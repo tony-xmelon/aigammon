@@ -9,29 +9,39 @@ sealed class GameEvent {
 
   Map<String, dynamic> toJson();
 
+  /// Throws [FormatException] on any malformed input.
   static GameEvent fromJson(Map<String, dynamic> json) {
-    final player = json['player'] != null
-        ? Player.values.byName(json['player'] as String)
-        : null;
-    return switch (json['type'] as String) {
-      'openingRoll' => OpeningRollEvent(
-          whiteDie: json['whiteDie'] as int, blackDie: json['blackDie'] as int),
-      'roll' => RollEvent(player!, json['die1'] as int, json['die2'] as int),
-      'move' => MoveEvent(player!, _moveFromJson(json['move'] as List)),
-      'double' => DoubleEvent(player!),
-      'take' => TakeEvent(player!),
-      'drop' => DropEvent(player!),
-      'resignOffer' => ResignOfferEvent(
-          player!, ResignValue.values.byName(json['value'] as String)),
-      'resignAccept' => ResignAcceptEvent(player!),
-      'resignDecline' => ResignDeclineEvent(player!),
-      final t => throw ArgumentError('unknown event type: $t'),
-    };
+    try {
+      final player = json['player'] != null
+          ? Player.values.byName(json['player'] as String)
+          : null;
+      return switch (json['type'] as String) {
+        'openingRoll' => OpeningRollEvent(
+            whiteDie: (json['whiteDie'] as num).toInt(),
+            blackDie: (json['blackDie'] as num).toInt()),
+        'roll' => RollEvent(player!, (json['die1'] as num).toInt(),
+            (json['die2'] as num).toInt()),
+        'move' => MoveEvent(player!, _moveFromJson(json['move'] as List)),
+        'double' => DoubleEvent(player!),
+        'take' => TakeEvent(player!),
+        'drop' => DropEvent(player!),
+        'resignOffer' => ResignOfferEvent(
+            player!, ResignValue.values.byName(json['value'] as String)),
+        'resignAccept' => ResignAcceptEvent(player!),
+        'resignDecline' => ResignDeclineEvent(player!),
+        final t => throw FormatException('unknown event type: $t'),
+      };
+    } on FormatException {
+      rethrow;
+    } catch (e) {
+      throw FormatException('malformed GameEvent JSON: $e');
+    }
   }
 
   static Move _moveFromJson(List<dynamic> hops) => Move([
         for (final h in hops)
-          CheckerMove(h[0] as int, h[1] as int, isHit: h[2] as bool),
+          CheckerMove((h[0] as num).toInt(), (h[1] as num).toInt(),
+              isHit: h[2] as bool),
       ]);
 
   static List<List<Object>> moveToJson(Move m) => [

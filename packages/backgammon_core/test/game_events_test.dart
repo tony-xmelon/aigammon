@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:test/test.dart';
 
@@ -60,5 +62,52 @@ void main() {
     ]);
     expect(game.state.cube, const CubeState(value: 2, owner: Player.white));
     expect(game.state.turn, Player.black);
+  });
+
+  test('fromJson throws FormatException on malformed input', () {
+    expect(
+        () => GameEvent.fromJson({'type': 'teleport'}), throwsFormatException);
+    expect(() => GameEvent.fromJson({'type': 'roll', 'die1': 3, 'die2': 1}),
+        throwsFormatException); // missing player
+    expect(
+        () => GameEvent.fromJson({
+              'type': 'move',
+              'player': 'white',
+              'move': [
+                [7]
+              ]
+            }),
+        throwsFormatException); // malformed hop triple
+    expect(() => GameEvent.fromJson({}), throwsFormatException);
+  });
+
+  test('events survive a real jsonEncode/jsonDecode round-trip', () {
+    final original = MoveEvent(Player.white,
+        Move(const [CheckerMove(7, 4, isHit: true), CheckerMove(5, 4)]));
+    final wire = jsonDecode(jsonEncode(original.toJson()));
+    final back = GameEvent.fromJson((wire as Map).cast<String, dynamic>());
+    expect(back, original);
+    // isHit must survive the wire even though == ignores it:
+    expect((back as MoveEvent).move.checkerMoves.first.isHit, isTrue);
+  });
+
+  test('events by the wrong player are rejected at replay', () {
+    expect(
+      () => Game.replay([
+        const OpeningRollEvent(whiteDie: 3, blackDie: 1),
+        MoveEvent(
+            Player.black, // white is on turn
+            Move(const [CheckerMove(7, 4), CheckerMove(5, 4)])),
+      ]),
+      throwsStateError,
+    );
+  });
+
+  test('append does not expose a mutable event log', () {
+    final game = Game.replay([const OpeningRollEvent(whiteDie: 3, blackDie: 1)])
+        .append(MoveEvent(
+            Player.white, Move(const [CheckerMove(7, 4), CheckerMove(5, 4)])));
+    expect(() => game.events.add(const DoubleEvent(Player.black)),
+        throwsUnsupportedError);
   });
 }

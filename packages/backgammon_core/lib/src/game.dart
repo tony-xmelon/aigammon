@@ -11,6 +11,14 @@ class Game {
 
   Game._(this.events, this.state);
 
+  /// Starts a fresh game from the opening roll.
+  factory Game.start(OpeningRollEvent opening, {bool isCrawfordGame = false}) =>
+      Game.replay([opening], isCrawfordGame: isCrawfordGame);
+
+  /// Rebuilds a game by folding [events] over the initial state.
+  ///
+  /// isCrawfordGame is match context supplied out of band (from MatchState);
+  /// peers replaying the same events must agree on it.
   factory Game.replay(List<GameEvent> events, {bool isCrawfordGame = false}) {
     if (events.isEmpty || events.first is! OpeningRollEvent) {
       throw StateError('a game starts with an OpeningRollEvent');
@@ -28,7 +36,7 @@ class Game {
   }
 
   Game append(GameEvent event) =>
-      Game._([...events, event], _apply(state, event));
+      Game._(List.unmodifiable([...events, event]), _apply(state, event));
 
   static GameState _apply(GameState s, GameEvent e) => switch (e) {
         OpeningRollEvent() =>
