@@ -1,0 +1,3 @@
+[submodule "native/wildbg"]
+	path = native/wildbg
+	url = https://github.com/carsten-wenderdel/wildbg
