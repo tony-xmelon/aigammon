@@ -2,6 +2,10 @@ import 'game_state.dart';
 import 'player.dart';
 
 /// Score state of a match, between games. Immutable.
+///
+/// matchLength is not validated (const constructor); callers supply positive
+/// lengths. A 1-point match correctly treats its only game as the Crawford
+/// game.
 class MatchState {
   final int matchLength;
   final int whiteScore;
@@ -38,4 +42,16 @@ class MatchState {
       crawfordPlayed: crawfordPlayed || crawfordJustPlayed,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      other is MatchState &&
+      other.matchLength == matchLength &&
+      other.whiteScore == whiteScore &&
+      other.blackScore == blackScore &&
+      other.crawfordPlayed == crawfordPlayed;
+
+  @override
+  int get hashCode =>
+      Object.hash(matchLength, whiteScore, blackScore, crawfordPlayed);
 }

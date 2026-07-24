@@ -39,4 +39,19 @@ void main() {
     expect(m.blackScore, 2);
     expect(m.isCrawfordNext, isFalse);
   });
+
+  test('black can win the match, including past the match length', () {
+    final m = MatchState(matchLength: 3, blackScore: 2).applyResult(
+        const GameResult(
+            winner: Player.black, points: 4, outcome: GameOutcome.gammon));
+    expect(m.blackScore, 6); // overshoot past matchLength
+    expect(m.isMatchOver, isTrue);
+    expect(m.winner, Player.black);
+  });
+
+  test('value equality', () {
+    expect(MatchState(matchLength: 5), MatchState(matchLength: 5));
+    expect(MatchState(matchLength: 5),
+        isNot(MatchState(matchLength: 5, whiteScore: 1)));
+  });
 }
