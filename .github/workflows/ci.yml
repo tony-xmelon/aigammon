@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  core:
+    name: backgammon_core tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+        working-directory: packages/backgammon_core
+      - run: dart analyze --fatal-infos
+        working-directory: packages/backgammon_core
+      - run: dart test
+        working-directory: packages/backgammon_core
+
+  engine:
+    name: engine build + integration tests (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/engine_shim
+      - name: Build engine shim (cdylib)
+        run: cargo build --release
+        working-directory: native/engine_shim
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+        working-directory: packages/engine_bindings
+      - run: dart analyze --fatal-infos
+        working-directory: packages/engine_bindings
+      - name: Unit tests
+        run: dart test
+        working-directory: packages/engine_bindings
+      - name: Engine integration tests (real nets)
+        run: dart test -P engine
+        working-directory: packages/engine_bindings
+        env:
+          WILDBG_LIB_PATH: ${{ github.workspace }}/native/engine_shim/target/release/libaigammon_engine.so
