@@ -18,6 +18,8 @@ class FakeEngine implements EngineFacade {
 
   int rankMovesCalls = 0;
   int cubeInfoCalls = 0;
+  Player? lastRankMover;
+  Player? lastCubeMover;
 
   static const _defaultAdvice = CubeAdvice(
     shouldDouble: false,
@@ -31,12 +33,14 @@ class FakeEngine implements EngineFacade {
   Future<List<ScoredMove>> rankMoves(
       BoardState board, Player mover, Dice dice) async {
     rankMovesCalls++;
+    lastRankMover = mover;
     return ranked;
   }
 
   @override
   Future<CubeAdvice> cubeInfo(BoardState board, Player mover) async {
     cubeInfoCalls++;
+    lastCubeMover = mover;
     return advice;
   }
 }
@@ -63,6 +67,13 @@ GameState _awaitingRollState() => GameState.testState(
       board: BoardState.initial(),
       turn: Player.white,
       phase: GamePhase.awaitingRoll,
+    );
+
+/// White has doubled; black is now the decider being asked to take.
+GameState _cubeOfferedState() => GameState.testState(
+      board: BoardState.initial(),
+      turn: Player.black,
+      phase: GamePhase.cubeOffered,
     );
 
 CubeAdvice _adviceWith({bool shouldDouble = false, bool shouldAccept = true}) =>
@@ -121,8 +132,23 @@ void main() {
 
     test('a second concurrent request of the same kind throws StateError', () {
       final agent = LocalHumanAgent();
+
       agent.chooseMove(_movingState());
       expect(() => agent.chooseMove(_movingState()), throwsStateError);
+
+      agent.considerDouble(_awaitingRollState());
+      expect(() => agent.considerDouble(_awaitingRollState()), throwsStateError);
+
+      agent.chooseCubeResponse(_awaitingRollState());
+      expect(() => agent.chooseCubeResponse(_awaitingRollState()),
+          throwsStateError);
+
+      agent.chooseResignResponse(_awaitingRollState(), ResignValue.single);
+      expect(
+          () => agent.chooseResignResponse(
+              _awaitingRollState(), ResignValue.single),
+          throwsStateError);
+
       agent.dispose();
     });
 
@@ -207,17 +233,31 @@ void main() {
           isFalse);
     });
 
+    test('chooseCubeResponse consults the doubler, not the decider', () async {
+      // cubeOffered: turn = black (decider), doubler = white. The engine must
+      // be queried from the doubler's (on-roll) perspective so shouldAccept
+      // refers to the decider taking.
+      final engine = FakeEngine(advice: _adviceWith(shouldAccept: true));
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
+      final state = _cubeOfferedState();
+      expect(state.turn, Player.black);
+
+      await agent.chooseCubeResponse(state);
+      expect(engine.lastCubeMover, Player.white,
+          reason: 'must query the doubler (white), not the decider (black)');
+    });
+
     test('chooseCubeResponse takes when advice says accept', () async {
       final engine = FakeEngine(advice: _adviceWith(shouldAccept: true));
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
-      expect(await agent.chooseCubeResponse(_awaitingRollState()),
+      expect(await agent.chooseCubeResponse(_cubeOfferedState()),
           CubeAction.take);
     });
 
     test('chooseCubeResponse drops when advice says reject', () async {
       final engine = FakeEngine(advice: _adviceWith(shouldAccept: false));
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
-      expect(await agent.chooseCubeResponse(_awaitingRollState()),
+      expect(await agent.chooseCubeResponse(_cubeOfferedState()),
           CubeAction.drop);
     });
 

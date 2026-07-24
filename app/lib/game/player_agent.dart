@@ -213,11 +213,14 @@ class AiAgent implements PlayerAgent {
     return advice.shouldDouble;
   }
 
-  /// In [GamePhase.cubeOffered] the on-turn player is the one deciding whether
-  /// to take, so the advice is evaluated from `state.turn`'s perspective.
+  /// In [GamePhase.cubeOffered] `state.turn` is the decider; the doubler
+  /// (`state.turn.opponent`) is the on-roll player `x`. wildbg's cube_info is
+  /// evaluated with `x` on roll and its `shouldAccept` is advice for `x`'s
+  /// OPPONENT (= the decider) to take (native/wildbg/.../cube.rs:24). So we
+  /// pass the doubler and read shouldAccept directly.
   @override
   Future<CubeAction> chooseCubeResponse(GameState state) async {
-    final advice = await _engine.cubeInfo(state.board, state.turn);
+    final advice = await _engine.cubeInfo(state.board, state.turn.opponent);
     return advice.shouldAccept ? CubeAction.take : CubeAction.drop;
   }
 
