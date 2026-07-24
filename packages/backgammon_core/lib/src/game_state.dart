@@ -131,6 +131,35 @@ class GameState {
     return _copy(dice: d, phase: GamePhase.moving);
   }
 
+  GameState offerDouble() {
+    _require(phase == GamePhase.awaitingRoll, 'can only double before rolling');
+    _require(!isCrawfordGame, 'no doubling in the Crawford game');
+    _require(cube.owner == null || cube.owner == turn,
+        'only the cube owner may double');
+    return _copy(phase: GamePhase.cubeOffered, turn: turn.opponent);
+  }
+
+  GameState take() {
+    _require(phase == GamePhase.cubeOffered, 'no double is pending');
+    return _copy(
+      cube: CubeState(value: cube.value * 2, owner: turn),
+      turn: turn.opponent,
+      phase: GamePhase.awaitingRoll,
+    );
+  }
+
+  GameState drop() {
+    _require(phase == GamePhase.cubeOffered, 'no double is pending');
+    return _copy(
+      phase: GamePhase.gameOver,
+      result: GameResult(
+        winner: turn.opponent,
+        points: cube.value,
+        outcome: GameOutcome.drop,
+      ),
+    );
+  }
+
   GameState play(Move move) {
     _require(phase == GamePhase.moving, 'not in the moving phase');
     final legal = legalMoves;
