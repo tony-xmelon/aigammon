@@ -35,6 +35,29 @@ void main() {
         moved);
   });
 
+  test('GameState equality is sensitive to every field', () {
+    GameState base({CubeState cube = const CubeState.initial(),
+        bool crawford = false}) {
+      return GameState.testState(
+        board: BoardState.initial(),
+        turn: Player.white,
+        phase: GamePhase.awaitingRoll,
+        cube: cube,
+        isCrawfordGame: crawford,
+      );
+    }
+
+    expect(base(),
+        isNot(base(cube: const CubeState(value: 2, owner: Player.white))));
+    expect(base(), isNot(base(crawford: true)));
+    // resignOffer differs:
+    expect(base().offerResign(ResignValue.single), isNot(base()));
+    // result differs (drop ends the game):
+    final dropped = base().offerDouble().drop();
+    expect(dropped, isNot(base()));
+    expect(dropped.result, isNotNull);
+  });
+
   test('opening-roll ties are a FormatException at the JSON boundary', () {
     expect(
         () => GameEvent.fromJson(
