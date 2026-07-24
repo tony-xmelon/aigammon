@@ -115,4 +115,33 @@ void main() {
     expect(next.turn, Player.black);
     expect(next.phase, GamePhase.awaitingRoll);
   });
+
+  test('reordered multiset-equal submission applies the canonical board', () {
+    // Defense in depth: even a caller that bypasses MoveBuilder and submits a
+    // reordered decomposition of a single-checker transit must not corrupt the
+    // board. Lone White on point 24 (index 23), dice (4,2): the only legal
+    // move is 24/22 22/18 == [(23,21),(21,17)]. Submitting the reversed hop
+    // order must still land the checker on index 17 with no phantom checker on
+    // the vacated point 22 (index 21) and no phantom hit.
+    final board = BoardState(points: [
+      -2, 0, 0, 0, 0, 0, //
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+    ], whiteOff: 14, blackOff: 13);
+    final s = GameState.testState(
+      board: board,
+      turn: Player.white,
+      phase: GamePhase.moving,
+      dice: Dice(4, 2),
+    );
+    final expected = board.applyMove(Player.white, s.legalMoves.single);
+    final reordered = Move(const [CheckerMove(21, 17), CheckerMove(23, 21)]);
+    final next = s.play(reordered);
+    expect(next.board, equals(expected));
+    expect(next.board.points[21], 0);
+    expect(next.board.points[17], 1);
+    expect(next.board.whiteBar, 0);
+    expect(next.board.blackBar, 0);
+    expect(next.board.checkerCount(Player.white), 15);
+    expect(next.board.checkerCount(Player.black), 15);
+  });
 }

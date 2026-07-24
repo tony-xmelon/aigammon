@@ -248,8 +248,19 @@ class GameState {
       return _copy(
           turn: turn.opponent, phase: GamePhase.awaitingRoll, clearDice: true);
     }
-    _require(_isLegal(move, legal), 'illegal move: $move');
-    final next = board.applyMove(turn, move);
+    // Apply the canonical legal representative when one matches by hop
+    // multiset — applyMove is order-dependent for a single checker transiting
+    // a point it vacates, so the submitted hop ORDER must never reach the
+    // board. Only fall back to the position-equivalence check for submissions
+    // that are NOT multiset-equal to any legal move (a transit-equivalent
+    // decomposition the generator deduped away); those are safe to apply as
+    // submitted because their applied result was verified equal to a legal
+    // move's result.
+    final canonical = _firstMatching(move, legal);
+    if (canonical == null) {
+      _require(_isPositionEquivalent(move, legal), 'illegal move: $move');
+    }
+    final next = board.applyMove(turn, canonical ?? move);
     if (next.offFor(turn) == 15) {
       return _copy(
           board: next, phase: GamePhase.gameOver, result: _winResult(next));
@@ -261,12 +272,23 @@ class GameState {
         clearDice: true);
   }
 
-  /// A submitted move is legal when it matches a generated move hop-for-hop
-  /// (sameAs), or — because the generator dedupes transit-equivalent
-  /// decompositions to one representative — when applying it reaches the
-  /// same resulting position as some legal move.
-  bool _isLegal(Move move, List<Move> legal) {
-    if (legal.any((m) => m.sameAs(move))) return true;
+  /// The first legal move equal to [move] by hop multiset ([Move.sameAs]), or
+  /// null when none matches. The caller applies this canonical representative
+  /// rather than the submitted hop order, because [BoardState.applyMove] is
+  /// order-dependent for single-checker transits through vacated points.
+  Move? _firstMatching(Move move, List<Move> legal) {
+    for (final m in legal) {
+      if (m.sameAs(move)) return m;
+    }
+    return null;
+  }
+
+  /// True when applying [move] reaches the same resulting position as some
+  /// legal move. The generator dedupes transit-equivalent decompositions to a
+  /// single representative, so a caller may submit a different but position-
+  /// equivalent decomposition. Multiset-equal submissions are handled earlier
+  /// by canonical replacement and never reach here.
+  bool _isPositionEquivalent(Move move, List<Move> legal) {
     if (move.checkerMoves.length != legal.first.checkerMoves.length) {
       return false;
     }

@@ -9,8 +9,11 @@ import 'move.dart';
 /// matching is brute-force.
 ///
 /// The builder offers only hops that appear in surviving candidates, so a
-/// completed sequence always corresponds to a legal move (possibly as a
-/// reordering; `GameState.play` accepts those via position equivalence).
+/// completed sequence always corresponds to a legal move (possibly entered as
+/// a reordering). The builder accepts reordered *entry* but [build] always
+/// emits the canonical playable ordering of the matched legal move — never the
+/// user's tap order — because `BoardState.applyMove` is order-dependent for a
+/// single checker transiting a point it vacates (see [build]).
 ///
 /// v1 scope: reorderings of a *listed* move are supported (permutation
 /// matching). A transit-equivalent decomposition that the generator collapsed
@@ -20,9 +23,9 @@ import 'move.dart';
 /// semantics.
 ///
 /// Hits: chosen hops are recorded with `isHit == false` and compared to
-/// candidates by (from, to) only. [build] returns the chosen hops as entered;
-/// `GameState.play` recomputes hits from the board via position equivalence,
-/// so the missing flags are harmless.
+/// candidates by (from, to) only. [build] resolves back to the matching legal
+/// move, whose hops carry the generator's correct isHit flags, so the emitted
+/// move is fully playable.
 ///
 /// No `isDeadEnd`: under the maximal-dice rule every legal move has the same
 /// length, so any prefix the builder offers can always be extended to a
@@ -83,12 +86,21 @@ class MoveBuilder {
       _legal.isNotEmpty &&
       _chosen.length == _legal.first.checkerMoves.length;
 
-  /// The completed [Move]. Throws [StateError] unless [isComplete].
+  /// The completed [Move] in canonical (generator/playable) order. Throws
+  /// [StateError] unless [isComplete].
+  ///
+  /// This returns the matching legal move — NOT the user's tap order.
+  /// `BoardState.applyMove` is order-dependent for a single checker moving
+  /// through a point it vacates earlier in the sequence (a reordered
+  /// decomposition would decrement an empty transit point and fabricate a
+  /// hit), so the canonical playable ordering (with correct isHit flags) must
+  /// be what reaches the board.
   Move build() {
     if (!isComplete) {
-      throw StateError('move is not complete: ${_chosen.length} hop(s) chosen');
+      throw StateError('turn is not complete: ${_chosen.length} hop(s) chosen');
     }
-    return Move(List.of(_chosen));
+    final entered = Move(List.of(_chosen));
+    return _legal.firstWhere((m) => m.sameAs(entered));
   }
 
   /// Recomputes the next-hop options for the current prefix: for every legal

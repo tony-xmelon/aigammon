@@ -200,6 +200,57 @@ void main() {
     });
   });
 
+  group('MoveBuilder single-checker transit (order-dependence regression)', () {
+    test('reversed entry still plays the canonical, non-corrupt board', () {
+      // Lone White checker on point 24 (index 23); dice (4,2). The only legal
+      // move is 24/22 22/18 == [(23,21),(21,17)] — one checker through the
+      // vacated point 22 (index 21). Entering the hops reversed must NOT let
+      // the tap order reach the board (that would fabricate a checker on 22
+      // and a phantom hit).
+      final board = BoardState(
+        points: [
+          -2, 0, 0, 0, 0, 0, //  1-6 (black filler, out of the way)
+          0, 0, 0, 0, 0, 0, //  7-12
+          0, 0, 0, 0, 0, 0, // 13-18
+          0, 0, 0, 0, 0, 1, // 19-24 (lone White on 24)
+        ],
+        whiteOff: 14,
+        blackOff: 13,
+      );
+      final state = GameState.testState(
+        board: board,
+        turn: Player.white,
+        phase: GamePhase.moving,
+        dice: Dice(4, 2),
+      );
+      final legal = state.legalMoves;
+      expect(legal, hasLength(1));
+      final canonical = legal.single;
+      final expected = board.applyMove(Player.white, canonical);
+
+      final b = MoveBuilder(legal);
+      // Enter REVERSED: 22/18 (21->17) first, then 24/22 (23->21).
+      b.addHop(21, 17);
+      b.addHop(23, 21);
+      expect(b.isComplete, isTrue);
+      // build() emits the canonical playable order, not the tap order.
+      expect(
+        b.build().checkerMoves.map((c) => '${c.from}>${c.to}').toList(),
+        equals(['23>21', '21>17']),
+      );
+
+      final next = state.play(b.build());
+      expect(next.board, equals(expected));
+      // No phantom checker on the vacated transit point, no phantom hit.
+      expect(next.board.points[21], 0);
+      expect(next.board.points[17], 1);
+      expect(next.board.whiteBar, 0);
+      expect(next.board.blackBar, 0);
+      expect(next.board.checkerCount(Player.white), 15);
+      expect(next.board.checkerCount(Player.black), 15);
+    });
+  });
+
   group('MoveBuilder prefix-extendability invariant', () {
     test('random offered walks never strand the user (seeded)', () {
       final rolls = [Dice(3, 1), Dice(6, 5), Dice(1, 1)];
