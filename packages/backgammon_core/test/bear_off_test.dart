@@ -42,6 +42,33 @@ void main() {
     final first = moves.first.checkerMoves.first;
     expect(first.from, 3);
     expect(first.to, CheckerMove.off);
+    expect(moves.first.checkerMoves[1].from, 1);
+  });
+
+  test('opponent checkers in the home board do not block bear-off', () {
+    final pts = List<int>.filled(24, 0);
+    pts[5] = 2; // White on the 6-point
+    pts[0] = -2; // Black anchor on White's 1-point
+    pts[10] = -1; // Black blot outside
+    final board = BoardState(points: pts, whiteOff: 13);
+    final moves = MoveGenerator.legalMoves(board, Player.white, Dice(6, 6));
+    expect(
+        moves.any((m) =>
+            m.checkerMoves.where((c) => c.to == CheckerMove.off).length == 2),
+        isTrue);
+  });
+
+  test('a checker can come home and bear off in the same turn', () {
+    final pts = List<int>.filled(24, 0);
+    pts[7] = 1; // White's 8-point, outside home
+    final board = BoardState(points: pts, whiteOff: 14);
+    final moves = MoveGenerator.legalMoves(board, Player.white, Dice(4, 4));
+    // 8/4 with the first 4, then 4/off exactly, twice unused? Only one
+    // checker: 8/4 then 4/off — a length-2 sequence bearing off the last
+    // checker mid-doubles.
+    expect(
+        moves.any((m) => m.checkerMoves.any((c) => c.to == CheckerMove.off)),
+        isTrue);
   });
 
   test('smaller die may still move inside the home board', () {
