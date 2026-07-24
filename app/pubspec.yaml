@@ -1,0 +1,24 @@
+name: aigammon_app
+description: AIGammon — backgammon with a neural-net engine.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  backgammon_core:
+    path: ../packages/backgammon_core
+  engine_bindings:
+    path: ../packages/engine_bindings
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

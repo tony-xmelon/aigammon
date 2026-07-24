@@ -50,3 +50,18 @@ jobs:
         working-directory: packages/engine_bindings
         env:
           WILDBG_LIB_PATH: ${{ github.workspace }}/native/engine_shim/target/release/libaigammon_engine.so
+
+  app:
+    name: flutter app tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+        working-directory: app
+      - run: flutter analyze
+        working-directory: app
+      - run: flutter test
+        working-directory: app
