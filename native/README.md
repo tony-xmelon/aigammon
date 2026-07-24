@@ -43,6 +43,11 @@ Extracted binary-exact via
 `git cat-file blob origin/nets:neural-nets/<name>.onnx > …` (blob hashes and
 byte sizes verified against `git ls-tree -l origin/nets`).
 
+> **`app/assets/nets/{contact,race}.onnx` are byte-identical copies of these**
+> files (the Flutter app bundles them as assets, since tract loads nets from
+> real filesystem paths). Keep them in sync when bumping the nets; a CI check
+> could hash-verify the copies against these sources later.
+
 ## Net filenames the engine expects
 
 The engine references the fixed relative paths **`neural-nets/contact.onnx`**
