@@ -1,0 +1,17 @@
+[package]
+name = "aigammon_engine"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# This crate is its own workspace root; it deliberately does NOT join the
+# vendored wildbg workspace at ../wildbg. The empty table below prevents cargo
+# from walking up the tree and trying to attach us to another workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+engine = { path = "../wildbg/crates/engine" }
+logic = { path = "../wildbg/crates/logic" }
