@@ -43,7 +43,11 @@ class ScoredMove {
   const ScoredMove({required this.move, required this.probabilities});
 }
 
-/// wildbg cube advice (Janowski-based internally), money or match-aware.
+/// wildbg cube advice (Janowski-based internally, including the
+/// too-good-to-double branch). MONEY GAME ONLY: wildbg's cube_info takes no
+/// away scores, so match context (score, Crawford) is not reflected here.
+/// Match-aware cube decisions are a deferred Plan-3 concern (Janowski + MET
+/// adapter in Dart) if the tutor needs them at a match score.
 class CubeAdvice {
   final bool shouldDouble;
   final bool shouldAccept;

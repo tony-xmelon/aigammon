@@ -81,19 +81,25 @@ Sanity-build wildbg's C staticlib crate (from `native/wildbg`):
 cargo build --package wildbg-c --release
 ```
 
-> **Toolchain note (host build blocker):** the default toolchain is
-> `stable-x86_64-pc-windows-gnu`. Its rustup *self-contained* MinGW
-> (`…/rustlib/x86_64-pc-windows-gnu/bin/self-contained/`) ships `dlltool.exe`,
-> `ld.exe` and a linker-only `gcc`, but **no GNU assembler (`as.exe`)**, so
-> `dlltool` fails with `CreateProcess` while building import libraries (e.g. for
-> `getrandom`/`bcryptprimitives`). A full **MinGW-w64** install (providing
-> `as.exe` + binutils) — or a full MSVC Build Tools install for the
-> `-msvc` target — is required for host builds. See the build blocker note in
-> the engine-integration task report.
+> **Host toolchain requirement:** Rust `stable-x86_64-pc-windows-gnu` alone is
+> NOT enough. Its rustup *self-contained* MinGW ships `dlltool.exe`, `ld.exe`
+> and a linker-only `gcc`, but **no GNU assembler (`as.exe`)**, so `dlltool`
+> fails with `CreateProcess` while building import libraries (first hit in the
+> `getrandom` crate, for `bcryptprimitives.dll`). A full **MinGW-w64** must be
+> on PATH — this machine uses WinLibs (winget
+> `BrechtSanders.WinLibs.POSIX.UCRT`, GCC 16.1.0). With it,
+> `cargo build --package wildbg-c --release` completes (~2.5 min cold). A full
+> MSVC Build Tools install would also work for the `-msvc` target.
 
-## Host toolchain requirement (Windows)
+## Cube advice: money game only
 
-Rust `stable-x86_64-pc-windows-gnu` alone is NOT enough: its self-contained MinGW lacks a GNU assembler, and `dlltool` fails while building import libraries (first hit in the `getrandom` crate). A full MinGW-w64 must be on PATH — this machine uses WinLibs (winget `BrechtSanders.WinLibs.POSIX.UCRT`, GCC 16.1.0). With it, `cargo build --package wildbg-c --release` completes (~2.5 min cold).
+wildbg's `cube_info(position)` implements the Janowski cube formulas (including
+too-good-to-double) but takes **no away scores** — its advice assumes a money
+game. Only `best_move` is match-aware (via `BgConfig { x_away, o_away }`).
+Consequently `engine_bindings`' `CubeAdvice` ignores match context; if the
+tutor needs cube advice at a match score (score-dependent take points,
+Crawford), a Dart Janowski + match-equity-table adapter must be built then.
+Recorded in the engine-integration plan's deferred list.
 
 ## Build matrix
 
