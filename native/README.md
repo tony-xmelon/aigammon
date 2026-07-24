@@ -95,3 +95,13 @@ cargo build --package wildbg-c --release
 
 Rust `stable-x86_64-pc-windows-gnu` alone is NOT enough: its self-contained MinGW lacks a GNU assembler, and `dlltool` fails while building import libraries (first hit in the `getrandom` crate). A full MinGW-w64 must be on PATH — this machine uses WinLibs (winget `BrechtSanders.WinLibs.POSIX.UCRT`, GCC 16.1.0). With it, `cargo build --package wildbg-c --release` completes (~2.5 min cold).
 
+## Build matrix
+
+| Platform | Script | Status |
+|---|---|---|
+| Windows x64 | `engine_shim/build-windows.ps1` | Verified (dev machine) |
+| Android (arm64-v8a, armeabi-v7a, x86_64) | `engine_shim/build-android.ps1` | Authored — verification deferred to Plan 3 (needs NDK) |
+| iOS (device + sim XCFramework) | `engine_shim/build-ios.sh` | Authored — verification deferred to CI/macOS |
+
+Inference is tract-onnx (pure Rust) — mobile builds carry no ONNX Runtime binaries.
+
