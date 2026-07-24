@@ -25,7 +25,17 @@ class _Pos {
   CheckerMove? tryMove(int from, int die) {
     if (bar > 0 && from != CheckerMove.bar) return null;
     if (from == CheckerMove.bar) {
-      return null; // bar entry: Task 7
+      if (bar == 0) return null;
+      final to = 24 - die;
+      if (points[to] < -1) return null;
+      final hit = points[to] == -1;
+      if (hit) {
+        points[to] = 0;
+        oppBar++;
+      }
+      points[to]++;
+      bar--;
+      return CheckerMove(CheckerMove.bar, to, isHit: hit);
     }
     if (points[from] <= 0) return null;
     final to = from - die;
