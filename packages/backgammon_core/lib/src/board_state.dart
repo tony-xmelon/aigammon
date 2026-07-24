@@ -1,5 +1,6 @@
 import 'package:collection/collection.dart' show ListEquality;
 
+import 'move.dart';
 import 'player.dart';
 
 /// Immutable board from White's perspective. `points[i]` is the point
@@ -64,6 +65,50 @@ class BoardState {
         whiteOff: blackOff,
         blackOff: whiteOff,
       );
+
+  /// Applies an assumed-legal [move] for [player]. Hits are recomputed from
+  /// the board so application is safe regardless of the isHit flags.
+  /// Legality checking lives in MoveGenerator/GameState, not here.
+  BoardState applyMove(Player player, Move move) {
+    final pts = List.of(points);
+    var wBar = whiteBar, bBar = blackBar, wOff = whiteOff, bOff = blackOff;
+    final sign = player == Player.white ? 1 : -1;
+    for (final cm in move.checkerMoves) {
+      if (cm.from == CheckerMove.bar) {
+        if (player == Player.white) {
+          wBar--;
+        } else {
+          bBar--;
+        }
+      } else {
+        pts[cm.from] -= sign;
+      }
+      if (cm.to == CheckerMove.off) {
+        if (player == Player.white) {
+          wOff++;
+        } else {
+          bOff++;
+        }
+      } else {
+        if (pts[cm.to] == -sign) {
+          pts[cm.to] = 0;
+          if (player == Player.white) {
+            bBar++;
+          } else {
+            wBar++;
+          }
+        }
+        pts[cm.to] += sign;
+      }
+    }
+    return BoardState(
+      points: pts,
+      whiteBar: wBar,
+      blackBar: bBar,
+      whiteOff: wOff,
+      blackOff: bOff,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
