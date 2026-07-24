@@ -38,8 +38,11 @@ jobs:
       # Simplest reliable path: install the exact version via sdkmanager and
       # point ANDROID_NDK_HOME at it for the cargo-ndk step.
       - name: Install Android NDK 28.2.13676358
+        # No `pipefail`: `yes |` receives SIGPIPE once sdkmanager stops reading
+        # (licenses already accepted on the runner), which would otherwise fail
+        # the pipeline even though sdkmanager itself succeeded.
         run: |
-          set -euo pipefail
+          set -eu
           SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
           echo "ANDROID_NDK_HOME=$SDK/ndk/28.2.13676358" >> "$GITHUB_ENV"
