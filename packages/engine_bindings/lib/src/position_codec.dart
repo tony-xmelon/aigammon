@@ -15,6 +15,10 @@ List<int> encodePips(BoardState board, Player mover) {
 /// Maps one wildbg move detail (from: 1-25 where 25 = bar; to: 0-24 where
 /// 0 = off) back to a [CheckerMove] in real White-perspective coordinates.
 /// Hit flags are not reconstructed — BoardState.applyMove recomputes hits.
+///
+/// Assumes in-contract input (from ∈ [1,25], to ∈ [0,24]); out-of-contract
+/// input yields undefined results, matching the package's assumed-legal
+/// philosophy.
 CheckerMove decodeDetail(int from, int to, Player mover) {
   if (mover == Player.white) {
     return CheckerMove(
