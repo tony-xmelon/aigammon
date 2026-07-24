@@ -79,7 +79,8 @@ aigammon/
   `rankMoves(GameState, {topN})`, `cubeAdvice(GameState)`,
   `evaluate(GameState)`. The UI never blocks on inference.
 - **Match-play math lives in Dart:** wildbg supplies raw probabilities; a Dart
-  module applies a match equity table and Janowski cube formulas to produce
+  module applies a match equity table (default: Kazaross-XG2, the gnubg
+  default) and Janowski cube formulas to produce
   match-aware equities and cube decisions. An early implementation spike
   confirms how much of this wildbg's own cube API covers; the Dart layer is the
   match-play adapter either way, and is unit-tested against published tables.
