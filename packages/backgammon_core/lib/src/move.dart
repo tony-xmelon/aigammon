@@ -30,6 +30,10 @@ class CheckerMove {
 
 /// A full turn: every checker moved for one dice roll, in a playable order.
 /// An empty move is a dance (no legal play).
+///
+/// Note: `Move` has no value `==` — identity comparison only. Use [sameAs]
+/// for order-insensitive value comparison; do not use `Move` as a Set/Map
+/// key expecting value semantics.
 class Move {
   final List<CheckerMove> checkerMoves;
 

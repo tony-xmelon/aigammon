@@ -21,6 +21,13 @@ class ResignOffer {
   final Player by;
   final ResignValue value;
   const ResignOffer({required this.by, required this.value});
+
+  @override
+  bool operator ==(Object other) =>
+      other is ResignOffer && other.by == by && other.value == value;
+
+  @override
+  int get hashCode => Object.hash(by, value);
 }
 
 class CubeState {
@@ -45,6 +52,16 @@ class GameResult {
 
   const GameResult(
       {required this.winner, required this.points, required this.outcome});
+
+  @override
+  bool operator ==(Object other) =>
+      other is GameResult &&
+      other.winner == winner &&
+      other.points == points &&
+      other.outcome == outcome;
+
+  @override
+  int get hashCode => Object.hash(winner, points, outcome);
 }
 
 /// Immutable game state machine. All mutating verbs return a new state and
@@ -294,4 +311,20 @@ class GameState {
     }
     return false;
   }
+
+  @override
+  bool operator ==(Object other) =>
+      other is GameState &&
+      other.board == board &&
+      other.turn == turn &&
+      other.phase == phase &&
+      other.dice == dice &&
+      other.cube == cube &&
+      other.isCrawfordGame == isCrawfordGame &&
+      other.resignOffer == resignOffer &&
+      other.result == result;
+
+  @override
+  int get hashCode => Object.hash(
+      board, turn, phase, dice, cube, isCrawfordGame, resignOffer, result);
 }

@@ -18,7 +18,8 @@ sealed class GameEvent {
       return switch (json['type'] as String) {
         'openingRoll' => OpeningRollEvent(
             whiteDie: (json['whiteDie'] as num).toInt(),
-            blackDie: (json['blackDie'] as num).toInt()),
+            blackDie: (json['blackDie'] as num).toInt())
+          ..validate(),
         'roll' => RollEvent(player!, (json['die1'] as num).toInt(),
             (json['die2'] as num).toInt()),
         'move' => MoveEvent(player!, _moveFromJson(json['move'] as List)),
