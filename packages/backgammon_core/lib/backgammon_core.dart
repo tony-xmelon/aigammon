@@ -3,6 +3,8 @@ library;
 
 export 'src/board_state.dart';
 export 'src/dice.dart';
+export 'src/game.dart';
+export 'src/game_events.dart';
 export 'src/game_state.dart';
 export 'src/match_state.dart';
 export 'src/move.dart';
