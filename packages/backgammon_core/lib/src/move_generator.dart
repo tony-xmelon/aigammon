@@ -135,7 +135,34 @@ class MoveGenerator {
       search(_Pos.of(normalized), order, 0, const []);
     }
 
+    // Higher-die rule: when only a single die can be played this turn (and
+    // it is not a doubles turn), and the higher die alone is playable, the
+    // player must play the higher die. For a single-move bear-off where
+    // either die could be used (overshoot), both orders reach the same
+    // position and dedupe to one Move; `_dieOf` reports the exact pip
+    // distance, which may be lower than `dice.high`, so `usesHigh.isNotEmpty`
+    // correctly falls back to offering that move.
+    if (!dice.isDouble && maxLen == 1) {
+      final usesHigh = [
+        for (final m in byResult.values)
+          if (_dieOf(m.checkerMoves.single) == dice.high) m,
+      ];
+      if (usesHigh.isNotEmpty) {
+        return _denormalize(usesHigh, player);
+      }
+    }
+
     return _denormalize(byResult.values.toList(), player);
+  }
+
+  /// The die a single normalized hop consumed. Bear-off overshoots consume
+  /// a die larger than the exact distance; report the distance, and treat
+  /// "at least" matches at the call site via dedup (overshoots reaching the
+  /// same result collapse to one entry keyed by position).
+  static int _dieOf(CheckerMove cm) {
+    final from = cm.from == CheckerMove.bar ? 24 : cm.from;
+    if (cm.to == CheckerMove.off) return from + 1;
+    return from - cm.to;
   }
 
   static List<Move> _denormalize(List<Move> moves, Player player) {
