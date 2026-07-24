@@ -56,4 +56,30 @@ void main() {
     expect(b.points[3], -1);
     expect(b.whiteBar, 1);
   });
+
+  test('sequential same-checker hop within one Move', () {
+    final b = BoardState.initial().applyMove(
+        Player.white, Move(const [CheckerMove(23, 22), CheckerMove(22, 20)]));
+    expect(b.points[23], 1);
+    expect(b.points[22], 0);
+    expect(b.points[20], 1);
+    expect(b.checkerCount(Player.white), 15);
+  });
+
+  test('hit then land a second checker on the same point in one Move', () {
+    final b = BoardState(points: [
+      0, 0, 0, -1, 1, 1, //
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]).applyMove(Player.white,
+        Move(const [CheckerMove(5, 3, isHit: true), CheckerMove(4, 3)]));
+    expect(b.points[3], 2);
+    expect(b.blackBar, 1);
+  });
+
+  test('applyMove does not mutate the source board', () {
+    final original = BoardState.initial();
+    original.applyMove(
+        Player.white, Move(const [CheckerMove(23, 22), CheckerMove(12, 10)]));
+    expect(original, BoardState.initial());
+  });
 }

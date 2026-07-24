@@ -69,6 +69,8 @@ class BoardState {
   /// Applies an assumed-legal [move] for [player]. Hits are recomputed from
   /// the board so application is safe regardless of the isHit flags.
   /// Legality checking lives in MoveGenerator/GameState, not here.
+  /// Violating the assumed-legal precondition produces a silently corrupt
+  /// board, not an error.
   BoardState applyMove(Player player, Move move) {
     final pts = List.of(points);
     var wBar = whiteBar, bBar = blackBar, wOff = whiteOff, bOff = blackOff;
