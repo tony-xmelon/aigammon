@@ -47,6 +47,27 @@ void main() {
     expect(moves.every((m) => m.checkerMoves.length == 2), isTrue);
   });
 
+  test('a one-die line is excluded when another line plays both dice', () {
+    // White can play 6-5 fully via 11/5 6/1 (10->4 then 5->0). But playing
+    // the 5 as 11/6 (10->5) leaves the 6 unplayable everywhere — that
+    // one-die line must be excluded. The checker on index 23 is outside
+    // home and fully blocked by Black (so bear-off can never rescue the
+    // stuck line, now or after Task 8).
+    final pts = List<int>.filled(24, 0);
+    pts[5] = 1;
+    pts[10] = 1;
+    pts[23] = 1;
+    pts[17] = -2; // blocks 24/18 (the 6)
+    pts[18] = -2; // blocks 24/19 (the 5)
+    final board = BoardState(points: pts);
+    final moves = MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
+    expect(moves, hasLength(1));
+    expect(
+        moves.single
+            .sameAs(Move(const [CheckerMove(10, 4), CheckerMove(5, 0)])),
+        isTrue);
+  });
+
   test('doubles play up to four checkers', () {
     final moves =
         MoveGenerator.legalMoves(BoardState.initial(), Player.white, Dice(1, 1));

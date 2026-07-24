@@ -51,6 +51,10 @@ class MoveGenerator {
   /// dance. The higher-die tiebreak is added in Task 9.
   static List<Move> legalMoves(BoardState board, Player player, Dice dice) {
     final normalized = player == Player.white ? board : board.mirrored();
+    // TODO(perf): for doubles, memoize expanded (dice-remaining, signature)
+    // nodes — permutations of the same source multiset are currently
+    // re-expanded and only collapse at the leaves. Revisit before heavy AI
+    // playout use.
     // Both dice orders are searched. When two orders reach the same
     // resulting position (e.g. 24/23 23/20 vs 24/21 21/20 with a 3-1), the
     // first-searched order supplies the deduped representative, so die2 is
@@ -70,6 +74,12 @@ class MoveGenerator {
       var moved = false;
       if (i < order.length) {
         for (var from = CheckerMove.bar; from >= 0; from--) {
+          // Cheap source precheck before the clone: most squares hold no
+          // movable checker for this player.
+          final hasSource = from == CheckerMove.bar
+              ? pos.bar > 0
+              : pos.bar == 0 && pos.points[from] > 0;
+          if (!hasSource) continue;
           final branch = pos.clone();
           final cm = branch.tryMove(from, order[i]);
           if (cm != null) {
