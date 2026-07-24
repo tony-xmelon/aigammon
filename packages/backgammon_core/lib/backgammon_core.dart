@@ -8,6 +8,7 @@ export 'src/game_events.dart';
 export 'src/game_state.dart';
 export 'src/match_state.dart';
 export 'src/move.dart';
+export 'src/move_builder.dart';
 export 'src/move_generator.dart';
 export 'src/player.dart';
 export 'src/position_id.dart';
