@@ -82,8 +82,11 @@ class GameState {
     Dice? dice,
     CubeState cube = const CubeState.initial(),
     bool isCrawfordGame = false,
-  }) =>
-      GameState._(
+  }) {
+    if (phase == GamePhase.moving && dice == null) {
+      throw ArgumentError('moving phase requires dice');
+    }
+    return GameState._(
         board: board,
         turn: turn,
         phase: phase,
@@ -92,7 +95,10 @@ class GameState {
         isCrawfordGame: isCrawfordGame,
         result: null,
       );
+  }
 
+  // clearDice explicitly nulls dice on turn handoff; result has no matching
+  // flag because it is terminal-only and never needs clearing.
   GameState _copy({
     BoardState? board,
     Player? turn,
@@ -154,6 +160,11 @@ class GameState {
     if (legal.any((m) => m.sameAs(move))) return true;
     if (move.checkerMoves.length != legal.first.checkerMoves.length) {
       return false;
+    }
+    for (final cm in move.checkerMoves) {
+      final fromOk = cm.from == CheckerMove.bar || (cm.from >= 0 && cm.from < 24);
+      final toOk = cm.to == CheckerMove.off || (cm.to >= 0 && cm.to < 24);
+      if (!fromOk || !toOk) return false;
     }
     final resulting = board.applyMove(turn, move);
     return legal.any((m) => board.applyMove(turn, m) == resulting);

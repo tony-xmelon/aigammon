@@ -84,6 +84,16 @@ void main() {
     expect(bg.result!.points, 6); // cube 2 × 3
   });
 
+  test('no actions after game over', () {
+    final done = GameState.testState(
+      board: BoardState(points: List.filled(24, 0), whiteOff: 15),
+      turn: Player.white,
+      phase: GamePhase.gameOver,
+    );
+    expect(() => done.roll(Dice(3, 1)), throwsStateError);
+    expect(() => done.play(Move.none), throwsStateError);
+  });
+
   test('a dance passes the turn with Move.none', () {
     // White on the bar, Black's home fully closed.
     final pts = List<int>.filled(24, 0);
