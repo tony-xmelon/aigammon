@@ -40,6 +40,20 @@ void main() {
     expect(m.mirrored(), b);
   });
 
+  test('mirrored swaps bar and off counts', () {
+    final b = BoardState(
+      points: List.filled(24, 0),
+      whiteBar: 1,
+      blackOff: 3,
+    );
+    final m = b.mirrored();
+    expect(m.blackBar, 1);
+    expect(m.whiteBar, 0);
+    expect(m.whiteOff, 3);
+    expect(m.blackOff, 0);
+    expect(m.mirrored(), b);
+  });
+
   test('value equality', () {
     expect(BoardState.initial(), BoardState.initial());
     expect(BoardState.initial(),
