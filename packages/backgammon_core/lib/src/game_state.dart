@@ -8,6 +8,21 @@ enum GamePhase { awaitingRoll, moving, cubeOffered, resignOffered, gameOver }
 
 enum GameOutcome { single, gammon, backgammon, drop, resignation }
 
+enum ResignValue {
+  single(1),
+  gammon(2),
+  backgammon(3);
+
+  final int multiplier;
+  const ResignValue(this.multiplier);
+}
+
+class ResignOffer {
+  final Player by;
+  final ResignValue value;
+  const ResignOffer({required this.by, required this.value});
+}
+
 class CubeState {
   final int value;
   final Player? owner; // null = centered
@@ -42,6 +57,7 @@ class GameState {
   final CubeState cube;
   final bool isCrawfordGame;
   final GameResult? result;
+  final ResignOffer? resignOffer;
 
   const GameState._({
     required this.board,
@@ -51,6 +67,7 @@ class GameState {
     required this.cube,
     required this.isCrawfordGame,
     required this.result,
+    required this.resignOffer,
   });
 
   /// Start of game: the opening roll decided [firstPlayer], who now plays
@@ -71,6 +88,7 @@ class GameState {
       cube: const CubeState.initial(),
       isCrawfordGame: isCrawfordGame,
       result: null,
+      resignOffer: null,
     );
   }
 
@@ -94,6 +112,7 @@ class GameState {
         cube: cube,
         isCrawfordGame: isCrawfordGame,
         result: null,
+        resignOffer: null,
       );
   }
 
@@ -107,6 +126,8 @@ class GameState {
     bool clearDice = false,
     CubeState? cube,
     GameResult? result,
+    ResignOffer? resignOffer,
+    bool clearResignOffer = false,
   }) =>
       GameState._(
         board: board ?? this.board,
@@ -116,6 +137,8 @@ class GameState {
         cube: cube ?? this.cube,
         isCrawfordGame: isCrawfordGame,
         result: result ?? this.result,
+        resignOffer:
+            clearResignOffer ? null : (resignOffer ?? this.resignOffer),
       );
 
   void _require(bool condition, String message) {
@@ -157,6 +180,46 @@ class GameState {
         points: cube.value,
         outcome: GameOutcome.drop,
       ),
+    );
+  }
+
+  // Resign offers carry an explicit ResignOffer record, whereas the cube verbs
+  // encode the offerer purely via a turn-flip. The two modeling styles coexist
+  // deliberately: resignation can be offered mid-turn (from `moving`), so
+  // declineResign must restore the exact prior context, which the record makes
+  // possible. Do not "simplify" one style into the other.
+  GameState offerResign(ResignValue value) {
+    _require(phase == GamePhase.awaitingRoll || phase == GamePhase.moving,
+        'cannot resign now');
+    return _copy(
+      phase: GamePhase.resignOffered,
+      turn: turn.opponent,
+      resignOffer: ResignOffer(by: turn, value: value),
+    );
+  }
+
+  GameState acceptResign() {
+    _require(phase == GamePhase.resignOffered, 'no resignation is pending');
+    final offer = resignOffer!;
+    return _copy(
+      phase: GamePhase.gameOver,
+      clearResignOffer: true,
+      result: GameResult(
+        winner: offer.by.opponent,
+        points: cube.value * offer.value.multiplier,
+        outcome: GameOutcome.resignation,
+      ),
+    );
+  }
+
+  GameState declineResign() {
+    _require(phase == GamePhase.resignOffered, 'no resignation is pending');
+    final offer = resignOffer!;
+    // Prior phase is inferred from dice in exactly this one place.
+    return _copy(
+      phase: dice == null ? GamePhase.awaitingRoll : GamePhase.moving,
+      turn: offer.by,
+      clearResignOffer: true,
     );
   }
 

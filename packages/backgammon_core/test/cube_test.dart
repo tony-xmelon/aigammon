@@ -49,4 +49,13 @@ void main() {
     final rolled = awaiting().roll(Dice(3, 1));
     expect(() => rolled.offerDouble(), throwsStateError);
   });
+
+  test('take and drop require a pending double', () {
+    expect(() => awaiting().take(), throwsStateError);
+    expect(() => awaiting().drop(), throwsStateError);
+  });
+
+  test('offering a double does not change the cube value', () {
+    expect(awaiting().offerDouble().cube, const CubeState.initial());
+  });
 }
