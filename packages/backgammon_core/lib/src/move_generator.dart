@@ -20,6 +20,21 @@ class _Pos {
 
   String signature() => '${points.join(",")}|$bar|$oppBar|$off';
 
+  bool get allHome {
+    if (bar > 0) return false;
+    for (var i = 6; i < 24; i++) {
+      if (points[i] > 0) return false;
+    }
+    return true;
+  }
+
+  int get highestPoint {
+    for (var i = 23; i >= 0; i--) {
+      if (points[i] > 0) return i;
+    }
+    return -1;
+  }
+
   /// Attempts to move one checker with [die] from [from] (0-23 or
   /// [CheckerMove.bar]), mutating this position. Returns null if illegal.
   CheckerMove? tryMove(int from, int die) {
@@ -40,7 +55,13 @@ class _Pos {
     if (points[from] <= 0) return null;
     final to = from - die;
     if (to < 0) {
-      return null; // bear-off: Task 8
+      if (!allHome) return null;
+      final exact = die == from + 1;
+      final overshoot = die > from + 1 && from == highestPoint;
+      if (!exact && !overshoot) return null;
+      points[from]--;
+      off++;
+      return CheckerMove(from, CheckerMove.off);
     }
     if (points[to] < -1) return null;
     final hit = points[to] == -1;
