@@ -180,10 +180,13 @@ class EngineService {
     return _decodeCube(r as List);
   }
 
-  /// Shuts the service down. Idempotent. Signals the worker to dispose the
-  /// engine, then kills the isolate immediately (we do not wait for a clean
-  /// exit — the native handle is freed by the worker before it acks, and a
-  /// hard kill guarantees prompt teardown). All in-flight requests error with
+  /// Shuts the service down. Idempotent. Sequence: the 'dispose' message is
+  /// queued to the worker, then the isolate is killed with
+  /// [Isolate.beforeNextEvent] — which lets the already-queued 'dispose'
+  /// message run first, so the worker frees the native Wildbg handle and
+  /// closes its port before the isolate is reaped. (An immediate kill would
+  /// preempt that message and leak one native engine per dispose/re-spawn
+  /// cycle.) All in-flight requests error with
   /// `StateError('EngineService disposed')`; subsequent verb calls throw
   /// synchronously.
   void dispose() {
@@ -194,7 +197,7 @@ class EngineService {
     } catch (_) {
       // Worker port may already be dead; the kill below still cleans up.
     }
-    _isolate.kill(priority: Isolate.immediate);
+    _isolate.kill(priority: Isolate.beforeNextEvent);
     _fromWorker.close();
     _deathPort?.close();
     final pending = List.of(_pending.values);
@@ -242,7 +245,11 @@ class EngineService {
       final verb = list[1] as String;
       final payload = list[2] as Map<String, Object?>;
       final out = reply;
-      if (out == null) return; // not yet bound (shouldn't happen)
+      // Unreachable today: spawn() always sends 'bind' before any verb, so
+      // `reply` is set by the time a request arrives. Guarded anyway — a
+      // future refactor that emitted a verb pre-bind would otherwise drop the
+      // request silently and hang the caller's completer forever.
+      if (out == null) return;
       try {
         final result = _dispatch(engine, verb, payload);
         out.send([id, 'ok', result]);
