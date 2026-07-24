@@ -56,6 +56,7 @@ class Engine {
     }
   }
 
+  /// Cubeless win/gammon/backgammon probabilities for [mover] in [board].
   Probabilities evaluate(BoardState board, Player mover) {
     _checkAlive();
     _loadPips(board, mover);

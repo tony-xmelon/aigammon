@@ -99,6 +99,9 @@ void main() {
     final advice = engine.cubeInfo(BoardState(points: pts), Player.white);
     expect(advice.shouldDouble, isTrue,
         reason: 'clear takeable lead is a double');
+    // NB: shouldAccept=false here rests on only a ~2.4pp win-probability
+    // margin past the take point; if the neural nets are ever upgraded this
+    // threshold may flip and the fixture will need retuning.
     expect(advice.shouldAccept, isFalse,
         reason: 'the trailer is too far behind to take');
   });
