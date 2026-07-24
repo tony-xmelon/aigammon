@@ -90,3 +90,8 @@ cargo build --package wildbg-c --release
 > `as.exe` + binutils) — or a full MSVC Build Tools install for the
 > `-msvc` target — is required for host builds. See the build blocker note in
 > the engine-integration task report.
+
+## Host toolchain requirement (Windows)
+
+Rust `stable-x86_64-pc-windows-gnu` alone is NOT enough: its self-contained MinGW lacks a GNU assembler, and `dlltool` fails while building import libraries (first hit in the `getrandom` crate). A full MinGW-w64 must be on PATH — this machine uses WinLibs (winget `BrechtSanders.WinLibs.POSIX.UCRT`, GCC 16.1.0). With it, `cargo build --package wildbg-c --release` completes (~2.5 min cold).
+
