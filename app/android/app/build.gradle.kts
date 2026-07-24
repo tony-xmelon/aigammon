@@ -19,7 +19,9 @@ android {
         applicationId = "com.xmelon.aigammon_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Pinned explicitly (was flutter.minSdkVersion, currently 24) so the
+        // native engine .so ABI expectations don't silently shift with Flutter.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -1,0 +1,102 @@
+name: Android
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, feature/flutter-app] # feature trigger removed at merge (Task 12)
+
+jobs:
+  apk:
+    name: build APK + distribute
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Rust toolchain (Android targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/engine_shim
+
+      # cargo-ndk drives the NDK toolchain for cross-compiling the cdylib.
+      # Cached across runs via ~/.cargo/bin (restored by rust-cache above is
+      # crate-scoped, so we guard the install with a `which` check).
+      - name: Install cargo-ndk
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
+
+      # Flutter pins NDK 28.2.13676358 (see app/android/app/build.gradle.kts ->
+      # flutter.ndkVersion). The ubuntu-latest image ships several NDKs under
+      # $ANDROID_SDK_ROOT/ndk, but not necessarily this exact revision, and both
+      # cargo-ndk (engine .so) and Flutter's gradle build must agree on the NDK.
+      # Simplest reliable path: install the exact version via sdkmanager and
+      # point ANDROID_NDK_HOME at it for the cargo-ndk step.
+      - name: Install Android NDK 28.2.13676358
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Cross-compile engine shim -> jniLibs
+        working-directory: native/engine_shim
+        run: |
+          cargo ndk \
+            -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            -o ../../app/android/app/src/main/jniLibs \
+            build --release
+
+      - name: List staged jniLibs
+        run: find app/android/app/src/main/jniLibs -type f -name '*.so' -exec ls -l {} +
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: app
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aigammon-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      # Secrets can't be referenced in a step-level `if:`, so gate on an env var
+      # exported from a prior shell step.
+      - name: Check Firebase secrets
+        id: fb
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+        run: |
+          if [ -n "$FIREBASE_SERVICE_ACCOUNT" ] && [ -n "$FIREBASE_ANDROID_APP_ID" ]; then
+            echo "has_firebase=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_firebase=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Distribute to Firebase App Distribution
+        if: steps.fb.outputs.has_firebase == 'true'
+        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          groups: testers
+          file: app/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Skip Firebase distribution (secrets not set)
+        if: steps.fb.outputs.has_firebase != 'true'
+        run: |
+          echo "Firebase secrets not set — skipping distribution (see .github/workflows/README.md: Firebase App Distribution setup)"
