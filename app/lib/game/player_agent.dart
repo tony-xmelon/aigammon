@@ -15,6 +15,15 @@ enum CubeAction { take, drop }
 /// Every method is async so the same interface serves a human (who answers
 /// via UI callbacks) and the AI (which awaits the engine isolate).
 abstract interface class PlayerAgent {
+  /// Whether the [GameController] should ask this agent (via [considerDouble])
+  /// whether to double at the start of each of its turns.
+  ///
+  /// AI agents return `true`: the controller polls them every pre-roll. Humans
+  /// return `false`: a human is never prompted with a modal "double?" each turn
+  /// and instead drives doubling/resigning through the controller's
+  /// `offerDouble`/`offerResign`/`rollDice` verbs. See [GameController].
+  bool get wantsDoublePrompts;
+
   /// The move to play for the current roll. Returns [Move.none] to pass when
   /// there is no legal play.
   Future<Move> chooseMove(GameState state);
@@ -50,6 +59,11 @@ class LocalHumanAgent implements PlayerAgent {
   Completer<bool>? _doubleCompleter;
   Completer<CubeAction>? _cubeCompleter;
   Completer<bool>? _resignCompleter;
+
+  /// A human is never polled for a double each turn; the UI drives doubling and
+  /// resigning through the controller's verbs instead.
+  @override
+  bool get wantsDoublePrompts => false;
 
   @override
   Future<Move> chooseMove(GameState state) {
@@ -192,6 +206,10 @@ class AiAgent implements PlayerAgent {
   final EngineFacade _engine;
   final Difficulty difficulty;
   final Random _rng;
+
+  /// The bot evaluates a double at the start of every turn.
+  @override
+  bool get wantsDoublePrompts => true;
 
   @override
   Future<Move> chooseMove(GameState state) async {
