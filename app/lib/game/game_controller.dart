@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../data/persistence_hooks.dart';
 import 'dice_roller.dart';
+import 'match_controller.dart';
 import 'player_agent.dart';
 
 /// The verb a human on turn invoked at their pre-roll decision point.
@@ -50,7 +51,7 @@ enum _HumanAction { roll, offerDouble, offerResign }
 /// await the loop re-checks the flag and unwinds promptly, and no `choose*` is
 /// issued afterwards. Agents are disposed exactly once, inside
 /// [disposeController].
-class GameController extends ChangeNotifier {
+class GameController extends ChangeNotifier implements MatchController {
   GameController({
     required this.white,
     required this.black,
@@ -97,35 +98,44 @@ class GameController extends ChangeNotifier {
   ResignValue? _pendingResignValue;
 
   /// The current game's derived state.
+  @override
   GameState get state => _game.state;
 
   /// The running match score.
+  @override
   MatchState get match => _match;
 
   /// The current event-sourced game.
+  @override
   Game get game => _game;
 
   /// True while an agent decision is in flight (an `await` on a [PlayerAgent]).
+  @override
   bool get isThinking => _isThinking;
 
   /// The last error that stopped the loop, or `null` when healthy.
+  @override
   Object? get error => _error;
 
   /// The last non-fatal persistence failure, or `null` when healthy. A throw
   /// from a [MatchPersistence] hook is recorded here and surfaced to the UI,
   /// but never stops play.
+  @override
   Object? get persistenceError => _persistenceError;
 
   /// True once the match has been decided.
+  @override
   bool get matchOver => _match.isMatchOver;
 
   /// True while the loop is paused between games waiting for
   /// [continueToNextGame] (so the UI can show a game-end dialog).
+  @override
   bool get awaitingNextGame => _awaitingNextGame;
 
   /// True while the loop is parked on a human's pre-roll, waiting for one of
   /// [rollDice], [offerDouble], or [offerResign]. The UI enables those controls
   /// exactly while this is true.
+  @override
   bool get awaitingHumanTurn =>
       _humanTurnGate != null && !_humanTurnGate!.isCompleted;
 
@@ -135,6 +145,7 @@ class GameController extends ChangeNotifier {
   /// without corrupting the match; the caller/UI surfaces it. Safe to await;
   /// completes when the match ends, an error occurs, or the controller is
   /// disposed.
+  @override
   Future<void> playMatch() async {
     if (_disposed || _cancelled || _started) return;
     _started = true;
@@ -180,6 +191,7 @@ class GameController extends ChangeNotifier {
   }
 
   /// Resumes the loop after a game ends. Valid only while [awaitingNextGame].
+  @override
   void continueToNextGame() {
     final gate = _continueGate;
     if (gate == null || gate.isCompleted) {
@@ -190,10 +202,12 @@ class GameController extends ChangeNotifier {
 
   /// Human pre-roll verb: roll the dice. Valid only while the human turn gate
   /// is open (the human is on turn in [GamePhase.awaitingRoll]).
+  @override
   void rollDice() => _submitHumanAction(_HumanAction.roll);
 
   /// Human pre-roll verb: offer a double. Valid only while the human turn gate
   /// is open AND doubling is currently legal.
+  @override
   void offerDouble() {
     if (!_doublingLegal(state)) {
       throw StateError('doubling is not legal now');
@@ -203,6 +217,7 @@ class GameController extends ChangeNotifier {
 
   /// Human pre-roll verb: offer to resign for [value]. Valid only while the
   /// human turn gate is open.
+  @override
   void offerResign(ResignValue value) {
     _pendingResignValue = value;
     _submitHumanAction(_HumanAction.offerResign);
@@ -211,6 +226,7 @@ class GameController extends ChangeNotifier {
   /// Idempotent: stops the loop, disposes both agents exactly once, and
   /// disposes this notifier. Safe to call while [playMatch] is in flight — the
   /// parked await is released and unwinds without touching the agents again.
+  @override
   void disposeController() {
     if (_disposed) return;
     _disposed = true;
@@ -319,6 +335,63 @@ class GameController extends ChangeNotifier {
 
   PlayerAgent _agentFor(Player p) => p == Player.white ? white : black;
 
+  // --- Interaction surface (MatchController) --------------------------------
+  //
+  // Delegates to the on-side [LocalHumanAgent]. Callers must first check
+  // [isLocalHuman]; for an AI side the `pending*Of` accessors return a shared
+  // always-null listenable and the `submit*` verbs throw.
+
+  /// A constant `null`-valued listenable returned by [pendingMoveOf] /
+  /// [pendingCubeOf] for a non-human side.
+  static final ValueNotifier<GameState?> _alwaysNullState = ValueNotifier(null);
+
+  /// A constant `null`-valued listenable returned by [pendingResignOf] for a
+  /// non-human side.
+  static final ValueNotifier<(GameState, ResignValue)?> _alwaysNullResign =
+      ValueNotifier(null);
+
+  @override
+  bool isLocalHuman(Player side) => _agentFor(side) is LocalHumanAgent;
+
+  @override
+  ValueListenable<GameState?> pendingMoveOf(Player side) {
+    final agent = _agentFor(side);
+    return agent is LocalHumanAgent ? agent.pendingMoveRequest : _alwaysNullState;
+  }
+
+  @override
+  void submitMove(Player side, Move move) => _localHuman(side).submitMove(move);
+
+  @override
+  ValueListenable<GameState?> pendingCubeOf(Player side) {
+    final agent = _agentFor(side);
+    return agent is LocalHumanAgent ? agent.pendingCubeRequest : _alwaysNullState;
+  }
+
+  @override
+  void submitCubeResponse(Player side, CubeAction action) =>
+      _localHuman(side).submitCubeResponse(action);
+
+  @override
+  ValueListenable<(GameState, ResignValue)?> pendingResignOf(Player side) {
+    final agent = _agentFor(side);
+    return agent is LocalHumanAgent
+        ? agent.pendingResignRequest
+        : _alwaysNullResign;
+  }
+
+  @override
+  void submitResignResponse(Player side, bool accept) =>
+      _localHuman(side).submitResignResponse(accept);
+
+  LocalHumanAgent _localHuman(Player side) {
+    final agent = _agentFor(side);
+    if (agent is! LocalHumanAgent) {
+      throw StateError('$side is not locally human');
+    }
+    return agent;
+  }
+
   /// Builds the [MatchContext] for [actor] from the running [MatchState],
   /// anchored to [actor]'s own perspective (`moverAway` is [actor]'s away
   /// score). Call sites pass `state.turn` — the actor being asked to decide.
@@ -326,6 +399,7 @@ class GameController extends ChangeNotifier {
   /// Public so the tutor UI (Plan 4 Task 6) can build the same context for its
   /// cube advice at a human's decision point, rather than duplicating the three
   /// lines below.
+  @override
   MatchContext contextFor(Player actor) {
     final actorScore =
         actor == Player.white ? _match.whiteScore : _match.blackScore;

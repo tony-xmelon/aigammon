@@ -5,7 +5,7 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 
 import '../board/board_view.dart';
-import '../game/game_controller.dart';
+import '../game/match_controller.dart';
 import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
 import '../tutor/tutor_service.dart';
@@ -54,7 +54,7 @@ class GameScreen extends StatefulWidget {
     this.tutor,
   });
 
-  final GameController controller;
+  final MatchController controller;
 
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
@@ -83,7 +83,7 @@ enum BoardOrientationMode {
 }
 
 class _GameScreenState extends State<GameScreen> {
-  GameController get _c => widget.controller;
+  MatchController get _c => widget.controller;
 
   /// The merged listenable: the controller plus the pending-request notifiers of
   /// whichever agents are human. Rebuilds the screen on any of them.
@@ -105,7 +105,7 @@ class _GameScreenState extends State<GameScreen> {
       _c.state.turn == Player.white;
 
   bool get _hotSeat =>
-      _c.white is LocalHumanAgent && _c.black is LocalHumanAgent;
+      _c.isLocalHuman(Player.white) && _c.isLocalHuman(Player.black);
 
   TutorService? get _tutor => widget.tutor;
 
@@ -162,11 +162,11 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   List<Listenable> _humanNotifiers() => [
-        for (final a in [_c.white, _c.black])
-          if (a is LocalHumanAgent) ...[
-            a.pendingMoveRequest,
-            a.pendingCubeRequest,
-            a.pendingResignRequest,
+        for (final side in [Player.white, Player.black])
+          if (_c.isLocalHuman(side)) ...[
+            _c.pendingMoveOf(side),
+            _c.pendingCubeOf(side),
+            _c.pendingResignOf(side),
           ],
       ];
 
@@ -215,7 +215,7 @@ class _GameScreenState extends State<GameScreen> {
     for (var i = _lastEventCount; i < len; i++) {
       final event = events[i];
       if (event is! MoveEvent) continue;
-      if (_agentForSide(event.player) is! LocalHumanAgent) continue;
+      if (!_c.isLocalHuman(event.player)) continue;
       final before = Game.replay(
         events.sublist(0, i),
         isCrawfordGame: _c.state.isCrawfordGame,
@@ -265,8 +265,8 @@ class _GameScreenState extends State<GameScreen> {
   /// Recomputes the take/pass advice while a human faces an opponent's double
   /// (a pending cube request); clears it otherwise. Keyed by the event count.
   void _syncCubeResponse() {
-    final cubeHuman = _humanWith((a) => a.pendingCubeRequest.value != null);
-    if (cubeHuman == null) {
+    final cubeSide = _humanSideWith((s) => _c.pendingCubeOf(s).value != null);
+    if (cubeSide == null) {
       _cubeResponseAdvice = null;
       _cubeResponseKey = null;
       return;
@@ -276,7 +276,7 @@ class _GameScreenState extends State<GameScreen> {
     _cubeResponseKey = key;
     final seq = ++_cubeResponseSeq;
     _cubeResponseAdvice = null;
-    final state = cubeHuman.pendingCubeRequest.value!;
+    final state = _c.pendingCubeOf(cubeSide).value!;
     unawaited(_tutor!
         .assessCubeResponse(state, _c.contextFor(state.turn))
         .then((advice) {
@@ -288,9 +288,6 @@ class _GameScreenState extends State<GameScreen> {
   bool _doublingLegal(GameState s) =>
       !s.isCrawfordGame && (s.cube.owner == null || s.cube.owner == s.turn);
 
-  PlayerAgent _agentForSide(Player p) =>
-      p == Player.white ? _c.white : _c.black;
-
   // --- Hint panel ------------------------------------------------------------
 
   void _openHint() {
@@ -300,8 +297,9 @@ class _GameScreenState extends State<GameScreen> {
       _hintMoves = null;
     });
     final seq = ++_hintSeq;
-    final moveHuman = _humanWith((a) => a.pendingMoveRequest.value != null);
-    final state = moveHuman?.pendingMoveRequest.value ?? _c.state;
+    final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    final state =
+        (moveSide != null ? _c.pendingMoveOf(moveSide).value : null) ?? _c.state;
     unawaited(_tutor!.hint(state).then((moves) {
       if (!mounted || seq != _hintSeq) return;
       setState(() {
@@ -350,14 +348,14 @@ class _GameScreenState extends State<GameScreen> {
   /// response, or a resign response).
   bool get _humanDecisionActive =>
       _c.awaitingHumanTurn ||
-      _humanWith((a) => a.pendingMoveRequest.value != null) != null ||
-      _humanWith((a) => a.pendingCubeRequest.value != null) != null ||
-      _humanWith((a) => a.pendingResignRequest.value != null) != null;
+      _humanSideWith((s) => _c.pendingMoveOf(s).value != null) != null ||
+      _humanSideWith((s) => _c.pendingCubeOf(s).value != null) != null ||
+      _humanSideWith((s) => _c.pendingResignOf(s).value != null) != null;
 
-  /// The human agent (if any) for which [test] holds.
-  LocalHumanAgent? _humanWith(bool Function(LocalHumanAgent) test) {
-    for (final a in [_c.white, _c.black]) {
-      if (a is LocalHumanAgent && test(a)) return a;
+  /// The locally-human side (if any) for which [test] holds.
+  Player? _humanSideWith(bool Function(Player) test) {
+    for (final side in [Player.white, Player.black]) {
+      if (_c.isLocalHuman(side) && test(side)) return side;
     }
     return null;
   }
@@ -365,9 +363,10 @@ class _GameScreenState extends State<GameScreen> {
   @override
   Widget build(BuildContext context) {
     final state = _c.state;
-    final moveHuman = _humanWith((a) => a.pendingMoveRequest.value != null);
-    final cubeHuman = _humanWith((a) => a.pendingCubeRequest.value != null);
-    final resignHuman = _humanWith((a) => a.pendingResignRequest.value != null);
+    final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    final cubeSide = _humanSideWith((s) => _c.pendingCubeOf(s).value != null);
+    final resignSide =
+        _humanSideWith((s) => _c.pendingResignOf(s).value != null);
     final whiteAtBottom = switch (widget.orientation) {
       BoardOrientationMode.fixedWhite => true,
       BoardOrientationMode.fixedBlack => false,
@@ -389,17 +388,19 @@ class _GameScreenState extends State<GameScreen> {
                     child: Center(
                       child: BoardView(
                         state: state,
-                        interactive: moveHuman != null,
-                        onMoveCommitted: (move) => moveHuman?.submitMove(move),
+                        interactive: moveSide != null,
+                        onMoveCommitted: (move) {
+                          if (moveSide != null) _c.submitMove(moveSide, move);
+                        },
                         whiteAtBottom: whiteAtBottom,
                       ),
                     ),
                   ),
                 ),
-                _bottomRegion(moveHuman),
+                _bottomRegion(moveSide),
               ],
             ),
-            ..._buildModals(cubeHuman, resignHuman),
+            ..._buildModals(cubeSide, resignSide),
             if (_hintOpen) _hintPanel(),
           ],
         ),
@@ -409,15 +410,12 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The single active modal layer, chosen by priority: match end, then game
   /// end, then the pass-device gate, then the cube/resign response dialogs.
-  List<Widget> _buildModals(
-    LocalHumanAgent? cubeHuman,
-    LocalHumanAgent? resignHuman,
-  ) {
+  List<Widget> _buildModals(Player? cubeSide, Player? resignSide) {
     if (_c.matchOver) return [_matchEndDialog()];
     if (_c.awaitingNextGame) return [_gameEndDialog()];
     if (_passDevicePending) return [_passDeviceOverlay()];
-    if (cubeHuman != null) return [_cubeDialog(cubeHuman)];
-    if (resignHuman != null) return [_resignDialog(resignHuman)];
+    if (cubeSide != null) return [_cubeDialog(cubeSide)];
+    if (resignSide != null) return [_resignDialog(resignSide)];
     return const [];
   }
 
@@ -446,8 +444,8 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  Widget _cubeDialog(LocalHumanAgent human) {
-    final state = human.pendingCubeRequest.value!;
+  Widget _cubeDialog(Player side) {
+    final state = _c.pendingCubeOf(side).value!;
     // The decider is `state.turn`; the doubler is the opponent.
     final doubler = _playerName(state.turn.opponent);
     final newValue = state.cube.value * 2;
@@ -461,19 +459,19 @@ class _GameScreenState extends State<GameScreen> {
       actions: [
         _CardAction(
           label: 'Pass',
-          onPressed: () => human.submitCubeResponse(CubeAction.drop),
+          onPressed: () => _c.submitCubeResponse(side, CubeAction.drop),
         ),
         _CardAction(
           label: 'Take',
           filled: true,
-          onPressed: () => human.submitCubeResponse(CubeAction.take),
+          onPressed: () => _c.submitCubeResponse(side, CubeAction.take),
         ),
       ],
     );
   }
 
-  Widget _resignDialog(LocalHumanAgent human) {
-    final (state, value) = human.pendingResignRequest.value!;
+  Widget _resignDialog(Player side) {
+    final (state, value) = _c.pendingResignOf(side).value!;
     final resigner = _playerName(state.turn.opponent);
     return _ModalCard(
       title: 'Resignation offered',
@@ -482,12 +480,12 @@ class _GameScreenState extends State<GameScreen> {
       actions: [
         _CardAction(
           label: 'Decline',
-          onPressed: () => human.submitResignResponse(false),
+          onPressed: () => _c.submitResignResponse(side, false),
         ),
         _CardAction(
           label: 'Accept',
           filled: true,
-          onPressed: () => human.submitResignResponse(true),
+          onPressed: () => _c.submitResignResponse(side, true),
         ),
       ],
     );
@@ -531,8 +529,8 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The bottom controls: the tutor hint button (during a human move), the
   /// pre-roll action bar, and the pre-roll cube advice line.
-  Widget _bottomRegion(LocalHumanAgent? moveHuman) {
-    final showHint = _tutor != null && moveHuman != null;
+  Widget _bottomRegion(Player? moveSide) {
+    final showHint = _tutor != null && moveSide != null;
     final showCube =
         _tutor != null && _cubeAdvice != null && _c.awaitingHumanTurn;
     return Column(
@@ -749,7 +747,7 @@ String _outcomeName(GameOutcome o) => switch (o) {
       GameOutcome.resignation => 'resignation',
     };
 
-String _scoreLine(GameController c) {
+String _scoreLine(MatchController c) {
   final m = c.match;
   return 'White ${m.whiteScore} — ${m.blackScore} Black  (to ${m.matchLength})';
 }
@@ -759,15 +757,15 @@ String _scoreLine(GameController c) {
 class _Hud extends StatelessWidget {
   const _Hud({required this.controller});
 
-  final GameController controller;
+  final MatchController controller;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
-    for (final a in [controller.white, controller.black]) {
-      if (a is LocalHumanAgent &&
-          (a.pendingMoveRequest.value != null ||
-              a.pendingCubeRequest.value != null ||
-              a.pendingResignRequest.value != null)) {
+    for (final side in [Player.white, Player.black]) {
+      if (controller.isLocalHuman(side) &&
+          (controller.pendingMoveOf(side).value != null ||
+              controller.pendingCubeOf(side).value != null ||
+              controller.pendingResignOf(side).value != null)) {
         return true;
       }
     }
@@ -838,7 +836,7 @@ class _Badge extends StatelessWidget {
 class _ActionBar extends StatelessWidget {
   const _ActionBar({required this.controller});
 
-  final GameController controller;
+  final MatchController controller;
 
   bool get _doublingLegal {
     final s = controller.state;

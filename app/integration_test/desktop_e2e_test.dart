@@ -11,7 +11,6 @@
 // It is deliberately NOT stubbed; the point of the task is the real engine.
 //
 // Run: `flutter test integration_test -d windows`
-import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/main.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
@@ -51,9 +50,8 @@ void main() {
       // Reach into the live tree for the running controller and the human agent.
       final controller =
           tester.widget<GameScreen>(find.byType(GameScreen)).controller;
-      expect(controller.white, isA<LocalHumanAgent>(),
+      expect(controller.isLocalHuman(Player.white), isTrue,
           reason: 'default side is White, so White is the human');
-      final human = controller.white as LocalHumanAgent;
 
       int plies() => controller.game.events.whereType<MoveEvent>().length;
 
@@ -88,7 +86,7 @@ void main() {
         if (maxPlies >= targetPlies) break;
         if (controller.matchOver || controller.awaitingNextGame) break;
 
-        if (human.pendingMoveRequest.value != null) {
+        if (controller.pendingMoveOf(Player.white).value != null) {
           // The interactive board is live: commit the human's move (or pass).
           await commitFirstMove(tester);
         } else if (controller.awaitingHumanTurn) {
