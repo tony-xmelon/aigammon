@@ -194,4 +194,37 @@ void main() {
     expect(ring.at(apex), equals(plain.at(apex)),
         reason: 'the source highlight must not tint the whole triangle');
   });
+
+  testWidgets('a bear-off destination fills the whole off strip (rule made '
+      'legible)', (t) async {
+    // Regression guard for the UX-round-1 bear-off complaint: a selected
+    // overshoot bear-off source must light the tray strip so the user sees they
+    // CAN bear off with a higher die. The uniform fill spans the full-width
+    // strip (Task 2's layout), not a narrow right column.
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final g = BoardGeometry(_size, whiteAtBottom: true);
+    final empty = BoardState(points: List<int>.filled(24, 0));
+    BoardPainter make({required bool off}) => BoardPainter(
+          board: empty,
+          geometry: g,
+          theme: BoardTheme.light,
+          highlightedDestinations: off ? {CheckerMove.off} : const {},
+          movingPlayer: Player.white,
+        );
+
+    final plain = await _render(t, make(off: false));
+    final lit = await _render(t, make(off: true));
+    final tray = g.offRect(Player.white);
+
+    // The strip centre and both ends change from bare felt to the fill colour.
+    for (final p in [
+      tray.center,
+      Offset(tray.left + 12, tray.center.dy),
+      Offset(tray.right - 12, tray.center.dy),
+    ]) {
+      expect(lit.at(p), isNot(equals(plain.at(p))),
+          reason: 'the off strip must fill across its whole width');
+    }
+  });
 }

@@ -768,4 +768,154 @@ void main() {
     expect(committed, isNotNull);
     expect(committed!.sameAs(goldenMove), isTrue);
   });
+
+  // UX-round-1 bear-off investigation: the user reported being unable to bear a
+  // checker off with a higher die than needed. These drive the FULL UI chain
+  // (select source -> off strip lights -> tap strip -> bear off) for the legal
+  // overshoot cases, confirming the new full-width tray strip (Task 2) accepts
+  // the bear-off tap.
+  group('bear-off overshoot (higher die than needed)', () {
+    GameState offState(Map<int, int> whitePts,
+        {required int whiteOff, required Dice dice}) {
+      final pts = List<int>.filled(24, 0);
+      whitePts.forEach((k, v) => pts[k] = v);
+      return GameState.testState(
+        board: BoardState(points: pts, whiteOff: whiteOff, blackOff: 15),
+        turn: Player.white,
+        phase: GamePhase.moving,
+        dice: dice,
+      );
+    }
+
+    testWidgets('selecting the 4-point lights the off strip and tapping it '
+        'bears off (die 6 > point 4)', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final control = BoardEntryController();
+      addTearDown(control.dispose);
+      // Lone White checker on the 4-point (index 3); 6-5 both overshoot it.
+      final state = offState({3: 1}, whiteOff: 14, dice: Dice(6, 5));
+      expect(state.legalMoves, isNotEmpty);
+      Move? committed;
+      await t.pumpWidget(_harness(BoardView(
+        state: state,
+        interactive: true,
+        onMoveCommitted: (m) => committed = m,
+        entryControl: control,
+      )));
+
+      // Select the checker on the 4-point.
+      await tapPoint(t, 3);
+      final painter = _painterOf(t);
+      expect(painter.selectedCheckerLocation, 3);
+      // The off strip is a highlighted destination and the mover is known, so
+      // the painter fills the whole bottom tray — the rule is made legible.
+      expect(painter.highlightedDestinations, contains(CheckerMove.off),
+          reason: 'a legal overshoot bear-off must light the off strip');
+      expect(painter.movingPlayer, Player.white);
+
+      // Tap anywhere on the (full-width) off strip → the bear-off is entered.
+      await t.tapAt(_geometry.offRect(Player.white).center);
+      await t.pump();
+      expect(control.canConfirm, isTrue,
+          reason: 'tapping the off strip must stage the overshoot bear-off');
+      control.confirm();
+      await t.pump();
+      expect(committed, isNotNull);
+      expect(committed!.checkerMoves.single.to, CheckerMove.off);
+    });
+
+    testWidgets('a corner tap on the off strip still bears off (generous hit '
+        'area, unlike the old right-column tray)', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final control = BoardEntryController();
+      addTearDown(control.dispose);
+      final state = offState({3: 1}, whiteOff: 14, dice: Dice(6, 5));
+      await t.pumpWidget(_harness(BoardView(
+        state: state,
+        interactive: true,
+        onMoveCommitted: (_) {},
+        entryControl: control,
+      )));
+      await tapPoint(t, 3);
+      // Tap the far-left edge of the bottom strip — the old narrow tray would
+      // have missed this; the new full-width strip accepts it.
+      final tray = _geometry.offRect(Player.white);
+      await t.tapAt(Offset(tray.left + 8, tray.center.dy));
+      await t.pump();
+      expect(control.canConfirm, isTrue);
+    });
+
+    testWidgets('two checkers on the 4-point bear off sequentially on 6-6 via '
+        'repeated off-strip taps', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final control = BoardEntryController();
+      addTearDown(control.dispose);
+      final state = offState({3: 2}, whiteOff: 13, dice: Dice(6, 6));
+      Move? committed;
+      await t.pumpWidget(_harness(BoardView(
+        state: state,
+        interactive: true,
+        onMoveCommitted: (m) => committed = m,
+        entryControl: control,
+      )));
+
+      // First checker: select 4-point, tap the off strip.
+      await tapPoint(t, 3);
+      expect(_painterOf(t).highlightedDestinations, contains(CheckerMove.off));
+      await t.tapAt(_geometry.offRect(Player.white).center);
+      await t.pump();
+      // Second checker is still on the 4-point and still bears off.
+      await tapPoint(t, 3);
+      expect(_painterOf(t).highlightedDestinations, contains(CheckerMove.off),
+          reason: 'the second checker on the 4-point still overshoots off');
+      await t.tapAt(_geometry.offRect(Player.white).center);
+      await t.pump();
+
+      expect(control.canConfirm, isTrue);
+      control.confirm();
+      await t.pump();
+      expect(committed, isNotNull);
+      expect(
+          committed!.checkerMoves.where((c) => c.to == CheckerMove.off).length,
+          2);
+    });
+
+    testWidgets('maximal-dice chain: tapping the off strip on 6-2 enters the '
+        'whole 4/2/off run (combined taps)', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final control = BoardEntryController();
+      addTearDown(control.dispose);
+      // Lone checker on the 4-point, 6-2: the maximal turn is 4/2 then 2/off,
+      // so off is a COMBINED (chained) landing, not a direct one. Combined taps
+      // are on by default, so tapping the strip enters both hops at once.
+      final state = offState({3: 1}, whiteOff: 14, dice: Dice(6, 2));
+      Move? committed;
+      await t.pumpWidget(_harness(BoardView(
+        state: state,
+        interactive: true,
+        onMoveCommitted: (m) => committed = m,
+        entryControl: control,
+      )));
+
+      await tapPoint(t, 3);
+      final painter = _painterOf(t);
+      // off is a combined landing here, not a direct destination.
+      expect(painter.highlightedDestinations, isNot(contains(CheckerMove.off)));
+      expect(painter.combinedDestinations, contains(CheckerMove.off),
+          reason: 'the overshoot bear-off is a two-die chain on 6-2');
+
+      await t.tapAt(_geometry.offRect(Player.white).center);
+      await t.pump();
+      expect(control.canConfirm, isTrue,
+          reason: 'tapping the strip must enter the whole chain to bear off');
+      control.confirm();
+      await t.pump();
+      expect(committed, isNotNull);
+      expect(committed!.checkerMoves.any((c) => c.to == CheckerMove.off), isTrue);
+    });
+  });
 }

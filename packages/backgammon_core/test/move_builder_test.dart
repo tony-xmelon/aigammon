@@ -418,4 +418,121 @@ void main() {
       expect(b.chainFor(0, 5), isEmpty);
     });
   });
+
+  // Investigation of the UX-round-1 bear-off complaint: "cannot move a chip out
+  // of the board with a higher die than needed." The engine allows an overshoot
+  // bear-off ONLY from the highest occupied point; these tests pin exactly what
+  // the MoveBuilder surfaces so the UI chain (BoardView) can be trusted.
+  group('MoveBuilder bear-off overshoot (UX round 1 investigation)', () {
+    BoardState home(Map<int, int> whitePts,
+        {required int whiteOff, int blackOff = 15}) {
+      final p = List<int>.filled(24, 0);
+      whitePts.forEach((k, v) => p[k] = v);
+      return BoardState(points: p, whiteOff: whiteOff, blackOff: blackOff);
+    }
+
+    test('(a) overshoot legal: lone checker on the 4-point offers off directly',
+        () {
+      // Lone White checker on index 3 (the 4-point), all else borne off. With
+      // 6-5 both dice exceed the point number and, since idx3 is the only (and
+      // therefore highest) occupied point, either die bears it off. Only one
+      // checker remains, so the maximal turn is length 1: a single overshoot
+      // bear-off, offered as a DIRECT destination.
+      final board = home({3: 1}, whiteOff: 14);
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
+      expect(legal, isNotEmpty);
+      final b = MoveBuilder(legal);
+      expect(b.selectableSources, contains(3));
+      expect(b.destinationsFor(3), contains(CheckerMove.off),
+          reason: 'overshoot bear-off from the highest point is offered '
+              'directly with a higher die than needed');
+      b.addHop(3, CheckerMove.off);
+      expect(b.isComplete, isTrue);
+      expect(b.build().checkerMoves.single.to, CheckerMove.off);
+    });
+
+    test('(c) maximal-dice overshoot surfaces only as a chain (6-2 from the '
+        '4-point)', () {
+      // Lone checker on idx3, dice 6-2. The maximal-dice rule forces BOTH dice
+      // to be played by the one checker: 4/2 (the 2) then 2/off (the 6, an
+      // overshoot from the now-highest point). So the 6 cannot bear off FIRST
+      // as a single hop — the builder does NOT offer off directly from idx3,
+      // but DOES surface it as a same-checker two-die chain, which the BoardView
+      // enters at once when combined taps are on.
+      final board = home({3: 1}, whiteOff: 14);
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 2));
+      final b = MoveBuilder(legal);
+      expect(b.destinationsFor(3), isNot(contains(CheckerMove.off)),
+          reason: 'the 6 cannot bear off first under the maximal-dice rule');
+      expect(b.destinationsFor(3), contains(1)); // the 2: 4-point -> 2-point
+      expect(b.chainedDestinationsFor(3), contains(CheckerMove.off),
+          reason: 'the overshoot bear-off is reachable as a two-die chain');
+      final chain = b.chainFor(3, CheckerMove.off);
+      expect(chain, hasLength(2));
+      for (final h in chain) {
+        b.addHop(h.from, h.to);
+      }
+      expect(b.isComplete, isTrue);
+      expect(
+          b.build().checkerMoves.any((c) => c.to == CheckerMove.off), isTrue);
+    });
+
+    test('(b) overshoot RULE: a checker on the 5-point blocks the 4-point from '
+        'bearing off first with a 6', () {
+      // Checkers on idx3 (4-point) AND idx4 (5-point), doubles 6-6. The engine
+      // rule: a 6 (which exceeds both point numbers) may bear off ONLY from the
+      // highest occupied point. So the canonical first hop of every legal turn
+      // is 5/off (idx4) — never 4/off (idx3) while idx4 is still occupied.
+      final board = home({3: 1, 4: 1}, whiteOff: 13);
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 6));
+      expect(legal, isNotEmpty);
+      for (final m in legal) {
+        expect(m.checkerMoves.first.from, 4,
+            reason: 'every legal turn bears the highest (5-)point off first');
+      }
+      // The builder tolerates reordered ENTRY (it permutes a listed move), so
+      // tapping the lower checker off first is accepted; build() still emits the
+      // canonical, rule-legal ordering (5/off then 4/off). This is NOT a rule
+      // violation: the board result is identical and correct.
+      final b = MoveBuilder(legal);
+      b.addHop(3, CheckerMove.off); // user taps the 4-point checker first
+      b.addHop(4, CheckerMove.off);
+      expect(b.isComplete, isTrue);
+      expect(b.build().checkerMoves.first.from, 4,
+          reason: 'canonical build bears the highest point off first');
+    });
+
+    test('(b2) non-double: the 6 bears off whichever point is highest after the '
+        '2 is played (off offered from both bear-off sources)', () {
+      // idx3 + idx4, dice 6-2. Two legal turns exist — 5/3 then 4/off, and
+      // 4/2 then 3/off — so a bear-off with the 6 is reachable from either
+      // point (as the point that is highest once the 2 has been played). The
+      // builder therefore offers off from both idx3 and idx4.
+      final board = home({3: 1, 4: 1}, whiteOff: 13);
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 2));
+      final b = MoveBuilder(legal);
+      expect(b.destinationsFor(4), contains(CheckerMove.off));
+      expect(b.destinationsFor(3), contains(CheckerMove.off));
+    });
+
+    test('(d) multi-checker: two on the 4-point bear off sequentially on 6-6',
+        () {
+      // Two White checkers on idx3, doubles 6-6. Each is borne off by an
+      // overshoot 6; after the first leaves, idx3 is still the highest point, so
+      // the second bears off too. The builder offers off from idx3, and keeps
+      // offering it after the first hop is entered.
+      final board = home({3: 2}, whiteOff: 13);
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 6));
+      final b = MoveBuilder(legal);
+      expect(b.destinationsFor(3), contains(CheckerMove.off));
+      b.addHop(3, CheckerMove.off);
+      expect(b.destinationsFor(3), contains(CheckerMove.off),
+          reason: 'the second checker on the 4-point still bears off');
+      b.addHop(3, CheckerMove.off);
+      expect(b.isComplete, isTrue);
+      expect(
+          b.build().checkerMoves.where((c) => c.to == CheckerMove.off).length,
+          2);
+    });
+  });
 }
