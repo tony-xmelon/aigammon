@@ -1,3 +1,4 @@
-# aigammon_app
+﻿# aigammon_app
 
-A new Flutter project.
+The AIGammon Flutter app. See the [repository README](../README.md) for project overview, toolchain setup, and how to run and test.
+
