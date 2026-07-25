@@ -321,7 +321,8 @@ class _GameScreenState extends State<GameScreen> {
   /// cannot be shown during a build/rebuild, hence the post-frame deferral.
   ///
   /// The SnackBar floats [SnackBarBehavior.floating] with a bottom margin that
-  /// clears the fixed 64px bottom action bar, so Confirm / Roll stay tappable —
+  /// clears both the fixed 64px bottom action bar and the 32px history strip
+  /// above it, so Confirm / Roll and the strip stay visible and tappable —
   /// the hint is genuinely non-blocking, not just logically so.
   void _maybeShowDragHint() {
     if (_dragHintShown || _dragHintScheduled) return;
@@ -337,7 +338,7 @@ class _GameScreenState extends State<GameScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.only(bottom: 72, left: 12, right: 12),
+          margin: const EdgeInsets.only(bottom: 104, left: 12, right: 12),
           content:
               const Text('Tip: drag checkers or tap them — change in Settings'),
           duration: const Duration(seconds: 6),
