@@ -21,3 +21,8 @@
 tags:
   golden:
   emulator:
+  # The UX screenshot tour (integration_test/ux_tour_test.dart). It lives under
+  # integration_test/, which neither `flutter test` nor CI ever walks, so the
+  # tag is declared purely so package:test does not warn about it when the tour
+  # is run by hand (`flutter test integration_test/ux_tour_test.dart -d windows`).
+  ux_tour:
