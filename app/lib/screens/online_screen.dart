@@ -278,6 +278,9 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          // The header names the sides "You … Opp" online (the remote player is
+          // not the AI); see GameScreen.opponentLabel.
+          opponentLabel: 'Opp',
           persistedMatchId: matchIdFuture,
           timings: settings.timings,
           interactionOptions: BoardInteractionOptions(

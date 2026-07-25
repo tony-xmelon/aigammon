@@ -1,4 +1,6 @@
 import 'package:aigammon_app/board/board_painter.dart';
+import 'package:aigammon_app/branding/app_mark.dart';
+import 'package:aigammon_app/branding/app_version.dart';
 import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
 import 'package:aigammon_app/data/match_repository.dart';
@@ -183,6 +185,47 @@ void main() {
     expect(find.text('Your side'), findsNothing);
     // Hot-seat exposes the rotate-for-Black toggle.
     expect(find.text('Rotate board for Black'), findsOneWidget);
+  });
+
+  group('first impression (phone portrait)', () {
+    const phone = Size(390, 844);
+
+    Future<void> pumpPhone(WidgetTester t) async {
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(_app());
+    }
+
+    testWidgets('home leads with the brand mark and closes with the version',
+        (t) async {
+      await pumpPhone(t);
+
+      // The hero: the same painted mark as the launcher icon, above the title.
+      expect(find.byType(AppMark), findsOneWidget);
+      expect(t.getBottomLeft(find.byType(AppMark)).dy,
+          lessThan(t.getTopLeft(find.text('AIGammon')).dy));
+
+      // The version sits in the bottom band, not in the content cluster.
+      final footer = find.text('v$appVersion');
+      expect(footer, findsOneWidget);
+      expect(t.getBottomLeft(footer).dy, greaterThan(phone.height - 60));
+
+      // The identity cluster reads in the upper half — the old layout left the
+      // whole top of the screen empty.
+      expect(t.getTopLeft(find.byType(AppMark)).dy,
+          lessThan(phone.height * 0.35));
+    });
+
+    testWidgets('setup form starts under the app bar, not mid-screen',
+        (t) async {
+      await pumpPhone(t);
+      await t.tap(find.text('Play vs Computer'));
+      await t.pumpAndSettle();
+
+      // App bar is 56 tall; with the form's 16pt top padding the first caption
+      // lands around y=72. The old centred layout put it past y=400.
+      expect(t.getTopLeft(find.text('Match length')).dy, lessThan(120));
+    });
   });
 
   testWidgets('vs computer: Start builds a controller and the match runs to a '

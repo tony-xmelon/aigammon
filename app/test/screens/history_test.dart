@@ -31,6 +31,19 @@ MatchRow _matchRow(int id) => MatchRow(
       completed: true,
     );
 
+/// An UNFINISHED match row (no winner, not completed) — the "Unfinished" badge.
+MatchRow _unfinishedRow(int id) => MatchRow(
+      id: id,
+      createdAt: DateTime(2026, 7, 24, 11, 15),
+      matchLength: 3,
+      mode: 'vsComputer',
+      whiteType: 'human',
+      blackType: 'ai:expert',
+      whiteScore: 0,
+      blackScore: 1,
+      completed: false,
+    );
+
 late AppDatabase _db;
 late MatchRepository _repo;
 
@@ -117,5 +130,130 @@ void main() {
     await _settle(t);
 
     expect(find.text('No matches played yet.'), findsOneWidget);
+  });
+
+  group('history hygiene', () {
+    testWidgets('loading the screen purges the gameless abandoned matches',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      late int litter;
+      late int keptWithGame;
+      await t.runAsync(() async {
+        // Two abandoned matches that never recorded a game, plus one that did.
+        litter = await _repo.startMatch(
+          matchLength: 1,
+          mode: 'vsComputer',
+          whiteType: 'human',
+          blackType: 'ai:expert',
+        );
+        await _repo.startMatch(
+          matchLength: 1,
+          mode: 'vsComputer',
+          whiteType: 'human',
+          blackType: 'ai:expert',
+        );
+        keptWithGame = await _repo.startMatch(
+          matchLength: 3,
+          mode: 'vsComputer',
+          whiteType: 'human',
+          blackType: 'ai:expert',
+        );
+        final game = _sampleGame();
+        await _repo.recordGame(
+          matchId: keptWithGame,
+          gameNumber: 1,
+          isCrawford: game.state.isCrawfordGame,
+          events: game.events,
+          result: game.state.result!,
+        );
+        // Age every row past the sweep's two-minute guard (created_at is unix
+        // seconds). Real litter is minutes-to-days old; the guard only exists
+        // to keep the sweep clear of a game that is still being written.
+        await _repo.db
+            .customStatement('UPDATE matches SET created_at = created_at - 600');
+      });
+
+      await t.pumpWidget(_app(const HistoryScreen(),
+          matches: [_unfinishedRow(keptWithGame), _unfinishedRow(litter)]));
+      await _settle(t);
+
+      final remaining = await t.runAsync(() => _repo.watchMatches().first);
+      expect([for (final m in remaining!) m.id], [keptWithGame],
+          reason: 'only the match with a recorded game survives the purge');
+    });
+
+    testWidgets('an unfinished match is badged "Unfinished", not "In progress"',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(
+          _app(const HistoryScreen(), matches: [_unfinishedRow(7)]));
+      await _settle(t);
+
+      expect(find.text('Unfinished'), findsOneWidget);
+      expect(find.text('In progress'), findsNothing);
+    });
+
+    testWidgets('swipe + confirm deletes the row and its database rows',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      late int matchId;
+      await t.runAsync(() async {
+        matchId = await _repo.startMatch(
+          matchLength: 1,
+          mode: 'vsComputer',
+          whiteType: 'human',
+          blackType: 'ai:expert',
+        );
+        await _repo.updateScore(matchId: matchId, whiteScore: 1, blackScore: 0);
+        await _repo.completeMatch(matchId: matchId, winner: 'white');
+        final game = _sampleGame();
+        await _repo.recordGame(
+          matchId: matchId,
+          gameNumber: 1,
+          isCrawford: game.state.isCrawfordGame,
+          events: game.events,
+          result: game.state.result!,
+        );
+      });
+
+      await t.pumpWidget(
+          _app(const HistoryScreen(), matches: [_matchRow(matchId)]));
+      await _settle(t);
+      expect(find.textContaining('White 1 — 0 Black'), findsOneWidget);
+
+      // Swipe the row from its trailing edge → the confirmation dialog.
+      await t.drag(find.textContaining('White 1 — 0 Black'),
+          const Offset(-600, 0));
+      await t.pumpAndSettle();
+      expect(find.text('Delete this match?'), findsOneWidget);
+
+      // Cancel first: nothing is deleted and the row springs back.
+      await t.tap(find.text('Cancel'));
+      await _settle(t);
+      expect(find.textContaining('White 1 — 0 Black'), findsOneWidget);
+      var games = await t.runAsync(() => _repo.gamesFor(matchId));
+      expect(games, hasLength(1), reason: 'cancel deletes nothing');
+
+      // Swipe again and confirm.
+      await t.drag(find.textContaining('White 1 — 0 Black'),
+          const Offset(-600, 0));
+      await t.pumpAndSettle();
+      await t.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await _settle(t);
+
+      expect(find.textContaining('White 1 — 0 Black'), findsNothing,
+          reason: 'the confirmed row leaves the list immediately');
+      expect(find.text('No matches played yet.'), findsOneWidget);
+      final rows = await t.runAsync(() => _repo.watchMatches().first);
+      expect(rows, isEmpty, reason: 'the match row is gone from the database');
+      games = await t.runAsync(() => _repo.gamesFor(matchId));
+      expect(games, isEmpty, reason: 'its games cascade away with it');
+    });
   });
 }

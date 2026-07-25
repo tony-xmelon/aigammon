@@ -13,15 +13,22 @@ import 'package:flutter_test/flutter_test.dart';
 
 const _size = Size(800, 600);
 
-Widget _harness(BoardPainter painter) {
+/// A PORTRAIT board: 450 wide at [BoardView.minAspect] (0.62), i.e. the exact
+/// shape [BoardView] hands the geometry on a phone in portrait, scaled up so
+/// the golden is readable. Guards the tall-board metrics — checkers sized by
+/// the column width, triangle length capped, dice grown into the roomier
+/// middle band — which the landscape goldens above can never exercise.
+const _portrait = Size(450, 726);
+
+Widget _harness(BoardPainter painter, [Size size = _size]) {
   return Directionality(
     textDirection: TextDirection.ltr,
     child: Center(
       child: SizedBox(
-        width: _size.width,
-        height: _size.height,
+        width: size.width,
+        height: size.height,
         child: RepaintBoundary(
-          child: CustomPaint(size: _size, painter: painter),
+          child: CustomPaint(size: size, painter: painter),
         ),
       ),
     ),
@@ -88,6 +95,27 @@ void main() {
     await expectLater(
       find.byType(RepaintBoundary),
       matchesGoldenFile('goldens/midgame_dark.png'),
+    );
+  });
+
+  testWidgets('golden: initial position, light theme, PORTRAIT board',
+      (t) async {
+    await t.binding.setSurfaceSize(_portrait);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final geometry = BoardGeometry(_portrait, whiteAtBottom: true);
+    final painter = BoardPainter(
+      board: BoardState.initial(),
+      geometry: geometry,
+      theme: BoardTheme.light,
+      whiteDice: Dice(3, 1),
+      blackDice: Dice(5, 4),
+      diceMover: Player.white,
+      cube: const CubeState.initial(),
+    );
+    await t.pumpWidget(_harness(painter, _portrait));
+    await expectLater(
+      find.byType(RepaintBoundary),
+      matchesGoldenFile('goldens/initial_light_portrait.png'),
     );
   });
 

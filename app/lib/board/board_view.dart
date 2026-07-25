@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -254,6 +256,22 @@ class BoardInteractionOptions {
 /// soon as it flips `false`. Only the LATEST queued move is kept (in practice a
 /// turn produces one move). When [holdMoveAnimation] is null or already `false`
 /// (e.g. the local player's own move — no beat), the animation starts at once.
+///
+/// ## Responsive sizing ([minAspect] / [maxAspect])
+///
+/// The board FILLS the slot its parent gives it, clamped to an aspect range —
+/// it is not pinned to a landscape shape. On a phone in portrait the slot
+/// between the header and the bottom strip is much taller than it is wide, so
+/// the board comes out TALLER than wide (down to [minAspect]); on a wide window
+/// it stops widening at [maxAspect] rather than stretching. See [boardSizeFor],
+/// and [BoardGeometry]'s "Aspect independence" note for how the geometry adapts
+/// (checkers sized by column width, triangle length capped, dice growing into
+/// the roomier middle band).
+///
+/// The "board never reflows" invariant survives: the slot is fixed for a given
+/// screen (a fixed-height HUD above, a fixed-height history strip and action
+/// bar below), so the board size is constant while the screen is — nothing the
+/// HUD or the action bar does mid-turn can resize it.
 class BoardView extends StatefulWidget {
   const BoardView({
     super.key,
@@ -366,6 +384,63 @@ class BoardView extends StatefulWidget {
   /// destination resolves to the correct half. Required for those to render;
   /// ignored while interactive (the builder supplies the moving player).
   final Player? highlightMovingPlayer;
+
+  /// Narrowest (tallest) shape the board may take, as width : height. A phone
+  /// in portrait hits this bound: the board comes out ~1.6x taller than it is
+  /// wide, filling the slot between the header and the bottom strip. Going any
+  /// taller would stretch the triangles past what the capped point length can
+  /// absorb, leaving an unreadably wide empty middle band.
+  static const double minAspect = 0.62;
+
+  /// Widest shape the board may take, as width : height. Past this the checkers
+  /// (height-bound on a wide board) stop growing and only the gaps between the
+  /// columns would widen, so a very wide slot letterboxes at the sides instead.
+  static const double maxAspect = 1.45;
+
+  /// Shape used when a dimension is unbounded (a board inside a scroll view):
+  /// roughly where the column-width and point-height bounds on the checker
+  /// radius meet, i.e. the most "efficient" board.
+  static const double naturalAspect = 1.2;
+
+  /// The board's paint size within [constraints]: the largest rectangle that
+  /// fits, with its aspect clamped to [minAspect] … [maxAspect]. An unbounded
+  /// dimension falls back to [naturalAspect] (and, with both unbounded, to a
+  /// nominal 320pt width) so the board is never laid out unbounded.
+  static Size boardSizeFor(BoxConstraints constraints) {
+    const double fallbackWidth = 320;
+    final bool boundedW = constraints.hasBoundedWidth;
+    final bool boundedH = constraints.hasBoundedHeight;
+    final double maxW = constraints.maxWidth;
+    final double maxH = constraints.maxHeight;
+    double w;
+    double h;
+    if (boundedW && boundedH && maxW > 0 && maxH > 0) {
+      final available = maxW / maxH;
+      final aspect = available.clamp(minAspect, maxAspect);
+      if (available > aspect) {
+        // The slot is wider than the board is allowed to be: height binds.
+        h = maxH;
+        w = h * aspect;
+      } else {
+        // The slot is taller than the board is allowed to be (or exactly the
+        // right shape): width binds and the board takes the height it may.
+        w = maxW;
+        h = w / aspect;
+      }
+    } else if (boundedW && maxW > 0) {
+      w = maxW;
+      h = w / naturalAspect;
+    } else if (boundedH && maxH > 0) {
+      h = maxH;
+      w = h * naturalAspect;
+    } else {
+      w = fallbackWidth;
+      h = w / naturalAspect;
+    }
+    // A degenerate (zero-sized) slot would trip BoardGeometry's positive-size
+    // assertion; hand back a nominal 1pt board instead.
+    return Size(math.max(1, w), math.max(1, h));
+  }
 
   @override
   State<BoardView> createState() => _BoardViewState();
@@ -849,7 +924,18 @@ class _BoardViewState extends State<BoardView>
   }
 
   /// The maximum distance a tap may miss an actionable target and still count.
-  double _tapTolerance(BoardGeometry geometry) => geometry.checkerRadius * 1.8;
+  ///
+  /// Scales with the checker so it stays proportionate on a big board, with a
+  /// floor of [_minTapTolerance] so a phone-sized checker (~13pt radius — a
+  /// 26pt disc, well under the 44pt accessibility minimum) still presents an
+  /// effective target at least 44pt across. Only the NEAREST target within the
+  /// tolerance wins, so a generous radius never makes a tap ambiguous.
+  double _tapTolerance(BoardGeometry geometry) =>
+      math.max(geometry.checkerRadius * 1.8, _minTapTolerance);
+
+  /// Half of the 44pt minimum touch target: the tap-forgiveness radius never
+  /// drops below this, however small the board's checkers are.
+  static const double _minTapTolerance = 22;
 
   /// The selectable source whose top-checker anchor is nearest [pos] within
   /// [_tapTolerance], or `null` when none is close enough. Anchors are computed
@@ -1024,8 +1110,7 @@ class _BoardViewState extends State<BoardView>
     final builder = _builder;
     final selected = _selectedSource;
 
-    return AspectRatio(
-      aspectRatio: 4 / 3,
+    return _BoardFrame(
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -1157,6 +1242,32 @@ class _BoardViewState extends State<BoardView>
             child: CustomPaint(size: size, painter: painter),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Gives the board its SHAPE: fills the slot it is given, with the aspect
+/// clamped to [BoardView.minAspect] … [BoardView.maxAspect], and centres the
+/// result. The [child] is then laid out with TIGHT constraints of exactly that
+/// size, so the board's own [LayoutBuilder] reads the final paint size.
+///
+/// Centring matters under a tight slot (a parent that forces its own size):
+/// the board takes the shape it is allowed and letterboxes in the leftover,
+/// rather than being stretched to a shape the geometry cannot use.
+class _BoardFrame extends StatelessWidget {
+  const _BoardFrame({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) => Center(
+        child: SizedBox.fromSize(
+          size: BoardView.boardSizeFor(constraints),
+          child: child,
+        ),
       ),
     );
   }

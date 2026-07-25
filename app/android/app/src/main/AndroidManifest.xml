@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="aigammon_app"
+        android:label="AIGammon"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

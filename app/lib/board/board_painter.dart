@@ -375,7 +375,10 @@ class BoardPainter extends CustomPainter {
       if (n == 0) continue;
       final tray = geometry.offRect(player);
       final isWhite = player == Player.white;
-      final r = tray.height * 0.38;
+      // A borne-off disc scales with the strip, but never grows PAST a board
+      // checker — on a tall (portrait) board the strip is the roomier of the
+      // two, and a tray full of oversized checkers reads as a different piece.
+      final r = math.min(tray.height * 0.38, geometry.checkerRadius);
       final cy = tray.center.dy;
       final pad = tray.height * 0.28;
       // Reserve a slot at the trailing end for the count text.

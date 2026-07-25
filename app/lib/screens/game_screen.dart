@@ -13,6 +13,7 @@ import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
 import '../tutor/tutor_service.dart';
 import 'history_screen.dart';
+import 'metric_explainer.dart';
 
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
 /// bar, the in-game dialogs (cube/resign responses, game-end, match-end), the
@@ -64,6 +65,7 @@ class GameScreen extends StatefulWidget {
     this.persistedMatchId,
     this.dragHintShown = true,
     this.onDragHintShown,
+    this.opponentLabel = 'AI',
   });
 
   final MatchController controller;
@@ -111,6 +113,16 @@ class GameScreen extends StatefulWidget {
 
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
+
+  /// What the HUD score calls the NON-local side when exactly one side is
+  /// locally human — "AI" (the default, a match against the computer) or "Opp"
+  /// (an online match). The local side is then always called "You" and shown
+  /// first, so the header reads "You 2–1 AI · to 5" rather than the cryptic
+  /// "W 2–1 B · to 5".
+  ///
+  /// IGNORED in hot-seat, where both sides are local and neither of them is
+  /// "you": that header keeps the neutral "W 2–1 B · to 5".
+  final String opponentLabel;
 
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
   /// surfaces a hint button (top-5 plays), post-move assessments for HUMAN moves
@@ -211,6 +223,17 @@ class _GameScreenState extends State<GameScreen> {
   /// prematurely committing the persisted [_dragHintShown] latch.
   bool _dragHintScheduled = false;
 
+  /// The messenger that owns this screen's SnackBars, captured while the
+  /// [BuildContext] is still valid so [dispose] can reach it (looking it up in
+  /// `dispose` is illegal — the element is already defunct).
+  ScaffoldMessengerState? _messenger;
+
+  /// The live drag-hint SnackBar's controller while OUR hint is on screen, else
+  /// `null` (cleared by its own `closed` future the moment it goes, however it
+  /// goes). [dispose] removes it only while this is non-null, so leaving the
+  /// screen never tears down a SnackBar that belongs to somebody else.
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _dragHintBar;
+
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
 
@@ -277,7 +300,31 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _messenger = ScaffoldMessenger.of(context);
+  }
+
+  @override
   void dispose() {
+    // The one-time drag hint is scoped to THIS screen: a floating SnackBar
+    // outlives its route, so without this it follows the user onto whatever
+    // they open next (History, Settings, …). Removed only while our own hint is
+    // the live one — never a SnackBar posted by another screen.
+    //
+    // Deferred to the end of the frame: this `dispose` runs while the element
+    // tree is LOCKED (mid-unmount), and removing a SnackBar drives the
+    // messenger's animation, which would `setState` under that lock. By the
+    // post-frame callback the lock is gone and the hint is still the current
+    // SnackBar (the route we are leaving with cannot have posted another).
+    // The `mounted` re-check matters when the whole app goes down with us (the
+    // messenger is then gone too, and driving its animation would throw).
+    final messenger = _messenger;
+    if (_dragHintBar != null && messenger != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (messenger.mounted) messenger.removeCurrentSnackBar();
+      });
+    }
     _rollBeatTimer?.cancel();
     _observable.removeListener(_onChange);
     _dicePresenting.dispose();
@@ -335,7 +382,8 @@ class _GameScreenState extends State<GameScreen> {
       if (!mounted) return;
       _dragHintShown = true;
       widget.onDragHintShown?.call();
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      final bar = messenger.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.only(bottom: 104, left: 12, right: 12),
@@ -344,11 +392,16 @@ class _GameScreenState extends State<GameScreen> {
           duration: const Duration(seconds: 6),
           action: SnackBarAction(
             label: 'Got it',
-            onPressed: () =>
-                ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+            onPressed: messenger.hideCurrentSnackBar,
           ),
         ),
       );
+      _dragHintBar = bar;
+      // Forget the controller however the bar goes (timeout, "Got it", or a
+      // replacement), so `dispose` only ever removes a hint that is still up.
+      unawaited(bar.closed.then((_) {
+        if (identical(_dragHintBar, bar)) _dragHintBar = null;
+      }));
     });
   }
 
@@ -671,35 +724,56 @@ class _GameScreenState extends State<GameScreen> {
           children: [
             Column(
               children: [
-                if (_c.error != null) _ErrorBanner(error: _c.error!),
                 _Hud(
                   controller: _c,
                   showScoring: widget.showScoring,
+                  opponentLabel: widget.opponentLabel,
                   onGameRecord: _openRecord,
                 ),
                 Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Center(
-                      child: BoardView(
-                        state: state,
-                        interactive: moveSide != null,
-                        onMoveCommitted: (move) {
-                          if (moveSide != null) _c.submitMove(moveSide, move);
-                        },
-                        whiteAtBottom: whiteAtBottom,
-                        externalMove: _stagedMove,
-                        lastMove: _c.lastMove,
-                        holdMoveAnimation: _dicePresenting,
-                        entryControl: _entryControl,
-                        hopDuration: widget.timings.hop,
-                        interHopDuration: widget.timings.interHop,
-                        interactionOptions: widget.interactionOptions,
-                        whiteDice: whiteDice,
-                        blackDice: blackDice,
-                        diceOverride: _rollBeatDice,
+                  // The board's slot. An error banner FLOATS at its top edge
+                  // (just under the HUD, where it used to sit) instead of being
+                  // a Column child: the board fills this slot, so a banner that
+                  // took height of its own would resize the board the moment an
+                  // agent errored — the same F6 no-jump rule the action bar and
+                  // the advice slot follow. StackFit.expand keeps the board's
+                  // constraints byte-identical to the un-stacked layout.
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Center(
+                          child: BoardView(
+                            state: state,
+                            interactive: moveSide != null,
+                            onMoveCommitted: (move) {
+                              if (moveSide != null) {
+                                _c.submitMove(moveSide, move);
+                              }
+                            },
+                            whiteAtBottom: whiteAtBottom,
+                            externalMove: _stagedMove,
+                            lastMove: _c.lastMove,
+                            holdMoveAnimation: _dicePresenting,
+                            entryControl: _entryControl,
+                            hopDuration: widget.timings.hop,
+                            interHopDuration: widget.timings.interHop,
+                            interactionOptions: widget.interactionOptions,
+                            whiteDice: whiteDice,
+                            blackDice: blackDice,
+                            diceOverride: _rollBeatDice,
+                          ),
+                        ),
                       ),
-                    ),
+                      if (_c.error != null)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: _ErrorBanner(error: _c.error!),
+                        ),
+                    ],
                   ),
                 ),
                 _historyStrip(),
@@ -800,12 +874,9 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _gameEndDialog() {
     final result = _c.state.result!;
-    final winner = _playerName(result.winner);
     return _ModalCard(
       title: 'Game over',
-      message: '$winner wins ${result.points} '
-          '(${_outcomeName(result.outcome)}).\n'
-          '${_scoreLine(_c)}',
+      message: '${_gameEndSummary(result)}\n${_scoreLine(_c)}',
       actions: [
         if (_canShowSummary) _summaryAction('Analyze game'),
         _CardAction(
@@ -876,8 +947,18 @@ class _GameScreenState extends State<GameScreen> {
 
   // --- Tutor UI --------------------------------------------------------------
 
+  /// Height of the tutor advice slot below the action bar. RESERVED whenever a
+  /// tutor is attached, whether or not there is advice to show right now, for
+  /// exactly the reason [_actionBar] is pinned to 64px: the board FILLS the slot
+  /// between the HUD and this region, so on a phone (where that slot is
+  /// height-bound) a line appearing here would resize the board mid-turn. The
+  /// advice comes and goes at every pre-roll gate, so an unreserved line meant a
+  /// board that grew and shrank by this much on every turn (F6).
+  static const double _adviceLineHeight = 28;
+
   /// The bottom region: the fixed-height contextual action bar and, when the
-  /// tutor is on, the pre-roll cube advice line beneath it.
+  /// tutor is on, the fixed-height cube-advice slot beneath it (empty until the
+  /// pre-roll gate resolves its advice).
   Widget _bottomRegion(Player? moveSide) {
     final showCube =
         _tutor != null && _cubeAdvice != null && _c.awaitingHumanTurn;
@@ -885,7 +966,15 @@ class _GameScreenState extends State<GameScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         _actionBar(moveSide),
-        if (showCube) _cubeAdviceLine(_cubeAdvice!),
+        // With no tutor there is never advice, so no slot is reserved at all —
+        // the tutor is fixed for the life of the screen, so this is still a
+        // constant height per screen.
+        if (_tutor != null)
+          SizedBox(
+            key: const ValueKey('adviceLine'),
+            height: _adviceLineHeight,
+            child: showCube ? _cubeAdviceLine(_cubeAdvice!) : null,
+          ),
       ],
     );
   }
@@ -976,16 +1065,20 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The always-present collapsed history strip. Fixed 32px height, rendered
   /// between the board and the action bar so the board never reflows (F6). It
-  /// shows the LATEST record line (ellipsized), that line's assessment score
-  /// when its move was assessed (coloured dot + loss), and a chevron. Tapping
-  /// anywhere expands the full scrollable record sheet ([_recordPanel]).
+  /// shows the LATEST record line (ellipsized), a PERSISTENT score chip for the
+  /// local player's most recent assessed move, and a chevron. Tapping anywhere
+  /// expands the full scrollable record sheet ([_recordPanel]).
+  ///
+  /// The chip is deliberately decoupled from the latest LINE. Against the AI the
+  /// tutor's verdict on your move resolves only after the AI has already replied,
+  /// so a chip tied to the latest line was never visible in a vs-computer match
+  /// at all — the one mode where it matters most. It now persists until a newer
+  /// assessment of your own replaces it, and clears with the log on a new game.
   Widget _historyStrip() {
     final scheme = Theme.of(context).colorScheme;
     final lines = buildGameRecord(_c.game.events);
     final latest = lines.isEmpty ? null : lines.last;
-    final assessment = (latest == null || latest.eventIndex == null)
-        ? null
-        : _assessmentsByEventIndex[latest.eventIndex];
+    final assessment = _stripAssessment();
     return Material(
       color: scheme.surfaceContainerHighest,
       child: InkWell(
@@ -1023,6 +1116,40 @@ class _GameScreenState extends State<GameScreen> {
         ),
       ),
     );
+  }
+
+  /// The assessment the strip's score chip shows: the most recent assessed move
+  /// by [_chipSide], or `null` when that side has none yet this game.
+  ///
+  /// Assessments are only ever recorded for locally-human movers, so this scans
+  /// [_assessmentsByEventIndex] backwards for the highest event index whose
+  /// [MoveEvent] belongs to the chip's side. Entries whose index no longer
+  /// addresses the live log (a game reset that has not yet cleared the map) are
+  /// skipped defensively.
+  ///
+  /// Runs on every build, so it scans the LOG backwards (which is already in
+  /// index order) and looks each candidate up in the map, rather than sorting
+  /// the map's keys — no allocation, and it stops at the first hit.
+  MoveAssessment? _stripAssessment() {
+    if (_assessmentsByEventIndex.isEmpty) return null;
+    final side = _chipSide();
+    if (side == null) return null;
+    final events = _c.game.events;
+    for (var index = events.length - 1; index >= 0; index--) {
+      final event = events[index];
+      if (event is! MoveEvent || event.player != side) continue;
+      final assessment = _assessmentsByEventIndex[index];
+      if (assessment != null) return assessment;
+    }
+    return null;
+  }
+
+  /// Whose score the strip chip reports: in hot-seat the CURRENT mover (the
+  /// person now holding the device sees their own last verdict); otherwise the
+  /// single locally-human side (vs-AI or the local side of an online match).
+  Player? _chipSide() {
+    if (_hotSeat) return _c.state.turn;
+    return _humanSideWith((_) => true);
   }
 
   /// The compact assessment indicator: a mark-coloured dot, the mark WORD, and
@@ -1064,6 +1191,8 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The pre-roll cube advice: "Tutor: Double — opponent should take/pass" or
   /// "Tutor: Roll".
+  /// Fills the reserved [_adviceLineHeight] slot (see [_bottomRegion]); the row
+  /// is centred in it rather than padded to its own height.
   Widget _cubeAdviceLine(CubeAssessment a) {
     final advice = a.advice;
     final text = advice.shouldDouble
@@ -1071,16 +1200,27 @@ class _GameScreenState extends State<GameScreen> {
             '${advice.shouldTake ? 'take' : 'pass'}'
         : 'Tutor: Roll';
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.school, size: 16, color: scheme.primary),
-          const SizedBox(width: 6),
-          Text(text, style: TextStyle(color: scheme.primary, fontSize: 13)),
-        ],
-      ),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.school, size: 16, color: scheme.primary),
+        const SizedBox(width: 6),
+        // Scale-to-fit rather than overflow: the longest advice string ("Double
+        // — opponent should take") outgrows a narrow phone once the system text
+        // scale is turned up, and a slightly smaller line still reads. Mirrors
+        // the HUD score's treatment.
+        Flexible(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              text,
+              maxLines: 1,
+              softWrap: false,
+              style: TextStyle(color: scheme.primary, fontSize: 13),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1119,6 +1259,11 @@ class _GameScreenState extends State<GameScreen> {
                                   Theme.of(context).textTheme.titleMedium),
                         ),
                         IconButton(
+                          tooltip: 'What do these numbers mean?',
+                          icon: const Icon(Icons.info_outline, size: 20),
+                          onPressed: () => showMetricExplainer(context),
+                        ),
+                        IconButton(
                           tooltip: 'Close',
                           icon: const Icon(Icons.close, size: 20),
                           onPressed: _closeHint,
@@ -1136,9 +1281,11 @@ class _GameScreenState extends State<GameScreen> {
                         padding: EdgeInsets.symmetric(vertical: 12),
                         child: Text('No hints available.'),
                       )
-                    else
+                    else ...[
+                      _hintColumnHeader(),
                       for (var i = 0; i < top.length; i++)
                         _hintRow(i, top[i], bestEq),
+                    ],
                   ],
                 ),
               ),
@@ -1148,6 +1295,36 @@ class _GameScreenState extends State<GameScreen> {
       ],
     );
   }
+
+  /// Names the hint sheet's two bare number columns ("Equity" / "Loss"), right-
+  /// aligned over them at the same widths the rows use, so the figures are not
+  /// left for the reader to guess at. The ⓘ in the sheet header explains what
+  /// they mean.
+  Widget _hintColumnHeader() {
+    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        children: [
+          const Spacer(),
+          SizedBox(
+            width: _hintNumberColumn,
+            child: Text('Equity', style: style, textAlign: TextAlign.right),
+          ),
+          SizedBox(
+            width: _hintNumberColumn,
+            child: Text('Loss', style: style, textAlign: TextAlign.right),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Width of each of the hint sheet's number columns, shared by the header and
+  /// the rows so the labels sit exactly over their figures.
+  static const double _hintNumberColumn = 64;
 
   Widget _hintRow(int i, ScoredMove sm, double bestEq) {
     final delta = i == 0 ? '—' : (sm.equity - bestEq).toStringAsFixed(3);
@@ -1170,9 +1347,13 @@ class _GameScreenState extends State<GameScreen> {
             ),
             Expanded(child: Text('${sm.move}', style: mono)),
             const SizedBox(width: 8),
-            Text(sm.equity.toStringAsFixed(3), style: mono),
             SizedBox(
-              width: 64,
+              width: _hintNumberColumn,
+              child: Text(sm.equity.toStringAsFixed(3),
+                  style: mono, textAlign: TextAlign.right),
+            ),
+            SizedBox(
+              width: _hintNumberColumn,
               child: Text(delta, style: mono, textAlign: TextAlign.right),
             ),
           ],
@@ -1398,23 +1579,53 @@ String _resignName(ResignValue v) => switch (v) {
       ResignValue.backgammon => 'backgammon',
     };
 
-String _outcomeName(GameOutcome o) => switch (o) {
-      GameOutcome.single => 'single',
-      GameOutcome.gammon => 'gammon',
-      GameOutcome.backgammon => 'backgammon',
-      GameOutcome.drop => 'drop',
-      GameOutcome.resignation => 'resignation',
-    };
+/// The game-end dialog's one-line summary, in plain language.
+///
+/// Replaces the old jargon fold ("Black wins 1 (drop).", which read as a score
+/// of 1 and a mystery word) with what actually happened and what it was worth:
+/// "Black wins this game (+1) — White declined the double." / "White wins this
+/// game (+2, gammon)." Terse by design — the running match score follows on the
+/// next line.
+String _gameEndSummary(GameResult result) {
+  final winner = _playerName(result.winner);
+  final loser = _playerName(result.winner.opponent);
+  final points = '+${result.points}';
+  return switch (result.outcome) {
+    GameOutcome.single => '$winner wins this game ($points).',
+    GameOutcome.gammon => '$winner wins this game ($points, gammon).',
+    GameOutcome.backgammon =>
+      '$winner wins this game ($points, backgammon).',
+    GameOutcome.drop =>
+      '$winner wins this game ($points) — $loser declined the double.',
+    GameOutcome.resignation =>
+      '$winner wins this game ($points) — $loser resigned.',
+  };
+}
 
 String _scoreLine(MatchController c) {
   final m = c.match;
   return 'White ${m.whiteScore} — ${m.blackScore} Black  (to ${m.matchLength})';
 }
 
-/// The compact header score: "W 2–3 B · to 5".
-String _compactScore(MatchController c) {
+/// The compact header score, named from the local player's point of view where
+/// there IS one: "You 2–3 AI · to 5" against the computer (or "… Opp …" online,
+/// per [GameScreen.opponentLabel]), with the local side's score first.
+///
+/// Falls back to the neutral "W 2–3 B · to 5" in hot-seat, where both sides are
+/// local, and for any controller with no locally-human side at all (an AI-vs-AI
+/// harness), since "You" would then be a lie.
+String _compactScore(MatchController c, String opponentLabel) {
   final m = c.match;
-  return 'W ${m.whiteScore}–${m.blackScore} B · to ${m.matchLength}';
+  final localWhite = c.isLocalHuman(Player.white);
+  final localBlack = c.isLocalHuman(Player.black);
+  final soleLocal = localWhite != localBlack;
+  if (!soleLocal) {
+    return 'W ${m.whiteScore}–${m.blackScore} B · to ${m.matchLength}';
+  }
+  final (mine, theirs) = localWhite
+      ? (m.whiteScore, m.blackScore)
+      : (m.blackScore, m.whiteScore);
+  return 'You $mine–$theirs $opponentLabel · to ${m.matchLength}';
 }
 
 /// Entries in the header overflow (⋮) menu. "Game record" is always available;
@@ -1437,6 +1648,7 @@ class _Hud extends StatelessWidget {
     required this.controller,
     required this.onGameRecord,
     this.showScoring = true,
+    this.opponentLabel = 'AI',
   });
 
   final MatchController controller;
@@ -1446,6 +1658,9 @@ class _Hud extends StatelessWidget {
 
   /// Whether the running match score is shown (the settings `showScoring`).
   final bool showScoring;
+
+  /// What the score calls the non-local side. See [GameScreen.opponentLabel].
+  final String opponentLabel;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
@@ -1483,27 +1698,53 @@ class _Hud extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: Row(
           children: [
-            // The score segment is hidden entirely when scoring is off; the rest
-            // of the header (Crawford badge, cube chip, Double, overflow) stays.
-            if (showScoring)
-              Flexible(
-                child: Text(
-                  _compactScore(controller),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall,
+            // The left group (score, Crawford badge, cube chip) takes ALL the
+            // space the right-hand controls leave. A bare `Flexible` + `Spacer`
+            // split the free space evenly instead, which truncated the longer
+            // "You 0–1 AI · to 3" score to "You 0–1 AI · t…" on a phone.
+            //
+            // The group scales to fit as ONE unit rather than flexing the score
+            // alone: a clipped score ("You 0–1 AI · t…") tells the player
+            // nothing, whereas a slightly smaller row still reads — and the
+            // badge and chip beside it are RIGID, so a flexing score could not
+            // absorb them. In a 1-point match (Crawford from the first roll)
+            // that rigid pair plus the score overflowed the row by a hair on a
+            // 390pt phone. Scaling the whole group can never overflow, at any
+            // width or system text scale, and only kicks in when the group
+            // genuinely outgrows the row — long names, two-digit scores, an
+            // 11-point match, the Crawford badge.
+            Expanded(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  // Unbounded inside the FittedBox: measured at natural size,
+                  // then scaled — so no child here may be Flexible.
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // The score segment is hidden entirely when scoring is off;
+                    // the rest of the header (Crawford badge, cube chip, Double,
+                    // overflow) stays.
+                    if (showScoring)
+                      Text(
+                        _compactScore(controller, opponentLabel),
+                        maxLines: 1,
+                        softWrap: false,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    if (state.isCrawfordGame) ...[
+                      if (showScoring) const SizedBox(width: 8),
+                      const _MiniBadge(icon: Icons.star, label: 'Crawford'),
+                    ],
+                    // The cube chip is hidden in a cubeless match (no cube).
+                    if (!controller.cubeless) ...[
+                      const SizedBox(width: 8),
+                      _CubeChip(value: cube.value, owner: cube.owner),
+                    ],
+                  ],
                 ),
               ),
-            if (state.isCrawfordGame) ...[
-              if (showScoring) const SizedBox(width: 8),
-              const _MiniBadge(icon: Icons.star, label: 'Crawford'),
-            ],
-            // The cube chip is hidden in a cubeless match (there is no cube).
-            if (!controller.cubeless) ...[
-              const SizedBox(width: 8),
-              _CubeChip(value: cube.value, owner: cube.owner),
-            ],
-            const Spacer(),
+            ),
             if (showThinking) ...[
               const _ThinkingDot(),
               const SizedBox(width: 8),
