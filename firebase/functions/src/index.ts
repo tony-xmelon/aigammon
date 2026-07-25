@@ -70,6 +70,30 @@ const SUBMITTABLE = new Set<FlowEventType>([
 
 const MATCH_LENGTHS = new Set([1, 3, 5, 7]);
 
+// The recognised terminal outcomes (F3). Anything else in a result claim is
+// rejected — mirrors GameOutcome in packages/backgammon_core/lib/src/game_state.dart.
+const VALID_OUTCOMES = new Set(['single', 'gammon', 'backgammon', 'resignation', 'drop']);
+
+// A pragmatic upper bound on one game's points (F2). The largest plausible
+// stake is a backgammon (×3) on a cube of 64 → 192; real games never approach
+// it. The bound only rejects absurd/overflowing claims — cube values are
+// unbounded in theory, so this is a v1 sanity cap, not a rules-exact limit.
+const MAX_POINTS = 3 * 64;
+
+// The only top-level keys any submittable event carries (F5-lite), unioned over
+// the event schemas in game_events.dart: move/double/take/drop/resign* use
+// {type, player[, move][, value]}. die1/die2 belong to server-only roll events
+// and are listed defensively. Any other key is rejected.
+const ALLOWED_EVENT_KEYS = new Set(['type', 'player', 'move', 'value', 'die1', 'die2']);
+
+// The maximum JSON-serialized size of a client event (F5-lite). A full move is
+// at most 4 hops of {from,to,hit}; 2 KiB is comfortably above that and well
+// below anything abusive.
+const MAX_EVENT_BYTES = 2048;
+
+/** The other seat. (turnflow.ts keeps its own private copy; this is index-local.) */
+const opponentSeat = (s: Seat): Seat => (s === 'white' ? 'black' : 'white');
+
 // Code alphabet: A-Z minus confusables I and O, plus digits 2-9 (0 and 1 are
 // confusable with O and I/L). 32 symbols → 32^6 ≈ 1.07e9 codes.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -151,11 +175,19 @@ function validateResultClaim(raw: unknown): ResultClaim {
   if (r.winner !== 'white' && r.winner !== 'black') {
     throw new HttpsError('invalid-argument', 'result.winner must be white or black');
   }
-  if (typeof r.points !== 'number' || !Number.isInteger(r.points) || r.points <= 0) {
-    throw new HttpsError('invalid-argument', 'result.points must be a positive integer');
+  if (
+    typeof r.points !== 'number' ||
+    !Number.isInteger(r.points) ||
+    r.points < 1 ||
+    r.points > MAX_POINTS
+  ) {
+    throw new HttpsError(
+      'invalid-argument',
+      `result.points must be an integer in 1..${MAX_POINTS}`,
+    );
   }
-  if (typeof r.outcome !== 'string') {
-    throw new HttpsError('invalid-argument', 'result.outcome must be a string');
+  if (typeof r.outcome !== 'string' || !VALID_OUTCOMES.has(r.outcome)) {
+    throw new HttpsError('invalid-argument', 'result.outcome is not a recognised outcome');
   }
   return { winner: r.winner, points: r.points, outcome: r.outcome };
 }
@@ -336,6 +368,19 @@ export const submitEvent = onCall(async (request) => {
   }
   const eventType = type as FlowEventType;
 
+  // F5-lite: cheap event-shape guard. Bound the payload size and reject any
+  // top-level key outside the known event schema before it is ever stored. This
+  // is abuse hardening, not full validation — move legality is still checked by
+  // both clients.
+  if (JSON.stringify(event).length > MAX_EVENT_BYTES) {
+    throw new HttpsError('invalid-argument', 'event payload too large');
+  }
+  for (const key of Object.keys(event as Record<string, unknown>)) {
+    if (!ALLOWED_EVENT_KEYS.has(key)) {
+      throw new HttpsError('invalid-argument', `unexpected event key: ${key}`);
+    }
+  }
+
   const seq = await db.runTransaction(async (tx) => {
     const matchRef = db.collection('matches').doc(matchId);
     const snap = await tx.get(matchRef);
@@ -393,6 +438,19 @@ export const submitEvent = onCall(async (request) => {
 
     // Terminal: fold the trusted result claim into scores.
     const result = validateResultClaim(rawResult);
+
+    // F1: the winner is DETERMINISTIC from {eventType, seat} — the client cannot
+    // invent it. Mirrors game_state.dart terminal semantics:
+    //   drop         -> the doubler wins == opponent(decider); decider == seat.
+    //   resignAccept -> the acceptor wins == seat (offerer == opponent(seat),
+    //                   and acceptResign() awards offer.by.opponent).
+    //   move (15th checker borne off) -> the mover wins == seat.
+    // Reject any claim whose winner disagrees.
+    const expectedWinner: Seat = eventType === 'drop' ? opponentSeat(seat) : seat;
+    if (result.winner !== expectedWinner) {
+      throw new HttpsError('failed-precondition', 'result winner mismatch');
+    }
+
     const newWhite = doc.scores.white + (result.winner === 'white' ? result.points : 0);
     const newBlack = doc.scores.black + (result.winner === 'black' ? result.points : 0);
 

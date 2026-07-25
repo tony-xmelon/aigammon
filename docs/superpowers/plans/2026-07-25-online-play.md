@@ -56,3 +56,4 @@ Whole-branch review; fixes; finish-branch (merge master, push, delete). Confirm 
 - Server-side full move legality (v1 trusts dual-client validation + divergence detection; a TS or WASM rules check is the hardening path).
 - Matchmaking, ratings, spectators, chat (out of scope per spec).
 - Production deploy + Web API key config (user-run; documented in firebase/DEPLOY.md).
+- No rate limiting / abuse protection on anonymous callables (createMatch spam, join probing) — accepted v1; Firebase App Check + per-uid caps are the hardening path.
