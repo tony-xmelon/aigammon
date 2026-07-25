@@ -95,9 +95,10 @@ class GameScreen extends StatefulWidget {
   final BoardOrientationMode orientation;
 
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
-  /// surfaces a hint button (top-5 plays), a post-move assessment chip for
-  /// HUMAN moves, and cube advice at the human's pre-roll gate / cube-offer
-  /// dialog. Display-only: hints never auto-apply.
+  /// surfaces a hint button (top-5 plays), post-move assessments for HUMAN moves
+  /// (a mark + equity loss on the collapsed history strip and the expanded
+  /// record sheet's rows), and cube advice at the human's pre-roll gate /
+  /// cube-offer dialog. Display-only: hints never auto-apply.
   final TutorService? tutor;
 
   @override
@@ -930,29 +931,29 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  /// The compact assessment indicator: a mark-coloured dot and, when the move
-  /// gave up measurable equity, the loss — e.g. a red dot + "−0.061". A best
-  /// play (loss below the display threshold) shows the dot alone.
+  /// The compact assessment indicator: a mark-coloured dot, the mark WORD, and
+  /// (when the move gave up measurable equity) the loss — e.g. a red dot +
+  /// "Error −0.061". The word is carried alongside the colour so the mark reads
+  /// without relying on colour alone (a colour-blind accessibility guard). A
+  /// best play (loss below the display threshold) shows just the dot + "Best".
   Widget _assessmentMark(MoveAssessment a) {
-    final (color, _) = _markStyle(a.mark);
+    final (color, label) = _markStyle(a.mark);
     final loss = a.equityLoss;
-    final lossText = loss >= 0.001 ? '−${loss.toStringAsFixed(3)}' : '';
+    final lossText = loss >= 0.001 ? ' −${loss.toStringAsFixed(3)}' : '';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(Icons.circle, size: 10, color: color),
-        if (lossText.isNotEmpty) ...[
-          const SizedBox(width: 4),
-          Text(
-            lossText,
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
+        const SizedBox(width: 4),
+        Text(
+          '$label$lossText',
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
           ),
-        ],
+        ),
       ],
     );
   }
