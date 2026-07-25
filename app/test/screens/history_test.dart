@@ -168,6 +168,11 @@ void main() {
           events: game.events,
           result: game.state.result!,
         );
+        // Age every row past the sweep's two-minute guard (created_at is unix
+        // seconds). Real litter is minutes-to-days old; the guard only exists
+        // to keep the sweep clear of a game that is still being written.
+        await _repo.db
+            .customStatement('UPDATE matches SET created_at = created_at - 600');
       });
 
       await t.pumpWidget(_app(const HistoryScreen(),

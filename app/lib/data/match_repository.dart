@@ -90,13 +90,34 @@ class MatchRepository {
   /// so they are swept on every history load. Matches with at least one
   /// recorded game are kept: their games are analysable.
   ///
-  /// Deliberately narrow: `completed = 0 AND no games`. A completed match is
-  /// never touched (a 0–0 completed match cannot occur), and an unfinished
-  /// match with games survives as an "Unfinished" row.
-  Future<int> deleteEmptyAbandonedMatches() {
+  /// Deliberately narrow: `completed = 0 AND no games AND older than [minAge]`.
+  /// A completed match is never touched (a 0–0 completed match cannot occur),
+  /// and an unfinished match with games survives as an "Unfinished" row.
+  ///
+  /// ## Why the age guard
+  ///
+  /// [recordGame] is fired and awaited OFF the UI thread's critical path, so a
+  /// match can be gameless for a moment while its first game is mid-insert. A
+  /// user who pops the game screen and reaches History fast enough would then
+  /// race that insert: the purge deletes the match row, and the in-flight
+  /// game insert either fails or is swept by the `ON DELETE CASCADE` — silently
+  /// losing a real, analysable game. Only sweeping rows that have been sitting
+  /// around for [minAge] puts the purge well clear of any live write; the
+  /// litter it exists to clean is minutes-to-days old by the time anyone sees
+  /// it. Tests pass [Duration.zero] to sweep deterministically.
+  Future<int> deleteEmptyAbandonedMatches({
+    Duration minAge = const Duration(minutes: 2),
+  }) {
+    final cutoff = DateTime.now().subtract(minAge);
+    // `<=`, not `<`: created_at is stored at one-second resolution, so a match
+    // created within the current second must still count as "at least minAge
+    // old" when minAge is zero (the test sweep). At the two-minute default the
+    // boundary is immaterial.
     return db.customUpdate(
       'DELETE FROM matches WHERE completed = 0 '
+      'AND created_at <= ? '
       'AND id NOT IN (SELECT match_id FROM games)',
+      variables: [Variable<DateTime>(cutoff)],
       updates: {db.matches},
       updateKind: UpdateKind.delete,
     );

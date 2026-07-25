@@ -42,10 +42,13 @@ void main() {
     // applies. The mark's ink is near-square, so the limit is its DIAGONAL —
     // and flutter_launcher_icons wraps this drawable in a further 16% inset
     // (see mipmap-anydpi-v26/ic_launcher.xml), which the size below accounts
-    // for: 0.64 * 0.70 (half-diagonal) * 0.68 (inset) lands on the safe circle.
+    // for. At 108dp: 0.60 * 108 = 64.8dp across, whose ink DIAGONAL after the
+    // launcher-icons 16%-per-side inset lands ~62dp — inside the 66dp safe
+    // circle with a few dp to spare. The previous 0.64 computed to 66.5dp: a
+    // hair OVER the circle, so a maximally circular mask could shave the mark.
     await _write(
       p.join(dir.path, 'app_icon_adaptive.png'),
-      const AppMarkPainter(background: false, contentScale: 0.64),
+      const AppMarkPainter(background: false, contentScale: 0.60),
     );
   });
 }

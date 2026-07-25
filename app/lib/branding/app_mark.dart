@@ -35,8 +35,9 @@ class AppMarkPainter extends CustomPainter {
   final double cornerRadiusFraction;
 
   /// How much of the shortest side the motif's ink spans (its larger dimension).
-  /// ~0.78 suits a full-bleed icon plate; ~0.62 keeps the Android adaptive
-  /// foreground inside the launcher's circular safe zone.
+  /// ~0.78 suits a full-bleed icon plate; 0.60 keeps the Android adaptive
+  /// foreground's ink DIAGONAL inside the launcher's circular safe zone (see
+  /// `tool/generate_app_icon.dart` for the arithmetic).
   final double contentScale;
 
   /// The motif's ink bounds inside the unit design box. Used to centre by ink

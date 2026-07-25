@@ -1125,6 +1125,79 @@ void main() {
     c.disposeController();
   });
 
+  // The board FILLS the slot between the fixed HUD and the fixed bottom region,
+  // so on a phone (where the slot is HEIGHT-bound) anything that changes a
+  // sibling's height would resize the board mid-turn — the F6 no-jump rule.
+  // Both intermittent siblings are checked on a real phone surface.
+  group('F6: no board reflow on a phone', () {
+    const phone = Size(390, 844);
+
+    testWidgets('the tutor advice line appearing and going leaves the board put',
+        (t) async {
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // Black wins the opening (6 > 1) and moves; White then reaches its
+        // pre-roll gate, where the cube advice line resolves.
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      final tutor = TutorService(TutorEngine());
+      await t.pumpWidget(_tutorHarness(c, tutor));
+
+      // At the gate, with the advice line showing.
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      await pumpUntil(
+          t, () => find.textContaining('Tutor:').evaluate().isNotEmpty);
+      final withAdvice = boardRect(t);
+
+      // Rolling closes the gate and the advice goes: the slot stays reserved,
+      // so the board must not grow into it (and must not shrink back when the
+      // next gate's advice lands).
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => !c.awaitingHumanTurn);
+      expect(find.textContaining('Tutor:'), findsNothing);
+      expect(boardRect(t), withAdvice,
+          reason: 'the advice line has a reserved slot — the board holds still');
+
+      c.disposeController();
+    });
+
+    testWidgets('the error banner appearing leaves the board put', (t) async {
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: ThrowingAgent(),
+        // 3, not 1: a 1-point match is Crawford from the off, and the HUD's
+        // Crawford badge overflows its row by ~1px at 390pt — a pre-existing
+        // header issue, not what this test is about.
+        matchLength: 3,
+        // White (human) wins the opening and moves; Black's agent then throws.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.pendingMoveOf(Player.white).value != null);
+      final clean = boardRect(t);
+      expect(find.byIcon(Icons.error_outline), findsNothing);
+
+      await commitFirstMove(t);
+      await pumpUntil(t, () => c.error != null);
+      await t.pump();
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      expect(boardRect(t), clean,
+          reason: 'the banner floats over the board — no reflow');
+
+      c.disposeController();
+    });
+  });
+
   group('opponent dice-roll beat', () {
     // Reaches a NON-local (AI Black) roll: White (human) wins the opening
     // (6 > 1) and plays, then Black auto-rolls its first turn. [HangingMoveAgent]

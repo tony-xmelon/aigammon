@@ -724,7 +724,6 @@ class _GameScreenState extends State<GameScreen> {
           children: [
             Column(
               children: [
-                if (_c.error != null) _ErrorBanner(error: _c.error!),
                 _Hud(
                   controller: _c,
                   showScoring: widget.showScoring,
@@ -732,28 +731,49 @@ class _GameScreenState extends State<GameScreen> {
                   onGameRecord: _openRecord,
                 ),
                 Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Center(
-                      child: BoardView(
-                        state: state,
-                        interactive: moveSide != null,
-                        onMoveCommitted: (move) {
-                          if (moveSide != null) _c.submitMove(moveSide, move);
-                        },
-                        whiteAtBottom: whiteAtBottom,
-                        externalMove: _stagedMove,
-                        lastMove: _c.lastMove,
-                        holdMoveAnimation: _dicePresenting,
-                        entryControl: _entryControl,
-                        hopDuration: widget.timings.hop,
-                        interHopDuration: widget.timings.interHop,
-                        interactionOptions: widget.interactionOptions,
-                        whiteDice: whiteDice,
-                        blackDice: blackDice,
-                        diceOverride: _rollBeatDice,
+                  // The board's slot. An error banner FLOATS at its top edge
+                  // (just under the HUD, where it used to sit) instead of being
+                  // a Column child: the board fills this slot, so a banner that
+                  // took height of its own would resize the board the moment an
+                  // agent errored — the same F6 no-jump rule the action bar and
+                  // the advice slot follow. StackFit.expand keeps the board's
+                  // constraints byte-identical to the un-stacked layout.
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Center(
+                          child: BoardView(
+                            state: state,
+                            interactive: moveSide != null,
+                            onMoveCommitted: (move) {
+                              if (moveSide != null) {
+                                _c.submitMove(moveSide, move);
+                              }
+                            },
+                            whiteAtBottom: whiteAtBottom,
+                            externalMove: _stagedMove,
+                            lastMove: _c.lastMove,
+                            holdMoveAnimation: _dicePresenting,
+                            entryControl: _entryControl,
+                            hopDuration: widget.timings.hop,
+                            interHopDuration: widget.timings.interHop,
+                            interactionOptions: widget.interactionOptions,
+                            whiteDice: whiteDice,
+                            blackDice: blackDice,
+                            diceOverride: _rollBeatDice,
+                          ),
+                        ),
                       ),
-                    ),
+                      if (_c.error != null)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: _ErrorBanner(error: _c.error!),
+                        ),
+                    ],
                   ),
                 ),
                 _historyStrip(),
@@ -927,8 +947,18 @@ class _GameScreenState extends State<GameScreen> {
 
   // --- Tutor UI --------------------------------------------------------------
 
+  /// Height of the tutor advice slot below the action bar. RESERVED whenever a
+  /// tutor is attached, whether or not there is advice to show right now, for
+  /// exactly the reason [_actionBar] is pinned to 64px: the board FILLS the slot
+  /// between the HUD and this region, so on a phone (where that slot is
+  /// height-bound) a line appearing here would resize the board mid-turn. The
+  /// advice comes and goes at every pre-roll gate, so an unreserved line meant a
+  /// board that grew and shrank by this much on every turn (F6).
+  static const double _adviceLineHeight = 28;
+
   /// The bottom region: the fixed-height contextual action bar and, when the
-  /// tutor is on, the pre-roll cube advice line beneath it.
+  /// tutor is on, the fixed-height cube-advice slot beneath it (empty until the
+  /// pre-roll gate resolves its advice).
   Widget _bottomRegion(Player? moveSide) {
     final showCube =
         _tutor != null && _cubeAdvice != null && _c.awaitingHumanTurn;
@@ -936,7 +966,15 @@ class _GameScreenState extends State<GameScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         _actionBar(moveSide),
-        if (showCube) _cubeAdviceLine(_cubeAdvice!),
+        // With no tutor there is never advice, so no slot is reserved at all —
+        // the tutor is fixed for the life of the screen, so this is still a
+        // constant height per screen.
+        if (_tutor != null)
+          SizedBox(
+            key: const ValueKey('adviceLine'),
+            height: _adviceLineHeight,
+            child: showCube ? _cubeAdviceLine(_cubeAdvice!) : null,
+          ),
       ],
     );
   }
@@ -1088,17 +1126,20 @@ class _GameScreenState extends State<GameScreen> {
   /// [MoveEvent] belongs to the chip's side. Entries whose index no longer
   /// addresses the live log (a game reset that has not yet cleared the map) are
   /// skipped defensively.
+  ///
+  /// Runs on every build, so it scans the LOG backwards (which is already in
+  /// index order) and looks each candidate up in the map, rather than sorting
+  /// the map's keys — no allocation, and it stops at the first hit.
   MoveAssessment? _stripAssessment() {
     if (_assessmentsByEventIndex.isEmpty) return null;
     final side = _chipSide();
     if (side == null) return null;
     final events = _c.game.events;
-    final indices = _assessmentsByEventIndex.keys.toList()..sort();
-    for (final index in indices.reversed) {
-      if (index >= events.length) continue;
+    for (var index = events.length - 1; index >= 0; index--) {
       final event = events[index];
       if (event is! MoveEvent || event.player != side) continue;
-      return _assessmentsByEventIndex[index];
+      final assessment = _assessmentsByEventIndex[index];
+      if (assessment != null) return assessment;
     }
     return null;
   }
@@ -1150,6 +1191,8 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The pre-roll cube advice: "Tutor: Double — opponent should take/pass" or
   /// "Tutor: Roll".
+  /// Fills the reserved [_adviceLineHeight] slot (see [_bottomRegion]); the row
+  /// is centred in it rather than padded to its own height.
   Widget _cubeAdviceLine(CubeAssessment a) {
     final advice = a.advice;
     final text = advice.shouldDouble
@@ -1157,16 +1200,27 @@ class _GameScreenState extends State<GameScreen> {
             '${advice.shouldTake ? 'take' : 'pass'}'
         : 'Tutor: Roll';
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.school, size: 16, color: scheme.primary),
-          const SizedBox(width: 6),
-          Text(text, style: TextStyle(color: scheme.primary, fontSize: 13)),
-        ],
-      ),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.school, size: 16, color: scheme.primary),
+        const SizedBox(width: 6),
+        // Scale-to-fit rather than overflow: the longest advice string ("Double
+        // — opponent should take") outgrows a narrow phone once the system text
+        // scale is turned up, and a slightly smaller line still reads. Mirrors
+        // the HUD score's treatment.
+        Flexible(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              text,
+              maxLines: 1,
+              softWrap: false,
+              style: TextStyle(color: scheme.primary, fontSize: 13),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

@@ -12,6 +12,13 @@ void main() {
   /// invariant below must hold on a board TALLER than it is wide.
   const portrait = Size(374, 603);
 
+  /// A SQUARE board (aspect 1.0), the regime BETWEEN the two above: past ~1.07
+  /// the point band sets the checker size (as at 800x600), below ~0.67 the
+  /// triangle cap kicks in (as in portrait). A square board sits in neither, so
+  /// it pins the boundaries — the checker is column-bound but the triangles are
+  /// still the full 44% band.
+  const square = Size(700, 700);
+
   Matcher offsetCloseTo(Offset o, double eps) => predicate<Offset>(
         (a) => (a.dx - o.dx).abs() < eps && (a.dy - o.dy).abs() < eps,
         'within $eps of $o',
@@ -166,11 +173,21 @@ void main() {
     });
   }
 
-  for (final boardSize in [size, portrait]) {
+  for (final boardSize in [size, square, portrait]) {
     for (final whiteAtBottom in [true, false]) {
       boardInvariants(boardSize, whiteAtBottom);
     }
   }
+
+  test('a square board is the middle regime: column-bound, triangles uncapped',
+      () {
+    final g = BoardGeometry(square, whiteAtBottom: true);
+    final colWidth = square.width * (1 - 0.08) / 12;
+    expect(g.checkerRadius, closeTo(colWidth * 0.46, 1e-6),
+        reason: 'below an aspect of ~1.07 the column sets the checker size');
+    expect(g.pointRect(0).height, closeTo(square.height * 0.86 * 0.44, 1e-6),
+        reason: 'above an aspect of ~0.67 the triangle cap does not bind');
+  });
 
   test('flipping orientation is a 180° rotation about the centre', () {
     final bottom = BoardGeometry(size, whiteAtBottom: true);

@@ -19,7 +19,9 @@ import 'analysis_screen.dart';
 ///
 /// * on every load the screen sweeps the **empty** abandoned matches
 ///   ([MatchRepository.deleteEmptyAbandonedMatches]) — those with zero recorded
-///   games carry no information at all;
+///   games carry no information at all. The sweep skips matches younger than a
+///   couple of minutes, so it can never race a game that is still being
+///   written (see that method's age-guard note);
 /// * every remaining row can be **swiped away** (right-to-left) behind a
 ///   confirmation dialog, which hard-deletes the match and, by cascade, its
 ///   games.

@@ -178,7 +178,8 @@ void main() {
       await recordOneGame(completed);
       await repo.completeMatch(matchId: completed, winner: 'white');
 
-      final purged = await repo.deleteEmptyAbandonedMatches();
+      final purged =
+          await repo.deleteEmptyAbandonedMatches(minAge: Duration.zero);
       expect(purged, 3, reason: 'exactly the gameless in-progress rows go');
 
       final ids = [for (final m in await repo.watchMatches().first) m.id];
@@ -191,8 +192,42 @@ void main() {
     test('deleteEmptyAbandonedMatches is a no-op on a clean history', () async {
       final matchId = await startMatch();
       await recordOneGame(matchId);
-      expect(await repo.deleteEmptyAbandonedMatches(), 0);
+      expect(
+          await repo.deleteEmptyAbandonedMatches(minAge: Duration.zero), 0);
       expect(await repo.watchMatches().first, hasLength(1));
+    });
+
+    test('the age guard spares a match whose first game may still be in flight',
+        () async {
+      // The race the guard exists for: the match row is in, its first game is
+      // mid-insert, and the user is already on the History screen.
+      final live = await startMatch();
+
+      // The DEFAULT sweep leaves it alone — it is seconds old.
+      expect(await repo.deleteEmptyAbandonedMatches(), 0,
+          reason: 'a just-created match is never swept');
+      expect([for (final m in await repo.watchMatches().first) m.id],
+          contains(live));
+
+      // The in-flight game lands, and the match is safe from then on anyway.
+      await recordOneGame(live);
+      expect(await repo.deleteEmptyAbandonedMatches(minAge: Duration.zero), 0);
+      expect(await repo.gamesFor(live), hasLength(1),
+          reason: 'the game survived the sweep that would have cascaded it');
+    });
+
+    test('the age guard sweeps once a gameless match is old enough', () async {
+      final old = await startMatch();
+      // Backdate the row ten minutes (created_at is stored as unix seconds)
+      // past the guard; the sweep then takes it.
+      await repo.db
+          .customStatement('UPDATE matches SET created_at = created_at - 600 '
+              'WHERE id = $old');
+      final fresh = await startMatch();
+
+      expect(await repo.deleteEmptyAbandonedMatches(), 1,
+          reason: 'only the aged-out gameless row goes');
+      expect([for (final m in await repo.watchMatches().first) m.id], [fresh]);
     });
 
     test('deleteMatch removes the match and cascades to its games', () async {
