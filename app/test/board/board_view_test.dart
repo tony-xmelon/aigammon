@@ -64,6 +64,41 @@ Widget _animHarness(
       ),
     );
 
+/// Mounts an INTERACTIVE [BoardView] wired for both move entry (an
+/// [entryControl] / [externalMove]) and move animation (a [lastMove]), with
+/// `disableAnimations: false` so the ticker runs. Used to prove the entry-source
+/// animation gate: a hand-entered commit must NOT replay, a staged one must.
+Widget _interactiveAnimHarness(
+  GameState state,
+  ValueNotifier<MoveEvent?> lastMove, {
+  required bool interactive,
+  BoardEntryController? control,
+  ValueListenable<Move?>? externalMove,
+  Duration hopDuration = const Duration(milliseconds: 150),
+}) =>
+    MaterialApp(
+      home: MediaQuery(
+        data: const MediaQueryData(disableAnimations: false),
+        child: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: _size.width,
+              height: _size.height,
+              child: BoardView(
+                state: state,
+                interactive: interactive,
+                onMoveCommitted: (_) {},
+                lastMove: lastMove,
+                externalMove: externalMove,
+                entryControl: control,
+                hopDuration: hopDuration,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
 /// The same geometry the widget computes for an 800x600 board.
 final _geometry = BoardGeometry(_size, whiteAtBottom: true);
 
@@ -599,6 +634,78 @@ void main() {
     await t.pump(const Duration(milliseconds: 260));
     expect(_painterOf(t).overlayChecker, isNull,
         reason: 'a fast (200ms) move has settled by 260ms');
+    expect(_painterOf(t).board, postBoard);
+  });
+
+  // --- Entry-source animation gate (no self-replay) --------------------------
+
+  testWidgets('a HAND-ENTERED commit is NOT replayed as an animation',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+
+    // Enter the golden 3-1 by HAND (tap both hops) on the interactive board.
+    await t.pumpWidget(_interactiveAnimHarness(goldenState, lastMove,
+        interactive: true, control: control));
+    await tapPoint(t, 7);
+    await tapPoint(t, 4); // 8/5
+    await tapPoint(t, 5);
+    await tapPoint(t, 4); // 6/5
+    expect(control.canConfirm, isTrue);
+
+    // Confirm, then fire the SAME move as lastMove and rebuild post-move /
+    // non-interactive — the exact sequence the controller drives after a commit.
+    control.confirm();
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(_interactiveAnimHarness(postState, lastMove,
+        interactive: false, control: control));
+
+    // No travelling overlay EVER appears: the move the user just performed live
+    // is not replayed. The post-move board snaps in.
+    await t.pump(const Duration(milliseconds: 75));
+    expect(_painterOf(t).overlayChecker, isNull,
+        reason: 'a hand-entered move must not animate');
+    await t.pump(const Duration(milliseconds: 400));
+    expect(_painterOf(t).overlayChecker, isNull);
+    expect(_painterOf(t).board, postBoard,
+        reason: 'the post-move board is shown without a replay');
+  });
+
+  testWidgets('an externally-STAGED (tap-to-apply hint) commit STILL animates',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+    final external = ValueNotifier<Move?>(null);
+    addTearDown(external.dispose);
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+
+    await t.pumpWidget(_interactiveAnimHarness(goldenState, lastMove,
+        interactive: true, externalMove: external, control: control));
+
+    // Stage the WHOLE play programmatically (a hint), not hop-by-hop, then
+    // confirm and fire the move as the controller would.
+    external.value = goldenMove;
+    await t.pump();
+    expect(control.canConfirm, isTrue);
+    control.confirm();
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(_interactiveAnimHarness(postState, lastMove,
+        interactive: false, externalMove: external, control: control));
+
+    // The staged move was not hand-entered, so it animates: a travelling overlay
+    // appears mid-flight before settling to the post-move board.
+    await t.pump(const Duration(milliseconds: 75));
+    expect(_painterOf(t).overlayChecker, isNotNull,
+        reason: 'a programmatically-staged (hint) move still animates');
+    expect(_painterOf(t).board, isNot(postBoard));
+    await t.pumpAndSettle();
     expect(_painterOf(t).board, postBoard);
   });
 
