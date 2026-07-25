@@ -86,8 +86,20 @@ void main() {
       );
       final seq = await api.submitEvent('m1', event);
       expect(captured.url.path, endsWith('/submitEvent'));
+      // Move hops are stored as maps (not nested lists) because Firestore
+      // forbids nested arrays — see encodeEventForStore in match_api.dart.
       expect(jsonDecode(captured.body), {
-        'data': {'matchId': 'm1', 'event': event.toJson()},
+        'data': {
+          'matchId': 'm1',
+          'event': {
+            'type': 'move',
+            'player': 'white',
+            'move': [
+              {'from': 23, 'to': 18, 'hit': false},
+              {'from': 18, 'to': 12, 'hit': false},
+            ],
+          },
+        },
       });
       expect(seq, 7);
     });

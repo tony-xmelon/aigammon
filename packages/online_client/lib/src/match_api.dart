@@ -48,8 +48,48 @@ class RemoteEvent {
   factory RemoteEvent.fromFields(Map<String, Object?> fields) => RemoteEvent(
         seq: (fields['seq'] as num).toInt(),
         gameNo: (fields['gameNo'] as num).toInt(),
-        event: GameEvent.fromJson(Map<String, dynamic>.from(fields)),
+        event: GameEvent.fromJson(
+          Map<String, dynamic>.from(decodeStoredEvent(fields)),
+        ),
       );
+}
+
+/// Firestore forbids NESTED ARRAYS, but [MoveEvent] serialises its hops as a
+/// list-of-lists (`[[from,to,hit],...]`, see `GameEvent.moveToJson`). Storing
+/// that raw makes `submitEvent` fail with `INVALID_ARGUMENT: Nested arrays are
+/// not allowed`. The online transport therefore stores each hop as a MAP
+/// (`{from,to,hit}`) — arrays of maps are allowed — via [encodeEventForStore]
+/// on write and reverses it via [decodeStoredEvent] on read. The Cloud Function
+/// stays a format-agnostic passthrough (it only stamps seq/gameNo), and
+/// backgammon_core's canonical event JSON is untouched: this remap lives only
+/// at the Firestore wire boundary.
+Map<String, Object?> encodeEventForStore(Map<String, dynamic> json) {
+  final out = Map<String, Object?>.from(json);
+  final move = out['move'];
+  if (move is List) {
+    out['move'] = [
+      for (final hop in move)
+        if (hop is List)
+          {'from': hop[0], 'to': hop[1], 'hit': hop[2]}
+        else
+          hop,
+    ];
+  }
+  return out;
+}
+
+/// Inverse of [encodeEventForStore]: turn a stored `move` list-of-maps back
+/// into the list-of-lists shape `GameEvent.fromJson` expects.
+Map<String, Object?> decodeStoredEvent(Map<String, Object?> fields) {
+  final out = Map<String, Object?>.from(fields);
+  final move = out['move'];
+  if (move is List) {
+    out['move'] = [
+      for (final hop in move)
+        if (hop is Map) [hop['from'], hop['to'], hop['hit']] else hop,
+    ];
+  }
+  return out;
 }
 
 /// Decoded summary of a `matches/{id}` document.
@@ -154,7 +194,7 @@ class MatchApi {
   }) async {
     final data = <String, Object?>{
       'matchId': matchId,
-      'event': event.toJson(),
+      'event': encodeEventForStore(event.toJson()),
       if (result != null) 'result': result.toJson(),
     };
     final r = await functions.call('submitEvent', data);
