@@ -13,6 +13,7 @@ import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
 import '../tutor/tutor_service.dart';
 import 'history_screen.dart';
+import 'metric_explainer.dart';
 
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
 /// bar, the in-game dialogs (cube/resign responses, game-end, match-end), the
@@ -64,6 +65,7 @@ class GameScreen extends StatefulWidget {
     this.persistedMatchId,
     this.dragHintShown = true,
     this.onDragHintShown,
+    this.opponentLabel = 'AI',
   });
 
   final MatchController controller;
@@ -111,6 +113,16 @@ class GameScreen extends StatefulWidget {
 
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
+
+  /// What the HUD score calls the NON-local side when exactly one side is
+  /// locally human — "AI" (the default, a match against the computer) or "Opp"
+  /// (an online match). The local side is then always called "You" and shown
+  /// first, so the header reads "You 2–1 AI · to 5" rather than the cryptic
+  /// "W 2–1 B · to 5".
+  ///
+  /// IGNORED in hot-seat, where both sides are local and neither of them is
+  /// "you": that header keeps the neutral "W 2–1 B · to 5".
+  final String opponentLabel;
 
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
   /// surfaces a hint button (top-5 plays), post-move assessments for HUMAN moves
@@ -211,6 +223,17 @@ class _GameScreenState extends State<GameScreen> {
   /// prematurely committing the persisted [_dragHintShown] latch.
   bool _dragHintScheduled = false;
 
+  /// The messenger that owns this screen's SnackBars, captured while the
+  /// [BuildContext] is still valid so [dispose] can reach it (looking it up in
+  /// `dispose` is illegal — the element is already defunct).
+  ScaffoldMessengerState? _messenger;
+
+  /// The live drag-hint SnackBar's controller while OUR hint is on screen, else
+  /// `null` (cleared by its own `closed` future the moment it goes, however it
+  /// goes). [dispose] removes it only while this is non-null, so leaving the
+  /// screen never tears down a SnackBar that belongs to somebody else.
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _dragHintBar;
+
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
 
@@ -277,7 +300,31 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _messenger = ScaffoldMessenger.of(context);
+  }
+
+  @override
   void dispose() {
+    // The one-time drag hint is scoped to THIS screen: a floating SnackBar
+    // outlives its route, so without this it follows the user onto whatever
+    // they open next (History, Settings, …). Removed only while our own hint is
+    // the live one — never a SnackBar posted by another screen.
+    //
+    // Deferred to the end of the frame: this `dispose` runs while the element
+    // tree is LOCKED (mid-unmount), and removing a SnackBar drives the
+    // messenger's animation, which would `setState` under that lock. By the
+    // post-frame callback the lock is gone and the hint is still the current
+    // SnackBar (the route we are leaving with cannot have posted another).
+    // The `mounted` re-check matters when the whole app goes down with us (the
+    // messenger is then gone too, and driving its animation would throw).
+    final messenger = _messenger;
+    if (_dragHintBar != null && messenger != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (messenger.mounted) messenger.removeCurrentSnackBar();
+      });
+    }
     _rollBeatTimer?.cancel();
     _observable.removeListener(_onChange);
     _dicePresenting.dispose();
@@ -335,7 +382,8 @@ class _GameScreenState extends State<GameScreen> {
       if (!mounted) return;
       _dragHintShown = true;
       widget.onDragHintShown?.call();
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      final bar = messenger.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.only(bottom: 104, left: 12, right: 12),
@@ -344,11 +392,16 @@ class _GameScreenState extends State<GameScreen> {
           duration: const Duration(seconds: 6),
           action: SnackBarAction(
             label: 'Got it',
-            onPressed: () =>
-                ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+            onPressed: messenger.hideCurrentSnackBar,
           ),
         ),
       );
+      _dragHintBar = bar;
+      // Forget the controller however the bar goes (timeout, "Got it", or a
+      // replacement), so `dispose` only ever removes a hint that is still up.
+      unawaited(bar.closed.then((_) {
+        if (identical(_dragHintBar, bar)) _dragHintBar = null;
+      }));
     });
   }
 
@@ -675,6 +728,7 @@ class _GameScreenState extends State<GameScreen> {
                 _Hud(
                   controller: _c,
                   showScoring: widget.showScoring,
+                  opponentLabel: widget.opponentLabel,
                   onGameRecord: _openRecord,
                 ),
                 Expanded(
@@ -800,12 +854,9 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _gameEndDialog() {
     final result = _c.state.result!;
-    final winner = _playerName(result.winner);
     return _ModalCard(
       title: 'Game over',
-      message: '$winner wins ${result.points} '
-          '(${_outcomeName(result.outcome)}).\n'
-          '${_scoreLine(_c)}',
+      message: '${_gameEndSummary(result)}\n${_scoreLine(_c)}',
       actions: [
         if (_canShowSummary) _summaryAction('Analyze game'),
         _CardAction(
@@ -976,16 +1027,20 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The always-present collapsed history strip. Fixed 32px height, rendered
   /// between the board and the action bar so the board never reflows (F6). It
-  /// shows the LATEST record line (ellipsized), that line's assessment score
-  /// when its move was assessed (coloured dot + loss), and a chevron. Tapping
-  /// anywhere expands the full scrollable record sheet ([_recordPanel]).
+  /// shows the LATEST record line (ellipsized), a PERSISTENT score chip for the
+  /// local player's most recent assessed move, and a chevron. Tapping anywhere
+  /// expands the full scrollable record sheet ([_recordPanel]).
+  ///
+  /// The chip is deliberately decoupled from the latest LINE. Against the AI the
+  /// tutor's verdict on your move resolves only after the AI has already replied,
+  /// so a chip tied to the latest line was never visible in a vs-computer match
+  /// at all — the one mode where it matters most. It now persists until a newer
+  /// assessment of your own replaces it, and clears with the log on a new game.
   Widget _historyStrip() {
     final scheme = Theme.of(context).colorScheme;
     final lines = buildGameRecord(_c.game.events);
     final latest = lines.isEmpty ? null : lines.last;
-    final assessment = (latest == null || latest.eventIndex == null)
-        ? null
-        : _assessmentsByEventIndex[latest.eventIndex];
+    final assessment = _stripAssessment();
     return Material(
       color: scheme.surfaceContainerHighest,
       child: InkWell(
@@ -1023,6 +1078,37 @@ class _GameScreenState extends State<GameScreen> {
         ),
       ),
     );
+  }
+
+  /// The assessment the strip's score chip shows: the most recent assessed move
+  /// by [_chipSide], or `null` when that side has none yet this game.
+  ///
+  /// Assessments are only ever recorded for locally-human movers, so this scans
+  /// [_assessmentsByEventIndex] backwards for the highest event index whose
+  /// [MoveEvent] belongs to the chip's side. Entries whose index no longer
+  /// addresses the live log (a game reset that has not yet cleared the map) are
+  /// skipped defensively.
+  MoveAssessment? _stripAssessment() {
+    if (_assessmentsByEventIndex.isEmpty) return null;
+    final side = _chipSide();
+    if (side == null) return null;
+    final events = _c.game.events;
+    final indices = _assessmentsByEventIndex.keys.toList()..sort();
+    for (final index in indices.reversed) {
+      if (index >= events.length) continue;
+      final event = events[index];
+      if (event is! MoveEvent || event.player != side) continue;
+      return _assessmentsByEventIndex[index];
+    }
+    return null;
+  }
+
+  /// Whose score the strip chip reports: in hot-seat the CURRENT mover (the
+  /// person now holding the device sees their own last verdict); otherwise the
+  /// single locally-human side (vs-AI or the local side of an online match).
+  Player? _chipSide() {
+    if (_hotSeat) return _c.state.turn;
+    return _humanSideWith((_) => true);
   }
 
   /// The compact assessment indicator: a mark-coloured dot, the mark WORD, and
@@ -1119,6 +1205,11 @@ class _GameScreenState extends State<GameScreen> {
                                   Theme.of(context).textTheme.titleMedium),
                         ),
                         IconButton(
+                          tooltip: 'What do these numbers mean?',
+                          icon: const Icon(Icons.info_outline, size: 20),
+                          onPressed: () => showMetricExplainer(context),
+                        ),
+                        IconButton(
                           tooltip: 'Close',
                           icon: const Icon(Icons.close, size: 20),
                           onPressed: _closeHint,
@@ -1136,9 +1227,11 @@ class _GameScreenState extends State<GameScreen> {
                         padding: EdgeInsets.symmetric(vertical: 12),
                         child: Text('No hints available.'),
                       )
-                    else
+                    else ...[
+                      _hintColumnHeader(),
                       for (var i = 0; i < top.length; i++)
                         _hintRow(i, top[i], bestEq),
+                    ],
                   ],
                 ),
               ),
@@ -1148,6 +1241,36 @@ class _GameScreenState extends State<GameScreen> {
       ],
     );
   }
+
+  /// Names the hint sheet's two bare number columns ("Equity" / "Loss"), right-
+  /// aligned over them at the same widths the rows use, so the figures are not
+  /// left for the reader to guess at. The ⓘ in the sheet header explains what
+  /// they mean.
+  Widget _hintColumnHeader() {
+    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        children: [
+          const Spacer(),
+          SizedBox(
+            width: _hintNumberColumn,
+            child: Text('Equity', style: style, textAlign: TextAlign.right),
+          ),
+          SizedBox(
+            width: _hintNumberColumn,
+            child: Text('Loss', style: style, textAlign: TextAlign.right),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Width of each of the hint sheet's number columns, shared by the header and
+  /// the rows so the labels sit exactly over their figures.
+  static const double _hintNumberColumn = 64;
 
   Widget _hintRow(int i, ScoredMove sm, double bestEq) {
     final delta = i == 0 ? '—' : (sm.equity - bestEq).toStringAsFixed(3);
@@ -1170,9 +1293,13 @@ class _GameScreenState extends State<GameScreen> {
             ),
             Expanded(child: Text('${sm.move}', style: mono)),
             const SizedBox(width: 8),
-            Text(sm.equity.toStringAsFixed(3), style: mono),
             SizedBox(
-              width: 64,
+              width: _hintNumberColumn,
+              child: Text(sm.equity.toStringAsFixed(3),
+                  style: mono, textAlign: TextAlign.right),
+            ),
+            SizedBox(
+              width: _hintNumberColumn,
               child: Text(delta, style: mono, textAlign: TextAlign.right),
             ),
           ],
@@ -1398,23 +1525,53 @@ String _resignName(ResignValue v) => switch (v) {
       ResignValue.backgammon => 'backgammon',
     };
 
-String _outcomeName(GameOutcome o) => switch (o) {
-      GameOutcome.single => 'single',
-      GameOutcome.gammon => 'gammon',
-      GameOutcome.backgammon => 'backgammon',
-      GameOutcome.drop => 'drop',
-      GameOutcome.resignation => 'resignation',
-    };
+/// The game-end dialog's one-line summary, in plain language.
+///
+/// Replaces the old jargon fold ("Black wins 1 (drop).", which read as a score
+/// of 1 and a mystery word) with what actually happened and what it was worth:
+/// "Black wins this game (+1) — White declined the double." / "White wins this
+/// game (+2, gammon)." Terse by design — the running match score follows on the
+/// next line.
+String _gameEndSummary(GameResult result) {
+  final winner = _playerName(result.winner);
+  final loser = _playerName(result.winner.opponent);
+  final points = '+${result.points}';
+  return switch (result.outcome) {
+    GameOutcome.single => '$winner wins this game ($points).',
+    GameOutcome.gammon => '$winner wins this game ($points, gammon).',
+    GameOutcome.backgammon =>
+      '$winner wins this game ($points, backgammon).',
+    GameOutcome.drop =>
+      '$winner wins this game ($points) — $loser declined the double.',
+    GameOutcome.resignation =>
+      '$winner wins this game ($points) — $loser resigned.',
+  };
+}
 
 String _scoreLine(MatchController c) {
   final m = c.match;
   return 'White ${m.whiteScore} — ${m.blackScore} Black  (to ${m.matchLength})';
 }
 
-/// The compact header score: "W 2–3 B · to 5".
-String _compactScore(MatchController c) {
+/// The compact header score, named from the local player's point of view where
+/// there IS one: "You 2–3 AI · to 5" against the computer (or "… Opp …" online,
+/// per [GameScreen.opponentLabel]), with the local side's score first.
+///
+/// Falls back to the neutral "W 2–3 B · to 5" in hot-seat, where both sides are
+/// local, and for any controller with no locally-human side at all (an AI-vs-AI
+/// harness), since "You" would then be a lie.
+String _compactScore(MatchController c, String opponentLabel) {
   final m = c.match;
-  return 'W ${m.whiteScore}–${m.blackScore} B · to ${m.matchLength}';
+  final localWhite = c.isLocalHuman(Player.white);
+  final localBlack = c.isLocalHuman(Player.black);
+  final soleLocal = localWhite != localBlack;
+  if (!soleLocal) {
+    return 'W ${m.whiteScore}–${m.blackScore} B · to ${m.matchLength}';
+  }
+  final (mine, theirs) = localWhite
+      ? (m.whiteScore, m.blackScore)
+      : (m.blackScore, m.whiteScore);
+  return 'You $mine–$theirs $opponentLabel · to ${m.matchLength}';
 }
 
 /// Entries in the header overflow (⋮) menu. "Game record" is always available;
@@ -1437,6 +1594,7 @@ class _Hud extends StatelessWidget {
     required this.controller,
     required this.onGameRecord,
     this.showScoring = true,
+    this.opponentLabel = 'AI',
   });
 
   final MatchController controller;
@@ -1446,6 +1604,9 @@ class _Hud extends StatelessWidget {
 
   /// Whether the running match score is shown (the settings `showScoring`).
   final bool showScoring;
+
+  /// What the score calls the non-local side. See [GameScreen.opponentLabel].
+  final String opponentLabel;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
@@ -1488,7 +1649,7 @@ class _Hud extends StatelessWidget {
             if (showScoring)
               Flexible(
                 child: Text(
-                  _compactScore(controller),
+                  _compactScore(controller, opponentLabel),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleSmall,

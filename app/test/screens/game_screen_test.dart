@@ -13,6 +13,7 @@ import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/online/online_match_controller.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:aigammon_app/screens/history_screen.dart';
+import 'package:aigammon_app/screens/metric_explainer.dart';
 import 'package:aigammon_app/tutor/tutor_service.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
@@ -646,8 +647,12 @@ void main() {
 
     expect(find.text('Game over'), findsOneWidget);
     final result = c.state.result!;
-    // The dialog reports the winner's points and the updated match score line.
-    expect(find.textContaining('wins ${result.points}'), findsOneWidget);
+    // Seed 7's first game is a White gammon: the dialog says so in plain words
+    // (points as a signed gain, the outcome named), plus the match score line.
+    expect(result.outcome, GameOutcome.gammon);
+    expect(
+        find.textContaining('White wins this game (+${result.points}, gammon).'),
+        findsOneWidget);
     expect(find.textContaining('White ${c.match.whiteScore} —'), findsWidgets);
 
     final g1 = c.game;
@@ -2318,6 +2323,341 @@ void main() {
 
       expect(find.text(hintText), findsNothing,
           reason: 'no point advertising a disabled gesture');
+
+      c.disposeController();
+    });
+
+    testWidgets('leaving the game screen takes the hint with it', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+
+      // A home route that pushes the game screen, so popping it disposes the
+      // GameScreen while the (floating, route-outliving) hint is still up.
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (ctx) => Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(ctx).push(
+                  MaterialPageRoute(
+                    builder: (_) => GameScreen(
+                      key: ValueKey(c),
+                      controller: c,
+                      interactionOptions:
+                          const BoardInteractionOptions(enableDrag: true),
+                      dragHintShown: false,
+                    ),
+                  ),
+                ),
+                child: const Text('play'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await t.tap(find.text('play'));
+      await t.pumpAndSettle();
+
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text(hintText), findsOneWidget, reason: 'the hint is up');
+
+      // Leave mid-hint: the SnackBar must not follow the user to the next route.
+      final nav = t.state<NavigatorState>(find.byType(Navigator));
+      nav.pop();
+      await t.pumpAndSettle();
+
+      expect(find.byType(GameScreen), findsNothing);
+      expect(find.text(hintText), findsNothing,
+          reason: 'the game screen clears its own hint on dispose');
+      expect(find.byType(SnackBar), findsNothing);
+
+      c.disposeController();
+    });
+  });
+
+  group('history strip score chip', () {
+    // White (human) wins the opening (6 > 1) and moves first; Black is a normal
+    // AI, so it REPLIES — the strip's latest line becomes Black's move while
+    // White's assessment is still the newest verdict on the local player.
+    GameController vsAi(LocalHumanAgent human) => GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    testWidgets('persists after the AI replies: the strip shows the AI move '
+        'AND the human score', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = vsAi(human);
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await commitFirstMove(t);
+
+      // Wait for BOTH: Black's reply in the log (so the latest line is the AI's)
+      // and White's assessment resolving (0.10 - 0.04 = 0.06).
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<MoveEvent>()
+              .any((e) => e.player == Player.black),
+          maxFrames: 1200);
+      await pumpUntil(
+          t, () => find.textContaining('−0.060').evaluate().isNotEmpty);
+
+      final strip = find.byKey(const ValueKey('historyStrip'));
+      expect(find.descendant(of: strip, matching: find.textContaining('. B ')),
+          findsOneWidget,
+          reason: "the strip's line text is the AI's move, unchanged");
+      expect(find.descendant(of: strip, matching: find.textContaining('−0.060')),
+          findsOneWidget,
+          reason: "the human's own score persists beside it");
+      expect(find.descendant(of: strip, matching: find.byIcon(Icons.circle)),
+          findsOneWidget,
+          reason: 'with its mark dot');
+
+      c.disposeController();
+    });
+
+    testWidgets('the strip stays 32px tall with the chip up', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = vsAi(human);
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => find.textContaining('−0.060').evaluate().isNotEmpty);
+
+      expect(t.getSize(find.byKey(const ValueKey('historyStrip'))).height, 32);
+
+      c.disposeController();
+    });
+
+    testWidgets('a new game clears the chip', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = vsAi(human);
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => find.textContaining('−0.060').evaluate().isNotEmpty);
+
+      // End the game the deterministic way: at White's next pre-roll gate,
+      // resign a single; the AI accepts.
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white,
+          maxFrames: 1200);
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Resign — single'));
+      await pumpUntil(t, () => c.awaitingNextGame, maxFrames: 1200);
+
+      final g1 = c.game;
+      await t.tap(find.widgetWithText(FilledButton, 'Next game'));
+      await pumpUntil(t, () => !identical(c.game, g1));
+      await t.pump();
+
+      final strip = find.byKey(const ValueKey('historyStrip'));
+      expect(find.descendant(of: strip, matching: find.byIcon(Icons.circle)),
+          findsNothing,
+          reason: 'the new game starts with no verdict to show');
+      expect(find.descendant(of: strip, matching: find.textContaining('−0.')),
+          findsNothing);
+
+      c.disposeController();
+    });
+  });
+
+  group('hint sheet column headers', () {
+    // White (human) moves first against a hanging AI, so the hint sheet can be
+    // opened on a live human move-entry and stays open.
+    GameController humanMoving(LocalHumanAgent human) => GameController(
+          white: human,
+          black: HangingMoveAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    Future<void> openHint(WidgetTester t, LocalHumanAgent human) async {
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.tap(find.widgetWithText(OutlinedButton, 'Hint'));
+      await pumpUntil(t, () => find.text('Top plays').evaluate().isNotEmpty);
+      await pumpUntil(
+          t, () => find.byType(CircularProgressIndicator).evaluate().isEmpty);
+    }
+
+    testWidgets('the two number columns are labelled Equity / Loss', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = humanMoving(human);
+      await t.pumpWidget(_tutorHarness(c, TutorService(RealRankEngine())));
+      await openHint(t, human);
+
+      expect(find.text('Equity'), findsOneWidget);
+      expect(find.text('Loss'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('the sheet ⓘ opens the shared metric explainer', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = humanMoving(human);
+      await t.pumpWidget(_tutorHarness(c, TutorService(RealRankEngine())));
+      await openHint(t, human);
+
+      expect(find.byType(MetricExplainerDialog), findsNothing);
+      await t.tap(find.byIcon(Icons.info_outline));
+      await t.pumpAndSettle();
+
+      expect(find.byType(MetricExplainerDialog), findsOneWidget);
+      expect(find.text('Understanding the metrics'), findsOneWidget);
+      await t.tap(find.widgetWithText(TextButton, 'Got it'));
+      await t.pumpAndSettle();
+      expect(find.byType(MetricExplainerDialog), findsNothing);
+
+      c.disposeController();
+    });
+  });
+
+  group('score + outcome copy', () {
+    testWidgets('vs the computer the header names the sides You / AI', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      expect(find.textContaining('You 0–0 AI · to 5'), findsOneWidget);
+      expect(find.textContaining('W 0–0 B'), findsNothing,
+          reason: 'the cryptic W/B form is gone in a vs-computer match');
+
+      c.disposeController();
+    });
+
+    testWidgets('the local side is named first when the human plays Black',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: FakeAgent(),
+        black: human,
+        matchLength: 5,
+        // White (AI) wins the opening and moves; Black (human) then gates.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+
+      expect(find.textContaining('You 0–0 AI · to 5'), findsOneWidget,
+          reason: "the local (Black) score leads, whichever side that is");
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat keeps the neutral W / B header', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: LocalHumanAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn || c.isThinking);
+      await t.pump();
+
+      expect(find.textContaining('W 0–0 B · to 5'), findsOneWidget,
+          reason: 'neither of two local players is "you"');
+      expect(find.textContaining('You'), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('opponentLabel renames the non-local side (online: Opp)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(MaterialApp(
+        home: GameScreen(key: ValueKey(c), controller: c, opponentLabel: 'Opp'),
+      ));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      expect(find.textContaining('You 0–0 Opp · to 5'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('game-end copy for a drop names the declined double', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final ai = FakeAgent(doubles: true);
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        // White moves first; Black then doubles at its pre-roll gate.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(t, () => human.pendingCubeRequest.value != null,
+          maxFrames: 1200);
+
+      // Decline: Black wins the game's single point by the drop.
+      await t.tap(find.widgetWithText(TextButton, 'Pass'));
+      await pumpUntil(t, () => c.awaitingNextGame, maxFrames: 1200);
+
+      expect(c.state.result!.outcome, GameOutcome.drop);
+      expect(
+          find.textContaining(
+              'Black wins this game (+1) — White declined the double.'),
+          findsOneWidget);
 
       c.disposeController();
     });
