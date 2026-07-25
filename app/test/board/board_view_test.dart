@@ -508,4 +508,208 @@ void main() {
     expect(control.canConfirm, isFalse);
     expect(control.isDance, isFalse);
   });
+
+  // --- Combined-move taps ----------------------------------------------------
+
+  Widget viewWith(
+    GameState state, {
+    required BoardInteractionOptions options,
+    BoardEntryController? control,
+    ValueChanged<Move>? onCommitted,
+  }) =>
+      _harness(BoardView(
+        state: state,
+        interactive: true,
+        onMoveCommitted: onCommitted ?? (_) {},
+        entryControl: control,
+        interactionOptions: options,
+      ));
+
+  testWidgets('combined tap: one tap on a chained landing enters the whole '
+      'chain (2 hops) and shows dimmer highlights', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+    Move? committed;
+    await t.pumpWidget(viewWith(goldenState,
+        options: const BoardInteractionOptions(enableCombinedTaps: true),
+        control: control,
+        onCommitted: (m) => committed = m));
+
+    // Pick up a back checker (24-point, index 23). Its direct singles are 22
+    // and 20; the combined landing (running both dice with one checker) is 19.
+    await tapPoint(t, 23);
+    expect(_painterOf(t).selectedCheckerLocation, 23);
+    expect(_painterOf(t).highlightedDestinations, containsAll(<int>[22, 20]));
+    expect(_painterOf(t).combinedDestinations, contains(19),
+        reason: 'the combined landing is highlighted (dimmer variant)');
+    expect(_painterOf(t).combinedDestinations,
+        isNot(anyElement(isIn(_painterOf(t).highlightedDestinations))),
+        reason: 'combined and direct highlight sets are disjoint');
+
+    // ONE tap on the chained landing enters BOTH hops: for a 3-1 that is the
+    // whole turn, so Confirm turns on (chosenHops == 2).
+    await tapPoint(t, 19);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
+    expect(control.canConfirm, isTrue,
+        reason: 'a two-hop chain is a complete 3-1 turn');
+
+    // The preview shows one back checker having run 24 -> 19 (the intermediate
+    // points 22/20 are untouched — a single checker moved through).
+    final preview = _painterOf(t).board;
+    expect(preview.points[23], 1, reason: 'one back checker left 24');
+    expect(preview.points[19], 1, reason: 'it landed on 20 (index 19)');
+
+    control.confirm();
+    await t.pump();
+    expect(committed, isNotNull);
+    expect(committed!.checkerMoves, hasLength(2));
+    // The committed move runs a single checker from 23 and ends on 19.
+    final froms = committed!.checkerMoves.map((c) => c.from).toSet();
+    final tos = committed!.checkerMoves.map((c) => c.to).toSet();
+    expect(froms, contains(23));
+    expect(tos, contains(19));
+  });
+
+  testWidgets('combined taps OFF: no dimmer highlights, a chained-landing tap '
+      'does nothing', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+    await t.pumpWidget(viewWith(goldenState,
+        options: const BoardInteractionOptions(enableCombinedTaps: false),
+        control: control));
+
+    await tapPoint(t, 23);
+    expect(_painterOf(t).selectedCheckerLocation, 23);
+    expect(_painterOf(t).combinedDestinations, isEmpty,
+        reason: 'combined highlights are suppressed when the toggle is off');
+
+    // Tapping the (would-be) chained landing does NOT enter a chain: point 19
+    // is not a direct destination and combined is off, so it is treated as a
+    // near-miss (no hop is recorded, Confirm stays off).
+    await tapPoint(t, 19);
+    expect(control.canConfirm, isFalse);
+    expect(_painterOf(t).board, goldenState.board,
+        reason: 'no hops entered: preview equals the base board');
+  });
+
+  // --- Drag-to-move ----------------------------------------------------------
+
+  testWidgets('drag lifts a checker (ghost during pan) and a drop on a '
+      'destination commits the hop', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+    await t.pumpWidget(viewWith(goldenState,
+        options: const BoardInteractionOptions(enableDrag: true),
+        control: control));
+
+    // Lift the 8-point's top checker (index 7 holds 3 White) and drag it toward
+    // the 5-point (index 4, the die-3 destination).
+    final start = _geometry.checkerCenter(7, 2, 3);
+    final end = _geometry.pointRect(4).center;
+    final g = await t.startGesture(start);
+    await t.pump();
+    // A first move past the touch slop wins the arena for the pan recogniser,
+    // then travel to the destination.
+    await g.moveBy(const Offset(0, 40));
+    await t.pump();
+    await g.moveTo(end);
+    await t.pump();
+
+    // Mid-drag: the source top checker is hidden and a travelling ghost is drawn.
+    expect(_painterOf(t).hiddenChecker, isNotNull);
+    expect(_painterOf(t).overlayChecker, isNotNull);
+    expect(_painterOf(t).hiddenChecker!.location, 7);
+
+    // Drop on the 5-point → the hop 8/5 is recorded (Undo becomes live) and the
+    // preview shows the checker moved.
+    await g.up();
+    await t.pump();
+    expect(control.canUndo, isTrue, reason: 'a hop was committed by the drop');
+    expect(_painterOf(t).overlayChecker, isNull, reason: 'ghost cleared on drop');
+    expect(_painterOf(t).board.points[4], 1, reason: 'a checker landed on 5');
+  });
+
+  testWidgets('drag: a drop on nothing snaps back (no hop recorded)', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+    await t.pumpWidget(viewWith(goldenState,
+        options: const BoardInteractionOptions(enableDrag: true),
+        control: control));
+
+    final start = _geometry.checkerCenter(7, 2, 3);
+    // Release over the empty middle gap (left of the bar): locationAt is null
+    // and no destination is near, so the drop must snap back.
+    final empty = Offset(_size.width * 0.15, _size.height / 2);
+    final g = await t.startGesture(start);
+    await t.pump();
+    await g.moveBy(const Offset(0, 40));
+    await t.pump();
+    await g.moveTo(empty);
+    await t.pump();
+    expect(_painterOf(t).overlayChecker, isNotNull, reason: 'lifted mid-drag');
+    await g.up();
+    await t.pump();
+
+    // Snap-back: ghost cleared, nothing committed, base board unchanged.
+    expect(_painterOf(t).overlayChecker, isNull);
+    expect(control.canUndo, isFalse);
+    expect(_painterOf(t).board, goldenState.board);
+  });
+
+  testWidgets('drag disabled: a pan does nothing (no lift, no hop)', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+    await t.pumpWidget(viewWith(goldenState,
+        options: const BoardInteractionOptions(enableDrag: false),
+        control: control));
+
+    final start = _geometry.checkerCenter(7, 2, 3);
+    final end = _geometry.pointRect(4).center;
+    final g = await t.startGesture(start);
+    await t.pump();
+    await g.moveTo(end);
+    await t.pump();
+    // No pan recognisers attached: no ghost is ever lifted.
+    expect(_painterOf(t).overlayChecker, isNull);
+    await g.up();
+    await t.pump();
+    expect(control.canUndo, isFalse);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
+    expect(_painterOf(t).board, goldenState.board);
+  });
+
+  testWidgets('tap still works when drag is enabled', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+    Move? committed;
+    await t.pumpWidget(viewWith(goldenState,
+        options: const BoardInteractionOptions(enableDrag: true),
+        control: control,
+        onCommitted: (m) => committed = m));
+
+    // A static press+release (no movement) is routed to the tap handler by the
+    // gesture arena even though pan recognisers are attached.
+    await tapPoint(t, 7);
+    expect(_painterOf(t).selectedCheckerLocation, 7);
+    await tapPoint(t, 4); // 8/5
+    await tapPoint(t, 5); // pick up 6-point
+    await tapPoint(t, 4); // 6/5
+    expect(control.canConfirm, isTrue);
+    control.confirm();
+    await t.pump();
+    expect(committed, isNotNull);
+    expect(committed!.sameAs(goldenMove), isTrue);
+  });
 }

@@ -124,6 +124,35 @@ class BoardEntryController extends ChangeNotifier {
   }
 }
 
+/// Toggles for the optional interaction affordances layered on top of the
+/// base tap-to-move flow. Persistence of these toggles is wired by the settings
+/// screen (Task 5); [BoardView] defaults to drag OFF and combined taps ON.
+class BoardInteractionOptions {
+  const BoardInteractionOptions({
+    this.enableDrag = false,
+    this.enableCombinedTaps = true,
+  });
+
+  /// When true, a pan gesture that starts on a selectable source's top checker
+  /// lifts it and drops it on the released location (a drag-to-move). When
+  /// false, pan gestures are ignored and only taps drive move entry.
+  final bool enableDrag;
+
+  /// When true, combined (multi-hop, same-checker) landings are highlighted (a
+  /// dimmer variant) alongside the direct destinations, and tapping / dropping
+  /// on one enters the WHOLE chain at once.
+  final bool enableCombinedTaps;
+
+  @override
+  bool operator ==(Object other) =>
+      other is BoardInteractionOptions &&
+      other.enableDrag == enableDrag &&
+      other.enableCombinedTaps == enableCombinedTaps;
+
+  @override
+  int get hashCode => Object.hash(enableDrag, enableCombinedTaps);
+}
+
 /// Interactive board. Renders [state]'s board (with a display-only preview of
 /// partially-entered hops) and, when [interactive], drives a [MoveBuilder]
 /// from taps: tap a highlighted source, then a highlighted destination. The
@@ -195,6 +224,7 @@ class BoardView extends StatefulWidget {
     this.lastMove,
     this.entryControl,
     this.animationDuration = const Duration(milliseconds: 150),
+    this.interactionOptions = const BoardInteractionOptions(),
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -236,6 +266,10 @@ class BoardView extends StatefulWidget {
   /// Palette override. Defaults to [BoardTheme.dark]/[BoardTheme.light] by the
   /// ambient [Theme] brightness.
   final BoardTheme? theme;
+
+  /// Toggles for drag-to-move and combined-move taps. See
+  /// [BoardInteractionOptions].
+  final BoardInteractionOptions interactionOptions;
 
   @override
   State<BoardView> createState() => _BoardViewState();
@@ -281,6 +315,15 @@ class _BoardViewState extends State<BoardView>
   /// Monotonic guard so a superseded animation's completion callback (fired when
   /// a new move restarts the controller) does not clear a fresh animation.
   int _animSeq = 0;
+
+  /// The source (point index or [CheckerMove.bar]) currently being dragged, or
+  /// `null` when no drag is in progress. Only set when drag is enabled and a
+  /// pan started on a selectable source's top checker.
+  int? _dragSource;
+
+  /// Current pointer position of the in-progress drag (board-local), where the
+  /// lifted checker's ghost is painted. `null` when not dragging.
+  Offset? _dragPointer;
 
   @override
   void initState() {
@@ -444,6 +487,8 @@ class _BoardViewState extends State<BoardView>
   /// moving phase; in a dance it exists but offers no sources.
   void _resetBuilder() {
     _selectedSource = null;
+    _dragSource = null;
+    _dragPointer = null;
     if (widget.interactive && widget.state.phase == GamePhase.moving) {
       final legal = widget.state.legalMoves;
       _builder = MoveBuilder(legal);
@@ -556,6 +601,13 @@ class _BoardViewState extends State<BoardView>
         _selectedSource = null;
         return;
       }
+      // Then a combined (multi-hop) landing: enter the whole chain at once.
+      final chained = _chainedDestinations(builder, selected);
+      if (loc != null && chained.contains(loc)) {
+        _enterChain(builder, selected, loc);
+        _selectedSource = null;
+        return;
+      }
       // Re-tapping the picked-up source deselects it.
       if (loc == selected) {
         _selectedSource = null;
@@ -566,8 +618,9 @@ class _BoardViewState extends State<BoardView>
         _selectedSource = loc;
         return;
       }
-      // Forgiving fallbacks: a near destination completes the hop; else a near
-      // source re-selects; else the tap hit nothing actionable, so clear.
+      // Forgiving fallbacks: a near direct destination completes the hop; then a
+      // near combined landing enters the chain; else a near source re-selects;
+      // else the tap hit nothing actionable, so clear.
       final nearDest =
           _nearestDestination(geometry, localPosition, builder, selected);
       if (nearDest != null) {
@@ -575,9 +628,42 @@ class _BoardViewState extends State<BoardView>
         _selectedSource = null;
         return;
       }
+      final nearChain =
+          _nearestTarget(geometry, localPosition, chained);
+      if (nearChain != null) {
+        _enterChain(builder, selected, nearChain);
+        _selectedSource = null;
+        return;
+      }
       _selectedSource = _nearestSource(geometry, localPosition, builder);
     });
     _syncEntry();
+  }
+
+  /// The combined-move landing points for [source] when combined taps are
+  /// enabled, with any point that is already a DIRECT destination removed (the
+  /// bright single-hop highlight wins). Empty when combined taps are off.
+  Set<int> _chainedDestinations(MoveBuilder builder, int source) {
+    if (!widget.interactionOptions.enableCombinedTaps) return const {};
+    final direct = builder.destinationsFor(source);
+    return {
+      for (final d in builder.chainedDestinationsFor(source))
+        if (!direct.contains(d)) d,
+    };
+  }
+
+  /// Enters the whole same-checker chain from [source] to [landing] by replaying
+  /// its hops through the builder. Each hop is offered by construction (see
+  /// [MoveBuilder.chainFor]); a defensive [ArgumentError] guard leaves the
+  /// builder untouched past the last accepted hop.
+  void _enterChain(MoveBuilder builder, int source, int landing) {
+    try {
+      for (final hop in builder.chainFor(source, landing)) {
+        builder.addHop(hop.from, hop.to);
+      }
+    } on ArgumentError {
+      // A stale chain (position moved on): ignore the trailing hops.
+    }
   }
 
   /// The maximum distance a tap may miss an actionable target and still count.
@@ -607,9 +693,16 @@ class _BoardViewState extends State<BoardView>
   /// within [_tapTolerance], or `null` when none is close enough.
   int? _nearestDestination(
       BoardGeometry geometry, Offset pos, MoveBuilder builder, int source) {
+    return _nearestTarget(geometry, pos, builder.destinationsFor(source));
+  }
+
+  /// The target location in [targets] whose region centre is nearest [pos]
+  /// within [_tapTolerance], or `null` when none is close enough. Shared by the
+  /// direct-destination and combined-landing forgiveness paths.
+  int? _nearestTarget(BoardGeometry geometry, Offset pos, Set<int> targets) {
     var bestD = _tapTolerance(geometry);
     int? best;
-    for (final loc in builder.destinationsFor(source)) {
+    for (final loc in targets) {
       final d = (_destAnchor(geometry, loc) - pos).distance;
       if (d < bestD) {
         bestD = d;
@@ -638,6 +731,106 @@ class _BoardViewState extends State<BoardView>
       ? geometry.offRect(widget.state.turn).center
       : geometry.pointRect(loc).center;
 
+  // --- Drag-to-move ----------------------------------------------------------
+
+  /// Pan start: lift the selectable source under (or nearest to) the pointer as
+  /// a drag ghost. No-op when drag is disabled, there is no builder, or the pan
+  /// did not start near a selectable source. Suspends any running move animation
+  /// so the ghost is the only travelling checker.
+  void _onPanStart(BoardGeometry geometry, Offset localPosition) {
+    if (!widget.interactionOptions.enableDrag) return;
+    final builder = _builder;
+    if (builder == null) return;
+    final loc = geometry.locationAt(localPosition);
+    final int? source;
+    if (loc != null && builder.selectableSources.contains(loc)) {
+      source = loc;
+    } else {
+      source = _nearestSource(geometry, localPosition, builder);
+    }
+    if (source == null) return;
+    setState(() {
+      // Suspend a running animation: fence its completion callback and stop it.
+      if (_animation != null) {
+        _animSeq++;
+        _animController.stop();
+        _animation = null;
+      }
+      _dragSource = source;
+      _dragPointer = localPosition;
+      _selectedSource = null;
+    });
+    _syncEntry();
+  }
+
+  /// Pan update: move the drag ghost to the pointer. No-op unless a drag is live.
+  void _onPanUpdate(Offset localPosition) {
+    if (_dragSource == null) return;
+    setState(() => _dragPointer = localPosition);
+  }
+
+  /// Pan end: drop the lifted checker. A direct destination under (or near) the
+  /// release commits a single hop; a combined landing (when enabled) enters the
+  /// whole chain; anything else snaps back (the ghost simply clears). The dragged
+  /// source is always deselected afterwards, mirroring the tap flow.
+  void _onPanEnd(BoardGeometry geometry) {
+    final source = _dragSource;
+    final pointer = _dragPointer;
+    setState(() {
+      _dragSource = null;
+      _dragPointer = null;
+    });
+    if (source == null || pointer == null) return;
+    final builder = _builder;
+    if (builder == null) return;
+    final loc = geometry.locationAt(pointer);
+
+    // Direct destination: exact hit first, then forgiveness.
+    int? directDrop;
+    if (loc != null && builder.destinationsFor(source).contains(loc)) {
+      directDrop = loc;
+    } else {
+      directDrop = _nearestDestination(geometry, pointer, builder, source);
+    }
+    if (directDrop != null) {
+      setState(() => builder.addHop(source, directDrop!));
+      _syncEntry();
+      return;
+    }
+
+    // Combined landing: exact hit first, then forgiveness.
+    final chained = _chainedDestinations(builder, source);
+    int? chainDrop;
+    if (loc != null && chained.contains(loc)) {
+      chainDrop = loc;
+    } else {
+      chainDrop = _nearestTarget(geometry, pointer, chained);
+    }
+    if (chainDrop != null) {
+      setState(() => _enterChain(builder, source, chainDrop!));
+      _syncEntry();
+      return;
+    }
+    // Dropped on nothing actionable: snap-back is a simple clear (already done).
+  }
+
+  /// The hidden-checker record for the drag ghost: the top checker of
+  /// [_dragSource] on [board], lifted while it travels as the overlay. `null`
+  /// when nothing is being dragged or the source is empty.
+  ({int location, int stackIndex, bool isWhite})? _dragHidden(BoardState board) {
+    final source = _dragSource;
+    if (source == null) return null;
+    final isWhite = widget.state.turn == Player.white;
+    if (source == CheckerMove.bar) {
+      final n = board.barFor(widget.state.turn);
+      if (n == 0) return null;
+      return (location: CheckerMove.bar, stackIndex: n - 1, isWhite: isWhite);
+    }
+    final count = board.points[source].abs();
+    if (count == 0) return null;
+    return (location: source, stackIndex: count - 1, isWhite: isWhite);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = widget.theme ??
@@ -655,44 +848,89 @@ class _BoardViewState extends State<BoardView>
           final geometry =
               BoardGeometry(size, whiteAtBottom: widget.whiteAtBottom);
 
-          // While a move animates, paint the pre-move board (with earlier hops
-          // applied), hide the travelling checker, and drop interaction
-          // highlights; otherwise paint the normal preview board.
-          final frame = _animFrame(geometry);
-          final painter = frame != null
-              ? BoardPainter(
-                  board: frame.board,
-                  geometry: geometry,
-                  theme: theme,
-                  dice: widget.state.dice,
-                  cube: widget.state.cube,
-                  hiddenChecker: frame.hidden,
-                  overlayChecker: frame.overlay,
-                )
-              : BoardPainter(
-                  board: _previewBoard(),
-                  geometry: geometry,
-                  theme: theme,
-                  dice: widget.state.dice,
-                  cube: widget.state.cube,
-                  highlightedSources: (builder != null && selected == null)
-                      ? builder.selectableSources
-                      : const {},
-                  highlightedDestinations: (builder != null && selected != null)
-                      ? builder.destinationsFor(selected)
-                      : const {},
-                  selectedCheckerLocation: selected,
-                  movingPlayer: builder != null ? widget.state.turn : null,
-                );
+          final dragSource = _dragSource;
+          final dragPointer = _dragPointer;
+          final dragging = dragSource != null && dragPointer != null;
 
-          return widget.interactive
-              ? GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTapUp: (details) =>
-                      _handleTap(geometry, details.localPosition),
-                  child: CustomPaint(size: size, painter: painter),
-                )
-              : CustomPaint(size: size, painter: painter);
+          // A live drag suspends animation, so the two are mutually exclusive.
+          final frame = dragging ? null : _animFrame(geometry);
+          final BoardPainter painter;
+          if (dragging) {
+            // Drag: paint the preview board, hide the lifted source checker, and
+            // draw the ghost at the pointer with the drop targets highlighted.
+            final preview = _previewBoard();
+            painter = BoardPainter(
+              board: preview,
+              geometry: geometry,
+              theme: theme,
+              dice: widget.state.dice,
+              cube: widget.state.cube,
+              hiddenChecker: _dragHidden(preview),
+              overlayChecker: (
+                center: dragPointer,
+                isWhite: widget.state.turn == Player.white,
+              ),
+              highlightedDestinations: builder != null
+                  ? builder.destinationsFor(dragSource)
+                  : const {},
+              combinedDestinations: builder != null
+                  ? _chainedDestinations(builder, dragSource)
+                  : const {},
+              movingPlayer: builder != null ? widget.state.turn : null,
+            );
+          } else if (frame != null) {
+            // While a move animates, paint the pre-move board (with earlier hops
+            // applied), hide the travelling checker, drop interaction highlights.
+            painter = BoardPainter(
+              board: frame.board,
+              geometry: geometry,
+              theme: theme,
+              dice: widget.state.dice,
+              cube: widget.state.cube,
+              hiddenChecker: frame.hidden,
+              overlayChecker: frame.overlay,
+            );
+          } else {
+            painter = BoardPainter(
+              board: _previewBoard(),
+              geometry: geometry,
+              theme: theme,
+              dice: widget.state.dice,
+              cube: widget.state.cube,
+              highlightedSources: (builder != null && selected == null)
+                  ? builder.selectableSources
+                  : const {},
+              highlightedDestinations: (builder != null && selected != null)
+                  ? builder.destinationsFor(selected)
+                  : const {},
+              combinedDestinations: (builder != null && selected != null)
+                  ? _chainedDestinations(builder, selected)
+                  : const {},
+              selectedCheckerLocation: selected,
+              movingPlayer: builder != null ? widget.state.turn : null,
+            );
+          }
+
+          if (!widget.interactive) {
+            return CustomPaint(size: size, painter: painter);
+          }
+          final dragEnabled = widget.interactionOptions.enableDrag;
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (details) => _handleTap(geometry, details.localPosition),
+            // Pan recognisers are attached only when drag is enabled, so with
+            // drag off a pan simply falls through (does nothing) while taps keep
+            // working. With both attached, Flutter's gesture arena routes a
+            // static press+release to onTapUp and a moving gesture to the pan
+            // handlers, so tap and drag coexist.
+            onPanStart: dragEnabled
+                ? (details) => _onPanStart(geometry, details.localPosition)
+                : null,
+            onPanUpdate:
+                dragEnabled ? (details) => _onPanUpdate(details.localPosition) : null,
+            onPanEnd: dragEnabled ? (_) => _onPanEnd(geometry) : null,
+            child: CustomPaint(size: size, painter: painter),
+          );
         },
       ),
     );

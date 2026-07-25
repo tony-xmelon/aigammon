@@ -92,6 +92,7 @@ void main() {
       CubeState? cube,
       Set<int> src = const {},
       Set<int> dst = const {},
+      Set<int> combined = const {},
       int? sel,
       Player? mover,
       bool whiteAtBottom = true,
@@ -104,6 +105,7 @@ void main() {
           cube: cube,
           highlightedSources: src,
           highlightedDestinations: dst,
+          combinedDestinations: combined,
           selectedCheckerLocation: sel,
           movingPlayer: mover,
         );
@@ -116,6 +118,7 @@ void main() {
         base.shouldRepaint(make(cube: const CubeState.initial())), isTrue);
     expect(base.shouldRepaint(make(src: const {1})), isTrue);
     expect(base.shouldRepaint(make(dst: const {2})), isTrue);
+    expect(base.shouldRepaint(make(combined: const {4})), isTrue);
     expect(base.shouldRepaint(make(sel: 3)), isTrue);
     expect(base.shouldRepaint(make(mover: Player.white)), isTrue);
     expect(base.shouldRepaint(make(whiteAtBottom: false)), isTrue);

@@ -20,6 +20,7 @@ class BoardPainter extends CustomPainter {
     this.cube,
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
+    this.combinedDestinations = const {},
     this.selectedCheckerLocation,
     this.movingPlayer,
     this.hiddenChecker,
@@ -40,6 +41,14 @@ class BoardPainter extends CustomPainter {
   /// highlight on the target TRIANGLE (point index 0..23, or [CheckerMove.off]
   /// for the bear-off strip).
   final Set<int> highlightedDestinations;
+
+  /// Landing points of COMBINED (multi-hop, same-checker) moves for the
+  /// picked-up source: each renders as a DIMMER (reduced-opacity) variant of the
+  /// destination highlight, so a tap there enters the whole chain. Disjoint from
+  /// [highlightedDestinations] (the caller subtracts the direct set); if a point
+  /// appears in both, the bright direct highlight wins. Empty by default, in
+  /// which case painting is byte-identical to the un-extended path.
+  final Set<int> combinedDestinations;
 
   /// The picked-up source whose TOP CHECKER wears the bright selection ring:
   /// a point index 0..23, or [CheckerMove.bar]. `null` when nothing is picked
@@ -121,8 +130,11 @@ class BoardPainter extends CustomPainter {
       final color = i.isEven ? theme.pointDark : theme.pointLight;
       canvas.drawPath(path, Paint()..color = color);
 
+      // A direct destination wins over a combined landing when both apply.
       if (highlightedDestinations.contains(i)) {
         _paintDestinationTriangle(canvas, path);
+      } else if (combinedDestinations.contains(i)) {
+        _paintCombinedTriangle(canvas, path);
       }
     }
   }
@@ -143,21 +155,44 @@ class BoardPainter extends CustomPainter {
     );
   }
 
+  /// Combined-move landing: a DIMMER variant of the direct destination
+  /// highlight — the same green fill + ring at reduced opacity — so it reads as
+  /// "reachable by playing both dice with this checker" without competing with
+  /// the bright single-hop targets.
+  void _paintCombinedTriangle(Canvas canvas, Path path) {
+    canvas.drawPath(
+        path,
+        Paint()
+          ..color = theme.highlightDestinationFill.withValues(alpha: 0.42));
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = geometry.checkerRadius * 0.18
+        ..color = theme.highlightDestination.withValues(alpha: 0.55),
+    );
+  }
+
   /// Highlights the moving player's bear-off strip when `off` is a destination,
   /// using the SAME opaque fill + ring as the triangle destinations so it reads
   /// uniformly. No-op unless [movingPlayer] is known.
   void _paintOffDestination(Canvas canvas) {
-    if (!highlightedDestinations.contains(CheckerMove.off)) return;
     final player = movingPlayer;
     if (player == null) return;
+    final direct = highlightedDestinations.contains(CheckerMove.off);
+    final combined = !direct && combinedDestinations.contains(CheckerMove.off);
+    if (!direct && !combined) return;
     final tray = geometry.offRect(player);
-    canvas.drawRect(tray, Paint()..color = theme.highlightDestinationFill);
+    final fillAlpha = combined ? 0.42 : 1.0;
+    final ringAlpha = combined ? 0.55 : 1.0;
+    canvas.drawRect(tray,
+        Paint()..color = theme.highlightDestinationFill.withValues(alpha: fillAlpha));
     canvas.drawRect(
       tray.deflate(geometry.checkerRadius * 0.11),
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = geometry.checkerRadius * 0.22
-        ..color = theme.highlightDestination,
+        ..strokeWidth = geometry.checkerRadius * (combined ? 0.18 : 0.22)
+        ..color = theme.highlightDestination.withValues(alpha: ringAlpha),
     );
   }
 
@@ -507,6 +542,7 @@ class BoardPainter extends CustomPainter {
         old.hiddenChecker != hiddenChecker ||
         old.overlayChecker != overlayChecker ||
         !setEquals(old.highlightedSources, highlightedSources) ||
-        !setEquals(old.highlightedDestinations, highlightedDestinations);
+        !setEquals(old.highlightedDestinations, highlightedDestinations) ||
+        !setEquals(old.combinedDestinations, combinedDestinations);
   }
 }

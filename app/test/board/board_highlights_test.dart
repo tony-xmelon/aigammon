@@ -130,6 +130,40 @@ void main() {
     });
   }
 
+  testWidgets('a combined-move landing renders a DIMMER highlight than a '
+      'direct destination', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final g = BoardGeometry(_size, whiteAtBottom: true);
+    final empty = BoardState(points: List<int>.filled(24, 0));
+    BoardPainter make({Set<int> direct = const {}, Set<int> combined = const {}}) =>
+        BoardPainter(
+          board: empty,
+          geometry: g,
+          theme: BoardTheme.light,
+          highlightedDestinations: direct,
+          combinedDestinations: combined,
+          movingPlayer: Player.white,
+        );
+
+    final plain = await _render(t, make());
+    final direct = await _render(t, make(direct: {7}));
+    final combined = await _render(t, make(combined: {7}));
+    final centre = g.pointRect(7).center;
+
+    // Both variants change the triangle centre from bare felt.
+    expect(direct.at(centre), isNot(equals(plain.at(centre))));
+    expect(combined.at(centre), isNot(equals(plain.at(centre))));
+    // The combined variant is DIMMER: its fill differs from the opaque direct
+    // fill (reduced opacity lets the point colour show through).
+    expect(combined.at(centre), isNot(equals(direct.at(centre))),
+        reason: 'a combined landing must read differently from a direct target');
+
+    // An empty combinedDestinations set is byte-identical to no highlight at all.
+    final none = await _render(t, make(combined: const {}));
+    expect(_diffCount(plain, none, centre, g.checkerRadius * 2), 0);
+  });
+
   testWidgets('a selectable source draws a checker ring, not a triangle tint',
       (t) async {
     await t.binding.setSurfaceSize(_size);
