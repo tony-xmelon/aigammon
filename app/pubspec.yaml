@@ -19,6 +19,8 @@ dependencies:
     path: ../packages/backgammon_core
   engine_bindings:
     path: ../packages/engine_bindings
+  online_client:
+    path: ../packages/online_client
 
 dev_dependencies:
   flutter_test:

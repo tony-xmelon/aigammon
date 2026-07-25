@@ -299,6 +299,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.2"
+  http:
+    dependency: transitive
+    description:
+      name: http
+      sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.6.0"
   http_multi_server:
     dependency: transitive
     description:
@@ -432,6 +440,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "9.4.1"
+  online_client:
+    dependency: "direct main"
+    description:
+      path: "../packages/online_client"
+      relative: true
+    source: path
+    version: "0.1.0"
   package_config:
     dependency: transitive
     description:
