@@ -73,6 +73,18 @@ bool isButtonEnabled(WidgetTester t, Finder f) {
 /// [MoveBuilder] offers extends to a full-length legal move (see MoveBuilder's
 /// class doc), so first-source/first-destination reaches `isComplete`.
 Future<void> commitFirstMove(WidgetTester t) async {
+  // The controller may set the pending-move request between frames (real
+  // async); wait until the board actually shows entry affordances before
+  // driving it (pre-existing E2E race fixed here — the painter's
+  // highlightedSources is empty until the BoardView rebuilds).
+  await pumpUntil(
+    t,
+    () =>
+        boardPainterOf(t).highlightedSources.isNotEmpty ||
+        find.text('No moves — pass').evaluate().isNotEmpty ||
+        (find.widgetWithText(FilledButton, 'Confirm').evaluate().isNotEmpty &&
+            isButtonEnabled(t, find.widgetWithText(FilledButton, 'Confirm'))),
+  );
   for (var i = 0; i < 6; i++) {
     final confirm = find.widgetWithText(FilledButton, 'Confirm');
     if (confirm.evaluate().isNotEmpty && isButtonEnabled(t, confirm)) break;
