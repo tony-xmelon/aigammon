@@ -116,3 +116,59 @@ Recorded in the engine-integration plan's deferred list.
 
 Inference is tract-onnx (pure Rust) — mobile builds carry no ONNX Runtime binaries.
 
+## iOS (static linking into the Runner)
+
+iOS forbids `dlopen`ing a dylib from an arbitrary path, so — unlike Windows
+(`.dll`) and Android (`.so`), which the Dart loader opens by path — the engine is
+linked **statically** into the app binary and its symbols are resolved at runtime
+via `DynamicLibrary.process()` (see `libraryLoadStrategyFor` in
+`packages/engine_bindings/lib/src/ffi/library_loader.dart`).
+
+**Staticlib target.** The shim's `Cargo.toml` already declares
+`crate-type = ["cdylib", "staticlib"]`, so the staticlib is a first-class build
+target. CI builds it for the device ABI:
+
+```bash
+rustup target add aarch64-apple-ios
+cargo build --release --target aarch64-apple-ios   # in native/engine_shim
+# → target/aarch64-apple-ios/release/libaigammon_engine.a
+```
+
+(`native/engine_shim/build-ios.sh` additionally builds the simulator ABI and
+packages an `.xcframework`; the CI device build above is all the `-force_load`
+integration needs.)
+
+**Where CI stages the `.a`.** The iOS CI workflow (`.github/workflows/ios.yml`,
+authored in the next task) copies that `libaigammon_engine.a` to
+**`app/ios/Frameworks/libaigammon_engine.a`**. That directory is kept in the tree
+by a `.gitkeep`; the `.a` itself is a build artifact and is git-ignored
+(`app/ios/Frameworks/.gitignore`), never committed.
+
+**Why `-force_load`.** `app/ios/Flutter/Debug.xcconfig` and `Release.xcconfig`
+each append:
+
+```
+OTHER_LDFLAGS = $(inherited) -force_load $(PROJECT_DIR)/Frameworks/libaigammon_engine.a
+```
+
+(`$(PROJECT_DIR)` resolves to `app/ios/`, so this is exactly the staged path.)
+The engine's exported symbols — `wildbg_new_with_path`, `best_move`,
+`probabilities`, `cube_info`, `wildbg_free` — are referenced **only** through
+`dart:ffi` symbol lookups at runtime, never from Swift/ObjC or C at link time. To
+the linker they look unused, so ordinary linking + dead-code stripping would drop
+them and `DynamicLibrary.process().lookup(...)` would fail at launch.
+`-force_load` forces every object file of the staticlib into the binary,
+guaranteeing all shim symbols survive. (`-all_load` would work too but pulls in
+every static library; `-force_load` scopes it to just ours.)
+
+**Troubleshooting a CI link failure.** wildbg/tract-onnx is pure Rust with no C++
+dependency, so no `-lc++` is needed and none is set. **If the CI link step fails
+with undefined C++ symbols** (e.g. `std::__1::...`, `___cxa_*`, or `operator new`),
+the first fix to try is adding `-lc++` (and, if a symbol like `res_9_init` shows
+up, `-lresolv`) to the same `OTHER_LDFLAGS` line. libSystem is linked
+automatically and needs no flag.
+
+**Deployment target.** The scaffold's `IPHONEOS_DEPLOYMENT_TARGET` is Flutter's
+default `13.0`, which is fine for the Rust staticlib (`aarch64-apple-ios`
+defaults below that) — left unchanged.
+

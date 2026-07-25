@@ -1,0 +1,6 @@
+# The Rust engine staticlib (libaigammon_engine.a) is built from
+# native/engine_shim and staged into this directory by CI (.github/workflows/ios.yml)
+# for the -force_load in ../Flutter/{Debug,Release}.xcconfig. It is a build
+# artifact — never commit it. The .gitkeep keeps this directory in the tree so
+# $(PROJECT_DIR)/Frameworks exists before CI stages the lib.
+*.a

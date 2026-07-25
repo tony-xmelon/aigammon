@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
+import 'library_loader.dart';
+
 /// dart:ffi struct/function bindings for the native `aigammon_engine` library
 /// (a thin C shim over wildbg). Internal to the package — not exported from the
 /// barrel. Use the high-level [Engine] facade instead.
@@ -99,7 +101,11 @@ class WildbgFfi {
   late final BestMoveDart bestMove;
   late final CubeInfoDart cubeInfo;
 
-  WildbgFfi(String libraryPath) : _lib = DynamicLibrary.open(libraryPath) {
+  /// Loads the native library via [loadEngineLibrary], which picks the
+  /// per-platform strategy: `DynamicLibrary.open([libraryPath])` on
+  /// Windows/Linux/Android, `DynamicLibrary.process()` on iOS/macOS (where the
+  /// staticlib is linked into the host binary and [libraryPath] is ignored).
+  WildbgFfi(String libraryPath) : _lib = loadEngineLibrary(libraryPath) {
     wildbgNewWithPath =
         _lib.lookupFunction<_WildbgNewWithPathNative, WildbgNewWithPathDart>(
             'wildbg_new_with_path');

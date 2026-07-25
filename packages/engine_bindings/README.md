@@ -43,8 +43,20 @@ binaries** — the engine is a single self-contained static/shared library per A
 
 ## Library resolution
 
-`WildbgFfi.defaultLibraryPath()` (in `lib/src/ffi/wildbg_ffi.dart`) resolves the
-native library in this order; the first candidate that exists on disk wins:
+The load *strategy* is picked per platform by `libraryLoadStrategyFor` (pure,
+unit-tested) in `lib/src/ffi/library_loader.dart`:
+
+- **Windows / Linux / Android** → `DynamicLibrary.open(path)`, where `path` comes
+  from `WildbgFfi.defaultLibraryPath()` (below). The engine is a separate
+  `.dll` / `.so`.
+- **iOS / macOS** → `DynamicLibrary.process()`. The Rust staticlib
+  `libaigammon_engine.a` is `-force_load`ed into the host binary (see
+  `app/ios/Flutter/*.xcconfig` and the "iOS" section of `native/README.md`), so
+  there is no file to open — the shim symbols already live in the process, and
+  the resolved path is ignored.
+
+`WildbgFfi.defaultLibraryPath()` (in `lib/src/ffi/wildbg_ffi.dart`) supplies the
+`open` path, resolved in this order; the first candidate that exists on disk wins:
 
 1. The `$WILDBG_LIB_PATH` environment variable, if set and non-empty — used
    verbatim (the override for staging/CI or a hand-placed build).
