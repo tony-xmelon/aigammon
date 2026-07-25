@@ -286,6 +286,119 @@ void main() {
     c2.disposeController();
   });
 
+  testWidgets('header is a single compact row (score and Double aligned)',
+      (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final human = LocalHumanAgent();
+    final c = GameController(
+      white: human,
+      black: FakeAgent(),
+      matchLength: 5,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+
+    // The compact single-line score ("… to 5") is present.
+    final score = find.textContaining('to 5');
+    expect(score, findsOneWidget);
+    // Score, cube chip and Double all sit on one horizontal line: their vertical
+    // centres coincide (a single row, not stacked rows).
+    final scoreY = t.getCenter(score).dy;
+    final doubleY =
+        t.getCenter(find.widgetWithText(OutlinedButton, 'Double')).dy;
+    expect((scoreY - doubleY).abs(), lessThan(32),
+        reason: 'header is a single row');
+    c.disposeController();
+  });
+
+  testWidgets('Resign lives behind the header overflow (⋮) menu', (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final human = LocalHumanAgent();
+    final c = GameController(
+      white: human,
+      black: FakeAgent(),
+      matchLength: 5,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+
+    // Resign entries are hidden until the overflow menu is opened.
+    expect(find.text('Resign — gammon'), findsNothing);
+    await t.tap(find.byIcon(Icons.more_vert));
+    await t.pumpAndSettle();
+    expect(find.text('Resign — single'), findsOneWidget);
+    expect(find.text('Resign — gammon'), findsOneWidget);
+    expect(find.text('Resign — backgammon'), findsOneWidget);
+    c.disposeController();
+  });
+
+  testWidgets('bottom action bar keeps a fixed 64px height across phases',
+      (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final human = LocalHumanAgent();
+    final c = GameController(
+      white: human,
+      black: FakeAgent(),
+      matchLength: 5,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    final bar = find.byKey(const ValueKey('actionBar'));
+
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+    expect(t.getSize(bar).height, 64, reason: 'pre-roll (Roll) phase');
+
+    await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+    await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+    expect(t.getSize(bar).height, 64, reason: 'moving (Undo/Confirm) phase');
+
+    c.disposeController();
+  });
+
+  testWidgets('Undo/Confirm in the bottom bar drive move entry', (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final human = LocalHumanAgent();
+    final c = GameController(
+      white: human,
+      black: FakeAgent(),
+      matchLength: 5,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+    await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+    await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+    // Before any hop: both entry controls are present but disabled.
+    final undo = find.widgetWithText(TextButton, 'Undo');
+    final confirm = find.widgetWithText(FilledButton, 'Confirm');
+    expect(undo, findsOneWidget);
+    expect(confirm, findsOneWidget);
+    expect(isButtonEnabled(t, undo), isFalse);
+    expect(isButtonEnabled(t, confirm), isFalse);
+
+    // Enter one hop from the board: the preview diverges and Undo turns on.
+    final src = boardPainterOf(t).highlightedSources.first;
+    await tapBoardPoint(t, src);
+    final dst = boardPainterOf(t).highlightedDestinations.first;
+    await tapBoardPoint(t, dst);
+    expect(boardPainterOf(t).board, isNot(c.state.board));
+    expect(isButtonEnabled(t, undo), isTrue);
+
+    // Undo from the bar reverts the preview to the base board.
+    await t.tap(undo);
+    await t.pump();
+    expect(boardPainterOf(t).board, c.state.board);
+
+    c.disposeController();
+  });
+
   testWidgets('cube-offer dialog: Take submits and the cube proceeds',
       (t) async {
     final human = LocalHumanAgent();

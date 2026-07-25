@@ -89,6 +89,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                     _Section(
                       label: 'Match length',
                       child: SegmentedButton<int>(
+                        showSelectedIcon: false,
                         segments: const [
                           ButtonSegment(value: 1, label: Text('1')),
                           ButtonSegment(value: 3, label: Text('3')),
@@ -105,6 +106,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                       _Section(
                         label: 'Difficulty',
                         child: SegmentedButton<Difficulty>(
+                          showSelectedIcon: false,
                           segments: const [
                             ButtonSegment(
                                 value: Difficulty.easy, label: Text('Easy')),
@@ -132,6 +134,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                       _Section(
                         label: 'Your side',
                         child: SegmentedButton<_SideChoice>(
+                          showSelectedIcon: false,
                           segments: const [
                             ButtonSegment(
                                 value: _SideChoice.white, label: Text('White')),

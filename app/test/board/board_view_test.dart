@@ -89,11 +89,14 @@ void main() {
   testWidgets('golden-point entry commits the canonical move', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
     Move? committed;
     await t.pumpWidget(_harness(BoardView(
       state: goldenState,
       interactive: true,
       onMoveCommitted: (m) => committed = m,
+      entryControl: control,
     )));
 
     // Initially all legal sources are highlighted, nothing selected.
@@ -115,10 +118,10 @@ void main() {
     expect(_painterOf(t).selectedSource, 5);
     await tapPoint(t, 4);
 
-    // Confirm is now enabled; committing yields the canonical golden move.
-    final confirm = find.widgetWithText(FilledButton, 'Confirm');
-    expect(_isEnabled(t, confirm), isTrue);
-    await t.tap(confirm);
+    // Confirm is now enabled (surfaced via the entry controller); committing
+    // yields the canonical golden move.
+    expect(control.canConfirm, isTrue);
+    control.confirm();
     await t.pump();
     expect(committed, isNotNull);
     expect(committed!.sameAs(goldenMove), isTrue,
@@ -128,21 +131,26 @@ void main() {
   testWidgets('undo reverts the preview board', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
     await t.pumpWidget(_harness(BoardView(
       state: goldenState,
       interactive: true,
       onMoveCommitted: (_) {},
+      entryControl: control,
     )));
 
-    // One hop 8/5: preview diverges from the base board.
+    // One hop 8/5: preview diverges from the base board, Undo becomes live.
     await tapPoint(t, 7);
     await tapPoint(t, 4);
     expect(_painterOf(t).board, isNot(goldenState.board));
+    expect(control.canUndo, isTrue);
 
     // Undo removes the hop; preview returns to the base board.
-    await t.tap(find.widgetWithText(TextButton, 'Undo'));
+    control.undo();
     await t.pump();
     expect(_painterOf(t).board, goldenState.board);
+    expect(control.canUndo, isFalse);
   });
 
   testWidgets('re-tapping a source deselects; tapping empty space clears',
@@ -187,20 +195,24 @@ void main() {
     );
     expect(danceState.legalMoves, isEmpty);
 
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
     Move? committed;
     await t.pumpWidget(_harness(BoardView(
       state: danceState,
       interactive: true,
       onMoveCommitted: (m) => committed = m,
+      entryControl: control,
     )));
 
-    final pass = find.text('No moves — pass');
-    expect(pass, findsOneWidget);
-    // No Confirm/Undo controls during a dance.
-    expect(find.text('Confirm'), findsNothing);
-    expect(find.text('Undo'), findsNothing);
+    // The controller reports a dance with no confirmable move; the board itself
+    // draws no controls (they live in the external bar).
+    expect(control.isDance, isTrue);
+    expect(control.canConfirm, isFalse);
+    expect(find.byType(FilledButton), findsNothing);
+    expect(find.byType(TextButton), findsNothing);
 
-    await t.tap(pass);
+    control.pass();
     await t.pump();
     expect(committed, isNotNull);
     expect(committed!.checkerMoves, isEmpty); // Move.none
@@ -240,18 +252,20 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     final external = ValueNotifier<Move?>(null);
     addTearDown(external.dispose);
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
     Move? committed;
     await t.pumpWidget(_harness(BoardView(
       state: goldenState,
       interactive: true,
       onMoveCommitted: (m) => committed = m,
       externalMove: external,
+      entryControl: control,
     )));
 
     // Nothing staged yet: base board, Confirm disabled.
     expect(_painterOf(t).board, goldenState.board);
-    final confirm = find.widgetWithText(FilledButton, 'Confirm');
-    expect(_isEnabled(t, confirm), isFalse);
+    expect(control.canConfirm, isFalse);
 
     // Fire the full golden move: it is staged (preview applied, Confirm on) but
     // NOT committed.
@@ -261,10 +275,10 @@ void main() {
         reason: 'staged move should show the play applied in the preview');
     expect(_painterOf(t).selectedSource, isNull);
     expect(committed, isNull, reason: 'staging must not auto-commit');
-    expect(_isEnabled(t, confirm), isTrue);
+    expect(control.canConfirm, isTrue);
 
     // Confirm commits the SAME canonical move.
-    await t.tap(confirm);
+    control.confirm();
     await t.pump();
     expect(committed, isNotNull);
     expect(committed!.sameAs(goldenMove), isTrue,
@@ -277,11 +291,14 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     final external = ValueNotifier<Move?>(null);
     addTearDown(external.dispose);
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
     await t.pumpWidget(_harness(BoardView(
       state: goldenState,
       interactive: true,
       onMoveCommitted: (_) {},
       externalMove: external,
+      entryControl: control,
     )));
 
     // A bogus move never offered by the builder: point 2 is empty in the
@@ -293,7 +310,7 @@ void main() {
     // and the legal sources are still offered for fresh entry.
     expect(_painterOf(t).board, goldenState.board);
     expect(_painterOf(t).selectedSource, isNull);
-    expect(_isEnabled(t, find.widgetWithText(FilledButton, 'Confirm')), isFalse);
+    expect(control.canConfirm, isFalse);
     expect(_painterOf(t).highlightedSources, contains(7));
   });
 
@@ -393,12 +410,34 @@ void main() {
     expect(_painterOf(t).overlayChecker, isNull);
     expect(_painterOf(t).board, postBoard);
   });
-}
 
-/// Whether the button found by [finder] is currently enabled.
-bool _isEnabled(WidgetTester t, Finder finder) {
-  final w = t.widget(finder);
-  if (w is FilledButton) return w.onPressed != null;
-  if (w is TextButton) return w.onPressed != null;
-  return false;
+  testWidgets('entry controller reports active only in the moving phase',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+
+    // Non-interactive: no entry is active.
+    await t.pumpWidget(_harness(BoardView(
+      state: goldenState,
+      interactive: false,
+      onMoveCommitted: (_) {},
+      entryControl: control,
+    )));
+    expect(control.active, isFalse);
+
+    // Interactive moving phase: entry becomes active, nothing entered yet.
+    await t.pumpWidget(_harness(BoardView(
+      state: goldenState,
+      interactive: true,
+      onMoveCommitted: (_) {},
+      entryControl: control,
+    )));
+    await t.pump();
+    expect(control.active, isTrue);
+    expect(control.canUndo, isFalse);
+    expect(control.canConfirm, isFalse);
+    expect(control.isDance, isFalse);
+  });
 }

@@ -61,6 +61,19 @@ void main() {
     expect(find.text('Tutor mode default'), findsOneWidget);
   });
 
+  testWidgets('every selector hides the selected checkmark', (t) async {
+    await t.pumpWidget(_app());
+    _feed.add(AppSettings.defaults);
+    await t.pumpAndSettle();
+
+    final segs = find.byWidgetPredicate((w) => w is SegmentedButton);
+    expect(segs, findsWidgets);
+    for (final w in t.widgetList(segs)) {
+      expect((w as SegmentedButton).showSelectedIcon, isFalse,
+          reason: 'a checkmark would squeeze/wrap the segment labels');
+    }
+  });
+
   testWidgets('each control autosaves immediately (probe the repo)', (t) async {
     await t.pumpWidget(_app());
     _feed.add(AppSettings.defaults);

@@ -59,6 +59,13 @@ void main() {
         reason: 'difficulty from settings');
     // Tutor override is null -> per-mode default (hard vs-computer = OFF).
     expect(_tutorSwitch(t), isFalse);
+
+    // No selector shows a checkmark (it would squeeze the labels onto two lines).
+    final segs = find.byWidgetPredicate((w) => w is SegmentedButton);
+    expect(segs, findsWidgets);
+    for (final w in t.widgetList(segs)) {
+      expect((w as SegmentedButton).showSelectedIcon, isFalse);
+    }
   });
 
   testWidgets('tutor override ON forces the tutor toggle on, even at expert',

@@ -50,6 +50,7 @@ class SettingsScreen extends ConsumerWidget {
                     _Section(
                       label: 'Theme',
                       child: SegmentedButton<ThemeMode>(
+                        showSelectedIcon: false,
                         segments: const [
                           ButtonSegment(
                               value: ThemeMode.system, label: Text('System')),
@@ -67,6 +68,7 @@ class SettingsScreen extends ConsumerWidget {
                     _Section(
                       label: 'Animation speed',
                       child: SegmentedButton<AnimationSpeed>(
+                        showSelectedIcon: false,
                         segments: const [
                           ButtonSegment(
                               value: AnimationSpeed.off, label: Text('None')),
@@ -85,6 +87,7 @@ class SettingsScreen extends ConsumerWidget {
                     _Section(
                       label: 'Default match length',
                       child: SegmentedButton<int>(
+                        showSelectedIcon: false,
                         segments: const [
                           ButtonSegment(value: 1, label: Text('1')),
                           ButtonSegment(value: 3, label: Text('3')),
@@ -100,6 +103,7 @@ class SettingsScreen extends ConsumerWidget {
                     _Section(
                       label: 'Default difficulty',
                       child: SegmentedButton<Difficulty>(
+                        showSelectedIcon: false,
                         segments: const [
                           ButtonSegment(
                               value: Difficulty.easy, label: Text('Easy')),
@@ -119,6 +123,7 @@ class SettingsScreen extends ConsumerWidget {
                     _Section(
                       label: 'Tutor mode default',
                       child: SegmentedButton<_TutorChoice>(
+                        showSelectedIcon: false,
                         segments: const [
                           ButtonSegment(
                               value: _TutorChoice.auto, label: Text('Auto')),

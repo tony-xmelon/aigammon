@@ -158,10 +158,16 @@ class _GameScreenState extends State<GameScreen> {
   /// the move's hops, leaving it complete but uncommitted for the user's Confirm.
   final ValueNotifier<Move?> _stagedMove = ValueNotifier<Move?>(null);
 
+  /// Bridges the interactive [BoardView]'s move-entry builder to the bottom
+  /// action bar: it mirrors the live Undo/Confirm/Pass affordances and forwards
+  /// the bar's taps back into the board. Merged into [_observable] so the bar
+  /// rebuilds when the affordances change.
+  final BoardEntryController _entryControl = BoardEntryController();
+
   @override
   void initState() {
     super.initState();
-    _observable = Listenable.merge([_c, ..._humanNotifiers()]);
+    _observable = Listenable.merge([_c, ..._humanNotifiers(), _entryControl]);
     _observable.addListener(_onChange);
     // Fire-and-forget: the controller catches loop errors and records them on
     // `error`, which the banner surfaces. Nothing here needs the returned future.
@@ -172,6 +178,7 @@ class _GameScreenState extends State<GameScreen> {
   void dispose() {
     _observable.removeListener(_onChange);
     _stagedMove.dispose();
+    _entryControl.dispose();
     _c.disposeController();
     super.dispose();
   }
@@ -413,6 +420,7 @@ class _GameScreenState extends State<GameScreen> {
                         whiteAtBottom: whiteAtBottom,
                         externalMove: _stagedMove,
                         lastMove: _c.lastMove,
+                        entryControl: _entryControl,
                         animationDuration: widget.animationDuration,
                       ),
                     ),
@@ -548,28 +556,102 @@ class _GameScreenState extends State<GameScreen> {
 
   // --- Tutor UI --------------------------------------------------------------
 
-  /// The bottom controls: the tutor hint button (during a human move), the
-  /// pre-roll action bar, and the pre-roll cube advice line.
+  /// The bottom region: the fixed-height contextual action bar and, when the
+  /// tutor is on, the pre-roll cube advice line beneath it.
   Widget _bottomRegion(Player? moveSide) {
-    final showHint = _tutor != null && moveSide != null;
     final showCube =
         _tutor != null && _cubeAdvice != null && _c.awaitingHumanTurn;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (showHint)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: OutlinedButton.icon(
-              onPressed: _openHint,
-              icon: const Icon(Icons.lightbulb_outline, size: 18),
-              label: const Text('Hint'),
-            ),
-          ),
-        _ActionBar(controller: _c),
+        _actionBar(moveSide),
         if (showCube) _cubeAdviceLine(_cubeAdvice!),
       ],
     );
+  }
+
+  /// The contextual bottom action bar. Its height is ALWAYS 64px (a fixed
+  /// [SizedBox]) so nothing below the board ever reflows as the phase changes —
+  /// only the bar's *contents* swap:
+  ///
+  /// * entering a move → `[Undo] [Confirm]` (Confirm primary, right),
+  /// * a dance → `[No moves — pass]`,
+  /// * the human pre-roll gate → `[Roll]`,
+  /// * otherwise → a subtle status line (whose turn / thinking).
+  ///
+  /// The tutor Hint button sits far-left whenever a human move is open. Double
+  /// and Resign are NOT here — they live in the header row, away from where
+  /// thumbs rest, to avoid accidental taps.
+  Widget _actionBar(Player? moveSide) {
+    final scheme = Theme.of(context).colorScheme;
+    final showHint = _tutor != null && moveSide != null;
+    final Widget content;
+    if (moveSide != null && _entryControl.isDance) {
+      content = Row(
+        children: [
+          if (showHint) _hintButton(),
+          const Spacer(),
+          FilledButton(
+            onPressed: _entryControl.pass,
+            child: const Text('No moves — pass'),
+          ),
+        ],
+      );
+    } else if (moveSide != null) {
+      content = Row(
+        children: [
+          if (showHint) _hintButton(),
+          const Spacer(),
+          TextButton(
+            onPressed: _entryControl.canUndo ? _entryControl.undo : null,
+            child: const Text('Undo'),
+          ),
+          const SizedBox(width: 12),
+          FilledButton(
+            onPressed: _entryControl.canConfirm ? _entryControl.confirm : null,
+            child: const Text('Confirm'),
+          ),
+        ],
+      );
+    } else if (_c.awaitingHumanTurn) {
+      content = Row(
+        children: [
+          const Spacer(),
+          FilledButton(
+            onPressed: _c.rollDice,
+            child: const Text('Roll'),
+          ),
+        ],
+      );
+    } else {
+      content = Center(
+        child: Text(
+          _statusText(),
+          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+        ),
+      );
+    }
+    return SizedBox(
+      key: const ValueKey('actionBar'),
+      height: 64,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: content,
+      ),
+    );
+  }
+
+  Widget _hintButton() => OutlinedButton.icon(
+        onPressed: _openHint,
+        icon: const Icon(Icons.lightbulb_outline, size: 18),
+        label: const Text('Hint'),
+      );
+
+  /// The idle-bar status line: what the game is waiting on.
+  String _statusText() {
+    if (_c.isThinking) return 'Thinking…';
+    if (_c.matchOver || _c.awaitingNextGame) return '';
+    return "${_playerName(_c.state.turn)}'s turn";
   }
 
   /// The dismissible post-move assessment chip: a coloured mark, the equity
@@ -788,8 +870,18 @@ String _scoreLine(MatchController c) {
   return 'White ${m.whiteScore} — ${m.blackScore} Black  (to ${m.matchLength})';
 }
 
-// --- HUD ---------------------------------------------------------------------
+/// The compact header score: "W 2–3 B · to 5".
+String _compactScore(MatchController c) {
+  final m = c.match;
+  return 'W ${m.whiteScore}–${m.blackScore} B · to ${m.matchLength}';
+}
 
+// --- HUD (single row) --------------------------------------------------------
+
+/// The single-row header: a compact score, an optional Crawford badge, the cube
+/// chip, a spacer, an optional thinking dot, then the Double button and the
+/// overflow (⋮) menu holding Resign. Keeping Double/Resign up here (rather than
+/// in the bottom bar) puts the risky actions away from where thumbs rest.
 class _Hud extends StatelessWidget {
   const _Hud({required this.controller});
 
@@ -808,72 +900,6 @@ class _Hud extends StatelessWidget {
     return false;
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final state = controller.state;
-    final cube = state.cube;
-    final cubeOwner = cube.owner == null
-        ? 'centre'
-        : _playerName(cube.owner!).toLowerCase();
-    // The thinking chip reflects a genuine AI await, not a human's own decision
-    // (the controller keeps `isThinking` true while it awaits a human move too).
-    final showThinking = controller.isThinking && !_humanDeciding;
-
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                _scoreLine(controller),
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            if (state.isCrawfordGame) ...[
-              const _Badge(label: 'Crawford'),
-              const SizedBox(width: 8),
-            ],
-            _Badge(label: 'Cube ${cube.value} ($cubeOwner)'),
-            if (showThinking) ...[
-              const SizedBox(width: 8),
-              const _Badge(label: 'thinking…'),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Badge extends StatelessWidget {
-  const _Badge({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: scheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(label,
-          style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 12)),
-    );
-  }
-}
-
-// --- Action bar --------------------------------------------------------------
-
-class _ActionBar extends StatelessWidget {
-  const _ActionBar({required this.controller});
-
-  final MatchController controller;
-
   bool get _doublingLegal {
     final s = controller.state;
     return !s.isCrawfordGame &&
@@ -882,47 +908,144 @@ class _ActionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Move-entry controls (Undo/Confirm/Pass) live inside the BoardView during
-    // the moving phase; this bar only serves the pre-roll human turn gate.
-    if (!controller.awaitingHumanTurn) {
-      return const SizedBox(height: 64);
-    }
-    return Padding(
-      padding: const EdgeInsets.all(8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          FilledButton(
-            onPressed: controller.rollDice,
-            child: const Text('Roll'),
-          ),
-          const SizedBox(width: 12),
-          OutlinedButton(
-            onPressed: _doublingLegal ? controller.offerDouble : null,
-            child: const Text('Double'),
-          ),
-          const SizedBox(width: 12),
-          PopupMenuButton<ResignValue>(
-            onSelected: controller.offerResign,
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: ResignValue.single, child: Text('Single')),
-              PopupMenuItem(value: ResignValue.gammon, child: Text('Gammon')),
-              PopupMenuItem(
-                  value: ResignValue.backgammon, child: Text('Backgammon')),
-            ],
-            // A styled container (not a disabled OutlinedButton) so the
-            // affordance does not read as greyed-out; the menu owns the tap.
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                border:
-                    Border.all(color: Theme.of(context).colorScheme.outline),
-                borderRadius: BorderRadius.circular(20),
+    final state = controller.state;
+    final cube = state.cube;
+    // The thinking dot reflects a genuine AI await, not a human's own decision
+    // (the controller keeps `isThinking` true while it awaits a human move too).
+    final showThinking = controller.isThinking && !_humanDeciding;
+    // Double/Resign are only meaningful at the human's own pre-roll gate.
+    final atGate = controller.awaitingHumanTurn;
+
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Row(
+          children: [
+            Flexible(
+              child: Text(
+                _compactScore(controller),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall,
               ),
-              child: const Text('Resign ▾'),
             ),
-          ),
+            if (state.isCrawfordGame) ...[
+              const SizedBox(width: 8),
+              const _MiniBadge(icon: Icons.star, label: 'Crawford'),
+            ],
+            const SizedBox(width: 8),
+            _CubeChip(value: cube.value, owner: cube.owner),
+            const Spacer(),
+            if (showThinking) ...[
+              const _ThinkingDot(),
+              const SizedBox(width: 8),
+            ],
+            OutlinedButton.icon(
+              onPressed:
+                  atGate && _doublingLegal ? controller.offerDouble : null,
+              icon: const Icon(Icons.control_point_duplicate, size: 16),
+              label: const Text('Double'),
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+            ),
+            PopupMenuButton<ResignValue>(
+              enabled: atGate,
+              icon: const Icon(Icons.more_vert),
+              tooltip: 'More actions',
+              onSelected: controller.offerResign,
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                    value: ResignValue.single, child: Text('Resign — single')),
+                PopupMenuItem(
+                    value: ResignValue.gammon, child: Text('Resign — gammon')),
+                PopupMenuItem(
+                    value: ResignValue.backgammon,
+                    child: Text('Resign — backgammon')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A small icon+label chip (e.g. the Crawford marker).
+class _MiniBadge extends StatelessWidget {
+  const _MiniBadge({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: scheme.onSecondaryContainer),
+          const SizedBox(width: 4),
+          Text(label,
+              style:
+                  TextStyle(color: scheme.onSecondaryContainer, fontSize: 12)),
         ],
+      ),
+    );
+  }
+}
+
+/// The doubling-cube chip: value plus the owner's initial (or centred when
+/// nobody owns it).
+class _CubeChip extends StatelessWidget {
+  const _CubeChip({required this.value, required this.owner});
+
+  final int value;
+  final Player? owner;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final suffix = owner == null
+        ? ''
+        : ' ${owner == Player.white ? 'W' : 'B'}';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text('×$value$suffix',
+          style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 12)),
+    );
+  }
+}
+
+/// A small static dot signalling the AI is thinking (a compact replacement for
+/// the old "thinking…" chip). Deliberately not animated, so tests that
+/// `pumpAndSettle` through AI turns are not blocked by a perpetual animation.
+class _ThinkingDot extends StatelessWidget {
+  const _ThinkingDot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Thinking',
+      child: Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.primary,
+          shape: BoxShape.circle,
+        ),
       ),
     );
   }

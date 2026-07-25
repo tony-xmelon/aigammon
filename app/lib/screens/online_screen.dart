@@ -299,6 +299,7 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
         Text('Match length', style: theme.textTheme.titleSmall),
         const SizedBox(height: 8),
         SegmentedButton<int>(
+          showSelectedIcon: false,
           segments: const [
             ButtonSegment(value: 1, label: Text('1')),
             ButtonSegment(value: 3, label: Text('3')),

@@ -1,17 +1,136 @@
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'board_geometry.dart';
 import 'board_painter.dart';
 import 'board_theme.dart';
 
+/// Bridges the [BoardView]'s private move-entry [MoveBuilder] to an EXTERNAL
+/// action bar (the game screen's fixed-height bottom bar).
+///
+/// The board no longer draws its own Undo/Confirm/Pass overlay. Instead the
+/// consumer owns a [BoardEntryController], hands it to [BoardView.entryControl],
+/// and renders the buttons wherever it likes. The controller MIRRORS the live
+/// builder affordances — [active] (a move is being entered), [canUndo] (at least
+/// one hop chosen), [canConfirm] (a full legal move is staged), [isDance] (no
+/// legal play, so a pass is offered) — and FORWARDS the user's [undo] /
+/// [confirm] / [pass] taps back into the board.
+///
+/// It is a [ChangeNotifier]: it fires whenever the affordances change, so a bar
+/// listening to it rebuilds its enabled/disabled state. [BoardView] pushes state
+/// via the private `_update` (which notifies only on a real change) and binds the
+/// action callbacks via `_bind`; both are library-private so external callers see
+/// only the read getters and the three action methods.
+class BoardEntryController extends ChangeNotifier {
+  bool _active = false;
+  bool _canUndo = false;
+  bool _canConfirm = false;
+  bool _isDance = false;
+
+  /// Whether a move is currently being entered (the interactive moving phase).
+  bool get active => _active;
+
+  /// Whether at least one hop has been chosen (Undo is meaningful).
+  bool get canUndo => _canUndo;
+
+  /// Whether a full legal move is staged (Confirm is enabled).
+  bool get canConfirm => _canConfirm;
+
+  /// Whether the moving phase has no legal play (offer a Pass instead).
+  bool get isDance => _isDance;
+
+  // Action callbacks bound by the owning [BoardView]; null when unbound.
+  VoidCallback? _onUndo;
+  VoidCallback? _onConfirm;
+  VoidCallback? _onPass;
+  bool _notifyScheduled = false;
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  /// Removes the last entered hop. No-op unless a move is being entered.
+  void undo() => _onUndo?.call();
+
+  /// Commits the staged move. No-op unless [canConfirm].
+  void confirm() => _onConfirm?.call();
+
+  /// Passes the turn (a dance). No-op unless [isDance].
+  void pass() => _onPass?.call();
+
+  /// [BoardView]-internal: wires the action callbacks.
+  void _bind({
+    required VoidCallback onUndo,
+    required VoidCallback onConfirm,
+    required VoidCallback onPass,
+  }) {
+    _onUndo = onUndo;
+    _onConfirm = onConfirm;
+    _onPass = onPass;
+  }
+
+  /// [BoardView]-internal: drops the action callbacks (on detach/dispose).
+  void _unbind() {
+    _onUndo = null;
+    _onConfirm = null;
+    _onPass = null;
+  }
+
+  /// [BoardView]-internal: mirrors the current builder affordances. Stores the
+  /// fields immediately (so a synchronous read is always current) and notifies
+  /// listeners only when something actually changed. If called mid-build (from
+  /// [BoardView]'s `initState`/`didUpdateWidget`, which run during the parent's
+  /// build), the notify is deferred to the next frame to avoid a
+  /// setState-during-build; from event handlers (taps, external-move fires) the
+  /// scheduler is idle, so it notifies immediately.
+  void _update({
+    required bool active,
+    required bool canUndo,
+    required bool canConfirm,
+    required bool isDance,
+  }) {
+    if (_active == active &&
+        _canUndo == canUndo &&
+        _canConfirm == canConfirm &&
+        _isDance == isDance) {
+      return;
+    }
+    _active = active;
+    _canUndo = canUndo;
+    _canConfirm = canConfirm;
+    _isDance = isDance;
+    _emit();
+  }
+
+  void _emit() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.idle ||
+        phase == SchedulerPhase.postFrameCallbacks) {
+      notifyListeners();
+      return;
+    }
+    if (_notifyScheduled) return;
+    _notifyScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _notifyScheduled = false;
+      if (_disposed) return;
+      notifyListeners();
+    });
+  }
+}
+
 /// Interactive board. Renders [state]'s board (with a display-only preview of
 /// partially-entered hops) and, when [interactive], drives a [MoveBuilder]
-/// from taps: tap a highlighted source, then a highlighted destination;
-/// Confirm commits `builder.build()` via [onMoveCommitted]; Undo removes the
-/// last hop. When there are no legal moves a "No moves — pass" affordance
-/// invokes [onMoveCommitted] with [Move.none].
+/// from taps: tap a highlighted source, then a highlighted destination. The
+/// move-entry affordances (Undo/Confirm, or Pass on a dance) are NOT drawn on
+/// the board; they are surfaced to an external action bar through the optional
+/// [entryControl] (see [BoardEntryController]). Confirm commits `builder.build()`
+/// via [onMoveCommitted]; Pass commits [Move.none].
 ///
 /// ## Preview board (display-only)
 ///
@@ -74,17 +193,19 @@ class BoardView extends StatefulWidget {
     this.theme, // defaults by brightness
     this.externalMove,
     this.lastMove,
+    this.entryControl,
     this.animationDuration = const Duration(milliseconds: 150),
   });
 
   /// The game state to render. Its board is the base of the preview.
   final GameState state;
 
-  /// When true, taps drive a [MoveBuilder] and the overlay controls appear.
+  /// When true, taps drive a [MoveBuilder] whose affordances are surfaced to
+  /// [entryControl] (there is no in-board control overlay).
   final bool interactive;
 
-  /// Invoked with the completed [Move] when Confirm is pressed, or with
-  /// [Move.none] when the "No moves — pass" affordance is used.
+  /// Invoked with the completed [Move] when the external Confirm action fires,
+  /// or with [Move.none] when the external Pass action is used (a dance).
   final ValueChanged<Move> onMoveCommitted;
 
   /// Board orientation. When false the board is rotated 180°.
@@ -99,6 +220,13 @@ class BoardView extends StatefulWidget {
   /// non-null fire plays a cosmetic hop-by-hop travel of the moved checker. See
   /// the class doc for timing and the pre-move-state capture contract.
   final ValueListenable<MoveEvent?>? lastMove;
+
+  /// Optional external bridge for the move-entry controls. When provided, the
+  /// board mirrors its live builder affordances onto it and honours its
+  /// [BoardEntryController.undo] / [BoardEntryController.confirm] /
+  /// [BoardEntryController.pass] actions, letting the consumer render the
+  /// buttons in its own layout instead of on the board.
+  final BoardEntryController? entryControl;
 
   /// Duration of each hop's travel (default 150ms; total capped at 600ms).
   /// [Duration.zero] disables animation entirely (the post-move board snaps in),
@@ -161,6 +289,7 @@ class _BoardViewState extends State<BoardView>
     _resetBuilder();
     widget.externalMove?.addListener(_applyExternalMove);
     widget.lastMove?.addListener(_onLastMove);
+    _bindEntryControl(widget.entryControl);
   }
 
   @override
@@ -182,14 +311,64 @@ class _BoardViewState extends State<BoardView>
       oldWidget.lastMove?.removeListener(_onLastMove);
       widget.lastMove?.addListener(_onLastMove);
     }
+    if (!identical(oldWidget.entryControl, widget.entryControl)) {
+      oldWidget.entryControl?._unbind();
+      _bindEntryControl(widget.entryControl);
+    }
+    // Any of the above may have changed the affordances; push them.
+    _syncEntry();
   }
 
   @override
   void dispose() {
     widget.externalMove?.removeListener(_applyExternalMove);
     widget.lastMove?.removeListener(_onLastMove);
+    widget.entryControl?._unbind();
     _animController.dispose();
     super.dispose();
+  }
+
+  /// Wires [control]'s action methods to this board's entry handlers and pushes
+  /// the current affordances into it.
+  void _bindEntryControl(BoardEntryController? control) {
+    control?._bind(onUndo: _undo, onConfirm: _confirm, onPass: _pass);
+    _syncEntry();
+  }
+
+  /// Mirrors the live builder affordances onto [widget.entryControl].
+  void _syncEntry() {
+    final builder = _builder;
+    widget.entryControl?._update(
+      active: builder != null,
+      canUndo: builder != null && builder.chosenHops.isNotEmpty,
+      canConfirm: builder != null && builder.isComplete,
+      isDance: _isDance,
+    );
+  }
+
+  /// Removes the last entered hop (external Undo). No-op with no builder.
+  void _undo() {
+    final builder = _builder;
+    if (builder == null) return;
+    setState(() {
+      builder.undoHop();
+      _selectedSource = null;
+    });
+    _syncEntry();
+  }
+
+  /// Commits the staged move (external Confirm). No-op unless a full legal move
+  /// is entered.
+  void _confirm() {
+    final builder = _builder;
+    if (builder == null || !builder.isComplete) return;
+    widget.onMoveCommitted(builder.build());
+  }
+
+  /// Passes the turn on a dance (external Pass). No-op unless in a dance.
+  void _pass() {
+    if (!_isDance) return;
+    widget.onMoveCommitted(Move.none);
   }
 
   void _onAnimTick() {
@@ -257,6 +436,7 @@ class _BoardViewState extends State<BoardView>
         builder.reset(); // stale/illegal move: leave a clean base position
       }
     });
+    _syncEntry();
   }
 
   /// Creates a fresh builder from the current legal moves (or clears it) and
@@ -372,6 +552,7 @@ class _BoardViewState extends State<BoardView>
         _selectedSource = null; // tapped somewhere irrelevant
       }
     });
+    _syncEntry();
   }
 
   @override
@@ -420,7 +601,7 @@ class _BoardViewState extends State<BoardView>
                   selectedSource: selected,
                 );
 
-          final board = widget.interactive
+          return widget.interactive
               ? GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTapUp: (details) =>
@@ -428,74 +609,8 @@ class _BoardViewState extends State<BoardView>
                   child: CustomPaint(size: size, painter: painter),
                 )
               : CustomPaint(size: size, painter: painter);
-
-          return Stack(
-            children: [
-              Positioned.fill(child: board),
-              if (builder != null)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: size.height * 0.02,
-                  child: _Overlay(
-                    builder: builder,
-                    hasDance: _isDance,
-                    onUndo: () => setState(() {
-                      builder.undoHop();
-                      _selectedSource = null;
-                    }),
-                    onConfirm: () => widget.onMoveCommitted(builder.build()),
-                    onPass: () => widget.onMoveCommitted(Move.none),
-                  ),
-                ),
-            ],
-          );
         },
       ),
-    );
-  }
-}
-
-/// The bottom control row: a Pass affordance during a dance, otherwise Undo +
-/// Confirm. Plain Material buttons — no custom styling.
-class _Overlay extends StatelessWidget {
-  const _Overlay({
-    required this.builder,
-    required this.hasDance,
-    required this.onUndo,
-    required this.onConfirm,
-    required this.onPass,
-  });
-
-  final MoveBuilder builder;
-  final bool hasDance;
-  final VoidCallback onUndo;
-  final VoidCallback onConfirm;
-  final VoidCallback onPass;
-
-  @override
-  Widget build(BuildContext context) {
-    if (hasDance) {
-      return Center(
-        child: FilledButton(
-          onPressed: onPass,
-          child: const Text('No moves — pass'),
-        ),
-      );
-    }
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        TextButton(
-          onPressed: builder.chosenHops.isNotEmpty ? onUndo : null,
-          child: const Text('Undo'),
-        ),
-        const SizedBox(width: 12),
-        FilledButton(
-          onPressed: builder.isComplete ? onConfirm : null,
-          child: const Text('Confirm'),
-        ),
-      ],
     );
   }
 }
