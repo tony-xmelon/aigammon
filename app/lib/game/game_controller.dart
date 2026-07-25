@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 
+import '../data/persistence_hooks.dart';
 import 'dice_roller.dart';
 import 'player_agent.dart';
 
@@ -55,6 +56,7 @@ class GameController extends ChangeNotifier {
     required this.black,
     required int matchLength,
     DiceRoller? diceRoller,
+    this.persistence = const NoopPersistence(),
   })  : _diceRoller = diceRoller ?? DiceRoller(),
         _match = MatchState(matchLength: matchLength) {
     _startNewGame();
@@ -66,10 +68,19 @@ class GameController extends ChangeNotifier {
   final PlayerAgent black;
   final DiceRoller _diceRoller;
 
+  /// Persistence seam invoked as the match progresses. Defaults to a no-op so
+  /// play works with persistence off; failures here never stop the loop.
+  final MatchPersistence persistence;
+
   late Game _game;
   MatchState _match;
+
+  /// 1-based index of the current game within the match.
+  int _gameNumber = 0;
+
   bool _isThinking = false;
   Object? _error;
+  Object? _persistenceError;
 
   bool _awaitingNextGame = false;
   bool _cancelled = false;
@@ -100,6 +111,11 @@ class GameController extends ChangeNotifier {
   /// The last error that stopped the loop, or `null` when healthy.
   Object? get error => _error;
 
+  /// The last non-fatal persistence failure, or `null` when healthy. A throw
+  /// from a [MatchPersistence] hook is recorded here and surfaced to the UI,
+  /// but never stops play.
+  Object? get persistenceError => _persistenceError;
+
   /// True once the match has been decided.
   bool get matchOver => _match.isMatchOver;
 
@@ -129,9 +145,24 @@ class GameController extends ChangeNotifier {
         }
         if (_cancelled) break;
 
-        _match = _match.applyResult(state.result!);
+        // Capture the just-finished game before the score fold, then persist it
+        // with the updated match. Persistence failures are non-fatal.
+        final finishedGame = _game;
+        final result = state.result!;
+        final finishedGameNumber = _gameNumber;
+        _match = _match.applyResult(result);
         _notify();
-        if (_match.isMatchOver) break;
+        await _persist(() => persistence.onGameFinished(
+              gameNumber: finishedGameNumber,
+              isCrawford: finishedGame.state.isCrawfordGame,
+              events: finishedGame.events,
+              result: result,
+              matchAfter: _match,
+            ));
+        if (_match.isMatchOver) {
+          await _persist(() => persistence.onMatchFinished(_match));
+          break;
+        }
 
         _awaitingNextGame = true;
         _continueGate = Completer<void>();
@@ -193,6 +224,7 @@ class GameController extends ChangeNotifier {
   // --- internals -----------------------------------------------------------
 
   void _startNewGame() {
+    _gameNumber++;
     final opening = _diceRoller.rollOpening();
     _game = Game.start(
       OpeningRollEvent(whiteDie: opening.die1, blackDie: opening.die2),
@@ -331,6 +363,17 @@ class GameController extends ChangeNotifier {
   void _append(GameEvent event) {
     _game = _game.append(event);
     _notify();
+  }
+
+  /// Runs a persistence hook, swallowing any failure into [persistenceError]
+  /// so the match loop is never interrupted by the storage layer.
+  Future<void> _persist(Future<void> Function() hook) async {
+    try {
+      await hook();
+    } catch (e) {
+      _persistenceError = e;
+      _notify();
+    }
   }
 
   void _setThinking(bool value) {

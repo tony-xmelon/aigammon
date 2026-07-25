@@ -4,6 +4,8 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/match_repository.dart';
+import '../data/persistence_hooks.dart';
 import '../engine/engine_provider.dart';
 import '../game/game_controller.dart';
 import '../game/player_agent.dart';
@@ -193,6 +195,11 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           white: LocalHumanAgent(),
           black: LocalHumanAgent(),
           matchLength: _matchLength,
+          persistence: _persistenceFor(
+            mode: 'hotSeat',
+            whiteType: 'human',
+            blackType: 'human',
+          ),
         ),
         _rotateForBlack
             ? BoardOrientationMode.followActive
@@ -208,16 +215,40 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
       _SideChoice.black => false,
       _SideChoice.random => Random().nextBool(),
     };
+    final aiType = 'ai:${_difficulty.name}';
     return (
       GameController(
         white: humanIsWhite ? human : ai,
         black: humanIsWhite ? ai : human,
         matchLength: _matchLength,
+        persistence: _persistenceFor(
+          mode: 'vsComputer',
+          whiteType: humanIsWhite ? 'human' : aiType,
+          blackType: humanIsWhite ? aiType : 'human',
+        ),
       ),
       humanIsWhite
           ? BoardOrientationMode.fixedWhite
           : BoardOrientationMode.fixedBlack,
     );
+  }
+
+  /// Creates the match row (fire-and-forget insert) and wraps the repository in
+  /// a [RepositoryPersistence] bound to that row's id. The insert runs in the
+  /// background; the controller's hooks await the id before recording games.
+  MatchPersistence _persistenceFor({
+    required String mode,
+    required String whiteType,
+    required String blackType,
+  }) {
+    final repo = ref.read(matchRepositoryProvider);
+    final matchIdFuture = repo.startMatch(
+      matchLength: _matchLength,
+      mode: mode,
+      whiteType: whiteType,
+      blackType: blackType,
+    );
+    return RepositoryPersistence(repo, matchIdFuture);
   }
 }
 

@@ -1,11 +1,51 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:aigammon_app/data/persistence_hooks.dart';
 import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// One captured [MatchPersistence.onGameFinished] call.
+class RecordedGame {
+  RecordedGame(this.gameNumber, this.isCrawford, this.events, this.result,
+      this.matchAfter);
+  final int gameNumber;
+  final bool isCrawford;
+  final List<GameEvent> events;
+  final GameResult result;
+  final MatchState matchAfter;
+}
+
+/// A [MatchPersistence] that records every hook call. When [throwOnGame] is set
+/// it throws from [onGameFinished] to exercise the non-fatal error path.
+class RecordingPersistence implements MatchPersistence {
+  RecordingPersistence({this.throwOnGame = false});
+
+  final bool throwOnGame;
+  final List<RecordedGame> games = [];
+  final List<MatchState> finishedMatches = [];
+
+  @override
+  Future<void> onGameFinished({
+    required int gameNumber,
+    required bool isCrawford,
+    required List<GameEvent> events,
+    required GameResult result,
+    required MatchState matchAfter,
+  }) async {
+    games.add(
+        RecordedGame(gameNumber, isCrawford, events, result, matchAfter));
+    if (throwOnGame) throw StateError('persistence boom');
+  }
+
+  @override
+  Future<void> onMatchFinished(MatchState finalState) async {
+    finishedMatches.add(finalState);
+  }
+}
 
 /// Deterministic dice: a fixed opening and an infinitely-cycling roll list.
 class ScriptedDiceRoller implements DiceRoller {
@@ -525,6 +565,62 @@ void main() {
 
       c.disposeController();
       await matchFuture;
+    });
+  });
+
+  group('persistence hooks', () {
+    test('onGameFinished (once, game 1) and onMatchFinished fire in a 1-point '
+        'match', () async {
+      final persistence = RecordingPersistence();
+      final c = GameController(
+        white: FakeAgent(),
+        black: FakeAgent(),
+        matchLength: 1,
+        diceRoller: DiceRoller(Random(7)),
+        persistence: persistence,
+      );
+
+      await c.playMatch();
+
+      expect(c.matchOver, isTrue);
+      expect(persistence.games, hasLength(1),
+          reason: 'a 1-point match records exactly one game');
+      final recorded = persistence.games.single;
+      expect(recorded.gameNumber, 1);
+      expect(recorded.isCrawford, isTrue,
+          reason: 'the only game of a 1-point match is the Crawford game');
+      expect(recorded.result, c.state.result);
+      expect(recorded.events, c.game.events);
+      expect(recorded.matchAfter, c.match);
+
+      expect(persistence.finishedMatches, hasLength(1));
+      expect(persistence.finishedMatches.single, c.match);
+      expect(c.persistenceError, isNull);
+      expect(c.error, isNull);
+
+      c.disposeController();
+    });
+
+    test('a throwing persistence hook does not stop the match', () async {
+      final persistence = RecordingPersistence(throwOnGame: true);
+      final c = GameController(
+        white: FakeAgent(),
+        black: FakeAgent(),
+        matchLength: 1,
+        diceRoller: DiceRoller(Random(7)),
+        persistence: persistence,
+      );
+
+      await c.playMatch();
+
+      // The match still completes despite the storage layer throwing.
+      expect(c.matchOver, isTrue);
+      expect(c.match.isMatchOver, isTrue);
+      expect(c.error, isNull, reason: 'a persistence throw is not a loop error');
+      expect(c.persistenceError, isNotNull);
+      expect(c.persistenceError, isA<StateError>());
+
+      c.disposeController();
     });
   });
 }
