@@ -637,6 +637,7 @@ class $GamesTable extends Games with TableInfo<$GamesTable, GameRow> {
     false,
     type: DriftSqlType.int,
     requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL REFERENCES matches (id) ON DELETE CASCADE',
   );
   static const VerificationMeta _gameNumberMeta = const VerificationMeta(
     'gameNumber',
@@ -869,6 +870,14 @@ class $GamesTable extends Games with TableInfo<$GamesTable, GameRow> {
 
 class GameRow extends DataClass implements Insertable<GameRow> {
   final int id;
+
+  /// A REAL SQL foreign key (emitted via [customConstraint], so the generated
+  /// DDL carries `REFERENCES matches (id) ON DELETE CASCADE`). drift's
+  /// `.references()` only wires the Dart-side relation; it does not emit the SQL
+  /// constraint, so a customConstraint is used to enforce integrity at the
+  /// database level. Cascade delete relies on `PRAGMA foreign_keys = ON`, which
+  /// [AppDatabase.migration] enables in `beforeOpen`. Because this column drops
+  /// the default `NOT NULL`, it is restated here explicitly.
   final int matchId;
   final int gameNumber;
   final bool isCrawford;
@@ -1210,6 +1219,16 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
   List<DatabaseSchemaEntity> get allSchemaEntities => [matches, games];
+  @override
+  StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'matches',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('games', kind: UpdateKind.delete)],
+    ),
+  ]);
 }
 
 typedef $$MatchesTableCreateCompanionBuilder =
@@ -1238,6 +1257,30 @@ typedef $$MatchesTableUpdateCompanionBuilder =
       Value<String?> winner,
       Value<bool> completed,
     });
+
+final class $$MatchesTableReferences
+    extends BaseReferences<_$AppDatabase, $MatchesTable, MatchRow> {
+  $$MatchesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static MultiTypedResultKey<$GamesTable, List<GameRow>> _gamesRefsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.games,
+    aliasName: $_aliasNameGenerator(db.matches.id, db.games.matchId),
+  );
+
+  $$GamesTableProcessedTableManager get gamesRefs {
+    final manager = $$GamesTableTableManager(
+      $_db,
+      $_db.games,
+    ).filter((f) => f.matchId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_gamesRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+}
 
 class $$MatchesTableFilterComposer
     extends Composer<_$AppDatabase, $MatchesTable> {
@@ -1297,6 +1340,31 @@ class $$MatchesTableFilterComposer
     column: $table.completed,
     builder: (column) => ColumnFilters(column),
   );
+
+  Expression<bool> gamesRefs(
+    Expression<bool> Function($$GamesTableFilterComposer f) f,
+  ) {
+    final $$GamesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.games,
+      getReferencedColumn: (t) => t.matchId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GamesTableFilterComposer(
+            $db: $db,
+            $table: $db.games,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$MatchesTableOrderingComposer
@@ -1403,6 +1471,31 @@ class $$MatchesTableAnnotationComposer
 
   GeneratedColumn<bool> get completed =>
       $composableBuilder(column: $table.completed, builder: (column) => column);
+
+  Expression<T> gamesRefs<T extends Object>(
+    Expression<T> Function($$GamesTableAnnotationComposer a) f,
+  ) {
+    final $$GamesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.games,
+      getReferencedColumn: (t) => t.matchId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GamesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.games,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$MatchesTableTableManager
@@ -1416,9 +1509,9 @@ class $$MatchesTableTableManager
           $$MatchesTableAnnotationComposer,
           $$MatchesTableCreateCompanionBuilder,
           $$MatchesTableUpdateCompanionBuilder,
-          (MatchRow, BaseReferences<_$AppDatabase, $MatchesTable, MatchRow>),
+          (MatchRow, $$MatchesTableReferences),
           MatchRow,
-          PrefetchHooks Function()
+          PrefetchHooks Function({bool gamesRefs})
         > {
   $$MatchesTableTableManager(_$AppDatabase db, $MatchesTable table)
     : super(
@@ -1480,9 +1573,36 @@ class $$MatchesTableTableManager
                 completed: completed,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$MatchesTableReferences(db, table, e),
+                ),
+              )
               .toList(),
-          prefetchHooksCallback: null,
+          prefetchHooksCallback: ({gamesRefs = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [if (gamesRefs) db.games],
+              addJoins: null,
+              getPrefetchedDataCallback: (items) async {
+                return [
+                  if (gamesRefs)
+                    await $_getPrefetchedData<MatchRow, $MatchesTable, GameRow>(
+                      currentTable: table,
+                      referencedTable: $$MatchesTableReferences._gamesRefsTable(
+                        db,
+                      ),
+                      managerFromTypedResult: (p0) =>
+                          $$MatchesTableReferences(db, table, p0).gamesRefs,
+                      referencedItemsForCurrentItem: (item, referencedItems) =>
+                          referencedItems.where((e) => e.matchId == item.id),
+                      typedResults: items,
+                    ),
+                ];
+              },
+            );
+          },
         ),
       );
 }
@@ -1497,9 +1617,9 @@ typedef $$MatchesTableProcessedTableManager =
       $$MatchesTableAnnotationComposer,
       $$MatchesTableCreateCompanionBuilder,
       $$MatchesTableUpdateCompanionBuilder,
-      (MatchRow, BaseReferences<_$AppDatabase, $MatchesTable, MatchRow>),
+      (MatchRow, $$MatchesTableReferences),
       MatchRow,
-      PrefetchHooks Function()
+      PrefetchHooks Function({bool gamesRefs})
     >;
 typedef $$GamesTableCreateCompanionBuilder =
     GamesCompanion Function({
@@ -1526,6 +1646,28 @@ typedef $$GamesTableUpdateCompanionBuilder =
       Value<String?> analysisJson,
     });
 
+final class $$GamesTableReferences
+    extends BaseReferences<_$AppDatabase, $GamesTable, GameRow> {
+  $$GamesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $MatchesTable _matchIdTable(_$AppDatabase db) => db.matches
+      .createAlias($_aliasNameGenerator(db.games.matchId, db.matches.id));
+
+  $$MatchesTableProcessedTableManager get matchId {
+    final $_column = $_itemColumn<int>('match_id')!;
+
+    final manager = $$MatchesTableTableManager(
+      $_db,
+      $_db.matches,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_matchIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
 class $$GamesTableFilterComposer extends Composer<_$AppDatabase, $GamesTable> {
   $$GamesTableFilterComposer({
     required super.$db,
@@ -1536,11 +1678,6 @@ class $$GamesTableFilterComposer extends Composer<_$AppDatabase, $GamesTable> {
   });
   ColumnFilters<int> get id => $composableBuilder(
     column: $table.id,
-    builder: (column) => ColumnFilters(column),
-  );
-
-  ColumnFilters<int> get matchId => $composableBuilder(
-    column: $table.matchId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1578,6 +1715,29 @@ class $$GamesTableFilterComposer extends Composer<_$AppDatabase, $GamesTable> {
     column: $table.analysisJson,
     builder: (column) => ColumnFilters(column),
   );
+
+  $$MatchesTableFilterComposer get matchId {
+    final $$MatchesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.matchId,
+      referencedTable: $db.matches,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MatchesTableFilterComposer(
+            $db: $db,
+            $table: $db.matches,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$GamesTableOrderingComposer
@@ -1591,11 +1751,6 @@ class $$GamesTableOrderingComposer
   });
   ColumnOrderings<int> get id => $composableBuilder(
     column: $table.id,
-    builder: (column) => ColumnOrderings(column),
-  );
-
-  ColumnOrderings<int> get matchId => $composableBuilder(
-    column: $table.matchId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -1633,6 +1788,29 @@ class $$GamesTableOrderingComposer
     column: $table.analysisJson,
     builder: (column) => ColumnOrderings(column),
   );
+
+  $$MatchesTableOrderingComposer get matchId {
+    final $$MatchesTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.matchId,
+      referencedTable: $db.matches,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MatchesTableOrderingComposer(
+            $db: $db,
+            $table: $db.matches,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$GamesTableAnnotationComposer
@@ -1646,9 +1824,6 @@ class $$GamesTableAnnotationComposer
   });
   GeneratedColumn<int> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
-
-  GeneratedColumn<int> get matchId =>
-      $composableBuilder(column: $table.matchId, builder: (column) => column);
 
   GeneratedColumn<int> get gameNumber => $composableBuilder(
     column: $table.gameNumber,
@@ -1684,6 +1859,29 @@ class $$GamesTableAnnotationComposer
     column: $table.analysisJson,
     builder: (column) => column,
   );
+
+  $$MatchesTableAnnotationComposer get matchId {
+    final $$MatchesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.matchId,
+      referencedTable: $db.matches,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MatchesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.matches,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$GamesTableTableManager
@@ -1697,9 +1895,9 @@ class $$GamesTableTableManager
           $$GamesTableAnnotationComposer,
           $$GamesTableCreateCompanionBuilder,
           $$GamesTableUpdateCompanionBuilder,
-          (GameRow, BaseReferences<_$AppDatabase, $GamesTable, GameRow>),
+          (GameRow, $$GamesTableReferences),
           GameRow,
-          PrefetchHooks Function()
+          PrefetchHooks Function({bool matchId})
         > {
   $$GamesTableTableManager(_$AppDatabase db, $GamesTable table)
     : super(
@@ -1757,9 +1955,52 @@ class $$GamesTableTableManager
                 analysisJson: analysisJson,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) =>
+                    (e.readTable(table), $$GamesTableReferences(db, table, e)),
+              )
               .toList(),
-          prefetchHooksCallback: null,
+          prefetchHooksCallback: ({matchId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (matchId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.matchId,
+                                referencedTable: $$GamesTableReferences
+                                    ._matchIdTable(db),
+                                referencedColumn: $$GamesTableReferences
+                                    ._matchIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
         ),
       );
 }
@@ -1774,9 +2015,9 @@ typedef $$GamesTableProcessedTableManager =
       $$GamesTableAnnotationComposer,
       $$GamesTableCreateCompanionBuilder,
       $$GamesTableUpdateCompanionBuilder,
-      (GameRow, BaseReferences<_$AppDatabase, $GamesTable, GameRow>),
+      (GameRow, $$GamesTableReferences),
       GameRow,
-      PrefetchHooks Function()
+      PrefetchHooks Function({bool matchId})
     >;
 
 class $AppDatabaseManager {

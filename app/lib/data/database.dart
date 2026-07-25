@@ -35,8 +35,16 @@ class Matches extends Table {
 @DataClassName('GameRow')
 class Games extends Table {
   IntColumn get id => integer().autoIncrement()();
-  IntColumn get matchId =>
-      integer().references(Matches, #id, onDelete: KeyAction.cascade)();
+
+  /// A REAL SQL foreign key (emitted via [customConstraint], so the generated
+  /// DDL carries `REFERENCES matches (id) ON DELETE CASCADE`). drift's
+  /// `.references()` only wires the Dart-side relation; it does not emit the SQL
+  /// constraint, so a customConstraint is used to enforce integrity at the
+  /// database level. Cascade delete relies on `PRAGMA foreign_keys = ON`, which
+  /// [AppDatabase.migration] enables in `beforeOpen`. Because this column drops
+  /// the default `NOT NULL`, it is restated here explicitly.
+  IntColumn get matchId => integer().customConstraint(
+      'NOT NULL REFERENCES matches (id) ON DELETE CASCADE')();
   IntColumn get gameNumber => integer()();
   BoolColumn get isCrawford => boolean()();
 
@@ -60,6 +68,18 @@ class AppDatabase extends _$AppDatabase {
 
   @override
   int get schemaVersion => 1;
+
+  // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
+  // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
+  // on (it defaults off). `beforeOpen` runs on every connection open, so the
+  // pragma is applied for the app and for every test database. The schema is
+  // pre-release, so the FK was added to v1 directly — no migration bump.
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        beforeOpen: (details) async {
+          await customStatement('PRAGMA foreign_keys = ON');
+        },
+      );
 }
 
 /// The app-wide lazy database, opened on first use under the app-support

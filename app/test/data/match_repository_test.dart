@@ -146,4 +146,48 @@ void main() {
     await repo.saveAnalysis(gameId, payload);
     expect(await repo.loadAnalysis(gameId), payload);
   });
+
+  group('foreign-key hardening', () {
+    test('games table DDL declares a REAL SQL foreign key with cascade',
+        () async {
+      final row = await db
+          .customSelect(
+              "SELECT sql FROM sqlite_master WHERE type='table' AND name='games'")
+          .getSingle();
+      final sql = row.read<String>('sql');
+      expect(sql, contains('REFERENCES matches (id)'),
+          reason: 'the DDL must carry a real SQL foreign key, not just a '
+              'drift-side relation');
+      expect(sql.toUpperCase(), contains('ON DELETE CASCADE'));
+    });
+
+    test('foreign_keys pragma is ON for the connection', () async {
+      final row = await db.customSelect('PRAGMA foreign_keys').getSingle();
+      expect(row.read<int>('foreign_keys'), 1,
+          reason: 'beforeOpen must enable FK enforcement');
+    });
+
+    test('deleting a match cascades to its games', () async {
+      final matchId = await repo.startMatch(
+        matchLength: 1,
+        mode: 'vsComputer',
+        whiteType: 'human',
+        blackType: 'ai:expert',
+      );
+      final game = buildSampleGame();
+      await repo.recordGame(
+        matchId: matchId,
+        gameNumber: 1,
+        isCrawford: game.state.isCrawfordGame,
+        events: game.events,
+        result: game.state.result!,
+      );
+      expect(await repo.gamesFor(matchId), hasLength(1));
+
+      await (db.delete(db.matches)..where((m) => m.id.equals(matchId))).go();
+
+      expect(await repo.gamesFor(matchId), isEmpty,
+          reason: 'ON DELETE CASCADE must remove the orphaned games');
+    });
+  });
 }
