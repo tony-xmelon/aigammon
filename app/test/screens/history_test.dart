@@ -1,0 +1,121 @@
+import 'package:aigammon_app/data/database.dart';
+import 'package:aigammon_app/data/match_repository.dart';
+import 'package:aigammon_app/screens/history_screen.dart';
+import 'package:backgammon_core/backgammon_core.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../data/test_database.dart';
+
+const _surface = Size(900, 1500);
+
+/// A finished one-move game (White drops Black's double): a real [GameResult].
+Game _sampleGame() {
+  final g0 = Game.start(const OpeningRollEvent(whiteDie: 6, blackDie: 1));
+  final g1 = g0.append(MoveEvent(Player.white, g0.state.legalMoves.first));
+  final g2 = g1.append(const DoubleEvent(Player.black));
+  return g2.append(const DropEvent(Player.white));
+}
+
+MatchRow _matchRow(int id) => MatchRow(
+      id: id,
+      createdAt: DateTime(2026, 7, 24, 10, 30),
+      matchLength: 1,
+      mode: 'vsComputer',
+      whiteType: 'human',
+      blackType: 'ai:expert',
+      whiteScore: 1,
+      blackScore: 0,
+      winner: 'white',
+      completed: true,
+    );
+
+late AppDatabase _db;
+late MatchRepository _repo;
+
+/// Builds the app over the in-memory db, with the matches list served by a
+/// plain [Stream.value] (`matchesProvider` override). The real drift
+/// `watchMatches` stream is covered in the repository test; overriding it here
+/// keeps the widget test off drift's watch-timer (which otherwise lingers past
+/// tree disposal in the fake-async test binding). Drill-down still hits the
+/// real db via `gamesFor`.
+Widget _app(Widget home, {required List<MatchRow> matches}) => ProviderScope(
+      overrides: [
+        databaseProvider.overrideWithValue(_db),
+        matchesProvider.overrideWith((ref) => Stream.value(matches)),
+      ],
+      child: MaterialApp(home: home),
+    );
+
+/// Alternates real I/O (runAsync) and pumps so the seeded-stream emission and
+/// the drift-backed `gamesFor` future resolve, then settles animations.
+Future<void> _settle(WidgetTester t, {int cycles = 30}) async {
+  for (var i = 0; i < cycles; i++) {
+    await t.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    await t.pump();
+  }
+  await t.pumpAndSettle();
+}
+
+void main() {
+  setUp(() {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    _db = newTestDatabase();
+    _repo = MatchRepository(_db);
+  });
+  tearDown(() => _db.close());
+
+  testWidgets('lists a seeded match and drills into its games', (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    late int matchId;
+    await t.runAsync(() async {
+      matchId = await _repo.startMatch(
+        matchLength: 1,
+        mode: 'vsComputer',
+        whiteType: 'human',
+        blackType: 'ai:expert',
+      );
+      await _repo.updateScore(matchId: matchId, whiteScore: 1, blackScore: 0);
+      await _repo.completeMatch(matchId: matchId, winner: 'white');
+      final game = _sampleGame();
+      await _repo.recordGame(
+        matchId: matchId,
+        gameNumber: 1,
+        isCrawford: game.state.isCrawfordGame,
+        events: game.events,
+        result: game.state.result!,
+      );
+    });
+
+    await t.pumpWidget(
+        _app(const HistoryScreen(), matches: [_matchRow(matchId)]));
+    await _settle(t);
+
+    // The match tile: score line, mode, and a completed badge.
+    expect(find.textContaining('White 1 — 0 Black'), findsOneWidget);
+    expect(find.textContaining('vs Computer'), findsOneWidget);
+    expect(find.text('White won'), findsOneWidget);
+
+    // Drill into the match → its games list (loaded from the real db).
+    await t.tap(find.textContaining('White 1 — 0 Black'));
+    await _settle(t);
+    expect(find.byType(MatchDetailScreen), findsOneWidget);
+    expect(find.text('Game 1'), findsOneWidget);
+    expect(find.textContaining('Black wins 1'), findsOneWidget);
+  });
+
+  testWidgets('empty history shows a placeholder', (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    await t.pumpWidget(_app(const HistoryScreen(), matches: const []));
+    await _settle(t);
+
+    expect(find.text('No matches played yet.'), findsOneWidget);
+  });
+}

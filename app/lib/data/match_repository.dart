@@ -91,6 +91,13 @@ class MatchRepository {
         .watch();
   }
 
+  /// The single game row for [gameId] (metadata: matchId, gameNumber,
+  /// isCrawford, folded result). Throws if no such game exists.
+  Future<GameRow> loadGame(int gameId) {
+    return (db.select(db.games)..where((g) => g.id.equals(gameId)))
+        .getSingle();
+  }
+
   /// The games of [matchId] in play order.
   Future<List<GameRow>> gamesFor(int matchId) {
     return (db.select(db.games)
@@ -131,4 +138,10 @@ class MatchRepository {
 /// The app-wide [MatchRepository] over the lazy [databaseProvider].
 final matchRepositoryProvider = Provider<MatchRepository>((ref) {
   return MatchRepository(ref.watch(databaseProvider));
+});
+
+/// All matches, newest first, as a live stream (drift re-emits on write). The
+/// history screen watches this.
+final matchesProvider = StreamProvider<List<MatchRow>>((ref) {
+  return ref.watch(matchRepositoryProvider).watchMatches();
 });

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'history_screen.dart';
 import 'new_match_screen.dart';
 
 /// The app's landing screen: a title and the two match-mode entry points.
@@ -39,6 +40,22 @@ class HomeScreen extends StatelessWidget {
                     label: 'Two Players',
                     icon: Icons.people_outline,
                     onPressed: () => _open(context, vsComputer: false),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const HistoryScreen(),
+                        ),
+                      ),
+                      icon: const Icon(Icons.history),
+                      label: const Text('History'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                    ),
                   ),
                 ],
               ),
