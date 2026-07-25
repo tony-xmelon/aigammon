@@ -1,2 +1,23 @@
+# The app's regular suite (including the default-included `golden` tests) runs
+# under a plain `flutter test`. The two-client emulator E2E
+# (test/online/emulator_e2e_test.dart, tagged `emulator`) is a heavy integration
+# test that needs a running Firebase Emulator Suite, so it is GATED OFF by
+# default and only executes when the environment variable AIGAMMON_EMULATOR=1 is
+# set (see firebase/run-emulator-tests.ps1). Under a plain run the test SKIPS
+# itself with a reason, keeping the suite green.
+#
+# Why an env gate instead of the `exclude_tags: emulator` + preset pattern that
+# packages/online_client uses?  `flutter test` forwards to package:test but does
+# NOT support `-P/--preset`, and a config-level `exclude_tags` can never be
+# re-included from the CLI: `-t emulator` loses to the config exclude (verified
+# empirically — the runner reports `No tests match ... include: emulator,
+# exclude: emulator`), and CLI `-x` only ever UNIONS with the config exclude.
+# An env gate is therefore the only mechanism that both (a) skips the E2E under a
+# plain `flutter test` and (b) still lets it run on demand through `flutter test`.
+#
+# The tags are still declared here (and the file carries `@Tags(['emulator'])`)
+# so the emulator run can be narrowed with `flutter test --tags emulator`, and so
+# package:test does not warn about an unknown tag.
 tags:
   golden:
+  emulator:

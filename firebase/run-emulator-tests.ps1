@@ -26,18 +26,44 @@ try {
   Pop-Location
 }
 
-# 2. Run the suite inside the emulator. Resolve the package dir to an absolute
-#    path here (where $PSScriptRoot is known) and hand cmd.exe a `cd && dart`.
+# 2. Run the online_client suite inside a throwaway emulator. Resolve the
+#    package dir to an absolute path here (where $PSScriptRoot is known) and hand
+#    cmd.exe a `cd && dart`.
 $onlineClient = (Resolve-Path (Join-Path $PSScriptRoot '..\packages\online_client')).Path
-$execCommand = "cd /d `"$onlineClient`" && dart test -P emulator"
+$clientCommand = "cd /d `"$onlineClient`" && dart test -P emulator"
 
 Push-Location $PSScriptRoot
 try {
-  firebase emulators:exec --project demo-aigammon --only firestore,functions,auth $execCommand
+  firebase emulators:exec --project demo-aigammon --only firestore,functions,auth $clientCommand
   $code = $LASTEXITCODE
 } finally {
   Pop-Location
 }
 
-if ($code -ne 0) { throw "emulator integration suite failed ($code)" }
-Write-Host "emulator integration suite passed" -ForegroundColor Green
+if ($code -ne 0) { throw "online_client emulator suite failed ($code)" }
+Write-Host "online_client emulator suite passed" -ForegroundColor Green
+
+# 3. Run the app's two-client full-match E2E in a SECOND throwaway emulator, so
+#    each suite gets a clean, isolated Firestore/Auth state. Unlike the Dart
+#    suite, `flutter test` supports neither `-P` presets nor re-including a
+#    config-excluded tag, so the E2E is gated by the AIGAMMON_EMULATOR env var
+#    instead (see app/dart_test.yaml); `set VAR=1 && ...` sets it for the cmd.exe
+#    line that emulators:exec runs, and `--tags emulator` narrows the run to just
+#    the tagged test.
+$app = (Resolve-Path (Join-Path $PSScriptRoot '..\app')).Path
+# `set "VAR=1"` (quoted) avoids cmd.exe capturing the trailing space before `&&`
+# into the value; the test also trims defensively.
+$appCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
+  "flutter test --tags emulator test\online\emulator_e2e_test.dart"
+
+Push-Location $PSScriptRoot
+try {
+  firebase emulators:exec --project demo-aigammon --only firestore,functions,auth $appCommand
+  $appCode = $LASTEXITCODE
+} finally {
+  Pop-Location
+}
+
+if ($appCode -ne 0) { throw "app two-client E2E failed ($appCode)" }
+Write-Host "app two-client E2E passed" -ForegroundColor Green
+Write-Host "all emulator suites passed" -ForegroundColor Green
