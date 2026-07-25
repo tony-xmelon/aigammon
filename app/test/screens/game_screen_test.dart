@@ -1,7 +1,5 @@
 import 'dart:math';
 
-import 'package:aigammon_app/board/board_geometry.dart';
-import 'package:aigammon_app/board/board_painter.dart';
 import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
@@ -9,6 +7,8 @@ import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../helpers/board_driving.dart';
 
 /// Deterministic dice: a fixed opening and a cycling roll list.
 class ScriptedDiceRoller implements DiceRoller {
@@ -93,65 +93,9 @@ Widget _harness(GameController c) => MaterialApp(
       home: GameScreen(key: ValueKey(c), controller: c),
     );
 
-/// Pumps frames until [cond] holds (the controller loop advances on the
-/// microtasks each pump flushes), failing if it never does.
-Future<void> pumpUntil(
-  WidgetTester t,
-  bool Function() cond, {
-  int maxFrames = 800,
-}) async {
-  for (var i = 0; i < maxFrames; i++) {
-    if (cond()) {
-      await t.pump(); // flush the pending setState rebuild before asserting
-      return;
-    }
-    await t.pump(const Duration(milliseconds: 1));
-  }
-  fail('condition not met after $maxFrames frames');
-}
-
-/// The board's painter (the only [BoardPainter] in the tree).
-BoardPainter _painterOf(WidgetTester t) => t
-    .widgetList<CustomPaint>(find.byType(CustomPaint))
-    .firstWhere((c) => c.painter is BoardPainter)
-    .painter as BoardPainter;
-
-/// The global rect of the board's paint surface.
-Rect _boardRect(WidgetTester t) => t.getRect(
-    find.byWidgetPredicate((w) => w is CustomPaint && w.painter is BoardPainter));
-
-Future<void> _tapPoint(WidgetTester t, int index) async {
-  final r = _boardRect(t);
-  final g = BoardGeometry(r.size, whiteAtBottom: true);
-  await t.tapAt(r.topLeft + g.pointRect(index).center);
-  await t.pump();
-}
-
-bool _enabled(WidgetTester t, Finder f) {
-  final w = t.widget(f);
-  return w is ButtonStyleButton && w.onPressed != null;
-}
-
-/// Drives the interactive board greedily (first highlighted source → first
-/// destination) until Confirm is enabled, then commits.
-Future<void> _commitFirstMove(WidgetTester t) async {
-  for (var i = 0; i < 6; i++) {
-    final confirm = find.widgetWithText(FilledButton, 'Confirm');
-    if (confirm.evaluate().isNotEmpty && _enabled(t, confirm)) break;
-    final pass = find.text('No moves — pass');
-    if (pass.evaluate().isNotEmpty) {
-      await t.tap(pass);
-      await t.pump();
-      return;
-    }
-    final src = _painterOf(t).highlightedSources.first;
-    await _tapPoint(t, src);
-    final dst = _painterOf(t).highlightedDestinations.first;
-    await _tapPoint(t, dst);
-  }
-  await t.tap(find.widgetWithText(FilledButton, 'Confirm'));
-  await t.pump();
-}
+// pumpUntil, boardPainterOf, tapBoardPoint, isButtonEnabled, and commitFirstMove
+// come from the shared board-driving helpers (test/helpers/board_driving.dart),
+// reused by the desktop end-to-end integration test.
 
 Future<void> _dismissPassDevice(WidgetTester t) async {
   final overlay = find.text('Pass the device');
@@ -191,10 +135,10 @@ void main() {
 
     // Once White rolls, its move request fires and the board becomes interactive.
     await pumpUntil(t, () => human.pendingMoveRequest.value != null);
-    expect(_painterOf(t).highlightedSources, isNotEmpty);
+    expect(boardPainterOf(t).highlightedSources, isNotEmpty);
 
     final before = c.state;
-    await _commitFirstMove(t);
+    await commitFirstMove(t);
     await pumpUntil(t, () => c.state != before);
     expect(c.state, isNot(before), reason: 'committing the move advanced state');
 
@@ -215,7 +159,7 @@ void main() {
     await pumpUntil(t, () => c.awaitingHumanTurn);
     expect(c.state.isCrawfordGame, isFalse);
     final dbl = find.widgetWithText(OutlinedButton, 'Double');
-    expect(_enabled(t, dbl), isTrue);
+    expect(isButtonEnabled(t, dbl), isTrue);
     c.disposeController();
 
     // A 1-point match's only game is the Crawford game: Double is disabled.
@@ -230,7 +174,7 @@ void main() {
     await pumpUntil(t, () => c2.awaitingHumanTurn);
     expect(c2.state.isCrawfordGame, isTrue);
     final dbl2 = find.widgetWithText(OutlinedButton, 'Double');
-    expect(_enabled(t, dbl2), isFalse);
+    expect(isButtonEnabled(t, dbl2), isFalse);
     c2.disposeController();
   });
 
@@ -453,16 +397,16 @@ void main() {
     await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
     // Enter a single hop: the preview board now diverges from the game board.
-    final src = _painterOf(t).highlightedSources.first;
-    await _tapPoint(t, src);
-    final dst = _painterOf(t).highlightedDestinations.first;
-    await _tapPoint(t, dst);
-    expect(_painterOf(t).board, isNot(c.state.board));
+    final src = boardPainterOf(t).highlightedSources.first;
+    await tapBoardPoint(t, src);
+    final dst = boardPainterOf(t).highlightedDestinations.first;
+    await tapBoardPoint(t, dst);
+    expect(boardPainterOf(t).board, isNot(c.state.board));
 
     // Force a same-state rebuild of GameScreen; the in-progress entry survives.
     rebuild.value++;
     await t.pump();
-    expect(_painterOf(t).board, isNot(c.state.board),
+    expect(boardPainterOf(t).board, isNot(c.state.board),
         reason: 'identical-state rebuild kept the entered hop');
 
     c.disposeController();
