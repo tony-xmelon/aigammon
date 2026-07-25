@@ -321,57 +321,122 @@ void main() {
           reason: 'doubler is 5-away: taking is correct here');
     });
 
-    test('chooseResignResponse declines a single when a gammon is likely',
+    // Match-equity-based resign policy. The AI is the ACCEPTOR (state.turn ==
+    // white); it accepts unless PLAYING ON at the current cube stake beats
+    // banking the offered points by more than the 0.005 hysteresis margin.
+    // Expected equities below are cross-checked against the public helpers
+    // (matchEquityAfter / matchEquityOfDistribution) so the fixtures cannot
+    // silently drift from the shipped Kazaross-XG2 table.
+
+    test('1-away acceptor accepts ANY resignation, even a likely gammon (flip)',
         () async {
-      final engine = FakeEngine(evalProbs: _probs(win: 0.9, winGammon: 0.3));
+      // Acceptor is 1-away, single offered (cube 1): banking 1 point wins the
+      // match, so eqAccept = matchEquityAfter(1 - 1, 5) = 1.0 and nothing can
+      // beat it. The OLD heuristic would DECLINE (winGammon 0.9 > 0.25); the
+      // match-aware policy ACCEPTS. This is the headline behaviour flip.
+      final engine = FakeEngine(
+          evalProbs: _probs(win: 0.99, winGammon: 0.9, winBackgammon: 0.5));
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
       expect(
-          await agent.chooseResignResponse(
-              _awaitingRollState(), ResignValue.single, _humanCtx),
-          isFalse);
+          await agent.chooseResignResponse(_awaitingRollState(),
+              ResignValue.single, _ctx(moverAway: 1, opponentAway: 5)),
+          isTrue);
       expect(engine.lastEvalMover, Player.white,
           reason: 'evaluated from the acceptor (state.turn)');
     });
 
-    test('chooseResignResponse accepts a single when a gammon is unlikely',
-        () async {
-      final engine = FakeEngine(evalProbs: _probs(win: 0.9, winGammon: 0.1));
-      final agent = AiAgent(engine, Difficulty.expert, Random(1));
-      expect(
-          await agent.chooseResignResponse(
-              _awaitingRollState(), ResignValue.single, _humanCtx),
-          isTrue);
-    });
+    test('long match: declines a single when a gammon is very likely', () async {
+      // 15-away/15-away, cube 1, single offered (banks 1 point).
+      //   eqAccept  = matchEquityAfter(15 - 1, 15) = preCrawford(14,15) = 0.54075
+      //   probs win 0.95, winGammon 0.5 -> single 0.45 / gammon 0.5, loseSingle 0.05
+      //   eqPlayOn  = 0.45*pre(14,15) + 0.5*pre(13,15) + 0.05*pre(15,14)
+      //             = 0.45*0.54075 + 0.5*0.582545 + 0.05*0.45925 = 0.5575725
+      //   0.5575725 > 0.54075 + 0.005 -> DECLINE (playing on wins more points).
+      final probs = _probs(win: 0.95, winGammon: 0.5);
+      final ctx = _ctx(moverAway: 15, opponentAway: 15);
+      final eqAccept = matchEquityAfter(14, 15, crawfordPlayed: false);
+      final eqPlayOn = matchEquityOfDistribution(probs,
+          moverAway: 15, opponentAway: 15, stake: 1, crawfordPlayed: false);
+      expect(eqPlayOn, greaterThan(eqAccept + 0.005),
+          reason: 'fixture must genuinely clear the hysteresis band');
 
-    test('chooseResignResponse declines a gammon when a backgammon is likely',
-        () async {
-      final engine = FakeEngine(
-          evalProbs: _probs(win: 0.95, winGammon: 0.6, winBackgammon: 0.3));
+      final engine = FakeEngine(evalProbs: probs);
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
       expect(
           await agent.chooseResignResponse(
-              _awaitingRollState(), ResignValue.gammon, _humanCtx),
+              _awaitingRollState(), ResignValue.single, ctx),
           isFalse);
     });
 
-    test('chooseResignResponse accepts a gammon when a backgammon is unlikely',
+    test('long match: declines a gammon offer when a backgammon is likely',
         () async {
-      final engine = FakeEngine(
-          evalProbs: _probs(win: 0.95, winGammon: 0.6, winBackgammon: 0.05));
+      // 15a/15a, cube 1, gammon offered (banks 2): eqAccept = pre(13,15) = 0.582545.
+      //   probs win 0.99 wg 0.9 wbg 0.6 -> single 0.09 / gammon 0.3 / bg 0.6,
+      //     loseSingle 0.01.
+      //   eqPlayOn = 0.09*pre(14,15) + 0.3*pre(13,15) + 0.6*pre(12,15)
+      //            + 0.01*pre(15,14)
+      //            = 0.09*0.54075 + 0.3*0.582545 + 0.6*0.625259 + 0.01*0.45925
+      //            = 0.6031789  > 0.582545 + 0.005 -> DECLINE.
+      final probs = _probs(win: 0.99, winGammon: 0.9, winBackgammon: 0.6);
+      final ctx = _ctx(moverAway: 15, opponentAway: 15);
+      final eqAccept = matchEquityAfter(13, 15, crawfordPlayed: false);
+      final eqPlayOn = matchEquityOfDistribution(probs,
+          moverAway: 15, opponentAway: 15, stake: 1, crawfordPlayed: false);
+      expect(eqPlayOn, greaterThan(eqAccept + 0.005),
+          reason: 'fixture must genuinely clear the hysteresis band');
+
+      final engine = FakeEngine(evalProbs: probs);
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
       expect(
           await agent.chooseResignResponse(
-              _awaitingRollState(), ResignValue.gammon, _humanCtx),
+              _awaitingRollState(), ResignValue.gammon, ctx),
+          isFalse);
+    });
+
+    test('backgammon offer is accepted — there is no bigger class to chase',
+        () async {
+      // Same strong distribution, but a BACKGAMMON is offered (banks 3). At the
+      // cube-1 stake the acceptor can win at most 3 points, so playing on cannot
+      // out-bank the offer (and carries real downside):
+      //   eqAccept = pre(12,15) = 0.625259 > eqPlayOn (0.6031789) -> ACCEPT.
+      final probs = _probs(win: 0.99, winGammon: 0.9, winBackgammon: 0.6);
+      final ctx = _ctx(moverAway: 15, opponentAway: 15);
+      final eqAccept = matchEquityAfter(12, 15, crawfordPlayed: false);
+      final eqPlayOn = matchEquityOfDistribution(probs,
+          moverAway: 15, opponentAway: 15, stake: 1, crawfordPlayed: false);
+      expect(eqPlayOn, lessThan(eqAccept),
+          reason: 'banking the max class beats playing on');
+
+      final engine = FakeEngine(evalProbs: probs);
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
+      expect(
+          await agent.chooseResignResponse(
+              _awaitingRollState(), ResignValue.backgammon, ctx),
           isTrue);
     });
 
-    test('chooseResignResponse always accepts a backgammon offer', () async {
-      final engine = FakeEngine(
-          evalProbs: _probs(win: 0.99, winGammon: 0.9, winBackgammon: 0.8));
+    test('hysteresis: a hair-thin play-on edge still accepts', () async {
+      // 15a/15a, single offered. eqAccept = pre(14,15) = 0.54075.
+      //   probs win 0.99 wg 0.05 -> single 0.94 / gammon 0.05, loseSingle 0.01.
+      //   eqPlayOn = 0.94*pre(14,15) + 0.05*pre(13,15) + 0.01*pre(15,14)
+      //            = 0.94*0.54075 + 0.05*0.582545 + 0.01*0.45925 = 0.5420248
+      //   eqPlayOn > eqAccept (would DECLINE without hysteresis), but the surplus
+      //   0.00127 < 0.005, so the policy leans to ACCEPT.
+      final probs = _probs(win: 0.99, winGammon: 0.05);
+      final ctx = _ctx(moverAway: 15, opponentAway: 15);
+      final eqAccept = matchEquityAfter(14, 15, crawfordPlayed: false);
+      final eqPlayOn = matchEquityOfDistribution(probs,
+          moverAway: 15, opponentAway: 15, stake: 1, crawfordPlayed: false);
+      expect(eqPlayOn, greaterThan(eqAccept),
+          reason: 'play-on is genuinely (barely) ahead');
+      expect(eqPlayOn, lessThan(eqAccept + 0.005),
+          reason: 'but inside the hysteresis band');
+
+      final engine = FakeEngine(evalProbs: probs);
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
       expect(
           await agent.chooseResignResponse(
-              _awaitingRollState(), ResignValue.backgammon, _humanCtx),
+              _awaitingRollState(), ResignValue.single, ctx),
           isTrue);
     });
   });

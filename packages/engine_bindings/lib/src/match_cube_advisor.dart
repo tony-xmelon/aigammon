@@ -1,6 +1,87 @@
 import 'met.dart';
 import 'scored_move.dart';
 
+/// Mover's probability of eventually winning the MATCH from the start of a game
+/// in which the mover is [aRemaining] points from victory and the opponent
+/// [bRemaining]. This is the model's value function over match scores, shared by
+/// [MatchCubeAdvisor] and the match-aware AI resign policy.
+///
+///  * `aRemaining <= 0` -> the mover has reached 0 away, i.e. won the match -> 1.0.
+///  * `bRemaining <= 0` -> the opponent has won the match -> 0.0.
+///  * otherwise both are >= 1 and we read the [MatchEquityTable].
+///
+/// See [MatchCubeAdvisor] for the pre-/post-Crawford reasoning ([crawfordPlayed]
+/// selects the post-Crawford column when the leader sits permanently 1-away).
+double matchEquityAfter(int aRemaining, int bRemaining,
+    {required bool crawfordPlayed}) {
+  if (aRemaining <= 0) return 1.0; // mover reached the match
+  if (bRemaining <= 0) return 0.0; // opponent reached the match
+  if (crawfordPlayed) {
+    // Post-Crawford: the leader is permanently 1-away, so a continuing state
+    // has exactly one side at 1-away. Use the post-Crawford column.
+    if (bRemaining == 1) {
+      // Opponent is the 1-away leader; mover trails aRemaining away.
+      return MatchEquityTable.postCrawford(aRemaining);
+    }
+    if (aRemaining == 1) {
+      // Mover is the 1-away leader; opponent trails bRemaining away.
+      return 1.0 - MatchEquityTable.postCrawford(bRemaining);
+    }
+    // Neither side 1-away: not a genuine post-Crawford state. Fall through
+    // to the pre-Crawford table (defensive; should not occur for valid
+    // input, where crawfordPlayed implies one current away == 1).
+  }
+  return MatchEquityTable.preCrawford(aRemaining, bRemaining);
+}
+
+/// Mover's match-winning probability of playing a game on to completion at the
+/// given per-game [stake] (in cube points), folding [probs] over the six
+/// exclusive outcome buckets with [matchEquityAfter] as the value function.
+///
+/// [probs] are CUMULATIVE (win includes gammons+backgammons; winGammon includes
+/// backgammons); this converts them to the exclusive single / gammon /
+/// backgammon buckets and computes, from the mover's perspective at score
+/// (mover [moverAway] away, opponent [opponentAway] away):
+///
+/// ```
+/// E(stake) = P(win single)  * eqAfter(a - 1*stake, b)
+///          + P(win gammon)  * eqAfter(a - 2*stake, b)
+///          + P(win bg)      * eqAfter(a - 3*stake, b)
+///          + P(lose single) * eqAfter(a, b - 1*stake)
+///          + P(lose gammon) * eqAfter(a, b - 2*stake)
+///          + P(lose bg)     * eqAfter(a, b - 3*stake)
+/// ```
+///
+/// Shared by [MatchCubeAdvisor.advise] (its `E(s)` over the cube stakes) and the
+/// AI resign policy (which compares E(cube) against the equity of accepting).
+double matchEquityOfDistribution(
+  Probabilities probs, {
+  required int moverAway,
+  required int opponentAway,
+  required int stake,
+  required bool crawfordPlayed,
+}) {
+  // Cumulative -> exclusive outcome buckets, mover's perspective.
+  final win = probs.win;
+  final lose = 1.0 - win;
+  final singleWin = win - probs.winGammon;
+  final gammonWin = probs.winGammon - probs.winBackgammon;
+  final bgWin = probs.winBackgammon;
+  final singleLose = lose - probs.loseGammon;
+  final gammonLose = probs.loseGammon - probs.loseBackgammon;
+  final bgLose = probs.loseBackgammon;
+
+  double eqAfter(int a, int b) =>
+      matchEquityAfter(a, b, crawfordPlayed: crawfordPlayed);
+
+  return singleWin * eqAfter(moverAway - stake, opponentAway) +
+      gammonWin * eqAfter(moverAway - 2 * stake, opponentAway) +
+      bgWin * eqAfter(moverAway - 3 * stake, opponentAway) +
+      singleLose * eqAfter(moverAway, opponentAway - stake) +
+      gammonLose * eqAfter(moverAway, opponentAway - 2 * stake) +
+      bgLose * eqAfter(moverAway, opponentAway - 3 * stake);
+}
+
 /// A match-aware cube decision produced by [MatchCubeAdvisor].
 ///
 /// All three equities are the MOVER's match-winning probability in `[0, 1]`
@@ -138,9 +219,9 @@ class MatchCubeAdvice {
 ///    worthless because the `2s` game already decides the match. The advisor is
 ///    then fully `x`-independent there (asserted by a test).
 ///
-/// ### Value function over scores: [_matchEquityAfter]
+/// ### Value function over scores: [matchEquityAfter]
 ///
-/// `_matchEquityAfter(aRem, bRem)` is the mover's probability of eventually
+/// `matchEquityAfter(aRem, bRem)` is the mover's probability of eventually
 /// winning the MATCH from the start of a game in which the mover is `aRem`
 /// points from victory and the opponent `bRem`:
 ///
@@ -224,30 +305,6 @@ class MatchCubeAdvice {
 class MatchCubeAdvisor {
   const MatchCubeAdvisor();
 
-  /// Mover's match-winning probability from the start of a game at score
-  /// (mover `aRemaining` away, opponent `bRemaining` away). See the class doc
-  /// for the pre-/post-Crawford reasoning.
-  double _matchEquityAfter(int aRemaining, int bRemaining, bool crawfordPlayed) {
-    if (aRemaining <= 0) return 1.0; // mover reached the match
-    if (bRemaining <= 0) return 0.0; // opponent reached the match
-    if (crawfordPlayed) {
-      // Post-Crawford: the leader is permanently 1-away, so a continuing state
-      // has exactly one side at 1-away. Use the post-Crawford column.
-      if (bRemaining == 1) {
-        // Opponent is the 1-away leader; mover trails aRemaining away.
-        return MatchEquityTable.postCrawford(aRemaining);
-      }
-      if (aRemaining == 1) {
-        // Mover is the 1-away leader; opponent trails bRemaining away.
-        return 1.0 - MatchEquityTable.postCrawford(bRemaining);
-      }
-      // Neither side 1-away: not a genuine post-Crawford state. Fall through
-      // to the pre-Crawford table (defensive; should not occur for valid
-      // input, where crawfordPlayed implies one current away == 1).
-    }
-    return MatchEquityTable.preCrawford(aRemaining, bRemaining);
-  }
-
   /// Match-aware cube advice for a mover [moverAway] points from victory
   /// against an opponent [opponentAway] away, with the cube currently at
   /// [cubeValue] (a doubles it to `2 * cubeValue`).
@@ -286,35 +343,15 @@ class MatchCubeAdvisor {
       throw ArgumentError.value(cubeLife, 'cubeLife', 'must be in [0, 1]');
     }
 
-    // Cumulative -> exclusive outcome buckets, mover's perspective.
     final win = probs.win;
-    final lose = 1.0 - win;
-    final singleWin = win - probs.winGammon;
-    final gammonWin = probs.winGammon - probs.winBackgammon;
-    final bgWin = probs.winBackgammon;
-    final singleLose = lose - probs.loseGammon;
-    final gammonLose = probs.loseGammon - probs.loseBackgammon;
-    final bgLose = probs.loseBackgammon;
 
-    double equityAtStake(int stake) =>
-        singleWin *
-                _matchEquityAfter(
-                    moverAway - stake, opponentAway, crawfordPlayed) +
-            gammonWin *
-                _matchEquityAfter(
-                    moverAway - 2 * stake, opponentAway, crawfordPlayed) +
-            bgWin *
-                _matchEquityAfter(
-                    moverAway - 3 * stake, opponentAway, crawfordPlayed) +
-            singleLose *
-                _matchEquityAfter(
-                    moverAway, opponentAway - stake, crawfordPlayed) +
-            gammonLose *
-                _matchEquityAfter(
-                    moverAway, opponentAway - 2 * stake, crawfordPlayed) +
-            bgLose *
-                _matchEquityAfter(
-                    moverAway, opponentAway - 3 * stake, crawfordPlayed);
+    double equityAtStake(int stake) => matchEquityOfDistribution(
+          probs,
+          moverAway: moverAway,
+          opponentAway: opponentAway,
+          stake: stake,
+          crawfordPlayed: crawfordPlayed,
+        );
 
     final equityNoDouble = equityAtStake(cubeValue);
 
@@ -329,18 +366,20 @@ class MatchCubeAdvisor {
     // loss-side score transition, so `recubeSwing >= 0` and the correction only
     // lowers the mover's equity (never below the dead value).
     final q = 1.0 - win; // P(mover loses) == taker's cubeless win probability
-    final recubeWinAt2 = _matchEquityAfter(
-        moverAway, opponentAway - 2 * cubeValue, crawfordPlayed);
-    final recubeWinAt4 = _matchEquityAfter(
-        moverAway, opponentAway - 4 * cubeValue, crawfordPlayed);
+    final recubeWinAt2 = matchEquityAfter(
+        moverAway, opponentAway - 2 * cubeValue,
+        crawfordPlayed: crawfordPlayed);
+    final recubeWinAt4 = matchEquityAfter(
+        moverAway, opponentAway - 4 * cubeValue,
+        crawfordPlayed: crawfordPlayed);
     final recubeSwing = recubeWinAt2 - recubeWinAt4; // >= 0
     // liveDoubleTake = deadDoubleTake - 0.5 * q * recubeSwing; blended by x:
     //   equityDoubleTake = (1 - x)*dead + x*live = dead - x*0.5*q*recubeSwing.
     final equityDoubleTake =
         deadDoubleTake - cubeLife * 0.5 * q * recubeSwing;
 
-    final equityDoubleDrop =
-        _matchEquityAfter(moverAway - cubeValue, opponentAway, crawfordPlayed);
+    final equityDoubleDrop = matchEquityAfter(moverAway - cubeValue, opponentAway,
+        crawfordPlayed: crawfordPlayed);
 
     // After a double the opponent chooses the branch worse for the mover.
     final doubledEquity = equityDoubleTake < equityDoubleDrop

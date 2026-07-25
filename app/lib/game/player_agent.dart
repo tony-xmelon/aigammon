@@ -314,29 +314,51 @@ class AiAgent implements PlayerAgent {
     return advice.shouldTake ? CubeAction.take : CubeAction.drop;
   }
 
-  /// Equity-based resign policy (v1). This agent is the potential ACCEPTOR of
+  /// Match-equity-based resign policy. This agent is the potential ACCEPTOR of
   /// the opponent's resignation; after [GameState.offerResign] `state.turn` is
   /// this decider, so evaluating from `state.turn` gives the acceptor's own
   /// win distribution.
   ///
-  /// The resigner concedes exactly [value]'s point class, so the acceptor
-  /// should DECLINE only when it has real prospects of winning a BIGGER class
-  /// than offered — leaving those points on the table:
-  ///  * a `single` offer is declined when a gammon is genuinely likely
-  ///    (`winGammon > 0.25`, i.e. >25% of ALL games end in a gammon+ win here);
-  ///  * a `gammon` offer is declined when a backgammon is genuinely likely
-  ///    (`winBackgammon > 0.25`);
-  ///  * a `backgammon` offer is always accepted — there is no bigger class.
-  /// (`winGammon`/`winBackgammon` are cumulative, so they already mean "gammon
-  /// or better" / "backgammon".)
+  /// Accepting banks a FIXED number of points now; playing on continues the game
+  /// at the current cube stake with the full range of outcomes (the acceptor may
+  /// win a bigger class, but may also win smaller, or even LOSE). We compare the
+  /// two in MATCH-EQUITY space using the shared [matchEquityAfter] /
+  /// [matchEquityOfDistribution] helpers:
+  ///
+  ///  * `eqAccept` = [matchEquityAfter] after banking the offered points
+  ///    `offeredPoints = cube.value * value.multiplier` — i.e. the match equity
+  ///    at score (acceptor `moverAway - offeredPoints`, opponent `opponentAway`).
+  ///  * `eqPlayOn` = [matchEquityOfDistribution] over the acceptor's outcome
+  ///    distribution at the current cube stake (`cube.value`).
+  ///
+  /// We DECLINE only when playing on beats accepting by more than a small
+  /// hysteresis margin (`eqPlayOn > eqAccept + 0.005`). Declining a resignation
+  /// is socially odd unless it is clearly right, so the tie-break leans toward
+  /// accepting.
+  ///
+  /// This is genuinely match-aware and subsumes the old class-likelihood
+  /// heuristic. In particular, when the acceptor is 1-away (`moverAway == 1`),
+  /// any offer of at least 1 point drives `eqAccept` to 1.0 (the match is won),
+  /// so every resignation is accepted regardless of gammon/backgammon prospects.
   @override
   Future<bool> chooseResignResponse(
       GameState state, ResignValue value, MatchContext ctx) async {
     final probs = await _engine.evaluate(state.board, state.turn);
-    final declines =
-        (value == ResignValue.single && probs.winGammon > 0.25) ||
-            (value == ResignValue.gammon && probs.winBackgammon > 0.25);
-    return !declines;
+    final offeredPoints = state.cube.value * value.multiplier;
+    final eqAccept = matchEquityAfter(
+      ctx.moverAway - offeredPoints,
+      ctx.opponentAway,
+      crawfordPlayed: ctx.crawfordPlayed,
+    );
+    final eqPlayOn = matchEquityOfDistribution(
+      probs,
+      moverAway: ctx.moverAway,
+      opponentAway: ctx.opponentAway,
+      stake: state.cube.value,
+      crawfordPlayed: ctx.crawfordPlayed,
+    );
+    // Decline only when playing on is clearly better; otherwise accept.
+    return eqPlayOn <= eqAccept + 0.005;
   }
 
   @override
