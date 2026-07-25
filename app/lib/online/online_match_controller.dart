@@ -112,6 +112,11 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   final ValueNotifier<(GameState, ResignValue)?> _nullResign =
       ValueNotifier(null);
 
+  /// The last folded move, published for the animation layer. Set in [_fold]
+  /// when a [MoveEvent] folds, BEFORE [_afterFold] notifies — so a subscriber
+  /// still sees the pre-move [state].
+  final ValueNotifier<MoveEvent?> _lastMove = ValueNotifier<MoveEvent?>(null);
+
   // --- observable state ------------------------------------------------------
 
   /// The current game's derived state.
@@ -151,6 +156,10 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     if (g == null) throw StateError('no game has started yet');
     return g;
   }
+
+  /// The most recently folded move (for the animation layer), or `null`.
+  @override
+  ValueListenable<MoveEvent?> get lastMove => _lastMove;
 
   /// True while the controller is waiting on the opponent or the server (i.e.
   /// the match is active but it is NOT the local side's moment to act).
@@ -224,6 +233,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     _pendingResign.dispose();
     _nullState.dispose();
     _nullResign.dispose();
+    _lastMove.dispose();
     super.dispose();
   }
 
@@ -375,6 +385,9 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     }
     final next = _game!.append(event);
     _game = next;
+    // Publish the move for the animation layer BEFORE [_afterFold] notifies, so
+    // a subscriber (the board) still observes the pre-move [state] as it fires.
+    if (event is MoveEvent) _lastMove.value = event;
     if (next.state.phase == GamePhase.gameOver) {
       _match = _match.applyResult(next.state.result!);
       if (!_match.isMatchOver) {

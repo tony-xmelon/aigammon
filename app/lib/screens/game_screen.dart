@@ -10,6 +10,10 @@ import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
 import '../tutor/tutor_service.dart';
 
+/// The production default per-hop checker-movement animation speed, passed by
+/// the app's [GameScreen] call sites. Task 5 replaces this with a user setting.
+const Duration kDefaultMoveAnimationDuration = Duration(milliseconds: 150);
+
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
 /// bar, the in-game dialogs (cube/resign responses, game-end, match-end), the
 /// error banner, and the hot-seat pass-device overlay.
@@ -54,9 +58,16 @@ class GameScreen extends StatefulWidget {
     required this.controller,
     this.orientation = BoardOrientationMode.fixedWhite,
     this.tutor,
+    this.animationDuration = Duration.zero,
   });
 
   final MatchController controller;
+
+  /// Per-hop checker-movement animation duration passed to the [BoardView].
+  /// Defaults to [Duration.zero] (animation off) so widget tests are unaffected;
+  /// production call sites pass a fixed non-zero speed. Settings wiring lands in
+  /// a later task.
+  final Duration animationDuration;
 
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
@@ -405,6 +416,8 @@ class _GameScreenState extends State<GameScreen> {
                         },
                         whiteAtBottom: whiteAtBottom,
                         externalMove: _stagedMove,
+                        lastMove: _c.lastMove,
+                        animationDuration: widget.animationDuration,
                       ),
                     ),
                   ),

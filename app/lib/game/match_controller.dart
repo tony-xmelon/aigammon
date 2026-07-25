@@ -33,6 +33,14 @@ abstract interface class MatchController implements Listenable {
   /// The current event-sourced game (the tutor/assessment reads its log).
   Game get game;
 
+  /// The most recently applied [MoveEvent], or `null` before any move has
+  /// landed. Fires (as a [Listenable]) each time a move is appended/folded so a
+  /// cosmetic animation layer can sequence the move's hops. The value carries
+  /// the applied move plus its mover; the pre-move board is the observer's
+  /// then-current [state] board (the value fires BEFORE this controller notifies
+  /// its own listeners, so a subscriber still sees the pre-move [state]).
+  ValueListenable<MoveEvent?> get lastMove;
+
   /// True while a decision is in flight (an AI/engine await).
   bool get isThinking;
 

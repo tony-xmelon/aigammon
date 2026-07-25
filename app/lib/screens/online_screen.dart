@@ -259,6 +259,7 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          animationDuration: kDefaultMoveAnimationDuration,
         ),
       ),
     );

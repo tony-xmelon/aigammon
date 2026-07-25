@@ -76,6 +76,11 @@ class GameController extends ChangeNotifier implements MatchController {
   late Game _game;
   MatchState _match;
 
+  /// The last applied move, published for the animation layer. Set in [_append]
+  /// whenever a [MoveEvent] is appended, BEFORE the loop notifies its own
+  /// listeners — so a subscriber still observes the pre-move [state].
+  final ValueNotifier<MoveEvent?> _lastMove = ValueNotifier<MoveEvent?>(null);
+
   /// 1-based index of the current game within the match.
   int _gameNumber = 0;
 
@@ -108,6 +113,10 @@ class GameController extends ChangeNotifier implements MatchController {
   /// The current event-sourced game.
   @override
   Game get game => _game;
+
+  /// The most recently applied move (for the animation layer), or `null`.
+  @override
+  ValueListenable<MoveEvent?> get lastMove => _lastMove;
 
   /// True while an agent decision is in flight (an `await` on a [PlayerAgent]).
   @override
@@ -234,6 +243,7 @@ class GameController extends ChangeNotifier implements MatchController {
     if (!_cancelledCompleter.isCompleted) _cancelledCompleter.complete();
     white.dispose();
     black.dispose();
+    _lastMove.dispose();
     super.dispose();
   }
 
@@ -436,6 +446,10 @@ class GameController extends ChangeNotifier implements MatchController {
 
   void _append(GameEvent event) {
     _game = _game.append(event);
+    // Publish the move for the animation layer BEFORE notifying the loop's own
+    // listeners: a subscriber (the board) still sees the pre-move [state] when
+    // this fires, and only rebuilds to the post-move state on the later notify.
+    if (event is MoveEvent) _lastMove.value = event;
     _notify();
   }
 

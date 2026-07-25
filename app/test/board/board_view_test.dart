@@ -31,6 +31,34 @@ BoardPainter _painterOf(WidgetTester t) {
   return cp.painter as BoardPainter;
 }
 
+/// Mounts a non-interactive [BoardView] wired for move animation, forcing
+/// `disableAnimations: false` so the ticker runs under test.
+Widget _animHarness(
+  GameState state,
+  ValueNotifier<MoveEvent?> lastMove, {
+  Duration animationDuration = const Duration(milliseconds: 150),
+}) =>
+    MaterialApp(
+      home: MediaQuery(
+        data: const MediaQueryData(disableAnimations: false),
+        child: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: _size.width,
+              height: _size.height,
+              child: BoardView(
+                state: state,
+                interactive: false,
+                onMoveCommitted: (_) {},
+                lastMove: lastMove,
+                animationDuration: animationDuration,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
 /// The same geometry the widget computes for an 800x600 board.
 final _geometry = BoardGeometry(_size, whiteAtBottom: true);
 
@@ -295,6 +323,75 @@ void main() {
     await t.pump();
     expect(_painterOf(t).board, stateB.board);
     expect(_painterOf(t).selectedSource, isNull);
+  });
+
+  // --- Move animation --------------------------------------------------------
+
+  // Post-move fixtures shared by the animation tests: White plays the golden
+  // 3-1, leaving a board distinct from the pre-move opening.
+  final postBoard = goldenState.board.applyMove(Player.white, goldenMove);
+  final postState = GameState.testState(
+    board: postBoard,
+    turn: Player.black,
+    phase: GamePhase.awaitingRoll,
+  );
+
+  testWidgets('mid-animation shows a travelling overlay checker', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+
+    // Mount PRE-move, then fire the move (the controller fires lastMove BEFORE
+    // notifying, so state is still pre-move at fire time) and rebuild POST-move.
+    await t.pumpWidget(_animHarness(goldenState, lastMove));
+    expect(_painterOf(t).overlayChecker, isNull);
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(_animHarness(postState, lastMove));
+
+    // 75ms into the 300ms (2 hops × 150ms) travel: an overlay checker is drawn
+    // and the painted board is NOT yet the post-move board.
+    await t.pump(const Duration(milliseconds: 75));
+    expect(_painterOf(t).overlayChecker, isNotNull);
+    expect(_painterOf(t).board, isNot(postBoard));
+
+    await t.pumpAndSettle(); // let the ticker finish before teardown
+  });
+
+  testWidgets('animation completes to the post-move board with no overlay',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+
+    await t.pumpWidget(_animHarness(goldenState, lastMove));
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(_animHarness(postState, lastMove));
+
+    // After settling, the overlay is gone and the post-move board is shown.
+    await t.pumpAndSettle();
+    expect(_painterOf(t).overlayChecker, isNull);
+    expect(_painterOf(t).board, postBoard);
+  });
+
+  testWidgets('Duration.zero disables animation: post board snaps in',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+
+    await t.pumpWidget(
+        _animHarness(goldenState, lastMove, animationDuration: Duration.zero));
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(
+        _animHarness(postState, lastMove, animationDuration: Duration.zero));
+    await t.pump();
+
+    // No animation ever ran: no overlay, board is immediately post-move.
+    expect(_painterOf(t).overlayChecker, isNull);
+    expect(_painterOf(t).board, postBoard);
   });
 }
 

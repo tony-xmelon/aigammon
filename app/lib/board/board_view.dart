@@ -46,6 +46,24 @@ import 'board_theme.dart';
 /// moved on), the builder is reset and the fire is ignored: never a crash, and
 /// the board falls back to the clean base position. External application is a
 /// no-op unless [interactive] and a builder exists (the moving phase).
+///
+/// ## Move animation ([lastMove] / [animationDuration])
+///
+/// When [lastMove] fires a non-null [MoveEvent], the view plays a purely
+/// cosmetic animation: the moved checker travels hop-by-hop from source to
+/// destination while the board underneath shows the position with the earlier
+/// hops applied and the travelling checker suppressed (see [BoardPainter]'s
+/// `hiddenChecker`/`overlayChecker`). The controller fires [lastMove] BEFORE it
+/// notifies its own listeners, so at the moment the listener runs [state] is
+/// still the PRE-move state — the pre-move board is captured then. Both the
+/// local player's own just-confirmed move and the opponent's/AI's moves are
+/// animated (simpler, and it reads fine).
+///
+/// Timing: [animationDuration] per hop (default 150ms), total capped at 600ms,
+/// [Curves.easeInOut]. Animation is DISABLED — the post-move board snaps in
+/// immediately — when [animationDuration] is [Duration.zero] or the ambient
+/// [MediaQuery.disableAnimations] is set. Input is never blocked: taps flow to
+/// the current (post-move) state; the animation is decoration only.
 class BoardView extends StatefulWidget {
   const BoardView({
     super.key,
@@ -55,6 +73,8 @@ class BoardView extends StatefulWidget {
     this.whiteAtBottom = true,
     this.theme, // defaults by brightness
     this.externalMove,
+    this.lastMove,
+    this.animationDuration = const Duration(milliseconds: 150),
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -75,6 +95,16 @@ class BoardView extends StatefulWidget {
   /// re-enters the move's hops, leaving it staged for Confirm. See the class doc.
   final ValueListenable<Move?>? externalMove;
 
+  /// Stream of applied moves to animate (from [MatchController.lastMove]). Each
+  /// non-null fire plays a cosmetic hop-by-hop travel of the moved checker. See
+  /// the class doc for timing and the pre-move-state capture contract.
+  final ValueListenable<MoveEvent?>? lastMove;
+
+  /// Duration of each hop's travel (default 150ms; total capped at 600ms).
+  /// [Duration.zero] disables animation entirely (the post-move board snaps in),
+  /// as does an ambient [MediaQuery.disableAnimations].
+  final Duration animationDuration;
+
   /// Palette override. Defaults to [BoardTheme.dark]/[BoardTheme.light] by the
   /// ambient [Theme] brightness.
   final BoardTheme? theme;
@@ -83,7 +113,23 @@ class BoardView extends StatefulWidget {
   State<BoardView> createState() => _BoardViewState();
 }
 
-class _BoardViewState extends State<BoardView> {
+/// The pre-move board plus the ordered hops of the move currently animating.
+class _BoardAnimation {
+  _BoardAnimation(this.preBoard, this.hops, this.player);
+
+  /// The board BEFORE the animated move (captured while [BoardView.state] still
+  /// held the pre-move position).
+  final BoardState preBoard;
+
+  /// The move's hops, in canonical (applied) order.
+  final List<CheckerMove> hops;
+
+  /// The side that made the move (for colour and board application).
+  final Player player;
+}
+
+class _BoardViewState extends State<BoardView>
+    with SingleTickerProviderStateMixin {
   /// Live move builder — non-null only while interactive and in the moving
   /// phase. Mutated in place (addHop/undoHop); rebuilt on any state change.
   MoveBuilder? _builder;
@@ -96,11 +142,25 @@ class _BoardViewState extends State<BoardView> {
   /// the interactive moving phase has no legal play, so a Pass is offered.
   bool _isDance = false;
 
+  /// Drives the move animation (0 → 1 across all hops). Repaints on each tick.
+  /// Constructed eagerly in [initState] (a lazy `late` field would first build —
+  /// and touch the TickerMode inherited widget — during [dispose], which throws).
+  late final AnimationController _animController;
+
+  /// The move currently animating, or `null` when idle.
+  _BoardAnimation? _animation;
+
+  /// Monotonic guard so a superseded animation's completion callback (fired when
+  /// a new move restarts the controller) does not clear a fresh animation.
+  int _animSeq = 0;
+
   @override
   void initState() {
     super.initState();
+    _animController = AnimationController(vsync: this)..addListener(_onAnimTick);
     _resetBuilder();
     widget.externalMove?.addListener(_applyExternalMove);
+    widget.lastMove?.addListener(_onLastMove);
   }
 
   @override
@@ -118,12 +178,62 @@ class _BoardViewState extends State<BoardView> {
       oldWidget.externalMove?.removeListener(_applyExternalMove);
       widget.externalMove?.addListener(_applyExternalMove);
     }
+    if (!identical(oldWidget.lastMove, widget.lastMove)) {
+      oldWidget.lastMove?.removeListener(_onLastMove);
+      widget.lastMove?.addListener(_onLastMove);
+    }
   }
 
   @override
   void dispose() {
     widget.externalMove?.removeListener(_applyExternalMove);
+    widget.lastMove?.removeListener(_onLastMove);
+    _animController.dispose();
     super.dispose();
+  }
+
+  void _onAnimTick() {
+    if (mounted) setState(() {});
+  }
+
+  /// Whether move animation is currently enabled: a positive per-hop duration
+  /// and no ambient reduce-motion setting.
+  bool get _animationsEnabled {
+    if (widget.animationDuration <= Duration.zero) return false;
+    final mq = MediaQuery.maybeOf(context);
+    return mq == null || !mq.disableAnimations;
+  }
+
+  /// Reacts to a fired [BoardView.lastMove]: captures the (still) pre-move board
+  /// and plays the hop-by-hop travel. Skipped when animations are disabled or
+  /// the move is an empty pass. A rapid follow-up move restarts the controller;
+  /// the old completion callback is fenced out by [_animSeq].
+  void _onLastMove() {
+    final event = widget.lastMove?.value;
+    if (event == null || !_animationsEnabled) return;
+    final hops = event.move.checkerMoves;
+    if (hops.isEmpty) return; // a pass: nothing to animate
+    // The controller fires this BEFORE it notifies, so [widget.state] is still
+    // the PRE-move state here — capture its board as the animation base.
+    final anim = _BoardAnimation(widget.state.board, hops, event.player);
+    final seq = ++_animSeq;
+    setState(() => _animation = anim);
+    _animController
+      ..stop()
+      ..duration = _totalDuration(hops.length)
+      ..value = 0
+      ..forward().whenComplete(() {
+        if (!mounted || seq != _animSeq) return;
+        setState(() => _animation = null);
+      });
+  }
+
+  /// Total animation time: per-hop [BoardView.animationDuration] × hop count,
+  /// capped at 600ms so long multi-hop plays stay snappy.
+  Duration _totalDuration(int hopCount) {
+    const cap = Duration(milliseconds: 600);
+    final total = widget.animationDuration * hopCount;
+    return total > cap ? cap : total;
   }
 
   /// Stages the current [BoardView.externalMove] value into the builder: resets
@@ -162,6 +272,62 @@ class _BoardViewState extends State<BoardView> {
       _builder = null;
       _isDance = false;
     }
+  }
+
+  /// The current animation frame for [geometry]: the board to paint (pre-move
+  /// board with earlier hops applied), the checker to hide, and the travelling
+  /// overlay checker. `null` when no move is animating.
+  ({
+    BoardState board,
+    ({int location, int stackIndex, bool isWhite})? hidden,
+    ({Offset center, bool isWhite})? overlay,
+  })? _animFrame(BoardGeometry geometry) {
+    final anim = _animation;
+    if (anim == null) return null;
+    final n = anim.hops.length;
+    final raw = _animController.value * n;
+    final hopIndex = raw.floor().clamp(0, n - 1);
+    final localT = (raw - hopIndex).clamp(0.0, 1.0);
+    final eased = Curves.easeInOut.transform(localT);
+    final isWhite = anim.player == Player.white;
+
+    // The board with the hops before the current one already applied.
+    var board = anim.preBoard;
+    for (var k = 0; k < hopIndex; k++) {
+      board = board.applyMove(anim.player, Move([anim.hops[k]]));
+    }
+    final hop = anim.hops[hopIndex];
+
+    // Source: the top checker at the hop's origin, lifted (hidden) as it travels.
+    final Offset from;
+    final int fromLoc;
+    final int fromStack;
+    if (hop.from == CheckerMove.bar) {
+      fromLoc = CheckerMove.bar;
+      fromStack = (board.barFor(anim.player) - 1).clamp(0, 1 << 30);
+      from = geometry.barCheckerCenter(anim.player, fromStack);
+    } else {
+      fromLoc = hop.from;
+      fromStack = (board.points[hop.from].abs() - 1).clamp(0, 1 << 30);
+      from = geometry.checkerCenter(hop.from, fromStack);
+    }
+
+    // Destination: the moving checker's landing spot (its own stack top, or the
+    // bear-off tray centre).
+    final Offset to;
+    if (hop.to == CheckerMove.off) {
+      to = geometry.offRect(anim.player).center;
+    } else {
+      final at = board.points[hop.to];
+      final sameSign = isWhite ? at > 0 : at < 0;
+      to = geometry.checkerCenter(hop.to, sameSign ? at.abs() : 0);
+    }
+
+    return (
+      board: board,
+      hidden: (location: fromLoc, stackIndex: fromStack, isWhite: isWhite),
+      overlay: (center: Offset.lerp(from, to, eased)!, isWhite: isWhite),
+    );
   }
 
   /// Preview board: [state]'s board with the chosen hops applied one at a time,
@@ -225,21 +391,34 @@ class _BoardViewState extends State<BoardView> {
           final geometry =
               BoardGeometry(size, whiteAtBottom: widget.whiteAtBottom);
 
-          final painter = BoardPainter(
-            board: _previewBoard(),
-            geometry: geometry,
-            theme: theme,
-            dice: widget.state.dice,
-            cube: widget.state.cube,
-            highlightedSources:
-                (builder != null && selected == null)
-                    ? builder.selectableSources
-                    : const {},
-            highlightedDestinations: (builder != null && selected != null)
-                ? builder.destinationsFor(selected)
-                : const {},
-            selectedSource: selected,
-          );
+          // While a move animates, paint the pre-move board (with earlier hops
+          // applied), hide the travelling checker, and drop interaction
+          // highlights; otherwise paint the normal preview board.
+          final frame = _animFrame(geometry);
+          final painter = frame != null
+              ? BoardPainter(
+                  board: frame.board,
+                  geometry: geometry,
+                  theme: theme,
+                  dice: widget.state.dice,
+                  cube: widget.state.cube,
+                  hiddenChecker: frame.hidden,
+                  overlayChecker: frame.overlay,
+                )
+              : BoardPainter(
+                  board: _previewBoard(),
+                  geometry: geometry,
+                  theme: theme,
+                  dice: widget.state.dice,
+                  cube: widget.state.cube,
+                  highlightedSources: (builder != null && selected == null)
+                      ? builder.selectableSources
+                      : const {},
+                  highlightedDestinations: (builder != null && selected != null)
+                      ? builder.destinationsFor(selected)
+                      : const {},
+                  selectedSource: selected,
+                );
 
           final board = widget.interactive
               ? GestureDetector(

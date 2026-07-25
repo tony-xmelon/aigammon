@@ -180,6 +180,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          animationDuration: kDefaultMoveAnimationDuration,
         ),
       ),
     );

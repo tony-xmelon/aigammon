@@ -21,6 +21,8 @@ class BoardPainter extends CustomPainter {
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
     this.selectedSource,
+    this.hiddenChecker,
+    this.overlayChecker,
   });
 
   final BoardState board;
@@ -32,6 +34,16 @@ class BoardPainter extends CustomPainter {
   final Set<int> highlightedDestinations;
   final int? selectedSource;
 
+  /// A single checker to SUPPRESS while it travels as [overlayChecker] during a
+  /// move animation: the [stackIndex]-th checker at [location] (a point index
+  /// 0..23, or [CheckerMove.bar]) belonging to [isWhite]. `null` when nothing is
+  /// hidden — in which case painting is byte-identical to the un-extended path.
+  final ({int location, int stackIndex, bool isWhite})? hiddenChecker;
+
+  /// A checker to draw on top of everything at [center] during a move animation
+  /// (the travelling piece). `null` when idle.
+  final ({Offset center, bool isWhite})? overlayChecker;
+
   @override
   void paint(Canvas canvas, Size size) {
     _paintBackground(canvas, size);
@@ -42,6 +54,19 @@ class BoardPainter extends CustomPainter {
     _paintOffTrays(canvas);
     if (dice != null) _paintDice(canvas, size);
     if (cube != null) _paintCube(canvas);
+    // The travelling checker rides above every static checker/tray.
+    final overlay = overlayChecker;
+    if (overlay != null) _drawChecker(canvas, overlay.center, overlay.isWhite);
+  }
+
+  /// Whether the [s]-th checker of [isWhite] at point/bar [location] is the one
+  /// currently hidden (lifted into the travelling [overlayChecker]).
+  bool _isHidden(int location, int s, bool isWhite) {
+    final h = hiddenChecker;
+    return h != null &&
+        h.location == location &&
+        h.stackIndex == s &&
+        h.isWhite == isWhite;
   }
 
   // --- Board furniture -------------------------------------------------------
@@ -108,6 +133,7 @@ class BoardPainter extends CustomPainter {
       final isWhite = count > 0;
       final n = count.abs();
       for (var s = 0; s < n; s++) {
+        if (_isHidden(i, s, isWhite)) continue;
         _drawChecker(canvas, geometry.checkerCenter(i, s), isWhite);
       }
       if (n > 5) {
@@ -121,6 +147,7 @@ class BoardPainter extends CustomPainter {
       final n = board.barFor(player);
       final isWhite = player == Player.white;
       for (var s = 0; s < n; s++) {
+        if (_isHidden(CheckerMove.bar, s, isWhite)) continue;
         _drawChecker(canvas, geometry.barCheckerCenter(player, s), isWhite);
       }
       if (n > 5) {
@@ -319,6 +346,8 @@ class BoardPainter extends CustomPainter {
         old.dice != dice ||
         old.cube != cube ||
         old.selectedSource != selectedSource ||
+        old.hiddenChecker != hiddenChecker ||
+        old.overlayChecker != overlayChecker ||
         !setEquals(old.highlightedSources, highlightedSources) ||
         !setEquals(old.highlightedDestinations, highlightedDestinations);
   }
