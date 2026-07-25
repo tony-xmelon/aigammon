@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ---------------------------------------------------------------------
+    // Write model: ALL client writes go through Cloud Functions callables
+    // (createMatch / joinMatch / rollDice / submitEvent). Functions use the
+    // Admin SDK, which BYPASSES these rules. Therefore rules only need to
+    // govern client-side READS, and they DENY every client write.
+    //
+    // This keeps the rules surface tiny: there is no need to validate seq
+    // ordering, event authorship, turn ownership, or roll-event provenance
+    // in rules — the submitEvent callable does all of that server-side.
+    //
+    // Note on join-by-code: joinMatch(code) is a callable (Admin SDK) exactly
+    // BECAUSE a joining client is not yet a participant and so — under the
+    // read rule below (uid must be in resource.data.uids) — could not query
+    // or read the target match by its code. The function looks it up and
+    // claims a seat transactionally.
+    // ---------------------------------------------------------------------
+    match /matches/{matchId} {
+      // Participants may read their own match doc.
+      allow read: if request.auth != null && request.auth.uid in resource.data.uids;
+      // Clients never write directly; the callables do (Admin SDK).
+      allow write: if false;
+
+      match /events/{eventId} {
+        // Participants may read the event log of a match they belong to.
+        allow read: if request.auth != null
+          && request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.uids;
+        // Events are appended only by the submitEvent / rollDice callables.
+        allow write: if false;
+      }
+    }
+  }
+}
