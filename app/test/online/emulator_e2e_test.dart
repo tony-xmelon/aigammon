@@ -190,11 +190,15 @@ void main() {
             return;
           }
           if (c.awaitingHumanTurn) {
-            // Script: A doubles ONCE, at its first centered-cube opportunity
-            // from game 2 onward; otherwise just roll.
+            // Script: A doubles ONCE, at its FIRST centered-cube opportunity in
+            // game 1; otherwise just roll. Game 1 always exists and is never the
+            // Crawford game (scores start 0-0), and white always reaches its
+            // pre-roll gate, so this double is guaranteed to fire — regardless of
+            // how many games the match ends up taking. (An earlier version gated
+            // this on game 2, which a game-1 backgammon ending the 3-point match
+            // could skip, leaving the cube-2 assertion unreachable.)
             final canDouble = isA &&
                 !doubledOnce &&
-                gamesCompletedA >= 1 &&
                 s.cube.owner == null &&
                 !s.isCrawfordGame;
             if (canDouble) {
