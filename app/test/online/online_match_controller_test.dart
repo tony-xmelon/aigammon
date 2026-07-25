@@ -24,6 +24,9 @@ class FakeMatchApi implements MatchApi {
   /// Number of leading [submitEvent] calls that should throw before succeeding.
   int throwsRemaining = 0;
 
+  /// Number of leading [rollDice] calls that should throw before succeeding.
+  int rollDiceThrows = 0;
+
   final List<(GameEvent, GameResultClaim?)> submissions = [];
   final List<int> fetchSinceArgs = [];
   int fetchMatchCalls = 0;
@@ -31,6 +34,8 @@ class FakeMatchApi implements MatchApi {
   int _seq = 100;
 
   void emit(RemoteEvent e) => _poll.add(e);
+
+  void emitError(Object e) => _poll.addError(e);
 
   bool get hasPollListener => _poll.hasListener;
 
@@ -65,6 +70,10 @@ class FakeMatchApi implements MatchApi {
   @override
   Future<Dice> rollDice(String matchId) async {
     rollDiceCalls++;
+    if (rollDiceThrows > 0) {
+      rollDiceThrows--;
+      throw const OnlineException('unavailable', 'scripted roll failure');
+    }
     return Dice(1, 2);
   }
 
@@ -467,5 +476,86 @@ void main() {
     expect(claim!.winner, Player.black); // the doubler wins
     expect(claim.points, 1); // pre-double cube value
     expect(claim.outcome, GameOutcome.drop);
+  });
+
+  test('a poll error is transient: cleared by the next successful fold',
+      () async {
+    final api = FakeMatchApi();
+    final open = const OpeningRollEvent(whiteDie: 6, blackDie: 3); // white first
+    var g = Game.start(open, isCrawfordGame: false);
+    final wMove = g.state.legalMoves.first;
+    g = g.append(MoveEvent(Player.white, wMove)); // black to roll
+    g = g.append(RollEvent(Player.black, 5, 2)); // black moving
+    final bMove = g.state.legalMoves.first;
+
+    final controller = OnlineMatchController(
+      api: api,
+      matchId: 'm8',
+      localSide: Player.white,
+      initialSnapshot: snap(matchLength: 3),
+    );
+    addTearDown(controller.disposeController);
+    await controller.playMatch();
+
+    await feed(api, RemoteEvent(seq: 0, gameNo: 1, event: open));
+    await feed(api,
+        RemoteEvent(seq: 1, gameNo: 1, event: MoveEvent(Player.white, wMove)));
+
+    // A transient poll blip surfaces an error but must not touch turn state.
+    api.emitError(const OnlineException('unavailable', 'blip'));
+    await pumpEventQueue();
+    expect(controller.error, isNotNull);
+
+    // The next successful fold clears it.
+    await feed(api, RemoteEvent(seq: 2, gameNo: 1, event: RollEvent(Player.black, 5, 2)));
+    expect(controller.error, isNull);
+
+    // Fold on to the local pre-roll turn: the gate is open despite the earlier blip.
+    await feed(api,
+        RemoteEvent(seq: 3, gameNo: 1, event: MoveEvent(Player.black, bMove)));
+    expect(controller.state.turn, Player.white);
+    expect(controller.state.phase, GamePhase.awaitingRoll);
+    expect(controller.awaitingHumanTurn, isTrue);
+    expect(controller.error, isNull);
+  });
+
+  test('a failed rollDice keeps the pre-roll gate open and heals on retry',
+      () async {
+    final api = FakeMatchApi();
+    // Black opens (blackDie > whiteDie), so after black's move white is at its
+    // pre-roll — the state where rollDice is valid.
+    final open = const OpeningRollEvent(whiteDie: 3, blackDie: 6);
+    final g0 = Game.start(open, isCrawfordGame: false);
+    final bMove = g0.state.legalMoves.first;
+
+    final controller = OnlineMatchController(
+      api: api,
+      matchId: 'm9',
+      localSide: Player.white,
+      initialSnapshot: snap(matchLength: 3, turn: Player.black),
+    );
+    addTearDown(controller.disposeController);
+    await controller.playMatch();
+
+    await feed(api, RemoteEvent(seq: 0, gameNo: 1, event: open));
+    await feed(api,
+        RemoteEvent(seq: 1, gameNo: 1, event: MoveEvent(Player.black, bMove)));
+    expect(controller.awaitingHumanTurn, isTrue);
+
+    // rollDice double-fails: error surfaces, but the gate MUST stay open so the
+    // user can retry (a single blip must not deadlock the loop).
+    api.rollDiceThrows = 2;
+    controller.rollDice();
+    await pumpEventQueue();
+    expect(api.rollDiceCalls, 2); // one attempt + one retry
+    expect(controller.error, isNotNull);
+    expect(controller.awaitingHumanTurn, isTrue);
+
+    // A retried roll succeeds and clears the error.
+    controller.rollDice();
+    await pumpEventQueue();
+    expect(api.rollDiceCalls, 3);
+    expect(controller.error, isNull);
+    expect(controller.awaitingHumanTurn, isTrue);
   });
 }

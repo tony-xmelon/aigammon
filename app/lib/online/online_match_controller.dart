@@ -134,10 +134,14 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
 
   /// True while the controller is waiting on the opponent or the server (i.e.
   /// the match is active but it is NOT the local side's moment to act).
+  ///
+  /// Deliberately does NOT gate on [error]: a transient poll/submit failure is a
+  /// non-fatal banner that must not change whose turn it is. Errors clear on the
+  /// next successful fold (see [_afterFold]).
   @override
   bool get isThinking {
     final g = _game;
-    if (g == null || _match.isMatchOver || _awaitingNextGame || _error != null) {
+    if (g == null || _match.isMatchOver || _awaitingNextGame) {
       return false;
     }
     return !_localActsNow(g.state);
@@ -157,14 +161,17 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   @override
   bool get awaitingNextGame => _awaitingNextGame;
 
+  /// True while the local side's pre-roll gate is open.
+  ///
+  /// Does NOT gate on [error]: a transient failure must never lock the pre-roll
+  /// controls, or a single network blip would permanently deadlock the loop
+  /// (the pre-roll verbs throw when the gate is closed and there is no other
+  /// recovery path). The error surfaces as a banner while the controls stay
+  /// usable; a retried [rollDice] clears it on success, as does the next fold.
   @override
   bool get awaitingHumanTurn {
     final g = _game;
-    if (g == null ||
-        _match.isMatchOver ||
-        _awaitingNextGame ||
-        _submitting ||
-        _error != null) {
+    if (g == null || _match.isMatchOver || _awaitingNextGame || _submitting) {
       return false;
     }
     final s = g.state;
@@ -302,6 +309,12 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
       for (final re in events) {
         _onRemoteEvent(re);
       }
+      // A clean catch-up heals a prior fetch failure even when it returned no
+      // events (so nothing folded to clear the error).
+      if (_error != null) {
+        _error = null;
+        _notify();
+      }
     } catch (e) {
       _error = e;
       _notify();
@@ -394,6 +407,9 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   }
 
   void _afterFold() {
+    // A successful fold proves the stream is healthy again: clear any transient
+    // poll/submit error so it stays a passing banner rather than a sticky gate.
+    _error = null;
     _refreshPending();
     _notify();
   }

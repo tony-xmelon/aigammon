@@ -14,8 +14,9 @@ import '../tutor/tutor_service.dart';
 /// bar, the in-game dialogs (cube/resign responses, game-end, match-end), the
 /// error banner, and the hot-seat pass-device overlay.
 ///
-/// It RECEIVES a ready [GameController] (constructed by the caller — Plan 3
-/// Task 9), starts its match loop in [initState], and disposes it in [dispose].
+/// It RECEIVES a ready [MatchController] (a local [GameController] or an online
+/// controller, constructed by the caller), starts its match loop in
+/// [initState], and disposes it in [dispose].
 ///
 /// ## Dialogs are declarative, not `showDialog` routes
 ///
@@ -31,12 +32,13 @@ import '../tutor/tutor_service.dart';
 ///
 /// ## Why `pendingDoubleRequest` is ignored
 ///
-/// [LocalHumanAgent.wantsDoublePrompts] is `false`, so the [GameController] never
-/// calls `considerDouble` on a human (see `game_controller.dart`
-/// `_stepPreRoll`: the `wantsDoublePrompts` branch is AI-only; humans park on the
-/// turn gate instead). A human's double is driven by the pre-roll action bar
-/// ([GameController.offerDouble]), so `pendingDoubleRequest` never fires for a
-/// human in practice and this screen deliberately does not observe it.
+/// No [MatchController] surfaces a per-turn "double?" prompt for a locally-human
+/// side (the hot-seat [GameController] never calls `considerDouble` on a human —
+/// see `game_controller.dart` `_stepPreRoll`, whose `wantsDoublePrompts` branch
+/// is AI-only; humans park on the turn gate instead). A human's double is driven
+/// by the pre-roll action bar ([MatchController.offerDouble]), so there is no
+/// `pendingDoubleOf` on the interface and this screen deliberately does not
+/// observe one.
 ///
 /// ## Board orientation
 ///
