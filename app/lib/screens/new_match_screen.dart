@@ -82,12 +82,17 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
         title: Text(widget.vsComputer ? 'Play vs Computer' : 'Two Players'),
       ),
       body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
+        // Top-aligned under the app bar: a setup form reads as a list of
+        // decisions, so it starts where the eye already is. (Centring it left a
+        // dead band the height of the app bar again on a phone.) The Center is
+        // inside the scroll view, so it only centres HORIZONTALLY — the column
+        // keeps its intrinsic height at the top of the viewport.
+        child: SingleChildScrollView(
+          child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 480),
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
