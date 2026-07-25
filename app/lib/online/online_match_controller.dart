@@ -92,6 +92,10 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   bool _disposed = false;
   Object? _error;
 
+  /// Completes the first time a game folds (so [state]/[game] become safe to
+  /// read), or when the controller is disposed before that happens. See [ready].
+  final Completer<void> _ready = Completer<void>();
+
   StreamSubscription<RemoteEvent>? _sub;
 
   /// Events received while paused between games, applied on [continueToNextGame].
@@ -124,6 +128,22 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
 
   @override
   MatchState get match => _match;
+
+  /// True once the first opening roll has been folded — i.e. [state] and [game]
+  /// are safe to read. The UI must not push the game screen until this is true.
+  bool get isReady => _game != null;
+
+  /// Completes once the controller [isReady] (the first game has folded), or
+  /// when it is disposed beforehand. Callers should `await` this, then check
+  /// [isReady] — a disposed-before-ready controller completes the future but
+  /// leaves [isReady] `false`, so the caller can bail without reading [state].
+  Future<void> get ready => _ready.future;
+
+  /// Completes [_ready] exactly once. Called after any fold that may have
+  /// started the game, and unconditionally on dispose.
+  void _completeReady() {
+    if (!_ready.isCompleted) _ready.complete();
+  }
 
   @override
   Game get game {
@@ -195,6 +215,8 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   void disposeController() {
     if (_disposed) return;
     _disposed = true;
+    // Unblock anyone awaiting readiness; [isReady] stays false so they can bail.
+    _completeReady();
     _sub?.cancel();
     _sub = null;
     _pendingMove.dispose();
@@ -397,6 +419,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
         currentGameEvents.first is OpeningRollEvent) {
       _game = Game.replay(currentGameEvents, isCrawfordGame: snap.isCrawford);
     }
+    if (_game != null) _completeReady();
     _refreshPending();
   }
 
@@ -410,6 +433,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     // A successful fold proves the stream is healthy again: clear any transient
     // poll/submit error so it stays a passing banner rather than a sticky gate.
     _error = null;
+    if (_game != null) _completeReady();
     _refreshPending();
     _notify();
   }

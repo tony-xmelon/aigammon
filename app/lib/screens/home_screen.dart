@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'history_screen.dart';
 import 'new_match_screen.dart';
+import 'online_screen.dart';
 
 /// The app's landing screen: a title and the two match-mode entry points.
 /// Each button pushes a [NewMatchScreen] (as a route) configured for its mode.
@@ -40,6 +41,16 @@ class HomeScreen extends StatelessWidget {
                     label: 'Two Players',
                     icon: Icons.people_outline,
                     onPressed: () => _open(context, vsComputer: false),
+                  ),
+                  const SizedBox(height: 16),
+                  _ModeButton(
+                    label: 'Play Online',
+                    icon: Icons.public,
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const OnlineScreen(),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   SizedBox(
