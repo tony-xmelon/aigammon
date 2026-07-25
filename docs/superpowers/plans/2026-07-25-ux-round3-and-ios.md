@@ -45,5 +45,14 @@
 - Iterate on the feature branch until the unsigned build is GREEN (expect several rounds — Xcode/pod quirks; use `gh run watch`, read failure logs, fix, push).
 - Docs: `.github/workflows/README.md` + a new "iOS distribution" section in `firebase/DEPLOY.md`: user-required steps — Apple Developer Program enrollment ($99/yr), creating an iOS app in the Firebase console (bundle id must match), certificate + ad-hoc provisioning profile (tester device UDIDs) OR the TestFlight alternative (App Store Connect API key), and exactly which GitHub secrets to add. Be explicit that WITHOUT these secrets CI produces an unsigned .app artifact only — iPhones cannot install it; signing is the user-gated step.
 
+### Task 6 (added from live feedback): analysis replay overhaul
+Verbatim: "when replaying a game, show the moves visually on the board with the dice. Show the entire history of moves, scrollable with the current one highlighted, allow navigation along the game and explain the metrics, what is error rate 0.016? For each position indicate the best move visually".
+`analysis_screen.dart` (+ board_painter/board_view as needed):
+- The replay board shows each stepped position WITH the dice of that turn (per-player pairs from Task 1 — feed the historical rolls) and the move being made rendered visually: draw movement arrows (or origin/destination highlights) for the played move's hops on the board.
+- Best move shown VISUALLY too: a toggle or side-by-side treatment — e.g. tapping the "Best: ..." line highlights the best move's hops on the board in a distinct color (reuse the existing highlight overlay vocabulary: played move = one color, best move = another; legend chip explains which is which).
+- Full scrollable move list beside/below the board: every move of the game with its mark + equity loss, CURRENT move highlighted and auto-scrolled into view; tapping any row jumps there; prev/next buttons remain; swipe/arrow-key nav nice-to-have.
+- Metric explanation: an info affordance (ⓘ) opening a plain-language explainer: equity = expected points swing of the game position (·1 cube); "−0.016" = this move loses 0.016 points of expected value vs the engine's best; the mark scale (best <0.001, good <0.02, dubious <0.05, error <0.11, blunder ≥0.11). Wording concise, non-jargon.
+- Tests: stepped position exposes dice + played-move highlights (probe painter fields); best-move toggle highlights differ from played; list highlights current row + tap-to-jump; explainer opens.
+
 ### Task 5: Verify, review, merge, ship v0.5.0
 Full local matrix + green iOS AND Android workflows, whole-branch review vs the 3 feedback items, remove the dev branch trigger from ios.yml, bump version 0.5.0+5, merge → push, memory update, feedback→resolution report incl. the explicit "what you must do for iOS distribution" list.
