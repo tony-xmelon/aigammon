@@ -1,5 +1,6 @@
 import 'package:aigammon_app/board/board_geometry.dart';
 import 'package:aigammon_app/board/board_painter.dart';
+import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,11 +38,23 @@ BoardPainter boardPainterOf(WidgetTester t) => t
 Rect boardRect(WidgetTester t) => t.getRect(
     find.byWidgetPredicate((w) => w is CustomPaint && w.painter is BoardPainter));
 
-/// Taps the centre of point [index] on the board (white-at-bottom geometry).
+/// Taps the centre of board location [index] (white-at-bottom geometry).
+///
+/// [index] is a point (0..23), [CheckerMove.bar] (24) when entering from the
+/// bar, or [CheckerMove.off] (-1) when bearing off — the latter two arise with
+/// real unseeded dice (a hit sends a checker to the bar; a home-board race bears
+/// off). `pointRect` only accepts 0..23, so route the bar/off sentinels to their
+/// strips instead. `locationAt` claims the whole bar/off columns (any row), so
+/// White's half is a valid tap target regardless of which side is on the bar.
 Future<void> tapBoardPoint(WidgetTester t, int index) async {
   final r = boardRect(t);
   final g = BoardGeometry(r.size, whiteAtBottom: true);
-  await t.tapAt(r.topLeft + g.pointRect(index).center);
+  final Rect target = index == CheckerMove.bar
+      ? g.barRect(Player.white)
+      : index == CheckerMove.off
+          ? g.offRect(Player.white)
+          : g.pointRect(index);
+  await t.tapAt(r.topLeft + target.center);
   await t.pump();
 }
 
