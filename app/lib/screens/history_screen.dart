@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,55 +10,173 @@ import 'analysis_screen.dart';
 /// The match-history list: every recorded match, newest first, tapping through
 /// to its games ([MatchDetailScreen]) and, from there, to the per-game
 /// [AnalysisScreen].
-class HistoryScreen extends ConsumerWidget {
+///
+/// ## History is not a landfill
+///
+/// A match row is written the moment a match is launched, so every abandoned
+/// setup used to accumulate forever as an unresumable "White 0 — 0 Black · In
+/// progress" row. Two things keep the list meaningful:
+///
+/// * on every load the screen sweeps the **empty** abandoned matches
+///   ([MatchRepository.deleteEmptyAbandonedMatches]) — those with zero recorded
+///   games carry no information at all;
+/// * every remaining row can be **swiped away** (right-to-left) behind a
+///   confirmation dialog, which hard-deletes the match and, by cascade, its
+///   games.
+///
+/// An unfinished match that DID record games is kept and badged "Unfinished"
+/// (not "In progress": no live match survives an app restart) — its games are
+/// still analysable.
+class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends ConsumerState<HistoryScreen> {
+  /// Ids deleted from THIS screen, hidden immediately rather than waiting for
+  /// the watch stream to re-emit. Keeps the swipe feeling instant and makes the
+  /// row's disappearance independent of the stream (so a test may serve a fixed
+  /// list). The delete itself has already committed when an id lands here.
+  final Set<int> _deleted = {};
+
+  @override
+  void initState() {
+    super.initState();
+    // Fire-and-forget purge of the empty abandoned matches. The watch stream
+    // re-emits when rows go, so no explicit refresh is needed; a failure just
+    // leaves the rows listed (they are deletable by hand).
+    unawaited(ref.read(matchRepositoryProvider).deleteEmptyAbandonedMatches());
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final matches = ref.watch(matchesProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Match history')),
       body: matches.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Failed to load history:\n$e')),
-        data: (rows) {
+        data: (all) {
+          final rows = [
+            for (final row in all)
+              if (!_deleted.contains(row.id)) row,
+          ];
           if (rows.isEmpty) {
             return const Center(child: Text('No matches played yet.'));
           }
           return ListView.separated(
             itemCount: rows.length,
             separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, i) => _MatchTile(match: rows[i]),
+            itemBuilder: (context, i) => _MatchTile(
+              match: rows[i],
+              onDeleteRequested: () => _confirmDelete(rows[i]),
+            ),
           );
         },
       ),
     );
   }
+
+  /// Confirms and performs the hard delete of [match].
+  ///
+  /// Always resolves `false` — the [Dismissible] is told NOT to dismiss, because
+  /// a confirmed delete has already removed the row from the list (via
+  /// [_deleted]) by the time this returns, and a "dismissed" widget that is
+  /// still in the tree trips a framework assertion. A cancelled delete simply
+  /// springs the row back.
+  Future<bool> _confirmDelete(MatchRow match) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this match?'),
+        content: Text(
+          '${_scoreLine(match)}\n\n'
+          'The match and every game recorded in it are removed permanently. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    await ref.read(matchRepositoryProvider).deleteMatch(match.id);
+    if (mounted) setState(() => _deleted.add(match.id));
+    return false;
+  }
 }
 
 class _MatchTile extends StatelessWidget {
-  const _MatchTile({required this.match});
+  const _MatchTile({required this.match, required this.onDeleteRequested});
 
   final MatchRow match;
+
+  /// Runs the confirm-then-delete flow; resolves whether the [Dismissible]
+  /// should complete its dismissal (always `false` — see
+  /// [_HistoryScreenState._confirmDelete]).
+  final Future<bool> Function() onDeleteRequested;
 
   @override
   Widget build(BuildContext context) {
     final subtitle =
         '${_modeLabel(match.mode)} · ${_formatDate(match.createdAt)}';
-    return ListTile(
-      title: Text(_scoreLine(match)),
-      subtitle: Text(subtitle),
-      trailing: match.completed
-          ? _StatusBadge(
-              label: match.winner == null
-                  ? 'Complete'
-                  : '${_sideLabel(match.winner!)} won',
-              tone: _BadgeTone.done,
-            )
-          : const _StatusBadge(label: 'In progress', tone: _BadgeTone.pending),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => MatchDetailScreen(match: match),
+    return Dismissible(
+      key: ValueKey('match-${match.id}'),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) => onDeleteRequested(),
+      background: const _DeleteBackground(),
+      child: ListTile(
+        title: Text(_scoreLine(match)),
+        subtitle: Text(subtitle),
+        trailing: match.completed
+            ? _StatusBadge(
+                label: match.winner == null
+                    ? 'Complete'
+                    : '${_sideLabel(match.winner!)} won',
+                tone: _BadgeTone.done,
+              )
+            // Not "In progress": nothing is in progress after the app restarts —
+            // the match cannot be resumed, only its games reviewed.
+            : const _StatusBadge(label: 'Unfinished', tone: _BadgeTone.pending),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => MatchDetailScreen(match: match),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// What shows behind a row as it is swiped: a delete affordance on the trailing
+/// edge (the swipe direction), so the gesture reads before it commits.
+class _DeleteBackground extends StatelessWidget {
+  const _DeleteBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Text('Delete',
+                style: TextStyle(color: scheme.onErrorContainer, fontSize: 13)),
+            const SizedBox(width: 8),
+            Icon(Icons.delete_outline, color: scheme.onErrorContainer),
+          ],
         ),
       ),
     );

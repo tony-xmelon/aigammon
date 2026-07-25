@@ -80,6 +80,36 @@ class MatchRepository {
     );
   }
 
+  /// Deletes every UNFINISHED match that recorded no games at all, returning
+  /// how many rows went.
+  ///
+  /// A match row is inserted the instant a match is LAUNCHED, so every match a
+  /// user backs out of before finishing a single game leaves a permanent
+  /// "White 0 — 0 Black" row in history. Those rows carry no information (no
+  /// games, no score, and — since there is no resume — nothing to return to),
+  /// so they are swept on every history load. Matches with at least one
+  /// recorded game are kept: their games are analysable.
+  ///
+  /// Deliberately narrow: `completed = 0 AND no games`. A completed match is
+  /// never touched (a 0–0 completed match cannot occur), and an unfinished
+  /// match with games survives as an "Unfinished" row.
+  Future<int> deleteEmptyAbandonedMatches() {
+    return db.customUpdate(
+      'DELETE FROM matches WHERE completed = 0 '
+      'AND id NOT IN (SELECT match_id FROM games)',
+      updates: {db.matches},
+      updateKind: UpdateKind.delete,
+    );
+  }
+
+  /// Hard-deletes [matchId]. Its games go with it through the `ON DELETE
+  /// CASCADE` foreign key on `games.match_id` (enforced because the database's
+  /// `beforeOpen` turns `PRAGMA foreign_keys` on), so this single statement
+  /// leaves no orphans. Irreversible — callers confirm first.
+  Future<void> deleteMatch(int matchId) async {
+    await (db.delete(db.matches)..where((m) => m.id.equals(matchId))).go();
+  }
+
   /// All matches, newest first. Ties on [createdAt] break by descending id so
   /// the order is stable and still puts the most recently inserted row first.
   Stream<List<MatchRow>> watchMatches() {
