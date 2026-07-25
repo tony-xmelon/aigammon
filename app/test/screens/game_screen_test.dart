@@ -1126,6 +1126,96 @@ void main() {
     c.disposeController();
   });
 
+  group('game record panel', () {
+    // Black (AI) wins the opening (6 > 1) and moves first; White (human) then
+    // reaches its pre-roll gate. The log holds the opening plus Black's move.
+    GameController preRoll(LocalHumanAgent human) => GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+
+    testWidgets('menu entry opens the panel listing the game so far',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = preRoll(human);
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // Hidden until the overflow menu's "Game record" entry is chosen.
+      expect(find.textContaining('Opening:'), findsNothing);
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Game record'));
+      await t.pumpAndSettle();
+
+      // The panel (its "Game record" title, the menu now closed) lists the
+      // opening header and Black's first move (6-1 from the opening dice).
+      expect(find.text('Game record'), findsOneWidget);
+      expect(find.text('Opening: W 1 — B 6 (B starts)'), findsOneWidget);
+      expect(find.textContaining('1. B 6-1:'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('live: a fresh move appends to the open panel', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = preRoll(human);
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Game record'));
+      await t.pumpAndSettle();
+      // Only Black's move so far; White has not played.
+      expect(find.textContaining('2. W'), findsNothing);
+
+      // Drive White's turn programmatically (the scrim covers the Roll button,
+      // but the controller drives the same events the UI would): the panel is
+      // rebuilt from the live event log and gains White's move line.
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t, () => find.textContaining('2. W 3-1:').evaluate().isNotEmpty);
+      expect(find.textContaining('2. W 3-1:'), findsOneWidget,
+          reason: 'the new move appended live while the panel was open');
+
+      c.disposeController();
+    });
+
+    testWidgets('close affordance dismisses the panel', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = preRoll(human);
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Game record'));
+      await t.pumpAndSettle();
+      expect(find.text('Opening: W 1 — B 6 (B starts)'), findsOneWidget);
+
+      await t.tap(find.byIcon(Icons.close));
+      await t.pumpAndSettle();
+      expect(find.text('Opening: W 1 — B 6 (B starts)'), findsNothing,
+          reason: 'closing removes the record panel');
+
+      c.disposeController();
+    });
+  });
+
   group('gameplay options', () {
     GameController preRoll() => GameController(
           white: LocalHumanAgent(),

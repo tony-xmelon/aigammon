@@ -4,7 +4,9 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 
+import '../board/board_theme.dart';
 import '../board/board_view.dart';
+import '../game/game_record.dart';
 import '../game/match_controller.dart';
 import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
@@ -158,6 +160,18 @@ class _GameScreenState extends State<GameScreen> {
   int? _cubeResponseKey;
   int _cubeResponseSeq = 0;
 
+  /// Whether the move-history ("Game record") bottom panel is open.
+  bool _recordOpen = false;
+
+  /// Scroll controller for the record list, kept so the panel can auto-scroll to
+  /// the newest line on open and when live events append while it is open.
+  final ScrollController _recordScroll = ScrollController();
+
+  /// The event count the record was last auto-scrolled for. A change (open, or a
+  /// fresh event) re-pins the list to the bottom; unrelated rebuilds do not, so
+  /// a user who scrolls up is left where they are until the next real event.
+  int _recordScrolledCount = -1;
+
   /// Whether the hint bottom panel is open, plus its loading/result state.
   bool _hintOpen = false;
   bool _hintLoading = false;
@@ -209,6 +223,7 @@ class _GameScreenState extends State<GameScreen> {
     _rollBeatTimer?.cancel();
     _observable.removeListener(_onChange);
     _stagedMove.dispose();
+    _recordScroll.dispose();
     _entryControl.dispose();
     _c.disposeController();
     super.dispose();
@@ -455,6 +470,20 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
+  // --- Game-record panel -----------------------------------------------------
+
+  void _openRecord() {
+    setState(() {
+      _recordOpen = true;
+      // Force a scroll-to-bottom on the first build of the freshly-opened panel.
+      _recordScrolledCount = -1;
+    });
+  }
+
+  void _closeRecord() {
+    setState(() => _recordOpen = false);
+  }
+
   /// Tracks the acting side and raises the pass-device overlay when, in a
   /// hot-seat game, a human decision opens for a DIFFERENT actor than the last.
   /// Skipped for the very first human decision of the match (`_lastActor` null).
@@ -517,7 +546,11 @@ class _GameScreenState extends State<GameScreen> {
             Column(
               children: [
                 if (_c.error != null) _ErrorBanner(error: _c.error!),
-                _Hud(controller: _c, showScoring: widget.showScoring),
+                _Hud(
+                  controller: _c,
+                  showScoring: widget.showScoring,
+                  onGameRecord: _openRecord,
+                ),
                 if (_chip != null) _tutorChip(_chip!),
                 Expanded(
                   child: Padding(
@@ -545,6 +578,7 @@ class _GameScreenState extends State<GameScreen> {
             ),
             ..._buildModals(cubeSide, resignSide),
             if (_hintOpen) _hintPanel(),
+            if (_recordOpen) _recordPanel(),
           ],
         ),
       ),
@@ -957,6 +991,121 @@ class _GameScreenState extends State<GameScreen> {
     _closeHint();
   }
 
+  /// The in-tree move-history bottom panel: a scrollable list of the CURRENT
+  /// game's record lines (see [buildGameRecord]), each with an actor-coloured
+  /// leading dot. Height is ~55% of the screen. Auto-scrolls to the newest line
+  /// on open and whenever a fresh event appends while it is open.
+  Widget _recordPanel() {
+    final lines = buildGameRecord(_c.game.events);
+    final count = _c.game.events.length;
+    // Re-pin to the bottom on open (count reset to -1) and on any new event.
+    if (count != _recordScrolledCount) {
+      _recordScrolledCount = count;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_recordScroll.hasClients) {
+          _recordScroll.jumpTo(_recordScroll.position.maxScrollExtent);
+        }
+      });
+    }
+    final height = MediaQuery.of(context).size.height * 0.55;
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _closeRecord,
+            child: const ColoredBox(color: Colors.black54),
+          ),
+        ),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: Material(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            child: SizedBox(
+              height: height,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text('Game record',
+                                style: Theme.of(context).textTheme.titleMedium),
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            icon: const Icon(Icons.close, size: 20),
+                            onPressed: _closeRecord,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: lines.isEmpty
+                            ? const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                child: Text('No moves yet.'),
+                              )
+                            : ListView.builder(
+                                controller: _recordScroll,
+                                itemCount: lines.length,
+                                itemBuilder: (context, i) => _recordRow(lines[i]),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _recordRow(RecordLine line) {
+    final mono = Theme.of(context)
+        .textTheme
+        .bodyMedium
+        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: _actorDot(line.actor),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(line.text, style: mono)),
+        ],
+      ),
+    );
+  }
+
+  /// A small leading dot in the actor's checker colour (ivory for White, ebony
+  /// for Black), or an empty transparent slot for a neutral line (the opening).
+  Widget _actorDot(Player? actor) {
+    if (actor == null) return const SizedBox(width: 10, height: 10);
+    final color = actor == Player.white
+        ? BoardTheme.light.whiteChecker
+        : BoardTheme.light.blackChecker;
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: BoardTheme.light.checkerBorder, width: 1),
+      ),
+    );
+  }
+
   TextStyle get _titleStyle =>
       Theme.of(context).textTheme.headlineSmall ?? const TextStyle(fontSize: 20);
 }
@@ -990,6 +1139,15 @@ String _compactScore(MatchController c) {
   return 'W ${m.whiteScore}–${m.blackScore} B · to ${m.matchLength}';
 }
 
+/// Entries in the header overflow (⋮) menu. "Game record" is always available;
+/// the resign entries appear only at the human's pre-roll gate.
+enum _MenuAction {
+  gameRecord,
+  resignSingle,
+  resignGammon,
+  resignBackgammon,
+}
+
 // --- HUD (single row) --------------------------------------------------------
 
 /// The single-row header: a compact score, an optional Crawford badge, the cube
@@ -997,9 +1155,16 @@ String _compactScore(MatchController c) {
 /// overflow (⋮) menu holding Resign. Keeping Double/Resign up here (rather than
 /// in the bottom bar) puts the risky actions away from where thumbs rest.
 class _Hud extends StatelessWidget {
-  const _Hud({required this.controller, this.showScoring = true});
+  const _Hud({
+    required this.controller,
+    required this.onGameRecord,
+    this.showScoring = true,
+  });
 
   final MatchController controller;
+
+  /// Opens the move-history ("Game record") panel.
+  final VoidCallback onGameRecord;
 
   /// Whether the running match score is shown (the settings `showScoring`).
   final bool showScoring;
@@ -1077,19 +1242,38 @@ class _Hud extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                 ),
               ),
-            PopupMenuButton<ResignValue>(
-              enabled: atGate,
+            PopupMenuButton<_MenuAction>(
               icon: const Icon(Icons.more_vert),
               tooltip: 'More actions',
-              onSelected: controller.offerResign,
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                    value: ResignValue.single, child: Text('Resign — single')),
-                PopupMenuItem(
-                    value: ResignValue.gammon, child: Text('Resign — gammon')),
-                PopupMenuItem(
-                    value: ResignValue.backgammon,
-                    child: Text('Resign — backgammon')),
+              onSelected: (action) {
+                switch (action) {
+                  case _MenuAction.gameRecord:
+                    onGameRecord();
+                  case _MenuAction.resignSingle:
+                    controller.offerResign(ResignValue.single);
+                  case _MenuAction.resignGammon:
+                    controller.offerResign(ResignValue.gammon);
+                  case _MenuAction.resignBackgammon:
+                    controller.offerResign(ResignValue.backgammon);
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                    value: _MenuAction.gameRecord, child: Text('Game record')),
+                // Resign is only meaningful (and legal) at the human's own
+                // pre-roll gate, so its entries appear only then.
+                if (atGate) ...const [
+                  PopupMenuDivider(),
+                  PopupMenuItem(
+                      value: _MenuAction.resignSingle,
+                      child: Text('Resign — single')),
+                  PopupMenuItem(
+                      value: _MenuAction.resignGammon,
+                      child: Text('Resign — gammon')),
+                  PopupMenuItem(
+                      value: _MenuAction.resignBackgammon,
+                      child: Text('Resign — backgammon')),
+                ],
               ],
             ),
           ],
