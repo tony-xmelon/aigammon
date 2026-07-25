@@ -91,6 +91,12 @@ class MatchRepository {
         .watch();
   }
 
+  /// The single match row for [matchId]. Throws if no such match exists.
+  Future<MatchRow> loadMatch(int matchId) {
+    return (db.select(db.matches)..where((m) => m.id.equals(matchId)))
+        .getSingle();
+  }
+
   /// The single game row for [gameId] (metadata: matchId, gameNumber,
   /// isCrawford, folded result). Throws if no such game exists.
   Future<GameRow> loadGame(int gameId) {

@@ -4,6 +4,7 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:online_client/online_client.dart';
 
+import '../data/persistence_hooks.dart';
 import '../game/match_controller.dart';
 import '../game/player_agent.dart';
 
@@ -60,6 +61,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     required this.matchId,
     required this.localSide,
     required MatchSnapshot initialSnapshot,
+    this.persistence = const NoopPersistence(),
     this.pollInterval = const Duration(seconds: 2),
   }) : _match = MatchState(
           matchLength: initialSnapshot.matchLength,
@@ -77,6 +79,11 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   /// The seat whose decisions are submitted; all others are remote.
   final Player localSide;
 
+  /// Persistence seam invoked as the match progresses (a finished game and,
+  /// finally, the decided match). Defaults to a no-op so play works with
+  /// persistence off; a failing hook is non-fatal (see [_persist]).
+  final MatchPersistence persistence;
+
   /// How often the poll stream fetches new events.
   final Duration pollInterval;
 
@@ -91,6 +98,12 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   bool _started = false;
   bool _disposed = false;
   Object? _error;
+  Object? _persistenceError;
+
+  /// Serialises persistence hooks so a game's [MatchPersistence.onGameFinished]
+  /// completes before the next game's (and before [MatchPersistence.onMatchFinished]),
+  /// even though each is scheduled fire-and-forget from the synchronous fold.
+  Future<void> _persistChain = Future<void>.value();
 
   /// Completes the first time a game folds (so [state]/[game] become safe to
   /// read), or when the controller is disposed before that happens. See [ready].
@@ -179,10 +192,11 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   @override
   Object? get error => _error;
 
-  /// Always `null`: the server owns persistence, so there is no local
-  /// persistence layer to fail.
+  /// The last non-fatal persistence failure, or `null` when healthy. A recorded
+  /// game / finished match is written through [persistence]; a throw there is
+  /// swallowed into this field (the fold is never interrupted by storage).
   @override
-  Object? get persistenceError => null;
+  Object? get persistenceError => _persistenceError;
 
   /// Always `false`: the doubling cube is server-mediated online, so the
   /// cubeless option is offline-only (see [MatchController.cubeless]).
@@ -394,8 +408,22 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     // a subscriber (the board) still observes the pre-move [state] as it fires.
     if (event is MoveEvent) _lastMove.value = event;
     if (next.state.phase == GamePhase.gameOver) {
-      _match = _match.applyResult(next.state.result!);
-      if (!_match.isMatchOver) {
+      final result = next.state.result!;
+      _match = _match.applyResult(result);
+      // Persist the JUST-finished game with its COMPLETE event log. This fires
+      // at the applyResult moment — before any of the next game's events are
+      // folded (they buffer while [_awaitingNextGame]), so [next.events] is the
+      // whole finished game. The authoritative game number is [re.gameNo].
+      _persist(() => persistence.onGameFinished(
+            gameNumber: re.gameNo,
+            isCrawford: next.state.isCrawfordGame,
+            events: next.events,
+            result: result,
+            matchAfter: _match,
+          ));
+      if (_match.isMatchOver) {
+        _persist(() => persistence.onMatchFinished(_match));
+      } else {
         _awaitingNextGame = true;
       }
     }
@@ -551,6 +579,21 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     if (side != localSide) {
       throw StateError('$side is not the local side');
     }
+  }
+
+  /// Runs a persistence [hook], chained after any in-flight one, swallowing a
+  /// failure into [persistenceError] so the fold is never interrupted by the
+  /// storage layer (mirrors [GameController]'s persistence handling).
+  void _persist(Future<void> Function() hook) {
+    _persistChain = _persistChain.then((_) async {
+      if (_disposed) return;
+      try {
+        await hook();
+      } catch (e) {
+        _persistenceError = e;
+        _notify();
+      }
+    });
   }
 
   void _notify() {

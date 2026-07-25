@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:aigammon_app/data/app_settings.dart';
+import 'package:aigammon_app/data/database.dart';
+import 'package:aigammon_app/data/match_repository.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
@@ -13,6 +15,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:online_client/online_client.dart';
+
+import '../data/test_database.dart';
 
 /// A no-native [EngineFacade] with instant, flat responses — enough for the
 /// online [TutorService] the game screen constructs (it never blocks a test).
@@ -145,13 +149,18 @@ List<RemoteEvent> _openingLog() => const [
 
 /// The online screen under test. [configured] false overrides the config to
 /// `null` (the not-configured case); otherwise the emulator config is used.
-Widget _app(FakeMatchApi api, {bool configured = true}) {
+///
+/// [db] backs the (now history-persisted) online launch: `_launch` inserts a
+/// match row through the repository over [databaseProvider], so the tests pass
+/// an in-memory db to keep off the real drift store.
+Widget _app(FakeMatchApi api, {bool configured = true, required AppDatabase db}) {
   return ProviderScope(
     overrides: [
       onlineConfigProvider
           .overrideWithValue(configured ? OnlineConfig.emulator() : null),
       matchApiProvider.overrideWith((ref) async => api),
       engineFacadeProvider.overrideWithValue(const FakeFacade()),
+      databaseProvider.overrideWithValue(db),
       // Launching a game reads settingsProvider (for animation speed); serve a
       // static value so the test avoids the real drift store and its watch-timer.
       settingsProvider.overrideWith((ref) => Stream.value(AppSettings.defaults)),
@@ -171,10 +180,15 @@ Future<void> _pumpUntil(WidgetTester t, Finder finder, {int tries = 40}) async {
 void main() {
   const surface = Size(900, 1400);
 
-  setUp(() => TestWidgetsFlutterBinding.ensureInitialized());
+  late AppDatabase db;
+  setUp(() {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    db = newTestDatabase();
+  });
+  tearDown(() => db.close());
 
   testWidgets('config null shows the not-configured card, no crash', (t) async {
-    await t.pumpWidget(_app(FakeMatchApi(), configured: false));
+    await t.pumpWidget(_app(FakeMatchApi(), configured: false, db: db));
     await t.pumpAndSettle();
 
     expect(find.byIcon(Icons.cloud_off), findsOneWidget);
@@ -191,7 +205,7 @@ void main() {
 
     // waiting on the first fetch, active on the second.
     final api = FakeMatchApi(activeAfter: 2)..log = _openingLog();
-    await t.pumpWidget(_app(api));
+    await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 
     expect(find.text('Create match'), findsOneWidget);
@@ -214,7 +228,7 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
 
     final api = FakeMatchApi(activeAfter: 1)..log = _openingLog();
-    await t.pumpWidget(_app(api));
+    await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 
     await t.enterText(find.byType(TextField), 'abc123');
@@ -226,6 +240,35 @@ void main() {
     expect(api.joinCodes, ['ABC123']); // trimmed + uppercased
   });
 
+  testWidgets('join flow persists an online match row (joiner is Black)',
+      (t) async {
+    await t.binding.setSurfaceSize(surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final api = FakeMatchApi(activeAfter: 1)..log = _openingLog();
+    await t.pumpWidget(_app(api, db: db));
+    await t.pumpAndSettle();
+
+    await t.enterText(find.byType(TextField), 'abc123');
+    await t.pump();
+    await t.tap(find.widgetWithText(FilledButton, 'Join'));
+    await _pumpUntil(t, find.byType(GameScreen));
+    expect(find.byType(GameScreen), findsOneWidget);
+
+    // The launch inserted an online match row over the in-memory db. The joiner
+    // plays Black, so blackType is 'human' and whiteType (the opponent) 'remote'.
+    final rows =
+        await t.runAsync(() => MatchRepository(db).watchMatches().first);
+    expect(rows, isNotNull);
+    expect(rows!.length, 1);
+    final row = rows.first;
+    expect(row.mode, 'online');
+    expect(row.matchLength, 5);
+    expect(row.whiteType, 'remote');
+    expect(row.blackType, 'human');
+    expect(row.completed, isFalse);
+  });
+
   testWidgets('join error: inline error shown, field editable, retry works',
       (t) async {
     await t.binding.setSurfaceSize(surface);
@@ -234,7 +277,7 @@ void main() {
     final api = FakeMatchApi(activeAfter: 1)..log = _openingLog();
     api.joinError = const OnlineException('not-found', 'No match with that code.');
 
-    await t.pumpWidget(_app(api));
+    await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 
     await t.enterText(find.byType(TextField), 'ZZZZZZ');
@@ -261,7 +304,7 @@ void main() {
 
     // Never becomes active, so the flow parks in the waiting state.
     final api = FakeMatchApi(activeAfter: 1000)..log = _openingLog();
-    await t.pumpWidget(_app(api));
+    await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 
     await t.tap(find.widgetWithText(FilledButton, 'Create'));

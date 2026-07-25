@@ -206,7 +206,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
   }
 
   void _startMatch() {
-    final (controller, orientation) = _buildController();
+    final (controller, orientation, matchIdFuture) = _buildController();
     // Build a tutor over the same engine facade when enabled; null = off.
     final tutor = _tutorEnabled
         ? TutorService(ref.read(engineFacadeProvider))
@@ -224,6 +224,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          persistedMatchId: matchIdFuture,
           animationDuration: settings.hopDuration,
           interactionOptions: BoardInteractionOptions(
             showHighlights: settings.showHighlights,
@@ -236,26 +237,30 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
     );
   }
 
-  /// Builds the controller and picks the board orientation: hot-seat follows
-  /// the active player when "Rotate board for Black" is on (else White stays
-  /// fixed at the bottom); vs-AI pins the human's side at the bottom.
-  (GameController, BoardOrientationMode) _buildController() {
+  /// Builds the controller, picks the board orientation, and returns the
+  /// persisted match id future (threaded into [GameScreen.persistedMatchId] for
+  /// the post-match "Match summary" link). Orientation: hot-seat follows the
+  /// active player when "Rotate board for Black" is on (else White stays fixed at
+  /// the bottom); vs-AI pins the human's side at the bottom.
+  (GameController, BoardOrientationMode, Future<int>) _buildController() {
     if (!widget.vsComputer) {
+      final (persistence, matchIdFuture) = _persistenceFor(
+        mode: 'hotSeat',
+        whiteType: 'human',
+        blackType: 'human',
+      );
       return (
         GameController(
           white: LocalHumanAgent(),
           black: LocalHumanAgent(),
           matchLength: _matchLength,
           cubeless: _cubeless,
-          persistence: _persistenceFor(
-            mode: 'hotSeat',
-            whiteType: 'human',
-            blackType: 'human',
-          ),
+          persistence: persistence,
         ),
         _rotateForBlack
             ? BoardOrientationMode.followActive
             : BoardOrientationMode.fixedWhite,
+        matchIdFuture,
       );
     }
 
@@ -268,28 +273,31 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
       _SideChoice.random => Random().nextBool(),
     };
     final aiType = 'ai:${_difficulty.name}';
+    final (persistence, matchIdFuture) = _persistenceFor(
+      mode: 'vsComputer',
+      whiteType: humanIsWhite ? 'human' : aiType,
+      blackType: humanIsWhite ? aiType : 'human',
+    );
     return (
       GameController(
         white: humanIsWhite ? human : ai,
         black: humanIsWhite ? ai : human,
         matchLength: _matchLength,
         cubeless: _cubeless,
-        persistence: _persistenceFor(
-          mode: 'vsComputer',
-          whiteType: humanIsWhite ? 'human' : aiType,
-          blackType: humanIsWhite ? aiType : 'human',
-        ),
+        persistence: persistence,
       ),
       humanIsWhite
           ? BoardOrientationMode.fixedWhite
           : BoardOrientationMode.fixedBlack,
+      matchIdFuture,
     );
   }
 
   /// Creates the match row (fire-and-forget insert) and wraps the repository in
   /// a [RepositoryPersistence] bound to that row's id. The insert runs in the
-  /// background; the controller's hooks await the id before recording games.
-  MatchPersistence _persistenceFor({
+  /// background; the controller's hooks await the id before recording games, and
+  /// the returned future also feeds [GameScreen.persistedMatchId].
+  (MatchPersistence, Future<int>) _persistenceFor({
     required String mode,
     required String whiteType,
     required String blackType,
@@ -301,7 +309,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
       whiteType: whiteType,
       blackType: blackType,
     );
-    return RepositoryPersistence(repo, matchIdFuture);
+    return (RepositoryPersistence(repo, matchIdFuture), matchIdFuture);
   }
 }
 

@@ -1,11 +1,56 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:aigammon_app/data/persistence_hooks.dart';
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/online/online_match_controller.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:online_client/online_client.dart';
+
+/// A [MatchPersistence] that records every hook call, so a test can assert
+/// onGameFinished fired once per finished game (with the full event log + folded
+/// result) and onMatchFinished at match end. [throwOnGame] scripts a single
+/// non-fatal onGameFinished failure for that game number.
+class RecordingPersistence implements MatchPersistence {
+  final List<
+      ({
+        int gameNumber,
+        bool isCrawford,
+        List<GameEvent> events,
+        GameResult result,
+        MatchState matchAfter,
+      })> games = [];
+  int matchFinishedCalls = 0;
+  MatchState? finalState;
+  int throwOnGame = -1;
+
+  @override
+  Future<void> onGameFinished({
+    required int gameNumber,
+    required bool isCrawford,
+    required List<GameEvent> events,
+    required GameResult result,
+    required MatchState matchAfter,
+  }) async {
+    if (gameNumber == throwOnGame) {
+      throw StateError('scripted persistence failure');
+    }
+    games.add((
+      gameNumber: gameNumber,
+      isCrawford: isCrawford,
+      events: events,
+      result: result,
+      matchAfter: matchAfter,
+    ));
+  }
+
+  @override
+  Future<void> onMatchFinished(MatchState finalState) async {
+    matchFinishedCalls++;
+    this.finalState = finalState;
+  }
+}
 
 /// A scriptable [MatchApi] stand-in. Events reach the controller through
 /// [emit] (the poll stream); [fetchEventsSince]/[fetchMatch] serve the canned
@@ -557,5 +602,137 @@ void main() {
     expect(api.rollDiceCalls, 3);
     expect(controller.error, isNull);
     expect(controller.awaitingHumanTurn, isTrue);
+  });
+
+  group('persistence', () {
+    test('records the finished game (full events + result) and the match',
+        () async {
+      final api = FakeMatchApi();
+      final rec = RecordingPersistence();
+      // A full 1-point game decides the match after one game. Feed every event
+      // through the poll stream — folding persists regardless of who "submits".
+      final play =
+          playoutGame(matchLength: 1, opening: Dice(6, 3), rng: Random(7));
+      final events = play.events;
+      final result = play.game.state.result!;
+
+      final controller = OnlineMatchController(
+        api: api,
+        matchId: 'mp1',
+        localSide: Player.black,
+        initialSnapshot: snap(matchLength: 1, isCrawford: true),
+        persistence: rec,
+      );
+      addTearDown(controller.disposeController);
+      await controller.playMatch();
+
+      for (final re in events) {
+        await feed(api, re);
+      }
+      await pumpEventQueue();
+
+      expect(controller.matchOver, isTrue);
+      // onGameFinished fired exactly once, with the COMPLETE game and its result.
+      expect(rec.games.length, 1);
+      final g = rec.games.single;
+      expect(g.gameNumber, 1);
+      expect(g.isCrawford, isTrue);
+      expect(g.events.length, events.length, reason: 'the whole event log');
+      expect(g.result.winner, result.winner);
+      expect(g.result.points, result.points);
+      expect(g.result.outcome, result.outcome);
+      expect(g.matchAfter.isMatchOver, isTrue);
+      // onMatchFinished fired once, with the decided final state.
+      expect(rec.matchFinishedCalls, 1);
+      expect(rec.finalState!.winner, result.winner);
+      expect(controller.persistenceError, isNull);
+    });
+
+    test('fires onGameFinished with the complete game while the next buffers',
+        () async {
+      final api = FakeMatchApi();
+      final rec = RecordingPersistence();
+      // 7-point match: one game never ends it, so game 2 follows and its events
+      // buffer while paused — the subtlety under test.
+      final play =
+          playoutGame(matchLength: 7, opening: Dice(6, 3), rng: Random(3));
+      final events = play.events;
+      final result = play.game.state.result!;
+
+      final controller = OnlineMatchController(
+        api: api,
+        matchId: 'mp2',
+        localSide: Player.white,
+        initialSnapshot: snap(matchLength: 7),
+        persistence: rec,
+      );
+      addTearDown(controller.disposeController);
+      await controller.playMatch();
+
+      for (final re in events) {
+        await feed(api, re);
+      }
+      await pumpEventQueue();
+
+      // Game 1 persisted IN FULL at the applyResult moment; match not over.
+      expect(controller.awaitingNextGame, isTrue);
+      expect(controller.matchOver, isFalse);
+      expect(rec.matchFinishedCalls, 0);
+      expect(rec.games.length, 1);
+      expect(rec.games.single.gameNumber, 1);
+      expect(rec.games.single.events.length, events.length);
+      expect(rec.games.single.result.points, result.points);
+
+      // The server appends game 2 (opening + a move) while we are paused; these
+      // buffer and must NOT record a second (unfinished) game.
+      final nextSeq = events.last.seq + 1;
+      const open2 = OpeningRollEvent(whiteDie: 6, blackDie: 2);
+      final g2 = Game.start(open2, isCrawfordGame: false);
+      await feed(api, RemoteEvent(seq: nextSeq, gameNo: 2, event: open2));
+      await feed(
+          api,
+          RemoteEvent(
+              seq: nextSeq + 1,
+              gameNo: 2,
+              event: MoveEvent(Player.white, g2.state.legalMoves.first)));
+      await pumpEventQueue();
+
+      expect(rec.games.length, 1,
+          reason: 'game 2 is unfinished — nothing new persisted');
+    });
+
+    test('a persistence failure is non-fatal: sets persistenceError, folds on',
+        () async {
+      final api = FakeMatchApi();
+      final rec = RecordingPersistence()..throwOnGame = 1;
+      final play =
+          playoutGame(matchLength: 1, opening: Dice(6, 3), rng: Random(7));
+      final events = play.events;
+
+      final controller = OnlineMatchController(
+        api: api,
+        matchId: 'mp3',
+        localSide: Player.black,
+        initialSnapshot: snap(matchLength: 1, isCrawford: true),
+        persistence: rec,
+      );
+      addTearDown(controller.disposeController);
+      await controller.playMatch();
+
+      for (final re in events) {
+        await feed(api, re);
+      }
+      await pumpEventQueue();
+
+      // The fold completed the match despite the onGameFinished throw.
+      expect(controller.matchOver, isTrue);
+      expect(controller.state.phase, GamePhase.gameOver);
+      expect(controller.persistenceError, isNotNull);
+      // The loop error surface is separate and stays clean.
+      expect(controller.error, isNull);
+      expect(rec.games, isEmpty, reason: 'onGameFinished threw before recording');
+      // onMatchFinished still ran (chained after the failed hook).
+      expect(rec.matchFinishedCalls, 1);
+    });
   });
 }

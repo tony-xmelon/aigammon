@@ -11,6 +11,7 @@ import '../game/match_controller.dart';
 import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
 import '../tutor/tutor_service.dart';
+import 'history_screen.dart';
 
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
 /// bar, the in-game dialogs (cube/resign responses, game-end, match-end), the
@@ -59,9 +60,19 @@ class GameScreen extends StatefulWidget {
     this.animationDuration = Duration.zero,
     this.interactionOptions = const BoardInteractionOptions(),
     this.showScoring = true,
+    this.persistedMatchId,
   });
 
   final MatchController controller;
+
+  /// The persisted match row's id (resolving asynchronously — the setup screen
+  /// inserts it fire-and-forget), or `null` when this match is not persisted.
+  ///
+  /// When non-null AND a [tutor] is configured (analysis needs the engine), the
+  /// game-end and match-end dialogs offer a "Match summary" button that awaits
+  /// this id and pushes the [MatchDetailScreen] (its games list drills through
+  /// to per-game [AnalysisScreen]).
+  final Future<int>? persistedMatchId;
 
   /// Per-hop checker-movement animation duration passed to the [BoardView].
   /// Defaults to [Duration.zero] (animation off) so widget tests are unaffected;
@@ -159,6 +170,10 @@ class _GameScreenState extends State<GameScreen> {
   CubeAssessment? _cubeResponseAdvice;
   int? _cubeResponseKey;
   int _cubeResponseSeq = 0;
+
+  /// Whether the post-match "Match summary" link is awaiting the persisted match
+  /// id (a brief spinner in the dialog button until the row insert resolves).
+  bool _summaryLoading = false;
 
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
@@ -677,6 +692,7 @@ class _GameScreenState extends State<GameScreen> {
           '(${_outcomeName(result.outcome)}).\n'
           '${_scoreLine(_c)}',
       actions: [
+        if (_canShowSummary) _summaryAction(),
         _CardAction(
           label: 'Next game',
           filled: true,
@@ -693,12 +709,49 @@ class _GameScreenState extends State<GameScreen> {
       message: '${winner == null ? 'Nobody' : _playerName(winner)} wins the '
           'match.\n${_scoreLine(_c)}',
       actions: [
+        if (_canShowSummary) _summaryAction(),
         _CardAction(
           label: 'Done',
           filled: true,
           onPressed: () => Navigator.of(context).maybePop(),
         ),
       ],
+    );
+  }
+
+  /// The post-match "Match summary" link is offered only when the match is
+  /// persisted ([GameScreen.persistedMatchId] set) AND analysis is available
+  /// (a [GameScreen.tutor] — it needs the engine). Same in both end dialogs.
+  bool get _canShowSummary =>
+      widget.persistedMatchId != null && widget.tutor != null;
+
+  _CardAction _summaryAction() => _CardAction(
+        label: 'Match summary',
+        busy: _summaryLoading,
+        onPressed: _summaryLoading ? null : _openMatchSummary,
+      );
+
+  /// Awaits the persisted match id (a brief spinner) then pushes the match's
+  /// detail screen (games list → per-game analysis). Swallows a failed insert
+  /// by simply clearing the spinner — the dialog stays put so the user can retry
+  /// (or dismiss). Re-entrancy is guarded by [_summaryLoading].
+  Future<void> _openMatchSummary() async {
+    final future = widget.persistedMatchId;
+    if (future == null || _summaryLoading) return;
+    setState(() => _summaryLoading = true);
+    int matchId;
+    try {
+      matchId = await future;
+    } catch (_) {
+      if (mounted) setState(() => _summaryLoading = false);
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _summaryLoading = false);
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => MatchDetailScreen(matchId: matchId),
+      ),
     );
   }
 
@@ -1399,11 +1452,17 @@ class _CardAction {
     required this.label,
     required this.onPressed,
     this.filled = false,
+    this.busy = false,
   });
 
   final String label;
-  final VoidCallback onPressed;
+
+  /// Null disables the button (e.g. while [busy] awaits an async action).
+  final VoidCallback? onPressed;
   final bool filled;
+
+  /// When true the button shows a small spinner in place of its label.
+  final bool busy;
 }
 
 /// A declarative modal: an opaque [ModalBarrier] plus a centred [Material] card.
@@ -1418,6 +1477,21 @@ class _ModalCard extends StatelessWidget {
   final String title;
   final String message;
   final List<_CardAction> actions;
+
+  /// Renders one action as a filled or text button, showing a small spinner in
+  /// place of the label while [_CardAction.busy].
+  Widget _actionButton(_CardAction action) {
+    final child = action.busy
+        ? const SizedBox(
+            height: 18,
+            width: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : Text(action.label);
+    return action.filled
+        ? FilledButton(onPressed: action.onPressed, child: child)
+        : TextButton(onPressed: action.onPressed, child: child);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1442,22 +1516,15 @@ class _ModalCard extends StatelessWidget {
                     const SizedBox(height: 12),
                     Text(message),
                     const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
+                    // Wrap (not Row) so a second action — e.g. the post-match
+                    // "Match summary" link alongside "Next game" / "Done" — flows
+                    // onto a new line rather than overflowing the narrow card.
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 12,
+                      runSpacing: 4,
                       children: [
-                        for (var i = 0; i < actions.length; i++) ...[
-                          if (i > 0) const SizedBox(width: 12),
-                          if (actions[i].filled)
-                            FilledButton(
-                              onPressed: actions[i].onPressed,
-                              child: Text(actions[i].label),
-                            )
-                          else
-                            TextButton(
-                              onPressed: actions[i].onPressed,
-                              child: Text(actions[i].label),
-                            ),
-                        ],
+                        for (final action in actions) _actionButton(action),
                       ],
                     ),
                   ],

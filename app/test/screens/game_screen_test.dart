@@ -3,11 +3,14 @@ import 'dart:math';
 
 import 'package:aigammon_app/board/board_view.dart';
 import 'package:aigammon_app/data/app_settings.dart';
+import 'package:aigammon_app/data/database.dart';
+import 'package:aigammon_app/data/match_repository.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
+import 'package:aigammon_app/screens/history_screen.dart';
 import 'package:aigammon_app/tutor/tutor_service.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
@@ -15,7 +18,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../data/test_database.dart';
 import '../helpers/board_driving.dart';
+
+/// A finished one-move game (White drops Black's double): a real [GameResult]
+/// with a full event log, for seeding the post-match summary tests.
+Game _finishedGame() {
+  final g0 = Game.start(const OpeningRollEvent(whiteDie: 6, blackDie: 1));
+  final g1 = g0.append(MoveEvent(Player.white, g0.state.legalMoves.first));
+  final g2 = g1.append(const DoubleEvent(Player.black));
+  return g2.append(const DropEvent(Player.white));
+}
 
 /// Deterministic dice: a fixed opening and a cycling roll list.
 class ScriptedDiceRoller implements DiceRoller {
@@ -600,6 +613,149 @@ void main() {
     await t.tap(find.widgetWithText(FilledButton, 'Done'));
     await t.pumpAndSettle();
     expect(find.byType(GameScreen), findsNothing);
+  });
+
+  group('post-match "Match summary" link', () {
+    // A vs-AI controller decided by a single game (match over immediately). The
+    // engine is never actually queried in these dialog-only tests.
+    GameController matchOver() => GameController(
+          white: FakeAgent(),
+          black: FakeAgent(),
+          matchLength: 1,
+          diceRoller: DiceRoller(Random(7)),
+        );
+
+    // A 7-point vs-AI controller: the first game ends but the match does not, so
+    // the game-end ("Game over") dialog shows.
+    GameController gameOver() => GameController(
+          white: FakeAgent(),
+          black: FakeAgent(),
+          matchLength: 7,
+          diceRoller: DiceRoller(Random(7)),
+        );
+
+    // Wraps a GameScreen over the in-memory db so a tapped "Match summary" can
+    // resolve its games from the real repository. The persisted match + one
+    // game are seeded first; [matchId] resolves immediately.
+    Widget harness(GameController c, {
+      required int? matchId,
+      required TutorService? tutor,
+      required AppDatabase db,
+    }) =>
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: MaterialApp(
+            home: GameScreen(
+              key: ValueKey(c),
+              controller: c,
+              tutor: tutor,
+              persistedMatchId: matchId == null ? null : Future.value(matchId),
+            ),
+          ),
+        );
+
+    testWidgets('match-end: shows the button when tutor+id present; pushes '
+        'MatchDetailScreen', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final repo = MatchRepository(db);
+      late int matchId;
+      final game = _finishedGame();
+      await t.runAsync(() async {
+        matchId = await repo.startMatch(
+            matchLength: 1, mode: 'online', whiteType: 'human', blackType: 'remote');
+        await repo.recordGame(
+          matchId: matchId,
+          gameNumber: 1,
+          isCrawford: game.state.isCrawfordGame,
+          events: game.events,
+          result: game.state.result!,
+        );
+      });
+
+      final c = matchOver();
+      await t.pumpWidget(harness(c,
+          matchId: matchId, tutor: TutorService(RealRankEngine()), db: db));
+      await t.pumpAndSettle();
+      expect(find.text('Match over'), findsOneWidget);
+
+      // The link is offered.
+      final summary = find.widgetWithText(TextButton, 'Match summary');
+      expect(summary, findsOneWidget);
+
+      await t.runAsync(() async {
+        await t.tap(summary);
+      });
+      // Resolve the id future + gamesFor, then settle the pushed route.
+      for (var i = 0; i < 20; i++) {
+        await t.runAsync(() async =>
+            Future<void>.delayed(const Duration(milliseconds: 10)));
+        await t.pump();
+      }
+      await t.pumpAndSettle();
+
+      expect(find.byType(MatchDetailScreen), findsOneWidget);
+      expect(find.text('Game 1'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('game-end: shows the "Match summary" button (tutor+id present)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final c = gameOver();
+      await t.pumpWidget(harness(c,
+          matchId: 42, tutor: TutorService(RealRankEngine()), db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Game over'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Match summary'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Next game'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('absent when tutor is null (even with a persisted id)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final c = matchOver();
+      await t.pumpWidget(harness(c, matchId: 7, tutor: null, db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Match over'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Match summary'), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('absent when there is no persisted id (even with a tutor)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final c = matchOver();
+      await t.pumpWidget(harness(c,
+          matchId: null, tutor: TutorService(RealRankEngine()), db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Match over'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Match summary'), findsNothing);
+
+      c.disposeController();
+    });
   });
 
   group('pass-device overlay', () {

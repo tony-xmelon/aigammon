@@ -65,13 +65,49 @@ class _MatchTile extends StatelessWidget {
 
 /// The games of one match, in play order, tapping through to the analysis
 /// screen. Games are loaded once via the repository's [MatchRepository.gamesFor].
+///
+/// Reached two ways: from the history list with the [match] row already in hand,
+/// or from the game screen's post-match "Match summary" button with only a
+/// [matchId] (the row is then loaded via [MatchRepository.loadMatch]). Exactly
+/// one of [match] / [matchId] must be provided.
 class MatchDetailScreen extends ConsumerWidget {
-  const MatchDetailScreen({super.key, required this.match});
+  const MatchDetailScreen({super.key, this.match, this.matchId})
+      : assert(match != null || matchId != null,
+            'provide a match row or a matchId');
 
-  final MatchRow match;
+  /// The pre-loaded match row (from the history list), or null when only a
+  /// [matchId] is known (from the post-match summary link).
+  final MatchRow? match;
+
+  /// The match id to load the row for, when [match] is null.
+  final int? matchId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final row = match;
+    if (row != null) return _detail(context, ref, row);
+    final repo = ref.watch(matchRepositoryProvider);
+    return FutureBuilder<MatchRow>(
+      future: repo.loadMatch(matchId!),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Match')),
+            body: Center(child: Text('Failed to load match:\n${snap.error}')),
+          );
+        }
+        if (!snap.hasData) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Match')),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
+        return _detail(context, ref, snap.data!);
+      },
+    );
+  }
+
+  Widget _detail(BuildContext context, WidgetRef ref, MatchRow match) {
     final repo = ref.watch(matchRepositoryProvider);
     return Scaffold(
       appBar: AppBar(title: Text(_scoreLine(match))),
@@ -130,6 +166,7 @@ String _scoreLine(MatchRow m) =>
 String _modeLabel(String mode) => switch (mode) {
       'vsComputer' => 'vs Computer',
       'hotSeat' => 'Two players',
+      'online' => 'Online',
       final other => other,
     };
 

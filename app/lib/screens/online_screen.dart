@@ -8,6 +8,8 @@ import 'package:online_client/online_client.dart';
 
 import '../board/board_view.dart';
 import '../data/app_settings.dart';
+import '../data/match_repository.dart';
+import '../data/persistence_hooks.dart';
 import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
 import '../online/online_match_controller.dart';
@@ -241,11 +243,23 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     required Player localSide,
     required BoardOrientationMode orientation,
   }) async {
+    // Create the local history row for this online match and bind persistence to
+    // it. The local seat is 'human'; the opponent is 'remote'. The insert runs
+    // fire-and-forget; the controller's hooks await the id before recording a
+    // finished game, and the post-match "Match summary" link awaits it too.
+    final repo = ref.read(matchRepositoryProvider);
+    final matchIdFuture = repo.startMatch(
+      matchLength: snapshot.matchLength,
+      mode: 'online',
+      whiteType: localSide == Player.white ? 'human' : 'remote',
+      blackType: localSide == Player.black ? 'human' : 'remote',
+    );
     final controller = OnlineMatchController(
       api: api,
       matchId: matchId,
       localSide: localSide,
       initialSnapshot: snapshot,
+      persistence: RepositoryPersistence(repo, matchIdFuture),
     );
     unawaited(controller.playMatch());
     await controller.ready;
@@ -264,6 +278,7 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          persistedMatchId: matchIdFuture,
           animationDuration: settings.hopDuration,
           interactionOptions: BoardInteractionOptions(
             showHighlights: settings.showHighlights,
