@@ -117,6 +117,10 @@ class GameController extends ChangeNotifier implements MatchController {
   @override
   MatchState get match => _match;
 
+  /// The 1-based number of the current game within the match.
+  @override
+  int get gameNumber => _gameNumber;
+
   /// The current event-sourced game.
   @override
   Game get game => _game;

@@ -90,6 +90,10 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   Game? _game;
   MatchState _match;
 
+  /// The 1-based number of the current game within the match (from the
+  /// authoritative server `gameNo`). `0` until the first event folds.
+  int _gameNumber = 0;
+
   /// The last folded sequence number; events must be contiguous with it.
   int _lastSeq = -1;
 
@@ -146,6 +150,9 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
 
   @override
   MatchState get match => _match;
+
+  @override
+  int get gameNumber => _gameNumber;
 
   /// True once the first opening roll has been folded — i.e. [state] and [game]
   /// are safe to read. The UI must not push the game screen until this is true.
@@ -386,6 +393,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   }
 
   void _applyEvent(RemoteEvent re) {
+    _gameNumber = re.gameNo;
     try {
       _fold(re);
     } on StateError {
@@ -453,6 +461,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
       blackScore: snap.blackScore,
       crawfordPlayed: snap.crawfordPlayed,
     );
+    _gameNumber = snap.gameNo;
     _buffer = [];
     _awaitingNextGame = false;
     _lastSeq = events.isEmpty ? -1 : events.last.seq;

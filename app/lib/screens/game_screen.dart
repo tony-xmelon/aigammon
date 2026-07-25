@@ -150,16 +150,19 @@ class _GameScreenState extends State<GameScreen> {
   /// be detected (and a new game — a shorter event list — resets the tutor).
   late int _lastEventCount = _c.game.events.length;
 
-  /// The current post-move assessment chip (HUMAN moves only), or `null`. Each
-  /// new human move replaces it; it is dismissible and cleared on game end.
-  MoveAssessment? _chip;
+  /// Post-move assessments for HUMAN moves, keyed by the source [MoveEvent]'s
+  /// index in the event log (the same index [RecordLine.eventIndex] carries).
+  /// The latest entry drives the collapsed history strip; every entry enriches
+  /// its row in the expanded sheet. Cleared when a new game begins.
+  final Map<int, MoveAssessment> _assessmentsByEventIndex = {};
 
-  /// Whether the chip is expanded to reveal the best play.
-  bool _chipExpanded = false;
+  /// Event indices whose expanded-sheet row has its best-move line revealed
+  /// (tap-to-reveal). Cleared when a new game begins.
+  final Set<int> _revealedBest = {};
 
-  /// Monotonic token guarding the async [TutorService.assess]: a resolved future
-  /// is applied only if it is still the latest request (and the screen mounted).
-  int _assessSeq = 0;
+  /// Bumped when a new game starts, so an in-flight [TutorService.assess] from
+  /// the previous game is discarded rather than written into a fresh log's map.
+  int _gameGeneration = 0;
 
   /// Cube advice for the human's currently-open pre-roll gate, or `null`. Keyed
   /// by [_cubeAdviceKey] so it is computed once per gate, not per rebuild.
@@ -377,23 +380,21 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   /// Detects a new [MoveEvent] in the current game's event log and, when the
-  /// mover is a human, kicks off an async assessment whose result becomes the
-  /// chip. A shorter event list means a new game began: reset and clear.
+  /// mover is a human, kicks off an async assessment stored under the move's
+  /// event index (see [_assessmentsByEventIndex]). A shorter event list means a
+  /// new game began: reset and clear the accumulated assessments.
   void _syncAssessment() {
     final events = _c.game.events;
     final len = events.length;
 
     if (len < _lastEventCount) {
-      // A new game started (the event log reset). Clear the previous chip.
+      // A new game started (the event log reset). Discard the old game's
+      // assessments and abandon any in-flight ones.
       _lastEventCount = len;
-      _chip = null;
-      _chipExpanded = false;
-      _assessSeq++; // abandon any in-flight assessment from the old game
+      _assessmentsByEventIndex.clear();
+      _revealedBest.clear();
+      _gameGeneration++;
       return;
-    }
-    if (_c.state.phase == GamePhase.gameOver) {
-      _chip = null;
-      _chipExpanded = false;
     }
     if (len == _lastEventCount) return;
 
@@ -407,21 +408,19 @@ class _GameScreenState extends State<GameScreen> {
         events.sublist(0, i),
         isCrawfordGame: _c.state.isCrawfordGame,
       ).state;
-      _fireAssessment(before, event.move);
+      _fireAssessment(i, before, event.move);
     }
     _lastEventCount = len;
   }
 
-  void _fireAssessment(GameState before, Move played) {
-    final seq = ++_assessSeq;
-    _chip = null; // show a fresh (empty) slot until the future resolves
-    _chipExpanded = false;
+  /// Assesses a human [played] move (whose event sits at [eventIndex]) and, on
+  /// resolution, files it under that index — unless the game has since reset
+  /// (a [_gameGeneration] mismatch) or the screen unmounted.
+  void _fireAssessment(int eventIndex, GameState before, Move played) {
+    final gen = _gameGeneration;
     unawaited(_tutor!.assess(before, played).then((assessment) {
-      if (!mounted || seq != _assessSeq) return;
-      setState(() {
-        _chip = assessment;
-        _chipExpanded = false;
-      });
+      if (!mounted || gen != _gameGeneration) return;
+      setState(() => _assessmentsByEventIndex[eventIndex] = assessment);
     }));
   }
 
@@ -589,7 +588,6 @@ class _GameScreenState extends State<GameScreen> {
                   showScoring: widget.showScoring,
                   onGameRecord: _openRecord,
                 ),
-                if (_chip != null) _tutorChip(_chip!),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(8),
@@ -613,6 +611,7 @@ class _GameScreenState extends State<GameScreen> {
                     ),
                   ),
                 ),
+                _historyStrip(),
                 _bottomRegion(moveSide),
               ],
             ),
@@ -880,54 +879,81 @@ class _GameScreenState extends State<GameScreen> {
     return "${_playerName(_c.state.turn)}'s turn";
   }
 
-  /// The dismissible post-move assessment chip: a coloured mark, the equity
-  /// loss, and (tap to expand) the best play. HUMAN moves only.
-  Widget _tutorChip(MoveAssessment a) {
-    final (color, label) = _markStyle(a.mark);
-    final loss = a.equityLoss;
-    final lossText = loss >= 0.001 ? ' −${loss.toStringAsFixed(3)}' : '';
-    final showBest = _chipExpanded && a.best.checkerMoves.isNotEmpty;
+  /// The always-present collapsed history strip. Fixed 32px height, rendered
+  /// between the board and the action bar so the board never reflows (F6). It
+  /// shows the LATEST record line (ellipsized), that line's assessment score
+  /// when its move was assessed (coloured dot + loss), and a chevron. Tapping
+  /// anywhere expands the full scrollable record sheet ([_recordPanel]).
+  Widget _historyStrip() {
+    final scheme = Theme.of(context).colorScheme;
+    final lines = buildGameRecord(_c.game.events);
+    final latest = lines.isEmpty ? null : lines.last;
+    final assessment = (latest == null || latest.eventIndex == null)
+        ? null
+        : _assessmentsByEventIndex[latest.eventIndex];
     return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: InkWell(
-                onTap: () => setState(() => _chipExpanded = !_chipExpanded),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    children: [
-                      Icon(Icons.circle, size: 12, color: color),
-                      const SizedBox(width: 8),
-                      Text('$label$lossText',
-                          style: TextStyle(
-                              color: color, fontWeight: FontWeight.w600)),
-                      if (showBest) ...[
-                        const SizedBox(width: 12),
-                        Flexible(
-                          child: Text('Best: ${a.best}',
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ],
+      color: scheme.surfaceContainerHighest,
+      child: InkWell(
+        onTap: _openRecord,
+        child: SizedBox(
+          key: const ValueKey('historyStrip'),
+          height: 32,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    latest?.text ?? 'No moves yet',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: latest == null
+                          ? scheme.onSurfaceVariant
+                          : scheme.onSurface,
+                    ),
                   ),
                 ),
-              ),
+                if (assessment != null) ...[
+                  const SizedBox(width: 8),
+                  _assessmentMark(assessment),
+                ],
+                const SizedBox(width: 4),
+                Icon(Icons.expand_less,
+                    size: 18, color: scheme.onSurfaceVariant),
+              ],
             ),
-            IconButton(
-              tooltip: 'Dismiss',
-              icon: const Icon(Icons.close, size: 18),
-              onPressed: () => setState(() {
-                _chip = null;
-                _chipExpanded = false;
-              }),
-            ),
-          ],
+          ),
         ),
       ),
+    );
+  }
+
+  /// The compact assessment indicator: a mark-coloured dot and, when the move
+  /// gave up measurable equity, the loss — e.g. a red dot + "−0.061". A best
+  /// play (loss below the display threshold) shows the dot alone.
+  Widget _assessmentMark(MoveAssessment a) {
+    final (color, _) = _markStyle(a.mark);
+    final loss = a.equityLoss;
+    final lossText = loss >= 0.001 ? '−${loss.toStringAsFixed(3)}' : '';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.circle, size: 10, color: color),
+        if (lossText.isNotEmpty) ...[
+          const SizedBox(width: 4),
+          Text(
+            lossText,
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -1069,10 +1095,15 @@ class _GameScreenState extends State<GameScreen> {
     _closeHint();
   }
 
-  /// The in-tree move-history bottom panel: a scrollable list of the CURRENT
-  /// game's record lines (see [buildGameRecord]), each with an actor-coloured
-  /// leading dot. Height is ~55% of the screen. Auto-scrolls to the newest line
-  /// on open and whenever a fresh event appends while it is open.
+  /// The in-tree move-history bottom sheet (the expanded form of
+  /// [_historyStrip]): a scrollable list of the CURRENT game's record lines
+  /// (see [buildGameRecord]), each with an actor-coloured leading dot and, for
+  /// assessed human moves, a trailing mark + loss with a tap-to-reveal best
+  /// line. It floats OVER the board as a scrimmed overlay layer of the screen
+  /// [Stack], so opening it never reflows the board (F6). Height is ~40% of the
+  /// screen. Auto-scrolls to the newest line on open and whenever a fresh event
+  /// appends while it is open; a manual scroll-up is respected until the next
+  /// event. Both the ⋮ "Game record" entry and the strip route here.
   Widget _recordPanel() {
     final lines = buildGameRecord(_c.game.events);
     final count = _c.game.events.length;
@@ -1085,7 +1116,7 @@ class _GameScreenState extends State<GameScreen> {
         }
       });
     }
-    final height = MediaQuery.of(context).size.height * 0.55;
+    final height = MediaQuery.of(context).size.height * 0.4;
     return Stack(
       children: [
         Positioned.fill(
@@ -1111,8 +1142,28 @@ class _GameScreenState extends State<GameScreen> {
                       Row(
                         children: [
                           Expanded(
-                            child: Text('Game record',
-                                style: Theme.of(context).textTheme.titleMedium),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('Game record',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _recordScoreContext(),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                ),
+                              ],
+                            ),
                           ),
                           IconButton(
                             tooltip: 'Close',
@@ -1145,12 +1196,28 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
+  /// The sheet's score context: "Game 3 · W 2–1 B · to 5".
+  String _recordScoreContext() {
+    final m = _c.match;
+    return 'Game ${_c.gameNumber} · W ${m.whiteScore}–${m.blackScore} B · '
+        'to ${m.matchLength}';
+  }
+
+  /// One record row. Assessed HUMAN moves (an entry in
+  /// [_assessmentsByEventIndex] for [RecordLine.eventIndex]) get a trailing
+  /// mark + loss and become tappable: a tap toggles a one-line "Best: …" reveal
+  /// beneath the row. Unassessed lines render plainly.
   Widget _recordRow(RecordLine line) {
     final mono = Theme.of(context)
         .textTheme
         .bodyMedium
         ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
-    return Padding(
+    final index = line.eventIndex;
+    final assessment =
+        index == null ? null : _assessmentsByEventIndex[index];
+    final revealed = index != null && _revealedBest.contains(index);
+
+    final row = Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1161,6 +1228,41 @@ class _GameScreenState extends State<GameScreen> {
           ),
           const SizedBox(width: 10),
           Expanded(child: Text(line.text, style: mono)),
+          if (assessment != null) ...[
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: _assessmentMark(assessment),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (assessment == null) return row;
+
+    // Assessed: tappable, with a tap-to-reveal best-move line under the row.
+    final best = assessment.best;
+    return InkWell(
+      onTap: () => setState(() {
+        if (revealed) {
+          _revealedBest.remove(index);
+        } else {
+          _revealedBest.add(index!);
+        }
+      }),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          row,
+          if (revealed && best.checkerMoves.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 20, bottom: 4),
+              child: Text('Best: $best',
+                  style: mono?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  )),
+            ),
         ],
       ),
     );
