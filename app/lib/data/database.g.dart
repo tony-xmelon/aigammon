@@ -1284,6 +1284,65 @@ class $SettingsTable extends Settings
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _showHighlightsMeta = const VerificationMeta(
+    'showHighlights',
+  );
+  @override
+  late final GeneratedColumn<bool> showHighlights = GeneratedColumn<bool>(
+    'show_highlights',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("show_highlights" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _enableDragMeta = const VerificationMeta(
+    'enableDrag',
+  );
+  @override
+  late final GeneratedColumn<bool> enableDrag = GeneratedColumn<bool>(
+    'enable_drag',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("enable_drag" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _enableCombinedTapsMeta =
+      const VerificationMeta('enableCombinedTaps');
+  @override
+  late final GeneratedColumn<bool> enableCombinedTaps = GeneratedColumn<bool>(
+    'enable_combined_taps',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("enable_combined_taps" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _showScoringMeta = const VerificationMeta(
+    'showScoring',
+  );
+  @override
+  late final GeneratedColumn<bool> showScoring = GeneratedColumn<bool>(
+    'show_scoring',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("show_scoring" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1292,6 +1351,10 @@ class $SettingsTable extends Settings
     defaultMatchLength,
     defaultDifficulty,
     tutorOverride,
+    showHighlights,
+    enableDrag,
+    enableCombinedTaps,
+    showScoring,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1350,6 +1413,39 @@ class $SettingsTable extends Settings
         ),
       );
     }
+    if (data.containsKey('show_highlights')) {
+      context.handle(
+        _showHighlightsMeta,
+        showHighlights.isAcceptableOrUnknown(
+          data['show_highlights']!,
+          _showHighlightsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('enable_drag')) {
+      context.handle(
+        _enableDragMeta,
+        enableDrag.isAcceptableOrUnknown(data['enable_drag']!, _enableDragMeta),
+      );
+    }
+    if (data.containsKey('enable_combined_taps')) {
+      context.handle(
+        _enableCombinedTapsMeta,
+        enableCombinedTaps.isAcceptableOrUnknown(
+          data['enable_combined_taps']!,
+          _enableCombinedTapsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('show_scoring')) {
+      context.handle(
+        _showScoringMeta,
+        showScoring.isAcceptableOrUnknown(
+          data['show_scoring']!,
+          _showScoringMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1383,6 +1479,22 @@ class $SettingsTable extends Settings
         DriftSqlType.string,
         data['${effectivePrefix}tutor_override'],
       ),
+      showHighlights: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}show_highlights'],
+      )!,
+      enableDrag: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}enable_drag'],
+      )!,
+      enableCombinedTaps: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}enable_combined_taps'],
+      )!,
+      showScoring: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}show_scoring'],
+      )!,
     );
   }
 
@@ -1403,6 +1515,20 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
 
   /// 'on' | 'off' | null (null = per-mode tutor default).
   final String? tutorOverride;
+
+  /// Gameplay option toggles (schema v3). Everything besides the base tap-to-move
+  /// play is optional (see Plan 7 Task 5).
+  /// Whether the board paints selection rings and destination highlights.
+  final bool showHighlights;
+
+  /// Whether drag-to-move is enabled (off by default: tap-to-move is the base).
+  final bool enableDrag;
+
+  /// Whether combined (multi-hop, same-checker) landing taps are enabled.
+  final bool enableCombinedTaps;
+
+  /// Whether the HUD shows the running match score.
+  final bool showScoring;
   const SettingsRow({
     required this.id,
     required this.themeMode,
@@ -1410,6 +1536,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     required this.defaultMatchLength,
     required this.defaultDifficulty,
     this.tutorOverride,
+    required this.showHighlights,
+    required this.enableDrag,
+    required this.enableCombinedTaps,
+    required this.showScoring,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1422,6 +1552,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     if (!nullToAbsent || tutorOverride != null) {
       map['tutor_override'] = Variable<String>(tutorOverride);
     }
+    map['show_highlights'] = Variable<bool>(showHighlights);
+    map['enable_drag'] = Variable<bool>(enableDrag);
+    map['enable_combined_taps'] = Variable<bool>(enableCombinedTaps);
+    map['show_scoring'] = Variable<bool>(showScoring);
     return map;
   }
 
@@ -1435,6 +1569,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       tutorOverride: tutorOverride == null && nullToAbsent
           ? const Value.absent()
           : Value(tutorOverride),
+      showHighlights: Value(showHighlights),
+      enableDrag: Value(enableDrag),
+      enableCombinedTaps: Value(enableCombinedTaps),
+      showScoring: Value(showScoring),
     );
   }
 
@@ -1450,6 +1588,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       defaultMatchLength: serializer.fromJson<int>(json['defaultMatchLength']),
       defaultDifficulty: serializer.fromJson<String>(json['defaultDifficulty']),
       tutorOverride: serializer.fromJson<String?>(json['tutorOverride']),
+      showHighlights: serializer.fromJson<bool>(json['showHighlights']),
+      enableDrag: serializer.fromJson<bool>(json['enableDrag']),
+      enableCombinedTaps: serializer.fromJson<bool>(json['enableCombinedTaps']),
+      showScoring: serializer.fromJson<bool>(json['showScoring']),
     );
   }
   @override
@@ -1462,6 +1604,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       'defaultMatchLength': serializer.toJson<int>(defaultMatchLength),
       'defaultDifficulty': serializer.toJson<String>(defaultDifficulty),
       'tutorOverride': serializer.toJson<String?>(tutorOverride),
+      'showHighlights': serializer.toJson<bool>(showHighlights),
+      'enableDrag': serializer.toJson<bool>(enableDrag),
+      'enableCombinedTaps': serializer.toJson<bool>(enableCombinedTaps),
+      'showScoring': serializer.toJson<bool>(showScoring),
     };
   }
 
@@ -1472,6 +1618,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     int? defaultMatchLength,
     String? defaultDifficulty,
     Value<String?> tutorOverride = const Value.absent(),
+    bool? showHighlights,
+    bool? enableDrag,
+    bool? enableCombinedTaps,
+    bool? showScoring,
   }) => SettingsRow(
     id: id ?? this.id,
     themeMode: themeMode ?? this.themeMode,
@@ -1481,6 +1631,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     tutorOverride: tutorOverride.present
         ? tutorOverride.value
         : this.tutorOverride,
+    showHighlights: showHighlights ?? this.showHighlights,
+    enableDrag: enableDrag ?? this.enableDrag,
+    enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
+    showScoring: showScoring ?? this.showScoring,
   );
   SettingsRow copyWithCompanion(SettingsCompanion data) {
     return SettingsRow(
@@ -1498,6 +1652,18 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       tutorOverride: data.tutorOverride.present
           ? data.tutorOverride.value
           : this.tutorOverride,
+      showHighlights: data.showHighlights.present
+          ? data.showHighlights.value
+          : this.showHighlights,
+      enableDrag: data.enableDrag.present
+          ? data.enableDrag.value
+          : this.enableDrag,
+      enableCombinedTaps: data.enableCombinedTaps.present
+          ? data.enableCombinedTaps.value
+          : this.enableCombinedTaps,
+      showScoring: data.showScoring.present
+          ? data.showScoring.value
+          : this.showScoring,
     );
   }
 
@@ -1509,7 +1675,11 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           ..write('animationSpeed: $animationSpeed, ')
           ..write('defaultMatchLength: $defaultMatchLength, ')
           ..write('defaultDifficulty: $defaultDifficulty, ')
-          ..write('tutorOverride: $tutorOverride')
+          ..write('tutorOverride: $tutorOverride, ')
+          ..write('showHighlights: $showHighlights, ')
+          ..write('enableDrag: $enableDrag, ')
+          ..write('enableCombinedTaps: $enableCombinedTaps, ')
+          ..write('showScoring: $showScoring')
           ..write(')'))
         .toString();
   }
@@ -1522,6 +1692,10 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     defaultMatchLength,
     defaultDifficulty,
     tutorOverride,
+    showHighlights,
+    enableDrag,
+    enableCombinedTaps,
+    showScoring,
   );
   @override
   bool operator ==(Object other) =>
@@ -1532,7 +1706,11 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           other.animationSpeed == this.animationSpeed &&
           other.defaultMatchLength == this.defaultMatchLength &&
           other.defaultDifficulty == this.defaultDifficulty &&
-          other.tutorOverride == this.tutorOverride);
+          other.tutorOverride == this.tutorOverride &&
+          other.showHighlights == this.showHighlights &&
+          other.enableDrag == this.enableDrag &&
+          other.enableCombinedTaps == this.enableCombinedTaps &&
+          other.showScoring == this.showScoring);
 }
 
 class SettingsCompanion extends UpdateCompanion<SettingsRow> {
@@ -1542,6 +1720,10 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
   final Value<int> defaultMatchLength;
   final Value<String> defaultDifficulty;
   final Value<String?> tutorOverride;
+  final Value<bool> showHighlights;
+  final Value<bool> enableDrag;
+  final Value<bool> enableCombinedTaps;
+  final Value<bool> showScoring;
   const SettingsCompanion({
     this.id = const Value.absent(),
     this.themeMode = const Value.absent(),
@@ -1549,6 +1731,10 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.defaultMatchLength = const Value.absent(),
     this.defaultDifficulty = const Value.absent(),
     this.tutorOverride = const Value.absent(),
+    this.showHighlights = const Value.absent(),
+    this.enableDrag = const Value.absent(),
+    this.enableCombinedTaps = const Value.absent(),
+    this.showScoring = const Value.absent(),
   });
   SettingsCompanion.insert({
     this.id = const Value.absent(),
@@ -1557,6 +1743,10 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.defaultMatchLength = const Value.absent(),
     this.defaultDifficulty = const Value.absent(),
     this.tutorOverride = const Value.absent(),
+    this.showHighlights = const Value.absent(),
+    this.enableDrag = const Value.absent(),
+    this.enableCombinedTaps = const Value.absent(),
+    this.showScoring = const Value.absent(),
   });
   static Insertable<SettingsRow> custom({
     Expression<int>? id,
@@ -1565,6 +1755,10 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Expression<int>? defaultMatchLength,
     Expression<String>? defaultDifficulty,
     Expression<String>? tutorOverride,
+    Expression<bool>? showHighlights,
+    Expression<bool>? enableDrag,
+    Expression<bool>? enableCombinedTaps,
+    Expression<bool>? showScoring,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1574,6 +1768,11 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
         'default_match_length': defaultMatchLength,
       if (defaultDifficulty != null) 'default_difficulty': defaultDifficulty,
       if (tutorOverride != null) 'tutor_override': tutorOverride,
+      if (showHighlights != null) 'show_highlights': showHighlights,
+      if (enableDrag != null) 'enable_drag': enableDrag,
+      if (enableCombinedTaps != null)
+        'enable_combined_taps': enableCombinedTaps,
+      if (showScoring != null) 'show_scoring': showScoring,
     });
   }
 
@@ -1584,6 +1783,10 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Value<int>? defaultMatchLength,
     Value<String>? defaultDifficulty,
     Value<String?>? tutorOverride,
+    Value<bool>? showHighlights,
+    Value<bool>? enableDrag,
+    Value<bool>? enableCombinedTaps,
+    Value<bool>? showScoring,
   }) {
     return SettingsCompanion(
       id: id ?? this.id,
@@ -1592,6 +1795,10 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
       defaultMatchLength: defaultMatchLength ?? this.defaultMatchLength,
       defaultDifficulty: defaultDifficulty ?? this.defaultDifficulty,
       tutorOverride: tutorOverride ?? this.tutorOverride,
+      showHighlights: showHighlights ?? this.showHighlights,
+      enableDrag: enableDrag ?? this.enableDrag,
+      enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
+      showScoring: showScoring ?? this.showScoring,
     );
   }
 
@@ -1616,6 +1823,18 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     if (tutorOverride.present) {
       map['tutor_override'] = Variable<String>(tutorOverride.value);
     }
+    if (showHighlights.present) {
+      map['show_highlights'] = Variable<bool>(showHighlights.value);
+    }
+    if (enableDrag.present) {
+      map['enable_drag'] = Variable<bool>(enableDrag.value);
+    }
+    if (enableCombinedTaps.present) {
+      map['enable_combined_taps'] = Variable<bool>(enableCombinedTaps.value);
+    }
+    if (showScoring.present) {
+      map['show_scoring'] = Variable<bool>(showScoring.value);
+    }
     return map;
   }
 
@@ -1627,7 +1846,11 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
           ..write('animationSpeed: $animationSpeed, ')
           ..write('defaultMatchLength: $defaultMatchLength, ')
           ..write('defaultDifficulty: $defaultDifficulty, ')
-          ..write('tutorOverride: $tutorOverride')
+          ..write('tutorOverride: $tutorOverride, ')
+          ..write('showHighlights: $showHighlights, ')
+          ..write('enableDrag: $enableDrag, ')
+          ..write('enableCombinedTaps: $enableCombinedTaps, ')
+          ..write('showScoring: $showScoring')
           ..write(')'))
         .toString();
   }
@@ -2456,6 +2679,10 @@ typedef $$SettingsTableCreateCompanionBuilder =
       Value<int> defaultMatchLength,
       Value<String> defaultDifficulty,
       Value<String?> tutorOverride,
+      Value<bool> showHighlights,
+      Value<bool> enableDrag,
+      Value<bool> enableCombinedTaps,
+      Value<bool> showScoring,
     });
 typedef $$SettingsTableUpdateCompanionBuilder =
     SettingsCompanion Function({
@@ -2465,6 +2692,10 @@ typedef $$SettingsTableUpdateCompanionBuilder =
       Value<int> defaultMatchLength,
       Value<String> defaultDifficulty,
       Value<String?> tutorOverride,
+      Value<bool> showHighlights,
+      Value<bool> enableDrag,
+      Value<bool> enableCombinedTaps,
+      Value<bool> showScoring,
     });
 
 class $$SettingsTableFilterComposer
@@ -2503,6 +2734,26 @@ class $$SettingsTableFilterComposer
 
   ColumnFilters<String> get tutorOverride => $composableBuilder(
     column: $table.tutorOverride,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get showHighlights => $composableBuilder(
+    column: $table.showHighlights,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get enableDrag => $composableBuilder(
+    column: $table.enableDrag,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get enableCombinedTaps => $composableBuilder(
+    column: $table.enableCombinedTaps,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get showScoring => $composableBuilder(
+    column: $table.showScoring,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2545,6 +2796,26 @@ class $$SettingsTableOrderingComposer
     column: $table.tutorOverride,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get showHighlights => $composableBuilder(
+    column: $table.showHighlights,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get enableDrag => $composableBuilder(
+    column: $table.enableDrag,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get enableCombinedTaps => $composableBuilder(
+    column: $table.enableCombinedTaps,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get showScoring => $composableBuilder(
+    column: $table.showScoring,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$SettingsTableAnnotationComposer
@@ -2579,6 +2850,26 @@ class $$SettingsTableAnnotationComposer
 
   GeneratedColumn<String> get tutorOverride => $composableBuilder(
     column: $table.tutorOverride,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get showHighlights => $composableBuilder(
+    column: $table.showHighlights,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get enableDrag => $composableBuilder(
+    column: $table.enableDrag,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get enableCombinedTaps => $composableBuilder(
+    column: $table.enableCombinedTaps,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get showScoring => $composableBuilder(
+    column: $table.showScoring,
     builder: (column) => column,
   );
 }
@@ -2620,6 +2911,10 @@ class $$SettingsTableTableManager
                 Value<int> defaultMatchLength = const Value.absent(),
                 Value<String> defaultDifficulty = const Value.absent(),
                 Value<String?> tutorOverride = const Value.absent(),
+                Value<bool> showHighlights = const Value.absent(),
+                Value<bool> enableDrag = const Value.absent(),
+                Value<bool> enableCombinedTaps = const Value.absent(),
+                Value<bool> showScoring = const Value.absent(),
               }) => SettingsCompanion(
                 id: id,
                 themeMode: themeMode,
@@ -2627,6 +2922,10 @@ class $$SettingsTableTableManager
                 defaultMatchLength: defaultMatchLength,
                 defaultDifficulty: defaultDifficulty,
                 tutorOverride: tutorOverride,
+                showHighlights: showHighlights,
+                enableDrag: enableDrag,
+                enableCombinedTaps: enableCombinedTaps,
+                showScoring: showScoring,
               ),
           createCompanionCallback:
               ({
@@ -2636,6 +2935,10 @@ class $$SettingsTableTableManager
                 Value<int> defaultMatchLength = const Value.absent(),
                 Value<String> defaultDifficulty = const Value.absent(),
                 Value<String?> tutorOverride = const Value.absent(),
+                Value<bool> showHighlights = const Value.absent(),
+                Value<bool> enableDrag = const Value.absent(),
+                Value<bool> enableCombinedTaps = const Value.absent(),
+                Value<bool> showScoring = const Value.absent(),
               }) => SettingsCompanion.insert(
                 id: id,
                 themeMode: themeMode,
@@ -2643,6 +2946,10 @@ class $$SettingsTableTableManager
                 defaultMatchLength: defaultMatchLength,
                 defaultDifficulty: defaultDifficulty,
                 tutorOverride: tutorOverride,
+                showHighlights: showHighlights,
+                enableDrag: enableDrag,
+                enableCombinedTaps: enableCombinedTaps,
+                showScoring: showScoring,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

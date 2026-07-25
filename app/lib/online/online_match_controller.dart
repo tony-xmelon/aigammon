@@ -184,6 +184,11 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   @override
   Object? get persistenceError => null;
 
+  /// Always `false`: the doubling cube is server-mediated online, so the
+  /// cubeless option is offline-only (see [MatchController.cubeless]).
+  @override
+  bool get cubeless => false;
+
   @override
   bool get matchOver => _match.isMatchOver;
 

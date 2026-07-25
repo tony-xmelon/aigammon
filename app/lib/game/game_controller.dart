@@ -58,6 +58,7 @@ class GameController extends ChangeNotifier implements MatchController {
     required int matchLength,
     DiceRoller? diceRoller,
     this.persistence = const NoopPersistence(),
+    this.cubeless = false,
   })  : _diceRoller = diceRoller ?? DiceRoller(),
         _match = MatchState(matchLength: matchLength) {
     _startNewGame();
@@ -72,6 +73,12 @@ class GameController extends ChangeNotifier implements MatchController {
   /// Persistence seam invoked as the match progresses. Defaults to a no-op so
   /// play works with persistence off; failures here never stop the loop.
   final MatchPersistence persistence;
+
+  /// When true the match is played without the doubling cube: [_doublingLegal]
+  /// is always false, so no AI double prompt is ever raised and a human's
+  /// [offerDouble] throws.
+  @override
+  final bool cubeless;
 
   late Game _game;
   MatchState _match;
@@ -330,6 +337,7 @@ class GameController extends ChangeNotifier implements MatchController {
   }
 
   bool _doublingLegal(GameState s) =>
+      !cubeless &&
       s.phase == GamePhase.awaitingRoll &&
       !s.isCrawfordGame &&
       (s.cube.owner == null || s.cube.owner == s.turn);

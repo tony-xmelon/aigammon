@@ -59,6 +59,60 @@ void main() {
     expect(find.text('Default match length'), findsOneWidget);
     expect(find.text('Default difficulty'), findsOneWidget);
     expect(find.text('Tutor mode default'), findsOneWidget);
+
+    // The Gameplay section with its four option toggles.
+    expect(find.text('Gameplay'), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, 'Move highlights'),
+        findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, 'Drag to move'), findsOneWidget);
+    expect(
+        find.widgetWithText(SwitchListTile, 'Combined moves'), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, 'Show score'), findsOneWidget);
+  });
+
+  testWidgets('gameplay toggles reflect settings and autosave on change',
+      (t) async {
+    // A tall surface so the Gameplay section (bottom of the scroll view) is on
+    // screen and its switches are tappable.
+    await t.binding.setSurfaceSize(const Size(600, 1600));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(_app());
+    _feed.add(AppSettings.defaults);
+    await t.pumpAndSettle();
+
+    // Defaults: highlights on, drag off, combined on, scoring on.
+    bool switchValue(String title) => t
+        .widget<SwitchListTile>(find.widgetWithText(SwitchListTile, title))
+        .value;
+    expect(switchValue('Move highlights'), isTrue);
+    expect(switchValue('Drag to move'), isFalse);
+    expect(switchValue('Combined moves'), isTrue);
+    expect(switchValue('Show score'), isTrue);
+
+    // Toggle drag ON — it autosaves.
+    final drag = find.widgetWithText(SwitchListTile, 'Drag to move');
+    await t.ensureVisible(drag);
+    await t.tap(drag);
+    await _refresh(t);
+    expect((await _persisted(t)).enableDrag, isTrue,
+        reason: 'no save button — the switch writes on toggle');
+    expect(switchValue('Drag to move'), isTrue);
+
+    // Toggle highlights OFF — independent, does not clobber the drag edit.
+    final hl = find.widgetWithText(SwitchListTile, 'Move highlights');
+    await t.ensureVisible(hl);
+    await t.tap(hl);
+    await _refresh(t);
+    final saved = await _persisted(t);
+    expect(saved.showHighlights, isFalse);
+    expect(saved.enableDrag, isTrue, reason: 'earlier edit preserved');
+
+    // Toggle scoring OFF too.
+    final score = find.widgetWithText(SwitchListTile, 'Show score');
+    await t.ensureVisible(score);
+    await t.tap(score);
+    await _refresh(t);
+    expect((await _persisted(t)).showScoring, isFalse);
   });
 
   testWidgets('every selector hides the selected checkmark', (t) async {

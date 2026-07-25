@@ -1,5 +1,8 @@
 import 'dart:math';
 
+import 'package:aigammon_app/board/board_view.dart';
+import 'package:aigammon_app/data/app_settings.dart';
+import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
@@ -8,6 +11,7 @@ import 'package:aigammon_app/tutor/tutor_service.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../helpers/board_driving.dart';
@@ -200,6 +204,35 @@ Widget _harnessOriented(GameController c, BoardOrientationMode mode) =>
     MaterialApp(
       home: GameScreen(key: ValueKey(c), controller: c, orientation: mode),
     );
+
+/// Mounts a [GameScreen] whose interaction options + scoring are derived from
+/// the (overridable) [settingsProvider] — exactly as the new-match / online
+/// screens wire them in production. Lets a test override the provider and probe
+/// that the settings reach the [BoardView] / HUD.
+Widget _settingsHarness(GameController c, AppSettings settings) => ProviderScope(
+      overrides: [
+        settingsProvider.overrideWith((ref) => Stream.value(settings)),
+      ],
+      child: MaterialApp(
+        home: Consumer(builder: (context, ref, _) {
+          final s = ref.watch(settingsProvider).valueOrNull ?? settings;
+          return GameScreen(
+            key: ValueKey(c),
+            controller: c,
+            interactionOptions: BoardInteractionOptions(
+              showHighlights: s.showHighlights,
+              enableDrag: s.enableDrag,
+              enableCombinedTaps: s.enableCombinedTaps,
+            ),
+            showScoring: s.showScoring,
+          );
+        }),
+      ),
+    );
+
+/// The [BoardView] in the tree.
+BoardView _boardViewOf(WidgetTester t) =>
+    t.widget<BoardView>(find.byType(BoardView));
 
 // pumpUntil, boardPainterOf, tapBoardPoint, isButtonEnabled, and commitFirstMove
 // come from the shared board-driving helpers (test/helpers/board_driving.dart),
@@ -945,5 +978,139 @@ void main() {
         reason: 'identical-state rebuild kept the entered hop');
 
     c.disposeController();
+  });
+
+  group('gameplay options', () {
+    GameController preRoll() => GameController(
+          white: LocalHumanAgent(),
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+
+    testWidgets('drag/combined wired from settings reach the BoardView',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = preRoll();
+
+      // Non-default gameplay options: highlights off, drag on, combined off.
+      const settings = AppSettings(
+        themeMode: ThemeMode.system,
+        animationSpeed: AnimationSpeed.normal,
+        defaultMatchLength: 5,
+        defaultDifficulty: Difficulty.medium,
+        tutorOverride: null,
+        showHighlights: false,
+        enableDrag: true,
+        enableCombinedTaps: false,
+      );
+      await t.pumpWidget(_settingsHarness(c, settings));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final opts = _boardViewOf(t).interactionOptions;
+      expect(opts.showHighlights, isFalse);
+      expect(opts.enableDrag, isTrue);
+      expect(opts.enableCombinedTaps, isFalse,
+          reason: 'settings toggles reach the board verbatim');
+
+      c.disposeController();
+    });
+
+    testWidgets('showScoring false hides the HUD score segment', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = preRoll();
+
+      await t.pumpWidget(MaterialApp(
+        home: GameScreen(key: ValueKey(c), controller: c, showScoring: false),
+      ));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // The compact score line ("… to 5") is gone; the rest of the header stays.
+      expect(find.textContaining('to 5'), findsNothing,
+          reason: 'the score segment is hidden');
+      expect(find.widgetWithText(OutlinedButton, 'Double'), findsOneWidget,
+          reason: 'the rest of the header is unaffected');
+
+      c.disposeController();
+    });
+
+    testWidgets('showScoring true (default) shows the HUD score', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = preRoll();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      expect(find.textContaining('to 5'), findsOneWidget);
+      c.disposeController();
+    });
+
+    testWidgets('cubeless match: cube chip and Double button are hidden',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        cubeless: true,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      expect(find.widgetWithText(OutlinedButton, 'Double'), findsNothing,
+          reason: 'no Double button in a cubeless match');
+      expect(find.textContaining('×'), findsNothing,
+          reason: 'the cube chip is hidden in a cubeless match');
+
+      c.disposeController();
+    });
+
+    testWidgets('non-cubeless match (default): cube chip and Double present',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = preRoll();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      expect(find.widgetWithText(OutlinedButton, 'Double'), findsOneWidget);
+      expect(find.textContaining('×'), findsOneWidget,
+          reason: 'the cube chip shows ×1');
+      c.disposeController();
+    });
+
+    testWidgets('cubeless match: a doubling AI never gets to offer a double',
+        (t) async {
+      // Black (AI) wants to double every chance it gets, but the cube is off.
+      final human = LocalHumanAgent();
+      final ai = FakeAgent(doubles: true);
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        cubeless: true,
+        // White moves first; Black then reaches its pre-roll (would double).
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+
+      // Drive White's opening move so Black reaches its pre-roll gate.
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+
+      // Let the loop run through Black's whole turn (its pre-roll — where a
+      // doubling AI would double — then its move) until play returns to White's
+      // pre-roll gate. No cube offer is ever raised along the way.
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white,
+          maxFrames: 1200);
+      expect(c.game.events.whereType<DoubleEvent>(), isEmpty,
+          reason: 'a cubeless match never produces a DoubleEvent');
+      expect(c.state.cube.value, 1, reason: 'the cube never moved off 1');
+
+      c.disposeController();
+    });
   });
 }

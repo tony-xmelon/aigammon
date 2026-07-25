@@ -84,6 +84,23 @@ class Settings extends Table {
   /// 'on' | 'off' | null (null = per-mode tutor default).
   TextColumn get tutorOverride => text().nullable()();
 
+  /// Gameplay option toggles (schema v3). Everything besides the base tap-to-move
+  /// play is optional (see Plan 7 Task 5).
+
+  /// Whether the board paints selection rings and destination highlights.
+  BoolColumn get showHighlights =>
+      boolean().withDefault(const Constant(true))();
+
+  /// Whether drag-to-move is enabled (off by default: tap-to-move is the base).
+  BoolColumn get enableDrag => boolean().withDefault(const Constant(false))();
+
+  /// Whether combined (multi-hop, same-checker) landing taps are enabled.
+  BoolColumn get enableCombinedTaps =>
+      boolean().withDefault(const Constant(true))();
+
+  /// Whether the HUD shows the running match score.
+  BoolColumn get showScoring => boolean().withDefault(const Constant(true))();
+
   @override
   Set<Column> get primaryKey => {id};
 
@@ -98,7 +115,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
   // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
@@ -116,7 +133,22 @@ class AppDatabase extends _$AppDatabase {
           // seeded by `beforeOpen` below (which runs right after this), so the
           // same upsert-if-absent covers both fresh creates and upgrades.
           if (from < 2) {
+            // Fresh create of the settings table. `createTable` uses the CURRENT
+            // (v3) table definition, so it already includes the v3 gameplay
+            // columns — the v2 -> v3 `addColumn` block below must NOT re-add them
+            // (hence it is gated on `from == 2`, not `from < 3`).
             await m.createTable(settings);
+          }
+          // v2 -> v3: add the four gameplay-option columns to the EXISTING v2
+          // settings row. Each has a column default, so the pre-existing (seeded
+          // or user-edited) row gains the new fields at their defaults while its
+          // other values are preserved. Only runs when the table already existed
+          // at v2 (a v1 -> v3 jump created it whole above).
+          if (from == 2) {
+            await m.addColumn(settings, settings.showHighlights);
+            await m.addColumn(settings, settings.enableDrag);
+            await m.addColumn(settings, settings.enableCombinedTaps);
+            await m.addColumn(settings, settings.showScoring);
           }
         },
         beforeOpen: (details) async {

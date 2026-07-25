@@ -37,6 +37,10 @@ class SettingsRepository {
         defaultMatchLength: row.defaultMatchLength,
         defaultDifficulty: _difficultyFromName(row.defaultDifficulty),
         tutorOverride: _tutorFromText(row.tutorOverride),
+        showHighlights: row.showHighlights,
+        enableDrag: row.enableDrag,
+        enableCombinedTaps: row.enableCombinedTaps,
+        showScoring: row.showScoring,
       );
 
   static SettingsCompanion _toCompanion(AppSettings s) => SettingsCompanion(
@@ -46,6 +50,10 @@ class SettingsRepository {
         defaultMatchLength: Value(s.defaultMatchLength),
         defaultDifficulty: Value(s.defaultDifficulty.name),
         tutorOverride: Value(_tutorToText(s.tutorOverride)),
+        showHighlights: Value(s.showHighlights),
+        enableDrag: Value(s.enableDrag),
+        enableCombinedTaps: Value(s.enableCombinedTaps),
+        showScoring: Value(s.showScoring),
       );
 
   // --- Enum <-> string codecs (tolerant of unknown values) -------------------

@@ -41,9 +41,27 @@ CREATE TABLE "games" (
 );
 ''';
 
+/// The exact v2 `settings` DDL — as drift generated it at schemaVersion 2,
+/// BEFORE the v3 gameplay-option columns (`show_highlights`, `enable_drag`,
+/// `enable_combined_taps`, `show_scoring`) existed. Embedded so this test can
+/// materialise a genuine v2 database and prove the 2 -> 3 `onUpgrade` adds the
+/// four columns while preserving an existing settings row.
+const _v2SettingsDdl = '''
+CREATE TABLE "settings" (
+  "id" INTEGER NOT NULL DEFAULT 1,
+  "theme_mode" TEXT NOT NULL DEFAULT 'system',
+  "animation_speed" TEXT NOT NULL DEFAULT 'normal',
+  "default_match_length" INTEGER NOT NULL DEFAULT 5,
+  "default_difficulty" TEXT NOT NULL DEFAULT 'medium',
+  "tutor_override" TEXT NULL,
+  PRIMARY KEY ("id"),
+  CHECK (id = 1)
+);
+''';
+
 void main() {
-  test('1 -> 2 upgrade adds the settings table, seeds its default row, and '
-      'preserves existing v1 data', () async {
+  test('1 -> 3 upgrade adds the settings table (with the v3 gameplay columns), '
+      'seeds its default row, and preserves existing v1 data', () async {
     // 1. Build a genuine v1 database in a shared in-memory sqlite3 handle: the
     //    v1 tables, a real match row, and user_version = 1.
     final raw = sqlite3.openInMemory();
@@ -60,11 +78,12 @@ void main() {
         "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'");
     expect(before, isEmpty, reason: 'v1 has no settings table');
 
-    // 2. Open the SAME database through AppDatabase (schemaVersion 2). drift
-    //    sees user_version 1 and runs onUpgrade(1 -> 2), then beforeOpen.
+    // 2. Open the SAME database through AppDatabase (schemaVersion 3). drift
+    //    sees user_version 1 and runs onUpgrade(1 -> 3), then beforeOpen.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
-    // 3a. The settings table now exists with the single default row.
+    // 3a. The settings table now exists with the single default row — including
+    //     the v3 gameplay columns (created whole via createTable on the v1 jump).
     final settings = await db.select(db.settings).getSingle();
     expect(settings.id, 1);
     expect(settings.themeMode, 'system');
@@ -72,6 +91,10 @@ void main() {
     expect(settings.defaultMatchLength, 5);
     expect(settings.defaultDifficulty, 'medium');
     expect(settings.tutorOverride, isNull);
+    expect(settings.showHighlights, isTrue);
+    expect(settings.enableDrag, isFalse);
+    expect(settings.enableCombinedTaps, isTrue);
+    expect(settings.showScoring, isTrue);
 
     // 3b. The pre-migration v1 match row survived intact.
     final matches = await db.select(db.matches).get();
@@ -81,9 +104,9 @@ void main() {
     expect(matches.single.whiteType, 'human');
     expect(matches.single.blackType, 'ai:expert');
 
-    // 3c. The schema version was bumped to 2.
+    // 3c. The schema version was bumped to 3.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 2);
+    expect(version.read<int>('user_version'), 3);
 
     // 3d. Writes still work post-migration (FK/insert into the migrated schema).
     final newId = await db.into(db.matches).insert(MatchesCompanion.insert(
@@ -95,6 +118,64 @@ void main() {
           whiteScore: const Value(0),
         ));
     expect(newId, greaterThan(matches.single.id));
+
+    await db.close();
+  });
+
+  test('2 -> 3 upgrade adds the four gameplay columns at their defaults and '
+      'preserves the existing settings row values', () async {
+    // 1. Build a genuine v2 database: the matches/games tables (unchanged),
+    //    the v2 settings table, a settings row with NON-default preferences,
+    //    and user_version = 2.
+    final raw = sqlite3.openInMemory();
+    raw.execute(_v1MatchesDdl);
+    raw.execute(_v1GamesDdl);
+    raw.execute(_v2SettingsDdl);
+    raw.execute(
+      'INSERT INTO settings (id, theme_mode, animation_speed, '
+      'default_match_length, default_difficulty, tutor_override) '
+      "VALUES (1, 'dark', 'off', 7, 'expert', 'on')",
+    );
+    raw.execute('PRAGMA user_version = 2');
+
+    // Sanity: the v2 settings table has none of the v3 columns yet.
+    final cols = raw
+        .select('PRAGMA table_info(settings)')
+        .map((r) => r['name'] as String)
+        .toSet();
+    expect(cols, isNot(contains('show_highlights')), reason: 'v2 has no v3 cols');
+    expect(cols, isNot(contains('enable_drag')));
+    expect(cols, isNot(contains('enable_combined_taps')));
+    expect(cols, isNot(contains('show_scoring')));
+
+    // 2. Open through AppDatabase (schemaVersion 3): drift runs onUpgrade(2 -> 3),
+    //    which addColumn's the four gameplay columns.
+    final db = AppDatabase(NativeDatabase.opened(raw));
+
+    // 3a. The four new columns exist at their defaults on the migrated row.
+    final settings = await db.select(db.settings).getSingle();
+    expect(settings.showHighlights, isTrue);
+    expect(settings.enableDrag, isFalse);
+    expect(settings.enableCombinedTaps, isTrue);
+    expect(settings.showScoring, isTrue);
+
+    // 3b. The pre-existing v2 settings row values SURVIVED intact.
+    expect(settings.id, 1);
+    expect(settings.themeMode, 'dark');
+    expect(settings.animationSpeed, 'off');
+    expect(settings.defaultMatchLength, 7);
+    expect(settings.defaultDifficulty, 'expert');
+    expect(settings.tutorOverride, 'on');
+
+    // 3c. The schema version was bumped to 3, and still exactly one row.
+    final version = await db.customSelect('PRAGMA user_version').getSingle();
+    expect(version.read<int>('user_version'), 3);
+    expect(await db.select(db.settings).get(), hasLength(1));
+
+    // 3d. Writes still work post-migration (upsert the migrated settings row).
+    await db.into(db.settings).insertOnConflictUpdate(
+        SettingsCompanion(id: const Value(1), showScoring: const Value(false)));
+    expect((await db.select(db.settings).getSingle()).showScoring, isFalse);
 
     await db.close();
   });

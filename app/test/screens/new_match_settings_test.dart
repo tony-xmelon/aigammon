@@ -84,6 +84,35 @@ void main() {
     expect(_tutorSwitch(t), isTrue);
   });
 
+  testWidgets('the "Play without cube" toggle is offered and toggles (both '
+      'local modes)', (t) async {
+    // A tall surface so the toggle (below the selectors) is on screen.
+    await t.binding.setSurfaceSize(const Size(600, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    const settings = AppSettings(
+      themeMode: ThemeMode.system,
+      animationSpeed: AnimationSpeed.normal,
+      defaultMatchLength: 5,
+      defaultDifficulty: Difficulty.medium,
+      tutorOverride: null,
+    );
+    for (final vsComputer in [true, false]) {
+      // Force a fresh screen State each iteration (an unkeyed NewMatchScreen of
+      // the same type is otherwise reused across pumpWidget, carrying its
+      // toggle state over).
+      await t.pumpWidget(const SizedBox());
+      await _pump(t, settings, vsComputer: vsComputer);
+      final tile = find.widgetWithText(SwitchListTile, 'Play without cube');
+      expect(tile, findsOneWidget, reason: 'offered for vsComputer=$vsComputer');
+      // Off by default; tapping turns it on.
+      expect(t.widget<SwitchListTile>(tile).value, isFalse);
+      await t.ensureVisible(tile);
+      await t.tap(tile);
+      await t.pumpAndSettle();
+      expect(t.widget<SwitchListTile>(tile).value, isTrue);
+    }
+  });
+
   testWidgets('tutor override OFF is not re-derived when difficulty changes',
       (t) async {
     const settings = AppSettings(

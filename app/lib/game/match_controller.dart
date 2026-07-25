@@ -54,6 +54,12 @@ abstract interface class MatchController implements Listenable {
   /// True once the match has been decided.
   bool get matchOver;
 
+  /// Whether this match is played WITHOUT the doubling cube. When true, doubling
+  /// is never legal (no AI double prompts, [offerDouble] throws) and the UI hides
+  /// the cube chip / Double button. Always `false` for an online match (the cube
+  /// is server-mediated there).
+  bool get cubeless;
+
   /// True while paused between games waiting for [continueToNextGame].
   bool get awaitingNextGame;
 

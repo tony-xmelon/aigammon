@@ -55,6 +55,8 @@ class GameScreen extends StatefulWidget {
     this.orientation = BoardOrientationMode.fixedWhite,
     this.tutor,
     this.animationDuration = Duration.zero,
+    this.interactionOptions = const BoardInteractionOptions(),
+    this.showScoring = true,
   });
 
   final MatchController controller;
@@ -64,6 +66,15 @@ class GameScreen extends StatefulWidget {
   /// production call sites pass the user's chosen speed (`AnimationSpeed`, via
   /// the settings-backed `AppSettings.hopDuration`).
   final Duration animationDuration;
+
+  /// Board interaction toggles (highlights / drag / combined taps) forwarded to
+  /// the [BoardView]. Production call sites build this from the persisted
+  /// settings; the default enables highlights + combined taps and disables drag.
+  final BoardInteractionOptions interactionOptions;
+
+  /// Whether the HUD shows the running match score. Production call sites pass
+  /// the persisted `AppSettings.showScoring`.
+  final bool showScoring;
 
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
@@ -405,7 +416,7 @@ class _GameScreenState extends State<GameScreen> {
             Column(
               children: [
                 if (_c.error != null) _ErrorBanner(error: _c.error!),
-                _Hud(controller: _c),
+                _Hud(controller: _c, showScoring: widget.showScoring),
                 if (_chip != null) _tutorChip(_chip!),
                 Expanded(
                   child: Padding(
@@ -422,6 +433,7 @@ class _GameScreenState extends State<GameScreen> {
                         lastMove: _c.lastMove,
                         entryControl: _entryControl,
                         animationDuration: widget.animationDuration,
+                        interactionOptions: widget.interactionOptions,
                       ),
                     ),
                   ),
@@ -883,9 +895,12 @@ String _compactScore(MatchController c) {
 /// overflow (⋮) menu holding Resign. Keeping Double/Resign up here (rather than
 /// in the bottom bar) puts the risky actions away from where thumbs rest.
 class _Hud extends StatelessWidget {
-  const _Hud({required this.controller});
+  const _Hud({required this.controller, this.showScoring = true});
 
   final MatchController controller;
+
+  /// Whether the running match score is shown (the settings `showScoring`).
+  final bool showScoring;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
@@ -901,6 +916,7 @@ class _Hud extends StatelessWidget {
   }
 
   bool get _doublingLegal {
+    if (controller.cubeless) return false;
     final s = controller.state;
     return !s.isCrawfordGame &&
         (s.cube.owner == null || s.cube.owner == s.turn);
@@ -922,35 +938,43 @@ class _Hud extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: Row(
           children: [
-            Flexible(
-              child: Text(
-                _compactScore(controller),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleSmall,
+            // The score segment is hidden entirely when scoring is off; the rest
+            // of the header (Crawford badge, cube chip, Double, overflow) stays.
+            if (showScoring)
+              Flexible(
+                child: Text(
+                  _compactScore(controller),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
               ),
-            ),
             if (state.isCrawfordGame) ...[
-              const SizedBox(width: 8),
+              if (showScoring) const SizedBox(width: 8),
               const _MiniBadge(icon: Icons.star, label: 'Crawford'),
             ],
-            const SizedBox(width: 8),
-            _CubeChip(value: cube.value, owner: cube.owner),
+            // The cube chip is hidden in a cubeless match (there is no cube).
+            if (!controller.cubeless) ...[
+              const SizedBox(width: 8),
+              _CubeChip(value: cube.value, owner: cube.owner),
+            ],
             const Spacer(),
             if (showThinking) ...[
               const _ThinkingDot(),
               const SizedBox(width: 8),
             ],
-            OutlinedButton.icon(
-              onPressed:
-                  atGate && _doublingLegal ? controller.offerDouble : null,
-              icon: const Icon(Icons.control_point_duplicate, size: 16),
-              label: const Text('Double'),
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+            // The Double button is omitted entirely in a cubeless match.
+            if (!controller.cubeless)
+              OutlinedButton.icon(
+                onPressed:
+                    atGate && _doublingLegal ? controller.offerDouble : null,
+                icon: const Icon(Icons.control_point_duplicate, size: 16),
+                label: const Text('Double'),
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                ),
               ),
-            ),
             PopupMenuButton<ResignValue>(
               enabled: atGate,
               icon: const Icon(Icons.more_vert),

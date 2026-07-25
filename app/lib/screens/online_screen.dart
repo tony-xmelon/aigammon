@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:online_client/online_client.dart';
 
+import '../board/board_view.dart';
 import '../data/app_settings.dart';
 import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
@@ -264,6 +265,12 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           orientation: orientation,
           tutor: tutor,
           animationDuration: settings.hopDuration,
+          interactionOptions: BoardInteractionOptions(
+            showHighlights: settings.showHighlights,
+            enableDrag: settings.enableDrag,
+            enableCombinedTaps: settings.enableCombinedTaps,
+          ),
+          showScoring: settings.showScoring,
         ),
       ),
     );

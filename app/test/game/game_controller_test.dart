@@ -362,6 +362,67 @@ void main() {
     });
   });
 
+  group('cubeless match', () {
+    test('a doubling AI never offers a double; the cube stays at 1', () async {
+      // Both AIs would double at every opportunity, but the cube is off.
+      final white = FakeAgent(wantsDoublePrompts: true, doubles: true);
+      final black = FakeAgent(wantsDoublePrompts: true, doubles: true);
+      final c = GameController(
+        white: white,
+        black: black,
+        matchLength: 1,
+        cubeless: true,
+        diceRoller: DiceRoller(Random(7)),
+      );
+
+      await c.playMatch();
+
+      expect(c.matchOver, isTrue);
+      // No DoubleEvent was ever produced across the whole match.
+      expect(c.game.events.whereType<DoubleEvent>(), isEmpty);
+      expect(c.state.cube.value, 1, reason: 'the cube never left 1');
+      expect(c.error, isNull);
+
+      c.disposeController();
+    });
+
+    test('reports cubeless; a human offerDouble throws at the gate', () async {
+      final human = LocalHumanAgent();
+      final black = FakeAgent();
+      final c = GameController(
+        white: human,
+        black: black,
+        matchLength: 5,
+        cubeless: true,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(6, 5), Dice(4, 3)]),
+      );
+      expect(c.cubeless, isTrue);
+
+      final matchFuture = c.playMatch();
+      await waitFor(
+          c, () => c.awaitingHumanTurn && c.state.turn == Player.white);
+
+      // Doubling is never legal in a cubeless match, so the verb throws even
+      // with the gate open.
+      expect(() => c.offerDouble(), throwsStateError);
+      expect(c.game.events.whereType<DoubleEvent>(), isEmpty);
+
+      c.disposeController();
+      await matchFuture;
+    });
+
+    test('default match is NOT cubeless', () {
+      final c = GameController(
+        white: FakeAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(6, 5)]),
+      );
+      expect(c.cubeless, isFalse);
+      c.disposeController();
+    });
+  });
+
   group('human pre-roll verbs', () {
     test('offerDouble appends a DoubleEvent the opponent takes', () async {
       final human = LocalHumanAgent();

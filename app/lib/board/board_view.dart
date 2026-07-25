@@ -126,12 +126,20 @@ class BoardEntryController extends ChangeNotifier {
 
 /// Toggles for the optional interaction affordances layered on top of the
 /// base tap-to-move flow. Persistence of these toggles is wired by the settings
-/// screen (Task 5); [BoardView] defaults to drag OFF and combined taps ON.
+/// screen (Task 5); [BoardView] defaults to highlights ON, drag OFF, combined
+/// taps ON.
 class BoardInteractionOptions {
   const BoardInteractionOptions({
+    this.showHighlights = true,
     this.enableDrag = false,
     this.enableCombinedTaps = true,
   });
+
+  /// When false, the board paints NO source rings, NO selection ring, and NO
+  /// destination (direct or combined) fills — a pure VISUAL gating. Taps and
+  /// drags still drive move entry exactly as before; only the highlight layer is
+  /// suppressed. When true (the default) highlights render normally.
+  final bool showHighlights;
 
   /// When true, a pan gesture that starts on a selectable source's top checker
   /// lifts it and drops it on the released location (a drag-to-move). When
@@ -146,11 +154,13 @@ class BoardInteractionOptions {
   @override
   bool operator ==(Object other) =>
       other is BoardInteractionOptions &&
+      other.showHighlights == showHighlights &&
       other.enableDrag == enableDrag &&
       other.enableCombinedTaps == enableCombinedTaps;
 
   @override
-  int get hashCode => Object.hash(enableDrag, enableCombinedTaps);
+  int get hashCode =>
+      Object.hash(showHighlights, enableDrag, enableCombinedTaps);
 }
 
 /// Interactive board. Renders [state]'s board (with a display-only preview of
@@ -852,6 +862,11 @@ class _BoardViewState extends State<BoardView>
           final dragPointer = _dragPointer;
           final dragging = dragSource != null && dragPointer != null;
 
+          // Highlights are a pure visual layer: when off, taps/drag still drive
+          // entry but no rings or destination fills are painted (see
+          // [BoardInteractionOptions.showHighlights]).
+          final showHl = widget.interactionOptions.showHighlights;
+
           // A live drag suspends animation, so the two are mutually exclusive.
           final frame = dragging ? null : _animFrame(geometry);
           final BoardPainter painter;
@@ -870,10 +885,10 @@ class _BoardViewState extends State<BoardView>
                 center: dragPointer,
                 isWhite: widget.state.turn == Player.white,
               ),
-              highlightedDestinations: builder != null
+              highlightedDestinations: (showHl && builder != null)
                   ? builder.destinationsFor(dragSource)
                   : const {},
-              combinedDestinations: builder != null
+              combinedDestinations: (showHl && builder != null)
                   ? _chainedDestinations(builder, dragSource)
                   : const {},
               movingPlayer: builder != null ? widget.state.turn : null,
@@ -897,16 +912,18 @@ class _BoardViewState extends State<BoardView>
               theme: theme,
               dice: widget.state.dice,
               cube: widget.state.cube,
-              highlightedSources: (builder != null && selected == null)
+              highlightedSources: (showHl && builder != null && selected == null)
                   ? builder.selectableSources
                   : const {},
-              highlightedDestinations: (builder != null && selected != null)
-                  ? builder.destinationsFor(selected)
-                  : const {},
-              combinedDestinations: (builder != null && selected != null)
-                  ? _chainedDestinations(builder, selected)
-                  : const {},
-              selectedCheckerLocation: selected,
+              highlightedDestinations:
+                  (showHl && builder != null && selected != null)
+                      ? builder.destinationsFor(selected)
+                      : const {},
+              combinedDestinations:
+                  (showHl && builder != null && selected != null)
+                      ? _chainedDestinations(builder, selected)
+                      : const {},
+              selectedCheckerLocation: showHl ? selected : null,
               movingPlayer: builder != null ? widget.state.turn : null,
             );
           }

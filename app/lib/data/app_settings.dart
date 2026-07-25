@@ -33,11 +33,16 @@ class AppSettings {
     required this.defaultMatchLength,
     required this.defaultDifficulty,
     required this.tutorOverride,
+    this.showHighlights = true,
+    this.enableDrag = false,
+    this.enableCombinedTaps = true,
+    this.showScoring = true,
   });
 
   /// The out-of-the-box defaults, matching the `Settings` table's column
   /// defaults (theme: system, animation: normal, length: 5, difficulty:
-  /// medium, tutor override: none).
+  /// medium, tutor override: none, highlights/combined-taps/scoring on, drag
+  /// off).
   static const AppSettings defaults = AppSettings(
     themeMode: ThemeMode.system,
     animationSpeed: AnimationSpeed.normal,
@@ -62,6 +67,18 @@ class AppSettings {
   /// true = always start ON, false = always start OFF.
   final bool? tutorOverride;
 
+  /// Whether the board paints selection rings and destination highlights.
+  final bool showHighlights;
+
+  /// Whether drag-to-move is enabled (base play is tap-to-move; drag is opt-in).
+  final bool enableDrag;
+
+  /// Whether combined (multi-hop, same-checker) landing taps are enabled.
+  final bool enableCombinedTaps;
+
+  /// Whether the HUD shows the running match score.
+  final bool showScoring;
+
   /// The per-hop animation [Duration] for the current [animationSpeed].
   Duration get hopDuration => animationSpeed.hopDuration;
 
@@ -72,6 +89,10 @@ class AppSettings {
     Difficulty? defaultDifficulty,
     // A sentinel is needed to distinguish "leave unchanged" from "set to null".
     Object? tutorOverride = _unset,
+    bool? showHighlights,
+    bool? enableDrag,
+    bool? enableCombinedTaps,
+    bool? showScoring,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -81,6 +102,10 @@ class AppSettings {
       tutorOverride: identical(tutorOverride, _unset)
           ? this.tutorOverride
           : tutorOverride as bool?,
+      showHighlights: showHighlights ?? this.showHighlights,
+      enableDrag: enableDrag ?? this.enableDrag,
+      enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
+      showScoring: showScoring ?? this.showScoring,
     );
   }
 
@@ -91,18 +116,34 @@ class AppSettings {
       other.animationSpeed == animationSpeed &&
       other.defaultMatchLength == defaultMatchLength &&
       other.defaultDifficulty == defaultDifficulty &&
-      other.tutorOverride == tutorOverride;
+      other.tutorOverride == tutorOverride &&
+      other.showHighlights == showHighlights &&
+      other.enableDrag == enableDrag &&
+      other.enableCombinedTaps == enableCombinedTaps &&
+      other.showScoring == showScoring;
 
   @override
-  int get hashCode => Object.hash(themeMode, animationSpeed, defaultMatchLength,
-      defaultDifficulty, tutorOverride);
+  int get hashCode => Object.hash(
+      themeMode,
+      animationSpeed,
+      defaultMatchLength,
+      defaultDifficulty,
+      tutorOverride,
+      showHighlights,
+      enableDrag,
+      enableCombinedTaps,
+      showScoring);
 
   @override
   String toString() => 'AppSettings(themeMode: $themeMode, '
       'animationSpeed: $animationSpeed, '
       'defaultMatchLength: $defaultMatchLength, '
       'defaultDifficulty: $defaultDifficulty, '
-      'tutorOverride: $tutorOverride)';
+      'tutorOverride: $tutorOverride, '
+      'showHighlights: $showHighlights, '
+      'enableDrag: $enableDrag, '
+      'enableCombinedTaps: $enableCombinedTaps, '
+      'showScoring: $showScoring)';
 }
 
 /// Sentinel marking an un-passed [AppSettings.copyWith] argument (so a caller

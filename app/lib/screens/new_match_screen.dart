@@ -4,6 +4,7 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../board/board_view.dart';
 import '../data/app_settings.dart';
 import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
@@ -41,6 +42,11 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
 
   /// Hot-seat only: rotate the board so the active player is at the bottom.
   bool _rotateForBlack = true;
+
+  /// Per-match: play without the doubling cube. Offered for both local modes
+  /// (vs-computer and hot-seat); online is server-mediated and does not expose
+  /// it. Threaded into the [GameController] as `cubeless`.
+  bool _cubeless = false;
 
   /// Whether live tutor mode is enabled. When the settings tutor override is
   /// unset it defaults per [_defaultTutor] and tracks difficulty changes until
@@ -171,6 +177,13 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                         _tutorTouched = true;
                       }),
                     ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Play without cube'),
+                      subtitle: const Text('No doubling cube this match'),
+                      value: _cubeless,
+                      onChanged: (v) => setState(() => _cubeless = v),
+                    ),
                     const SizedBox(height: 40),
                     SizedBox(
                       width: double.infinity,
@@ -198,7 +211,8 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
     final tutor = _tutorEnabled
         ? TutorService(ref.read(engineFacadeProvider))
         : null;
-    // Checker animation speed comes from the persisted settings.
+    // Checker animation speed and the gameplay option toggles come from the
+    // persisted settings.
     final settings =
         ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
     Navigator.of(context).push(
@@ -211,6 +225,12 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           orientation: orientation,
           tutor: tutor,
           animationDuration: settings.hopDuration,
+          interactionOptions: BoardInteractionOptions(
+            showHighlights: settings.showHighlights,
+            enableDrag: settings.enableDrag,
+            enableCombinedTaps: settings.enableCombinedTaps,
+          ),
+          showScoring: settings.showScoring,
         ),
       ),
     );
@@ -226,6 +246,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           white: LocalHumanAgent(),
           black: LocalHumanAgent(),
           matchLength: _matchLength,
+          cubeless: _cubeless,
           persistence: _persistenceFor(
             mode: 'hotSeat',
             whiteType: 'human',
@@ -252,6 +273,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
         white: humanIsWhite ? human : ai,
         black: humanIsWhite ? ai : human,
         matchLength: _matchLength,
+        cubeless: _cubeless,
         persistence: _persistenceFor(
           mode: 'vsComputer',
           whiteType: humanIsWhite ? 'human' : aiType,

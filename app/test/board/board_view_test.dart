@@ -688,6 +688,62 @@ void main() {
     expect(_painterOf(t).board, goldenState.board);
   });
 
+  // --- Highlights toggle -----------------------------------------------------
+
+  testWidgets('highlights OFF: painter gets empty highlight sets, but taps '
+      'still select and enter moves', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+    Move? committed;
+    await t.pumpWidget(viewWith(goldenState,
+        options: const BoardInteractionOptions(showHighlights: false),
+        control: control,
+        onCommitted: (m) => committed = m));
+
+    // With highlights off nothing is painted as a source, even though the
+    // builder is active and offers legal sources.
+    expect(control.active, isTrue);
+    expect(_painterOf(t).highlightedSources, isEmpty,
+        reason: 'no source rings when highlights are off');
+
+    // A tap still SELECTS the 8-point (internal state advances), but the painter
+    // draws no selection ring and no destination fills.
+    await tapPoint(t, 7);
+    expect(_painterOf(t).selectedCheckerLocation, isNull,
+        reason: 'no selection ring painted when highlights are off');
+    expect(_painterOf(t).highlightedDestinations, isEmpty);
+    expect(_painterOf(t).combinedDestinations, isEmpty);
+
+    // Yet the tap-to-move flow still works: complete the golden 3-1 by tapping
+    // through destinations (forgiving geometry), and Confirm commits it.
+    await tapPoint(t, 4); // 8/5
+    await tapPoint(t, 5); // pick up 6-point
+    await tapPoint(t, 4); // 6/5
+    expect(control.canConfirm, isTrue,
+        reason: 'move entry works even with highlights hidden');
+    control.confirm();
+    await t.pump();
+    expect(committed, isNotNull);
+    expect(committed!.sameAs(goldenMove), isTrue);
+  });
+
+  testWidgets('interactionOptions are forwarded to the BoardView unchanged',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    const options = BoardInteractionOptions(
+      showHighlights: false,
+      enableDrag: true,
+      enableCombinedTaps: false,
+    );
+    await t.pumpWidget(viewWith(goldenState, options: options));
+    final view = t.widget<BoardView>(find.byType(BoardView));
+    expect(view.interactionOptions, options,
+        reason: 'the options object reaches the board verbatim');
+  });
+
   testWidgets('tap still works when drag is enabled', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));

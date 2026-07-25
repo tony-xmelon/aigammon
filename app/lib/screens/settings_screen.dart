@@ -144,6 +144,53 @@ class SettingsScreen extends ConsumerWidget {
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant),
                     ),
+                    const SizedBox(height: 24),
+                    _Section(
+                      label: 'Gameplay',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Move highlights'),
+                            subtitle: const Text(
+                                'Ring selectable checkers and light up '
+                                'destinations'),
+                            value: settings.showHighlights,
+                            onChanged: (v) =>
+                                save(settings.copyWith(showHighlights: v)),
+                          ),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Drag to move'),
+                            subtitle: const Text(
+                                'Drag a checker to its destination (taps always '
+                                'work)'),
+                            value: settings.enableDrag,
+                            onChanged: (v) =>
+                                save(settings.copyWith(enableDrag: v)),
+                          ),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Combined moves'),
+                            subtitle: const Text(
+                                'One tap runs a checker through both dice'),
+                            value: settings.enableCombinedTaps,
+                            onChanged: (v) =>
+                                save(settings.copyWith(enableCombinedTaps: v)),
+                          ),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Show score'),
+                            subtitle: const Text(
+                                'Display the running match score in the header'),
+                            value: settings.showScoring,
+                            onChanged: (v) =>
+                                save(settings.copyWith(showScoring: v)),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
