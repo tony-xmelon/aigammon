@@ -18,6 +18,7 @@ import 'package:aigammon_app/tutor/tutor_service.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:online_client/online_client.dart';
@@ -2561,6 +2562,32 @@ void main() {
       expect(find.textContaining('You 0–0 AI · to 5'), findsOneWidget);
       expect(find.textContaining('W 0–0 B'), findsNothing,
           reason: 'the cryptic W/B form is gone in a vs-computer match');
+
+      c.disposeController();
+    });
+
+    testWidgets('the header score is not truncated on a phone', (t) async {
+      // The real capture surface: a 390x844 phone in portrait, where the header
+      // has the least room (score + cube chip + Double + overflow on one row).
+      await t.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 3,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      const score = 'You 0–0 AI · to 3';
+      expect(find.text(score), findsOneWidget);
+      final paragraph = t.renderObject<RenderParagraph>(find.text(score));
+      expect(paragraph.didExceedMaxLines, isFalse,
+          reason: 'the whole score must fit — no "You 0–0 AI · t…"');
+      // Still a single line (the header is one row by design).
+      expect(paragraph.size.height, lessThan(30));
 
       c.disposeController();
     });
