@@ -66,9 +66,28 @@ jobs:
         working-directory: app
         run: flutter pub get
 
+      # Every CI build gets a unique, monotonically increasing build number
+      # (the workflow run number), so testers can tell releases apart in
+      # Firebase App Distribution. The semantic version comes from pubspec.
+      # Online-play dart-defines are injected when the repo VARIABLES
+      # AIGAMMON_FIREBASE_PROJECT and AIGAMMON_FIREBASE_API_KEY are set
+      # (Settings -> Secrets and variables -> Actions -> Variables); when
+      # unset the app builds with online play "not configured", exactly as
+      # before. See firebase/DEPLOY.md.
       - name: Build release APK
         working-directory: app
-        run: flutter build apk --release
+        env:
+          FB_PROJECT: ${{ vars.AIGAMMON_FIREBASE_PROJECT }}
+          FB_API_KEY: ${{ vars.AIGAMMON_FIREBASE_API_KEY }}
+        run: |
+          DEFINES=""
+          if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ]; then
+            DEFINES="--dart-define=AIGAMMON_FIREBASE_PROJECT=$FB_PROJECT --dart-define=AIGAMMON_FIREBASE_API_KEY=$FB_API_KEY"
+            echo "Online play ENABLED for project $FB_PROJECT"
+          else
+            echo "Online-play repo variables not set — building with online play not configured"
+          fi
+          flutter build apk --release --build-number=${{ github.run_number }} $DEFINES
 
       - uses: actions/upload-artifact@v4
         with:

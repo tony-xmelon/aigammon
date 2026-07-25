@@ -42,3 +42,6 @@ Generate a simple, ownable icon programmatically (Dart script under `tool/`: dra
 - Android release signing keystore; Play Store listing/metadata.
 - Firebase production deploy (`firebase/DEPLOY.md`) + repo variables for online-enabled APKs.
 - Any paid-plan (Blaze) upgrade for Cloud Functions deploy.
+
+## Plan cut short (2026-07-25): Tasks 6 (app icon) and 7 (server cube cross-check) DEFERRED — superseded in priority by the user's first-version feedback (see plan 7). Task 8 reduced to: version increment (pubspec 1.1.0+2 + CI --build-number=run_number), online dart-define vars wiring, verification, merge.
+
