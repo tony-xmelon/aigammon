@@ -1346,16 +1346,19 @@ class _GameScreenState extends State<GameScreen> {
   /// for Black), or an empty transparent slot for a neutral line (the opening).
   Widget _actorDot(Player? actor) {
     if (actor == null) return const SizedBox(width: 10, height: 10);
-    final color = actor == Player.white
-        ? BoardTheme.light.whiteChecker
-        : BoardTheme.light.blackChecker;
+    final isWhite = actor == Player.white;
+    final color =
+        isWhite ? BoardTheme.light.whiteChecker : BoardTheme.light.blackChecker;
+    final border = isWhite
+        ? BoardTheme.light.whiteCheckerBorder
+        : BoardTheme.light.blackCheckerBorder;
     return Container(
       width: 10,
       height: 10,
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        border: Border.all(color: BoardTheme.light.checkerBorder, width: 1),
+        border: Border.all(color: border, width: 1),
       ),
     );
   }

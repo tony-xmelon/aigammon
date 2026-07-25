@@ -308,6 +308,9 @@ class BoardPainter extends CustomPainter {
 
   void _drawChecker(Canvas canvas, Offset center, bool isWhite) {
     final r = geometry.checkerRadius;
+    // Per-player rim: a light checker gets a dark rim, a dark checker a light
+    // rim, so the silhouette reads on any surface (the contrast-matrix guard).
+    final rim = isWhite ? theme.whiteCheckerBorder : theme.blackCheckerBorder;
     canvas.drawCircle(
       center,
       r,
@@ -318,8 +321,8 @@ class BoardPainter extends CustomPainter {
       r,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = r * 0.12
-        ..color = theme.checkerBorder,
+        ..strokeWidth = r * 0.15
+        ..color = rim,
     );
     // Inner ring for a little depth.
     canvas.drawCircle(
@@ -328,7 +331,7 @@ class BoardPainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = r * 0.08
-        ..color = theme.checkerBorder.withValues(alpha: 0.35),
+        ..color = rim.withValues(alpha: 0.35),
     );
   }
 
@@ -368,8 +371,8 @@ class BoardPainter extends CustomPainter {
         ..color = isWhite ? theme.whiteChecker : theme.blackChecker;
       final border = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = r * 0.14
-        ..color = theme.checkerBorder;
+        ..strokeWidth = r * 0.16
+        ..color = isWhite ? theme.whiteCheckerBorder : theme.blackCheckerBorder;
       for (var s = 0; s < n; s++) {
         final c = Offset(rowLeft + step * s, cy);
         canvas.drawCircle(c, r, disc);
