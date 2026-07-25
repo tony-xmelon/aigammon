@@ -19,6 +19,16 @@ class FakeFacade implements EngineFacade {
   const FakeFacade();
 
   @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) async =>
+      const Probabilities(
+        win: 0.5,
+        winGammon: 0,
+        winBackgammon: 0,
+        loseGammon: 0,
+        loseBackgammon: 0,
+      );
+
+  @override
   Future<List<ScoredMove>> rankMoves(
       BoardState board, Player mover, Dice dice) async {
     const flat = Probabilities(

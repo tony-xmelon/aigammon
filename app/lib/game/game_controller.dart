@@ -212,14 +212,15 @@ class GameController extends ChangeNotifier {
         if (_cancelled) return;
         _append(MoveEvent(s.turn, move as Move));
       case GamePhase.cubeOffered:
-        final action = await _guard(agent.chooseCubeResponse(s));
+        final action =
+            await _guard(agent.chooseCubeResponse(s, _contextFor(s.turn)));
         if (_cancelled) return;
         _append((action as CubeAction) == CubeAction.take
             ? TakeEvent(s.turn)
             : DropEvent(s.turn));
       case GamePhase.resignOffered:
-        final accept =
-            await _guard(agent.chooseResignResponse(s, s.resignOffer!.value));
+        final accept = await _guard(agent.chooseResignResponse(
+            s, s.resignOffer!.value, _contextFor(s.turn)));
         if (_cancelled) return;
         _append((accept as bool)
             ? ResignAcceptEvent(s.turn)
@@ -232,7 +233,7 @@ class GameController extends ChangeNotifier {
   Future<void> _stepPreRoll(GameState s, PlayerAgent agent) async {
     if (agent.wantsDoublePrompts) {
       if (_doublingLegal(s)) {
-        final wants = await _guard(agent.considerDouble(s));
+        final wants = await _guard(agent.considerDouble(s, _contextFor(s.turn)));
         if (_cancelled) return;
         if (wants == true) {
           _append(DoubleEvent(s.turn));
@@ -285,6 +286,21 @@ class GameController extends ChangeNotifier {
   }
 
   PlayerAgent _agentFor(Player p) => p == Player.white ? white : black;
+
+  /// Builds the [MatchContext] for [actor] from the running [MatchState],
+  /// anchored to [actor]'s own perspective (`moverAway` is [actor]'s away
+  /// score). Call sites pass `state.turn` — the actor being asked to decide.
+  MatchContext _contextFor(Player actor) {
+    final actorScore =
+        actor == Player.white ? _match.whiteScore : _match.blackScore;
+    final opponentScore =
+        actor == Player.white ? _match.blackScore : _match.whiteScore;
+    return MatchContext(
+      moverAway: _match.matchLength - actorScore,
+      opponentAway: _match.matchLength - opponentScore,
+      crawfordPlayed: _match.crawfordPlayed,
+    );
+  }
 
   /// Awaits [future] with the loop's thinking flag set, racing cancellation so
   /// a never-completing agent future is abandoned on dispose. Returns `null`

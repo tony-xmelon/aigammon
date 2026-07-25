@@ -48,13 +48,17 @@ class FakeAgent implements PlayerAgent {
   }
 
   @override
-  Future<bool> considerDouble(GameState state) async => doubles;
+  Future<bool> considerDouble(GameState state, MatchContext ctx) async =>
+      doubles;
 
   @override
-  Future<CubeAction> chooseCubeResponse(GameState state) async => cubeResponse;
+  Future<CubeAction> chooseCubeResponse(
+          GameState state, MatchContext ctx) async =>
+      cubeResponse;
 
   @override
-  Future<bool> chooseResignResponse(GameState state, ResignValue value) async =>
+  Future<bool> chooseResignResponse(
+          GameState state, ResignValue value, MatchContext ctx) async =>
       acceptsResign;
 
   @override
@@ -73,14 +77,16 @@ class HangingAgent implements PlayerAgent {
   Future<Move> chooseMove(GameState state) => _never.future;
 
   @override
-  Future<bool> considerDouble(GameState state) => _never.future.then((_) => false);
+  Future<bool> considerDouble(GameState state, MatchContext ctx) =>
+      _never.future.then((_) => false);
 
   @override
-  Future<CubeAction> chooseCubeResponse(GameState state) =>
+  Future<CubeAction> chooseCubeResponse(GameState state, MatchContext ctx) =>
       _never.future.then((_) => CubeAction.take);
 
   @override
-  Future<bool> chooseResignResponse(GameState state, ResignValue value) =>
+  Future<bool> chooseResignResponse(
+          GameState state, ResignValue value, MatchContext ctx) =>
       _never.future.then((_) => true);
 
   @override
@@ -99,18 +105,55 @@ class ThrowingAgent implements PlayerAgent {
       throw StateError('boom from agent');
 
   @override
-  Future<bool> considerDouble(GameState state) async => false;
+  Future<bool> considerDouble(GameState state, MatchContext ctx) async => false;
 
   @override
-  Future<CubeAction> chooseCubeResponse(GameState state) async =>
+  Future<CubeAction> chooseCubeResponse(
+          GameState state, MatchContext ctx) async =>
       CubeAction.take;
 
   @override
-  Future<bool> chooseResignResponse(GameState state, ResignValue value) async =>
+  Future<bool> chooseResignResponse(
+          GameState state, ResignValue value, MatchContext ctx) async =>
       true;
 
   @override
   void dispose() => disposeCount++;
+}
+
+/// An agent that records the [MatchContext] handed to each [considerDouble],
+/// and always offers a double (so a game ends immediately when the opponent
+/// drops — letting a test advance the match score deterministically).
+class RecordingAgent implements PlayerAgent {
+  final List<MatchContext> doubleContexts = [];
+
+  @override
+  bool get wantsDoublePrompts => true;
+
+  @override
+  Future<Move> chooseMove(GameState state) async {
+    final legal = state.legalMoves;
+    return legal.isEmpty ? Move.none : legal.first;
+  }
+
+  @override
+  Future<bool> considerDouble(GameState state, MatchContext ctx) async {
+    doubleContexts.add(ctx);
+    return true;
+  }
+
+  @override
+  Future<CubeAction> chooseCubeResponse(
+          GameState state, MatchContext ctx) async =>
+      CubeAction.take;
+
+  @override
+  Future<bool> chooseResignResponse(
+          GameState state, ResignValue value, MatchContext ctx) async =>
+      true;
+
+  @override
+  void dispose() {}
 }
 
 /// Completes once [predicate] holds, polling on every notification from [c].
@@ -423,6 +466,46 @@ void main() {
       expect(c.isThinking, isFalse, reason: 'settled after the match');
 
       c.disposeController();
+    });
+  });
+
+  group('match context', () {
+    test('passes each actor its own aways (white 2-away after leading 1-0)',
+        () async {
+      // 3-point match. White opens every game (6 > 1) and doubles at once;
+      // black drops, so white banks 1 point per game. In game 2 white leads
+      // 1-0, so white is 2-away and black 3-away — the ctx handed to white's
+      // considerDouble must reflect that.
+      final white = RecordingAgent();
+      final black = FakeAgent(cubeResponse: CubeAction.drop);
+      final c = GameController(
+        white: white,
+        black: black,
+        matchLength: 3,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      // Auto-advance past the between-games pause so game 2 begins.
+      c.addListener(() {
+        if (c.awaitingNextGame) c.continueToNextGame();
+      });
+
+      final matchFuture = c.playMatch();
+      // Wait until white has been asked to double in the SECOND game.
+      await waitFor(c, () => white.doubleContexts.length >= 2);
+
+      final game1 = white.doubleContexts[0];
+      expect(game1.moverAway, 3, reason: 'game 1: white 0-0, 3-away');
+      expect(game1.opponentAway, 3);
+      expect(game1.crawfordPlayed, isFalse);
+
+      final game2 = white.doubleContexts[1];
+      expect(game2.moverAway, 2, reason: 'game 2: white leads 1-0, 2-away');
+      expect(game2.opponentAway, 3, reason: 'black still 0, 3-away');
+      expect(game2.crawfordPlayed, isFalse);
+
+      c.disposeController();
+      await matchFuture;
     });
   });
 }

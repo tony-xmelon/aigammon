@@ -213,6 +213,10 @@ class ManagedEngineFacade implements EngineFacade {
   final EngineManager _manager;
 
   @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) =>
+      _manager.withEngine((e) => e.evaluate(board, mover));
+
+  @override
   Future<List<ScoredMove>> rankMoves(
           BoardState board, Player mover, Dice dice) =>
       _manager.withEngine((e) => e.rankMoves(board, mover, dice));

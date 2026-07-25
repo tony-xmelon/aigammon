@@ -10,16 +10,21 @@ class FakeEngine implements EngineFacade {
   FakeEngine({
     List<ScoredMove>? ranked,
     CubeAdvice? advice,
+    Probabilities? evalProbs,
   })  : ranked = ranked ?? const [],
-        advice = advice ?? _defaultAdvice;
+        advice = advice ?? _defaultAdvice,
+        evalProbs = evalProbs ?? _defaultProbs;
 
   List<ScoredMove> ranked;
   CubeAdvice advice;
+  Probabilities evalProbs;
 
   int rankMovesCalls = 0;
   int cubeInfoCalls = 0;
+  int evaluateCalls = 0;
   Player? lastRankMover;
   Player? lastCubeMover;
+  Player? lastEvalMover;
 
   static const _defaultAdvice = CubeAdvice(
     shouldDouble: false,
@@ -28,6 +33,21 @@ class FakeEngine implements EngineFacade {
     equityNoDouble: 0,
     equityDoubleTake: 0,
   );
+
+  static const _defaultProbs = Probabilities(
+    win: 0.5,
+    winGammon: 0,
+    winBackgammon: 0,
+    loseGammon: 0,
+    loseBackgammon: 0,
+  );
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) async {
+    evaluateCalls++;
+    lastEvalMover = mover;
+    return evalProbs;
+  }
 
   @override
   Future<List<ScoredMove>> rankMoves(
@@ -56,6 +76,32 @@ ScoredMove _scored(Move move, double win) => ScoredMove(
       ),
     );
 
+Probabilities _probs({
+  double win = 0.5,
+  double winGammon = 0,
+  double winBackgammon = 0,
+  double loseGammon = 0,
+  double loseBackgammon = 0,
+}) =>
+    Probabilities(
+      win: win,
+      winGammon: winGammon,
+      winBackgammon: winBackgammon,
+      loseGammon: loseGammon,
+      loseBackgammon: loseBackgammon,
+    );
+
+MatchContext _ctx({
+  required int moverAway,
+  required int opponentAway,
+  bool crawfordPlayed = false,
+}) =>
+    MatchContext(
+      moverAway: moverAway,
+      opponentAway: opponentAway,
+      crawfordPlayed: crawfordPlayed,
+    );
+
 GameState _movingState({Dice? dice}) => GameState.testState(
       board: BoardState.initial(),
       turn: Player.white,
@@ -76,14 +122,8 @@ GameState _cubeOfferedState() => GameState.testState(
       phase: GamePhase.cubeOffered,
     );
 
-CubeAdvice _adviceWith({bool shouldDouble = false, bool shouldAccept = true}) =>
-    CubeAdvice(
-      shouldDouble: shouldDouble,
-      shouldAccept: shouldAccept,
-      equityCubeless: 0,
-      equityNoDouble: 0,
-      equityDoubleTake: 0,
-    );
+/// A [MatchContext] for the human tests, which ignore it.
+final _humanCtx = _ctx(moverAway: 3, opponentAway: 3);
 
 void main() {
   group('LocalHumanAgent', () {
@@ -104,16 +144,16 @@ void main() {
       agent.submitMove(move);
       expect(await moveF, same(move));
 
-      final doubleF = agent.considerDouble(_awaitingRollState());
+      final doubleF = agent.considerDouble(_awaitingRollState(), _humanCtx);
       agent.submitDoubleDecision(true);
       expect(await doubleF, isTrue);
 
-      final cubeF = agent.chooseCubeResponse(_awaitingRollState());
+      final cubeF = agent.chooseCubeResponse(_awaitingRollState(), _humanCtx);
       agent.submitCubeResponse(CubeAction.drop);
       expect(await cubeF, CubeAction.drop);
 
-      final resignF =
-          agent.chooseResignResponse(_awaitingRollState(), ResignValue.gammon);
+      final resignF = agent.chooseResignResponse(
+          _awaitingRollState(), ResignValue.gammon, _humanCtx);
       agent.submitResignResponse(false);
       expect(await resignF, isFalse);
 
@@ -136,17 +176,19 @@ void main() {
       agent.chooseMove(_movingState());
       expect(() => agent.chooseMove(_movingState()), throwsStateError);
 
-      agent.considerDouble(_awaitingRollState());
-      expect(() => agent.considerDouble(_awaitingRollState()), throwsStateError);
-
-      agent.chooseCubeResponse(_awaitingRollState());
-      expect(() => agent.chooseCubeResponse(_awaitingRollState()),
+      agent.considerDouble(_awaitingRollState(), _humanCtx);
+      expect(() => agent.considerDouble(_awaitingRollState(), _humanCtx),
           throwsStateError);
 
-      agent.chooseResignResponse(_awaitingRollState(), ResignValue.single);
+      agent.chooseCubeResponse(_awaitingRollState(), _humanCtx);
+      expect(() => agent.chooseCubeResponse(_awaitingRollState(), _humanCtx),
+          throwsStateError);
+
+      agent.chooseResignResponse(
+          _awaitingRollState(), ResignValue.single, _humanCtx);
       expect(
           () => agent.chooseResignResponse(
-              _awaitingRollState(), ResignValue.single),
+              _awaitingRollState(), ResignValue.single, _humanCtx),
           throwsStateError);
 
       agent.dispose();
@@ -170,7 +212,8 @@ void main() {
     test('pendingResignRequest carries the state and value', () async {
       final agent = LocalHumanAgent();
       final state = _awaitingRollState();
-      final future = agent.chooseResignResponse(state, ResignValue.backgammon);
+      final future =
+          agent.chooseResignResponse(state, ResignValue.backgammon, _humanCtx);
       expect(agent.pendingResignRequest.value, isNotNull);
       expect(agent.pendingResignRequest.value!.$1, same(state));
       expect(agent.pendingResignRequest.value!.$2, ResignValue.backgammon);
@@ -218,55 +261,113 @@ void main() {
       expect(() => agent.chooseMove(_awaitingRollState()), throwsStateError);
     });
 
-    test('considerDouble reflects engine advice', () async {
-      final doublingEngine =
-          FakeEngine(advice: _adviceWith(shouldDouble: true));
-      final holdEngine = FakeEngine(advice: _adviceWith(shouldDouble: false));
-
+    test('considerDouble doubles when the advisor says so (2a/2a, w=0.6)',
+        () async {
+      // At 2-away/2-away, cube 1, a gammonless 0.6 win doubles (take point is
+      // beaten). Evaluated from the mover (state.turn == white).
+      final engine = FakeEngine(evalProbs: _probs(win: 0.6));
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
       expect(
-          await AiAgent(doublingEngine, Difficulty.expert, Random(1))
-              .considerDouble(_awaitingRollState()),
+          await agent.considerDouble(
+              _awaitingRollState(), _ctx(moverAway: 2, opponentAway: 2)),
           isTrue);
+      expect(engine.lastEvalMover, Player.white,
+          reason: 'evaluated from the mover (state.turn)');
+    });
+
+    test('considerDouble holds when the advisor says so (2a/2a, w=0.5)',
+        () async {
+      final engine = FakeEngine(evalProbs: _probs(win: 0.5));
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
       expect(
-          await AiAgent(holdEngine, Difficulty.expert, Random(1))
-              .considerDouble(_awaitingRollState()),
+          await agent.considerDouble(
+              _awaitingRollState(), _ctx(moverAway: 2, opponentAway: 2)),
           isFalse);
     });
 
-    test('chooseCubeResponse consults the doubler, not the decider', () async {
-      // cubeOffered: turn = black (decider), doubler = white. The engine must
-      // be queried from the doubler's (on-roll) perspective so shouldAccept
-      // refers to the decider taking.
-      final engine = FakeEngine(advice: _adviceWith(shouldAccept: true));
+    test('chooseCubeResponse evaluates the doubler and inverts the aways',
+        () async {
+      // cubeOffered: turn = black (decider), doubler = white. ctx is anchored
+      // to the DECIDER: moverAway = decider (2), opponentAway = doubler (5).
+      // The advisor must be fed the DOUBLER's perspective, so the agent
+      // inverts the aways. probs (win 0.61, gammonless, doubler's view) is
+      // chosen so the correct orientation (doubler 5-away) says TAKE while the
+      // inverted-by-mistake orientation would say DROP — pinning the fix.
+      const advisor = MatchCubeAdvisor();
+      final probs = _probs(win: 0.61);
+      final correct = advisor.advise(
+          probs: probs, moverAway: 5, opponentAway: 2, cubeValue: 1);
+      final swapped = advisor.advise(
+          probs: probs, moverAway: 2, opponentAway: 5, cubeValue: 1);
+      expect(correct.shouldTake, isTrue);
+      expect(swapped.shouldTake, isFalse,
+          reason: 'sanity: the orientation genuinely changes the decision');
+
+      final engine = FakeEngine(evalProbs: probs);
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
       final state = _cubeOfferedState();
       expect(state.turn, Player.black);
 
-      await agent.chooseCubeResponse(state);
-      expect(engine.lastCubeMover, Player.white,
+      final action = await agent.chooseCubeResponse(
+          state, _ctx(moverAway: 2, opponentAway: 5));
+
+      expect(engine.lastEvalMover, Player.white,
           reason: 'must query the doubler (white), not the decider (black)');
+      expect(action, CubeAction.take,
+          reason: 'doubler is 5-away: taking is correct here');
     });
 
-    test('chooseCubeResponse takes when advice says accept', () async {
-      final engine = FakeEngine(advice: _adviceWith(shouldAccept: true));
-      final agent = AiAgent(engine, Difficulty.expert, Random(1));
-      expect(await agent.chooseCubeResponse(_cubeOfferedState()),
-          CubeAction.take);
-    });
-
-    test('chooseCubeResponse drops when advice says reject', () async {
-      final engine = FakeEngine(advice: _adviceWith(shouldAccept: false));
-      final agent = AiAgent(engine, Difficulty.expert, Random(1));
-      expect(await agent.chooseCubeResponse(_cubeOfferedState()),
-          CubeAction.drop);
-    });
-
-    test('chooseResignResponse always accepts (v1 policy)', () async {
-      final engine = FakeEngine();
+    test('chooseResignResponse declines a single when a gammon is likely',
+        () async {
+      final engine = FakeEngine(evalProbs: _probs(win: 0.9, winGammon: 0.3));
       final agent = AiAgent(engine, Difficulty.expert, Random(1));
       expect(
           await agent.chooseResignResponse(
-              _awaitingRollState(), ResignValue.single),
+              _awaitingRollState(), ResignValue.single, _humanCtx),
+          isFalse);
+      expect(engine.lastEvalMover, Player.white,
+          reason: 'evaluated from the acceptor (state.turn)');
+    });
+
+    test('chooseResignResponse accepts a single when a gammon is unlikely',
+        () async {
+      final engine = FakeEngine(evalProbs: _probs(win: 0.9, winGammon: 0.1));
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
+      expect(
+          await agent.chooseResignResponse(
+              _awaitingRollState(), ResignValue.single, _humanCtx),
+          isTrue);
+    });
+
+    test('chooseResignResponse declines a gammon when a backgammon is likely',
+        () async {
+      final engine = FakeEngine(
+          evalProbs: _probs(win: 0.95, winGammon: 0.6, winBackgammon: 0.3));
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
+      expect(
+          await agent.chooseResignResponse(
+              _awaitingRollState(), ResignValue.gammon, _humanCtx),
+          isFalse);
+    });
+
+    test('chooseResignResponse accepts a gammon when a backgammon is unlikely',
+        () async {
+      final engine = FakeEngine(
+          evalProbs: _probs(win: 0.95, winGammon: 0.6, winBackgammon: 0.05));
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
+      expect(
+          await agent.chooseResignResponse(
+              _awaitingRollState(), ResignValue.gammon, _humanCtx),
+          isTrue);
+    });
+
+    test('chooseResignResponse always accepts a backgammon offer', () async {
+      final engine = FakeEngine(
+          evalProbs: _probs(win: 0.99, winGammon: 0.9, winBackgammon: 0.8));
+      final agent = AiAgent(engine, Difficulty.expert, Random(1));
+      expect(
+          await agent.chooseResignResponse(
+              _awaitingRollState(), ResignValue.backgammon, _humanCtx),
           isTrue);
     });
   });

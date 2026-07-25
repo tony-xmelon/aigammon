@@ -8,6 +8,35 @@ import 'package:flutter/foundation.dart';
 /// A player's response to an opponent's double.
 enum CubeAction { take, drop }
 
+/// The match-score context an agent needs to make match-aware cube and resign
+/// decisions. Always built from the perspective of the agent BEING ASKED (the
+/// on-turn actor / decider), so [moverAway] is that actor's own away score.
+///
+/// "Away" = points still needed to win the match (`matchLength - score`).
+///
+/// The [GameController] constructs this at each call site from its [MatchState]
+/// and `state.turn`. Because it is anchored to the actor, an agent that needs
+/// the OTHER side's perspective (e.g. [AiAgent.chooseCubeResponse], where the
+/// doubler is the actor's opponent) must invert [moverAway]/[opponentAway]
+/// itself — see that method.
+class MatchContext {
+  /// Points the actor being asked still needs to win the match.
+  final int moverAway;
+
+  /// Points that actor's opponent still needs to win the match.
+  final int opponentAway;
+
+  /// True once the match's Crawford game has already been played (cube live
+  /// again, post-Crawford). Threaded to [MatchCubeAdvisor.advise].
+  final bool crawfordPlayed;
+
+  const MatchContext({
+    required this.moverAway,
+    required this.opponentAway,
+    required this.crawfordPlayed,
+  });
+}
+
 /// A decision-maker for one side of a game. The [GameController] (Plan 3
 /// Task 4) drives a match by asking the on-turn agent for its choices and
 /// applying the results to the [GameState].
@@ -29,14 +58,17 @@ abstract interface class PlayerAgent {
   Future<Move> chooseMove(GameState state);
 
   /// Whether to offer a double. Called only when doubling is legal for the
-  /// on-turn player.
-  Future<bool> considerDouble(GameState state);
+  /// on-turn player. [ctx] is built from the on-turn player's perspective.
+  Future<bool> considerDouble(GameState state, MatchContext ctx);
 
-  /// The response to an opponent's double.
-  Future<CubeAction> chooseCubeResponse(GameState state);
+  /// The response to an opponent's double. [ctx] is built from the DECIDER's
+  /// (`state.turn`'s) perspective — the actor being asked, not the doubler.
+  Future<CubeAction> chooseCubeResponse(GameState state, MatchContext ctx);
 
-  /// The response to an opponent's resignation offer. `true` accepts.
-  Future<bool> chooseResignResponse(GameState state, ResignValue value);
+  /// The response to an opponent's resignation offer. `true` accepts. [ctx] is
+  /// built from the acceptor's (`state.turn`'s) perspective.
+  Future<bool> chooseResignResponse(
+      GameState state, ResignValue value, MatchContext ctx);
 
   /// Releases any resources. No-op by default.
   void dispose() {}
@@ -76,8 +108,11 @@ class LocalHumanAgent implements PlayerAgent {
     return completer.future;
   }
 
+  /// [ctx] is unused: a human answers via the UI, which sees the match score
+  /// directly. It stays in the signature so humans and the AI share one
+  /// interface.
   @override
-  Future<bool> considerDouble(GameState state) {
+  Future<bool> considerDouble(GameState state, MatchContext ctx) {
     if (_doubleCompleter != null) {
       throw StateError('a double request is already pending');
     }
@@ -88,7 +123,7 @@ class LocalHumanAgent implements PlayerAgent {
   }
 
   @override
-  Future<CubeAction> chooseCubeResponse(GameState state) {
+  Future<CubeAction> chooseCubeResponse(GameState state, MatchContext ctx) {
     if (_cubeCompleter != null) {
       throw StateError('a cube response is already pending');
     }
@@ -99,7 +134,8 @@ class LocalHumanAgent implements PlayerAgent {
   }
 
   @override
-  Future<bool> chooseResignResponse(GameState state, ResignValue value) {
+  Future<bool> chooseResignResponse(
+      GameState state, ResignValue value, MatchContext ctx) {
     if (_resignCompleter != null) {
       throw StateError('a resign response is already pending');
     }
@@ -177,6 +213,8 @@ class LocalHumanAgent implements PlayerAgent {
 /// agent is testable without the native engine. [EngineServiceFacade] wraps a
 /// real [EngineService] in production.
 abstract interface class EngineFacade {
+  /// Cubeless win/gammon/backgammon probabilities from [mover]'s perspective.
+  Future<Probabilities> evaluate(BoardState board, Player mover);
   Future<List<ScoredMove>> rankMoves(
       BoardState board, Player mover, Dice dice);
   Future<CubeAdvice> cubeInfo(BoardState board, Player mover);
@@ -186,6 +224,10 @@ abstract interface class EngineFacade {
 class EngineServiceFacade implements EngineFacade {
   EngineServiceFacade(this._service);
   final EngineService _service;
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) =>
+      _service.evaluate(board, mover);
 
   @override
   Future<List<ScoredMove>> rankMoves(
@@ -206,6 +248,7 @@ class AiAgent implements PlayerAgent {
   final EngineFacade _engine;
   final Difficulty difficulty;
   final Random _rng;
+  final MatchCubeAdvisor _advisor = const MatchCubeAdvisor();
 
   /// The bot evaluates a double at the start of every turn.
   @override
@@ -222,31 +265,78 @@ class AiAgent implements PlayerAgent {
     return pickMove(ranked, difficulty, _rng).move;
   }
 
-  /// Uses the engine's money-game cube advice. Match-score-aware cube
-  /// decisions are a deferred concern (see [CubeAdvice]); money advice is an
-  /// acceptable approximation for the bot.
+  /// Match-aware double decision via [MatchCubeAdvisor]. `state.turn` is the
+  /// mover, and [ctx] is built from the mover's perspective, so the advisor's
+  /// `moverAway`/`opponentAway` map straight through.
+  ///
+  /// This retires the old money-only `cubeInfo` path for bot doubling. The
+  /// [EngineFacade.cubeInfo] verb is kept (it is separately wired and tested,
+  /// and the tutor may use it for money-style display) but is no longer
+  /// consulted here.
   @override
-  Future<bool> considerDouble(GameState state) async {
-    final advice = await _engine.cubeInfo(state.board, state.turn);
+  Future<bool> considerDouble(GameState state, MatchContext ctx) async {
+    final probs = await _engine.evaluate(state.board, state.turn);
+    final advice = _advisor.advise(
+      probs: probs,
+      moverAway: ctx.moverAway,
+      opponentAway: ctx.opponentAway,
+      cubeValue: state.cube.value,
+      crawfordPlayed: ctx.crawfordPlayed,
+    );
     return advice.shouldDouble;
   }
 
-  /// In [GamePhase.cubeOffered] `state.turn` is the decider; the doubler
-  /// (`state.turn.opponent`) is the on-roll player `x`. wildbg's cube_info is
-  /// evaluated with `x` on roll and its `shouldAccept` is advice for `x`'s
-  /// OPPONENT (= the decider) to take (native/wildbg/.../cube.rs:24). So we
-  /// pass the doubler and read shouldAccept directly.
+  /// Match-aware take/drop via [MatchCubeAdvisor].
+  ///
+  /// In [GamePhase.cubeOffered] `state.turn` is the DECIDER (this agent); the
+  /// DOUBLER is `state.turn.opponent`. The advisor reasons from the doubler's
+  /// (mover's) perspective, so we:
+  ///  * evaluate the position from the DOUBLER's perspective (preserving the
+  ///    prior fix — the engine is queried with the on-roll doubler, not the
+  ///    decider), and
+  ///  * INVERT the aways: [ctx] is anchored to the decider (`state.turn`), so
+  ///    the doubler's away is `ctx.opponentAway` and the decider's is
+  ///    `ctx.moverAway`. We pass them swapped into `advise`.
+  /// `advice.shouldTake` is then the doubler-opponent's (= this decider's) best
+  /// response.
   @override
-  Future<CubeAction> chooseCubeResponse(GameState state) async {
-    final advice = await _engine.cubeInfo(state.board, state.turn.opponent);
-    return advice.shouldAccept ? CubeAction.take : CubeAction.drop;
+  Future<CubeAction> chooseCubeResponse(
+      GameState state, MatchContext ctx) async {
+    final doubler = state.turn.opponent;
+    final probs = await _engine.evaluate(state.board, doubler);
+    final advice = _advisor.advise(
+      probs: probs,
+      moverAway: ctx.opponentAway,
+      opponentAway: ctx.moverAway,
+      cubeValue: state.cube.value,
+      crawfordPlayed: ctx.crawfordPlayed,
+    );
+    return advice.shouldTake ? CubeAction.take : CubeAction.drop;
   }
 
+  /// Equity-based resign policy (v1). This agent is the potential ACCEPTOR of
+  /// the opponent's resignation; after [GameState.offerResign] `state.turn` is
+  /// this decider, so evaluating from `state.turn` gives the acceptor's own
+  /// win distribution.
+  ///
+  /// The resigner concedes exactly [value]'s point class, so the acceptor
+  /// should DECLINE only when it has real prospects of winning a BIGGER class
+  /// than offered — leaving those points on the table:
+  ///  * a `single` offer is declined when a gammon is genuinely likely
+  ///    (`winGammon > 0.25`, i.e. >25% of ALL games end in a gammon+ win here);
+  ///  * a `gammon` offer is declined when a backgammon is genuinely likely
+  ///    (`winBackgammon > 0.25`);
+  ///  * a `backgammon` offer is always accepted — there is no bigger class.
+  /// (`winGammon`/`winBackgammon` are cumulative, so they already mean "gammon
+  /// or better" / "backgammon".)
   @override
-  Future<bool> chooseResignResponse(GameState state, ResignValue value) async {
-    // TODO(plan4): decline resignations that undervalue the position (needs
-    // equity threshold vs ResignValue).
-    return true;
+  Future<bool> chooseResignResponse(
+      GameState state, ResignValue value, MatchContext ctx) async {
+    final probs = await _engine.evaluate(state.board, state.turn);
+    final declines =
+        (value == ResignValue.single && probs.winGammon > 0.25) ||
+            (value == ResignValue.gammon && probs.winBackgammon > 0.25);
+    return !declines;
   }
 
   @override

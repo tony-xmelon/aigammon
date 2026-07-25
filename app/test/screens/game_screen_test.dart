@@ -46,13 +46,17 @@ class FakeAgent implements PlayerAgent {
   }
 
   @override
-  Future<bool> considerDouble(GameState state) async => doubles;
+  Future<bool> considerDouble(GameState state, MatchContext ctx) async =>
+      doubles;
 
   @override
-  Future<CubeAction> chooseCubeResponse(GameState state) async => cubeResponse;
+  Future<CubeAction> chooseCubeResponse(
+          GameState state, MatchContext ctx) async =>
+      cubeResponse;
 
   @override
-  Future<bool> chooseResignResponse(GameState state, ResignValue value) async =>
+  Future<bool> chooseResignResponse(
+          GameState state, ResignValue value, MatchContext ctx) async =>
       acceptsResign;
 
   @override
@@ -69,14 +73,16 @@ class ThrowingAgent implements PlayerAgent {
       throw StateError('boom from agent');
 
   @override
-  Future<bool> considerDouble(GameState state) async => false;
+  Future<bool> considerDouble(GameState state, MatchContext ctx) async => false;
 
   @override
-  Future<CubeAction> chooseCubeResponse(GameState state) async =>
+  Future<CubeAction> chooseCubeResponse(
+          GameState state, MatchContext ctx) async =>
       CubeAction.take;
 
   @override
-  Future<bool> chooseResignResponse(GameState state, ResignValue value) async =>
+  Future<bool> chooseResignResponse(
+          GameState state, ResignValue value, MatchContext ctx) async =>
       true;
 
   @override
