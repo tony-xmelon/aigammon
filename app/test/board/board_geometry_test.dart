@@ -49,6 +49,31 @@ void main() {
         expect(g.locationAt(Offset(size.width + 1, size.height + 1)), isNull);
       });
 
+      test('dice pairs sit clear of the bar and every point', () {
+        final barUnion = g
+            .barRect(Player.white)
+            .expandToInclude(g.barRect(Player.black));
+        for (final mover in Player.values) {
+          final moverRect = g.diceRect(mover, mover: mover);
+          final waiterRect = g.diceRect(mover.opponent, mover: mover);
+          for (final r in [moverRect, waiterRect]) {
+            // Inside the board bounds.
+            expect(r.left, greaterThanOrEqualTo(-0.5));
+            expect(r.right, lessThanOrEqualTo(size.width + 0.5));
+            // Clear of the central bar strip.
+            expect(r.overlaps(barUnion), isFalse, reason: 'dice overlap bar');
+            // Clear of every triangle — dice live in the empty middle gap.
+            for (var i = 0; i < 24; i++) {
+              expect(r.overlaps(g.pointRect(i)), isFalse,
+                  reason: 'dice overlap point $i');
+            }
+          }
+          // The mover and waiter pairs never collide.
+          expect(moverRect.overlaps(waiterRect), isFalse,
+              reason: 'the two dice pairs overlap');
+        }
+      });
+
       test('five checkers stack inside the point rect at full spacing', () {
         for (var i = 0; i < 24; i++) {
           final rect = g.pointRect(i);
@@ -138,6 +163,22 @@ void main() {
     final p12 = g.pointRect(12).center;
     expect(p12.dx, lessThan(size.width / 2));
     expect(p12.dy, lessThan(size.height / 2));
+  });
+
+  test('the mover dice sit right of the bar, the waiter left (white bottom)',
+      () {
+    final g = BoardGeometry(size, whiteAtBottom: true);
+    for (final mover in Player.values) {
+      final moverRect = g.diceRect(mover, mover: mover);
+      final waiterRect = g.diceRect(mover.opponent, mover: mover);
+      expect(moverRect.center.dx, greaterThan(size.width / 2),
+          reason: 'mover pair in the right half');
+      expect(waiterRect.center.dx, lessThan(size.width / 2),
+          reason: 'waiter pair mirrored in the left half');
+      // Vertically both sit in the empty middle band (near centre).
+      expect(moverRect.center.dy, closeTo(size.height / 2, 1e-6));
+      expect(waiterRect.center.dy, closeTo(size.height / 2, 1e-6));
+    }
   });
 
   test('the board fills the full width symmetrically (no side tray)', () {

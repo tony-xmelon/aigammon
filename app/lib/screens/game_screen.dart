@@ -436,6 +436,14 @@ class _GameScreenState extends State<GameScreen> {
     _dicePresenting.value = false;
   }
 
+  /// Folds the CURRENT game's event log into each player's most recent roll, so
+  /// every player keeps their OWN persistent dice pair (the fix for "the
+  /// opponent dice is not perceivable"). The opening roll seeds the FIRST mover's
+  /// pair (they play the opening dice); each later [RollEvent] overwrites its
+  /// roller's pair. Both are `null` before a player's first roll (a blank dimmed
+  /// die), and reset automatically when a new game replaces the event log.
+  (Dice?, Dice?) _persistentDice() => persistentDice(_c.game.events);
+
   /// A deterministic dice pair for beat [frame], derived from the settled
   /// [realRoll]. Both faces are offset off the real roll (die1 always differs
   /// from the real die1), so the whole pair reads as different from the settled
@@ -653,6 +661,9 @@ class _GameScreenState extends State<GameScreen> {
       BoardOrientationMode.fixedBlack => false,
       BoardOrientationMode.followActive => _displayedWhiteAtBottom,
     };
+    // Each player's persistent dice pair (their most recent roll this game), so
+    // both stay visible after the turn passes.
+    final (whiteDice, blackDice) = _persistentDice();
 
     return Scaffold(
       body: SafeArea(
@@ -684,6 +695,8 @@ class _GameScreenState extends State<GameScreen> {
                         hopDuration: widget.timings.hop,
                         interHopDuration: widget.timings.interHop,
                         interactionOptions: widget.interactionOptions,
+                        whiteDice: whiteDice,
+                        blackDice: blackDice,
                         diceOverride: _rollBeatDice,
                       ),
                     ),

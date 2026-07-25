@@ -133,6 +133,34 @@ void _checkTheme(String theme, BoardTheme t) {
                 'fill: ${r.toStringAsFixed(2)}');
       });
     }
+
+    // 5. DICE LEGIBILITY (the persistent per-player dice pairs): the WHITE pair
+    //    is a white-checker body with dark pips; the BLACK pair a dark body with
+    //    light pips, each with the checker's inverted per-player rim. The pips
+    //    must read on the body (>= 3:1), and each die body must carry a >= 3:1
+    //    SILHOUETTE (body OR rim) against every surface it can rest over — the
+    //    same guarantee the checkers get, so a die never melts into the felt.
+    final dice = <String, (Color body, Color pip, Color rim)>{
+      'white dice': (t.whiteChecker, t.blackChecker, t.whiteCheckerBorder),
+      'black dice': (t.blackChecker, t.whiteChecker, t.blackCheckerBorder),
+    };
+    for (final d in dice.entries) {
+      final (body, pip, rim) = d.value;
+      test('$theme: ${d.key} pip vs body >= 3.0', () {
+        final r = _contrast(pip, body);
+        expect(r, greaterThanOrEqualTo(3.0),
+            reason: '$theme ${d.key} pips melt into the die body: '
+                '${r.toStringAsFixed(2)}');
+      });
+      for (final s in surfaces.entries) {
+        test('$theme: ${d.key} silhouette on ${s.key} >= 3.0', () {
+          final sil = _silhouette(body, rim, s.value);
+          expect(sil, greaterThanOrEqualTo(3.0),
+              reason: '$theme ${d.key} (body+rim) must carry a 3:1 silhouette '
+                  'over the ${s.key}; got ${sil.toStringAsFixed(2)}.');
+        });
+      }
+    }
   });
 }
 

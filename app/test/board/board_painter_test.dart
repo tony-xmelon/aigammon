@@ -36,7 +36,11 @@ void main() {
       board: BoardState.initial(),
       geometry: geometry,
       theme: BoardTheme.light,
-      dice: Dice(3, 1),
+      // Both persistent pairs: White (mover, right, bright) and Black (waiting,
+      // left, dimmed) each show a roll so the two pairs are visibly distinct.
+      whiteDice: Dice(3, 1),
+      blackDice: Dice(5, 4),
+      diceMover: Player.white,
       cube: const CubeState.initial(),
     );
     await t.pumpWidget(_harness(painter));
@@ -66,7 +70,10 @@ void main() {
       board: board,
       geometry: geometry,
       theme: BoardTheme.dark,
-      dice: Dice(6, 4),
+      // White is the mover (bright, right); Black's pair persists dimmed (left).
+      whiteDice: Dice(6, 4),
+      blackDice: Dice(2, 5),
+      diceMover: Player.white,
       cube: const CubeState(value: 2, owner: Player.black),
       // Showcases every highlight type at once: subtle source rings on the two
       // selectable sources' top checkers, uniform green destination triangles,
@@ -88,7 +95,9 @@ void main() {
     BoardPainter make({
       BoardState? board,
       BoardTheme? theme,
-      Dice? dice,
+      Dice? whiteDice,
+      Dice? blackDice,
+      Player? diceMover,
       CubeState? cube,
       Set<int> src = const {},
       Set<int> dst = const {},
@@ -101,7 +110,9 @@ void main() {
           board: board ?? BoardState.initial(),
           geometry: BoardGeometry(_size, whiteAtBottom: whiteAtBottom),
           theme: theme ?? BoardTheme.light,
-          dice: dice,
+          whiteDice: whiteDice,
+          blackDice: blackDice,
+          diceMover: diceMover,
           cube: cube,
           highlightedSources: src,
           highlightedDestinations: dst,
@@ -113,7 +124,9 @@ void main() {
     final base = make();
     expect(base.shouldRepaint(make()), isFalse);
     expect(base.shouldRepaint(make(theme: BoardTheme.dark)), isTrue);
-    expect(base.shouldRepaint(make(dice: Dice(2, 2))), isTrue);
+    expect(base.shouldRepaint(make(whiteDice: Dice(2, 2))), isTrue);
+    expect(base.shouldRepaint(make(blackDice: Dice(2, 2))), isTrue);
+    expect(base.shouldRepaint(make(diceMover: Player.white)), isTrue);
     expect(
         base.shouldRepaint(make(cube: const CubeState.initial())), isTrue);
     expect(base.shouldRepaint(make(src: const {1})), isTrue);

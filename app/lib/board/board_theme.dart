@@ -16,7 +16,6 @@ class BoardTheme {
     required this.highlightDestination,
     required this.highlightDestinationFill,
     required this.selectedOutline,
-    required this.diceColor,
     required this.dicePipColor,
     required this.cubeColor,
     required this.textColor,
@@ -58,8 +57,8 @@ class BoardTheme {
   /// Ring drawn around the currently picked-up source's TOP CHECKER.
   final Color selectedOutline;
 
-  /// Dice body and pip colours.
-  final Color diceColor;
+  /// Pip colour (shared by the cube glyph). Dice bodies/pips are drawn from the
+  /// per-player checker fills; only the cube still uses this.
   final Color dicePipColor;
 
   /// Doubling-cube body colour.
@@ -85,7 +84,6 @@ class BoardTheme {
     highlightDestination: Color(0xFF5FD98C), // opaque green edge ring
     highlightDestinationFill: Color(0xFF357A52), // opaque uniform green fill
     selectedOutline: Color(0xFFFFD24A), // amber selected-checker ring
-    diceColor: Color(0xFFF7F2E7),
     dicePipColor: Color(0xFF1A1A1A),
     cubeColor: Color(0xFFF2ECDC),
     textColor: Color(0xFFF5ECD8),
@@ -107,7 +105,6 @@ class BoardTheme {
     highlightDestination: Color(0xFF62E2A0), // opaque green edge ring
     highlightDestinationFill: Color(0xFF2F6B4A), // opaque uniform green fill
     selectedOutline: Color(0xFFFFC53D),
-    diceColor: Color(0xFFE8ECF0),
     dicePipColor: Color(0xFF14181C),
     cubeColor: Color(0xFFDDE3EA),
     textColor: Color(0xFFE6ECF2),

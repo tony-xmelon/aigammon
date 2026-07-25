@@ -1,0 +1,10 @@
+#include "Generated.xcconfig"
+
+// AIGammon: statically link the Rust engine staticlib into Runner.
+// CI (ios.yml) stages libaigammon_engine.a at $(PROJECT_DIR)/Frameworks/ (i.e.
+// app/ios/Frameworks/). -force_load pulls in ALL of the shim's #[no_mangle]
+// exports (wildbg_new_with_path, best_move, probabilities, cube_info,
+// wildbg_free) so the linker's dead-code stripping cannot drop symbols that are
+// only referenced at runtime via dart:ffi DynamicLibrary.process() lookups.
+// See native/README.md "iOS" for the -lc++ troubleshooting note.
+OTHER_LDFLAGS = $(inherited) -force_load $(PROJECT_DIR)/Frameworks/libaigammon_engine.a

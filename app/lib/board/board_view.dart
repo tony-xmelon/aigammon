@@ -213,9 +213,28 @@ class BoardInteractionOptions {
 /// hops applied and the travelling checker suppressed (see [BoardPainter]'s
 /// `hiddenChecker`/`overlayChecker`). The controller fires [lastMove] BEFORE it
 /// notifies its own listeners, so at the moment the listener runs [state] is
-/// still the PRE-move state — the pre-move board is captured then. Both the
-/// local player's own just-confirmed move and the opponent's/AI's moves are
-/// animated (simpler, and it reads fine).
+/// still the PRE-move state — the pre-move board is captured then.
+///
+/// ## Gating the animation by ENTRY SOURCE (no self-replay)
+///
+/// A move the user just entered HOP-BY-HOP on this device's board (by tapping or
+/// dragging the checkers) must NOT be replayed as an animation — the user already
+/// performed that travel live, so replaying it feels like a stutter (the reported
+/// bug). A move that was NOT hand-entered here still animates: the AI's reply, a
+/// remote opponent's move (folded from the server), and a tap-to-apply tutor hint
+/// (staged PROGRAMMATICALLY via [externalMove], not dragged by the user).
+///
+/// The distinguishing signal is captured AT THE COMMIT SITE, entirely inside this
+/// widget — the one place that sees the difference between hops added by user
+/// gestures and a whole move staged externally. [_confirm] sets a one-shot
+/// [_suppressNextCommitAnimation] flag whenever the committed move was NOT staged
+/// from [externalMove] (i.e. it was hand-entered). The FIRST [lastMove] to fire
+/// after a local commit is that very commit, so [_onLastMove] consumes the flag
+/// and skips the replay for it; every later move (the opponent's) fires with the
+/// flag clear and animates normally. This is source-based, not mover-based, so it
+/// holds across vs-AI (human's own moves are hand-entered here; the AI's are not),
+/// hot-seat (BOTH sides are hand-entered on this board — neither replays), and
+/// online (the local side is hand-entered; the remote side folds in and animates).
 ///
 /// Timing: [hopDuration] per hop with an [interHopDuration] stationary pause
 /// BETWEEN hops, so the controller's total is `n·hop + (n-1)·interHop` with NO
@@ -250,7 +269,12 @@ class BoardView extends StatefulWidget {
     this.hopDuration = const Duration(milliseconds: 150),
     this.interHopDuration = Duration.zero,
     this.interactionOptions = const BoardInteractionOptions(),
+    this.whiteDice,
+    this.blackDice,
     this.diceOverride,
+    this.highlightedSources = const {},
+    this.highlightedDestinations = const {},
+    this.highlightMovingPlayer,
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -309,12 +333,39 @@ class BoardView extends StatefulWidget {
   /// [BoardInteractionOptions].
   final BoardInteractionOptions interactionOptions;
 
-  /// When non-null, these faces REPLACE [state]'s dice on the painted board —
-  /// purely cosmetic. Used by the opponent dice-roll animation beat (see
-  /// [GameScreen]), which cycles pseudo-random faces for ~400ms before the real
-  /// roll settles (the override then clears back to `null`). Never affects move
-  /// entry or state; it only changes what the dice show.
+  /// WHITE's persistent dice pair — the most recent roll to show on White's
+  /// dice, or `null` when White has not rolled yet this game (a blank dimmed
+  /// outline). Each player keeps their OWN pair so the opponent's roll stays
+  /// visible after the turn passes. See [BoardPainter.whiteDice].
+  final Dice? whiteDice;
+
+  /// BLACK's persistent dice pair (see [whiteDice]).
+  final Dice? blackDice;
+
+  /// When non-null, these cycling faces REPLACE the CURRENT ROLLER's pair on the
+  /// painted board — purely cosmetic. Used by the opponent dice-roll animation
+  /// beat (see [GameScreen]), which cycles pseudo-random faces for ~400ms before
+  /// the real roll settles (the override then clears back to `null`). Applies
+  /// ONLY to the roller ([state]'s turn); the other pair stays static with its
+  /// persisted roll. Never affects move entry or state.
   final Dice? diceOverride;
+
+  /// Static SOURCE highlights to paint (point index 0..23, or [CheckerMove.bar])
+  /// — a subtle ring on each location's top checker. Used by the NON-interactive
+  /// replay/analysis board to draw a recorded move's origins over the pre-move
+  /// position; ignored in the interactive moving phase, where the live builder
+  /// owns the highlight layer. See [BoardPainter.highlightedSources].
+  final Set<int> highlightedSources;
+
+  /// Static DESTINATION highlights to paint (point index 0..23, or
+  /// [CheckerMove.off]) — a triangle/tray fill on each target. The replay board's
+  /// recorded-move landings; ignored while interactive (see [highlightedSources]).
+  final Set<int> highlightedDestinations;
+
+  /// The side a static overlay's move belongs to, so a bar source or an `off`
+  /// destination resolves to the correct half. Required for those to render;
+  /// ignored while interactive (the builder supplies the moving player).
+  final Player? highlightMovingPlayer;
 
   @override
   State<BoardView> createState() => _BoardViewState();
@@ -364,6 +415,20 @@ class _BoardViewState extends State<BoardView>
   /// Monotonic guard so a superseded animation's completion callback (fired when
   /// a new move restarts the controller) does not clear a fresh animation.
   int _animSeq = 0;
+
+  /// Whether the CURRENT move-entry builder holds a move that was staged
+  /// PROGRAMMATICALLY (a tap-to-apply hint via [BoardView.externalMove]) rather
+  /// than entered hop-by-hop by the user. Defaults to `false` (a fresh builder is
+  /// hand entry); [_applyExternalMove] sets it `true`, and any manual tap / drag /
+  /// undo flips it back to `false`. Read at [_confirm] to decide whether the
+  /// committed move should still animate. See the "Gating the animation" class doc.
+  bool _stagedFromExternal = false;
+
+  /// One-shot latch: set by [_confirm] when the user commits a move they entered
+  /// hop-by-hop on this board. The next [lastMove] to fire is that very commit;
+  /// [_onLastMove] consumes this to SKIP the cosmetic replay (the user already
+  /// performed the move live). See the "Gating the animation" class doc.
+  bool _suppressNextCommitAnimation = false;
 
   /// The source (point index or [CheckerMove.bar]) currently being dragged, or
   /// `null` when no drag is in progress. Only set when drag is enabled and a
@@ -451,6 +516,7 @@ class _BoardViewState extends State<BoardView>
     setState(() {
       builder.undoHop();
       _selectedSource = null;
+      _stagedFromExternal = false; // a manual undo makes this hand entry
     });
     _syncEntry();
   }
@@ -460,6 +526,11 @@ class _BoardViewState extends State<BoardView>
   void _confirm() {
     final builder = _builder;
     if (builder == null || !builder.isComplete) return;
+    // A move entered hop-by-hop on this board (tap/drag) must not be replayed as
+    // an animation — the user just performed it live. Flag the imminent lastMove
+    // fire so [_onLastMove] skips it. A move STAGED from [externalMove] (a
+    // tap-to-apply hint) was not hand-entered, so it is left to animate.
+    if (!_stagedFromExternal) _suppressNextCommitAnimation = true;
     widget.onMoveCommitted(builder.build());
   }
 
@@ -488,7 +559,16 @@ class _BoardViewState extends State<BoardView>
   /// releases (see [_onHoldChanged]); otherwise it starts immediately.
   void _onLastMove() {
     final event = widget.lastMove?.value;
-    if (event == null || !_animationsEnabled) return;
+    if (event == null) return;
+    // One-shot: the first move to land after a hand-entered commit IS that
+    // commit. Skip its cosmetic replay (the user just performed it live on the
+    // board). Consumed before the enabled/empty guards so it never leaks onto a
+    // later (opponent) move.
+    if (_suppressNextCommitAnimation) {
+      _suppressNextCommitAnimation = false;
+      return;
+    }
+    if (!_animationsEnabled) return;
     final hops = event.move.checkerMoves;
     if (hops.isEmpty) return; // a pass: nothing to animate
     // The controller fires this BEFORE it notifies, so [widget.state] is still
@@ -552,8 +632,12 @@ class _BoardViewState extends State<BoardView>
         for (final hop in move.checkerMoves) {
           builder.addHop(hop.from, hop.to);
         }
+        // Staged programmatically (a tap-to-apply hint): the user did not enter
+        // these hops by hand, so the committed move should still animate.
+        _stagedFromExternal = true;
       } on ArgumentError {
         builder.reset(); // stale/illegal move: leave a clean base position
+        _stagedFromExternal = false;
       }
     });
     _syncEntry();
@@ -566,6 +650,7 @@ class _BoardViewState extends State<BoardView>
     _selectedSource = null;
     _dragSource = null;
     _dragPointer = null;
+    _stagedFromExternal = false; // a fresh phase defaults to hand entry
     if (widget.interactive && widget.state.phase == GamePhase.moving) {
       final legal = widget.state.legalMoves;
       _builder = MoveBuilder(legal);
@@ -678,6 +763,9 @@ class _BoardViewState extends State<BoardView>
     if (builder == null) return;
     final loc = geometry.locationAt(localPosition);
     setState(() {
+      // Any manual tap interaction marks the entry as hand-driven; a later hint
+      // re-stage would flip it back via [_applyExternalMove].
+      _stagedFromExternal = false;
       final selected = _selectedSource;
       if (selected == null) {
         // Nothing picked up: pick up a source. Direct hit first, then forgive to
@@ -854,6 +942,7 @@ class _BoardViewState extends State<BoardView>
       _dragSource = source;
       _dragPointer = localPosition;
       _selectedSource = null;
+      _stagedFromExternal = false; // a manual drag makes this hand entry
     });
     _syncEntry();
   }
@@ -947,9 +1036,18 @@ class _BoardViewState extends State<BoardView>
           final dragPointer = _dragPointer;
           final dragging = dragSource != null && dragPointer != null;
 
-          // The dice faces to paint: the roll-beat override when one is active,
-          // otherwise the state's real dice. Cosmetic only.
-          final displayDice = widget.diceOverride ?? widget.state.dice;
+          // The two persistent dice pairs to paint. The roll-beat override, when
+          // active, REPLACES the current roller's ([state]'s turn) pair with the
+          // cycling faces; the other pair keeps its persisted roll. Cosmetic
+          // only — never touches state or move entry.
+          final turn = widget.state.turn;
+          final override = widget.diceOverride;
+          final whiteDice = (override != null && turn == Player.white)
+              ? override
+              : widget.whiteDice;
+          final blackDice = (override != null && turn == Player.black)
+              ? override
+              : widget.blackDice;
 
           // Highlights are a pure visual layer: when off, taps/drag still drive
           // entry but no rings or destination fills are painted (see
@@ -973,7 +1071,9 @@ class _BoardViewState extends State<BoardView>
               board: preview,
               geometry: geometry,
               theme: theme,
-              dice: displayDice,
+              whiteDice: whiteDice,
+              blackDice: blackDice,
+              diceMover: turn,
               cube: widget.state.cube,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
@@ -995,7 +1095,9 @@ class _BoardViewState extends State<BoardView>
               board: frame.board,
               geometry: geometry,
               theme: theme,
-              dice: displayDice,
+              whiteDice: whiteDice,
+              blackDice: blackDice,
+              diceMover: turn,
               cube: widget.state.cube,
               hiddenChecker: frame.hidden,
               overlayChecker: frame.overlay,
@@ -1005,21 +1107,32 @@ class _BoardViewState extends State<BoardView>
               board: held?.preBoard ?? _previewBoard(),
               geometry: geometry,
               theme: theme,
-              dice: displayDice,
+              whiteDice: whiteDice,
+              blackDice: blackDice,
+              diceMover: turn,
               cube: widget.state.cube,
-              highlightedSources: (showHl && builder != null && selected == null)
-                  ? builder.selectableSources
-                  : const {},
-              highlightedDestinations:
-                  (showHl && builder != null && selected != null)
+              // When a builder owns the board (interactive moving phase) the
+              // live selection drives the highlights; otherwise the static
+              // overlay fields (the replay/analysis move highlights) apply.
+              highlightedSources: builder == null
+                  ? widget.highlightedSources
+                  : (showHl && selected == null)
+                      ? builder.selectableSources
+                      : const {},
+              highlightedDestinations: builder == null
+                  ? widget.highlightedDestinations
+                  : (showHl && selected != null)
                       ? builder.destinationsFor(selected)
                       : const {},
               combinedDestinations:
                   (showHl && builder != null && selected != null)
                       ? _chainedDestinations(builder, selected)
                       : const {},
-              selectedCheckerLocation: showHl ? selected : null,
-              movingPlayer: builder != null ? widget.state.turn : null,
+              selectedCheckerLocation:
+                  builder != null && showHl ? selected : null,
+              movingPlayer: builder != null
+                  ? widget.state.turn
+                  : widget.highlightMovingPlayer,
             );
           }
 

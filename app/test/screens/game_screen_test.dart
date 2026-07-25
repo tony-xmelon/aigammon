@@ -8,7 +8,9 @@ import 'package:aigammon_app/data/match_repository.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
+import 'package:aigammon_app/game/match_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
+import 'package:aigammon_app/online/online_match_controller.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:aigammon_app/screens/history_screen.dart';
 import 'package:aigammon_app/tutor/tutor_service.dart';
@@ -17,6 +19,7 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:online_client/online_client.dart';
 
 import '../data/test_database.dart';
 import '../helpers/board_driving.dart';
@@ -230,9 +233,78 @@ class RealRankEngine implements EngineFacade {
       throw UnimplementedError();
 }
 
+/// A minimal scriptable [MatchApi] for driving an [OnlineMatchController] in a
+/// widget test. [initialLog] is served by [fetchEventsSince] (seed the opening
+/// roll so the controller becomes ready); [pollEvents] returns a stream fed by
+/// [push] (later remote events). [submitEvent] records the local side's event in
+/// [lastSubmitted] and is otherwise a no-op (the server would echo it back as a
+/// remote event, which the test injects via [push]).
+class ScriptedMatchApi implements MatchApi {
+  ScriptedMatchApi(this.initialLog);
+
+  final List<RemoteEvent> initialLog;
+  final StreamController<RemoteEvent> _poll = StreamController<RemoteEvent>();
+  GameEvent? lastSubmitted;
+
+  void push(RemoteEvent e) => _poll.add(e);
+  Future<void> close() => _poll.close();
+
+  @override
+  Future<List<RemoteEvent>> fetchEventsSince(String matchId, int afterSeq) async =>
+      [for (final e in initialLog) if (e.seq > afterSeq) e];
+
+  @override
+  Stream<RemoteEvent> pollEvents(String matchId,
+          {Duration interval = const Duration(seconds: 2)}) =>
+      _poll.stream;
+
+  @override
+  Future<int> submitEvent(String matchId, GameEvent event,
+      {GameResultClaim? result}) async {
+    lastSubmitted = event;
+    return 1;
+  }
+
+  @override
+  Future<Dice> rollDice(String matchId) async => Dice(1, 2);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      super.noSuchMethod(invocation);
+}
+
+/// A snapshot for a live 5-point online match (scores 0-0), enough to seed an
+/// [OnlineMatchController]; the live game state is derived from the folded log.
+MatchSnapshot _onlineSnap() => MatchSnapshot(
+      status: 'active',
+      code: 'ABC123',
+      matchLength: 5,
+      gameNo: 1,
+      seq: 0,
+      whiteUid: 'w',
+      blackUid: 'b',
+      whiteScore: 0,
+      blackScore: 0,
+      turn: Player.white,
+      phase: GamePhase.moving,
+      isCrawford: false,
+      crawfordPlayed: false,
+      winner: null,
+    );
+
 // --- Widget-test helpers -----------------------------------------------------
 
 const _surface = Size(900, 1300);
+
+/// A [GameScreen] over a generic [MatchController] with animation ENABLED, for
+/// the online (non-[GameController]) cases.
+Widget _controllerAnimHarness(MatchController c) => MaterialApp(
+      home: GameScreen(
+        key: ValueKey(c),
+        controller: c,
+        timings: AnimationTimings.normal,
+      ),
+    );
 
 Widget _tutorHarness(GameController c, TutorService tutor) => MaterialApp(
       home: GameScreen(key: ValueKey(c), controller: c, tutor: tutor),
@@ -1088,14 +1160,15 @@ void main() {
       expect(c.state.dice, Dice(realRoll.$1, realRoll.$2),
           reason: 'Black settled on its real roll internally');
 
-      // The beat is live: the board paints override faces, NOT the real roll.
-      expect(boardPainterOf(t).dice, isNot(Dice(realRoll.$1, realRoll.$2)),
-          reason: 'the roll beat overrides the displayed dice');
+      // The beat is live: Black (the roller) paints override faces on ITS pair,
+      // NOT the real roll.
+      expect(boardPainterOf(t).blackDice, isNot(Dice(realRoll.$1, realRoll.$2)),
+          reason: 'the roll beat overrides the roller pair');
 
       // After the tumble frames (6 × 140ms) the override clears and the real
       // roll shows. Pump comfortably past the cycling window.
       await t.pump(const Duration(milliseconds: 1000));
-      expect(boardPainterOf(t).dice, Dice(realRoll.$1, realRoll.$2),
+      expect(boardPainterOf(t).blackDice, Dice(realRoll.$1, realRoll.$2),
           reason: 'the beat settled to the real roll');
 
       // Let the settle-pause timer fire before teardown so no timer outlives it.
@@ -1111,9 +1184,9 @@ void main() {
       await t.pumpWidget(_harness(c)); // Duration.zero: animation off
       await driveToAiRoll(t, c, human);
 
-      // No override ever: the board shows Black's real roll immediately.
-      expect(boardPainterOf(t).dice, Dice(6, 5));
-      expect(boardPainterOf(t).dice, c.state.dice);
+      // No override ever: Black's pair shows its real roll immediately.
+      expect(boardPainterOf(t).blackDice, Dice(6, 5));
+      expect(boardPainterOf(t).blackDice, c.state.dice);
 
       c.disposeController();
     });
@@ -1190,13 +1263,341 @@ void main() {
 
       final realRoll = c.state.dice;
       expect(realRoll, isNotNull);
-      // The human's own roll shows immediately: the painter's dice equal the
-      // real state dice with no override in between.
-      expect(boardPainterOf(t).dice, realRoll,
+      // The human's own roll shows immediately: White's (the mover's) pair
+      // equals the real state dice with no override in between.
+      expect(boardPainterOf(t).whiteDice, realRoll,
           reason: 'a local roll is instant — no beat override');
 
       // Let any move animation from the AI opening finish before teardown.
       await t.pumpAndSettle();
+      c.disposeController();
+    });
+  });
+
+  group('no self-replay of hand-entered moves', () {
+    testWidgets('vs-AI: the human hand-entered move does NOT replay; the AI '
+        'reply DOES animate', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final ai = FakeAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        // White (human) wins the opening (6 > 1) and plays; Black (AI) then rolls
+        // (6,5) and replies.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      // Enter White's opening move BY HAND (taps → Confirm) on the board.
+      await commitFirstMove(t);
+
+      // The human's own move is not replayed: no travelling overlay appears in
+      // the window right after the commit (the AI's reply is still held behind
+      // its dice presentation, so any overlay here could only be the replay).
+      await t.pump(const Duration(milliseconds: 200));
+      expect(boardPainterOf(t).overlayChecker, isNull,
+          reason: "the human's hand-entered move must not replay");
+
+      // The AI's reply, by contrast, DOES animate once its dice presentation
+      // finishes and the held travel releases.
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker != null,
+          maxFrames: 2000);
+      expect(boardPainterOf(t).overlayChecker, isNotNull,
+          reason: 'the AI reply still animates');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('tap-to-apply hint: the applied move DOES animate', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // Black (AI) wins the opening and plays; White (human) then rolls (3,1)
+        // at its gate and applies a hint.
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      final tutor = TutorService(RealRankEngine());
+
+      await t.pumpWidget(MaterialApp(
+        home: GameScreen(
+          key: ValueKey(c),
+          controller: c,
+          tutor: tutor,
+          timings: AnimationTimings.normal,
+        ),
+      ));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      // Let the AI's opening-move animation settle before the human acts.
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker == null,
+          maxFrames: 2000);
+
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      final s = c.state;
+      final expected = MoveGenerator.legalMoves(s.board, s.turn, s.dice!).first;
+      await t.tap(find.widgetWithText(OutlinedButton, 'Hint'));
+      await pumpUntil(t, () => find.text('Top plays').evaluate().isNotEmpty);
+      await t.tap(find.text('$expected').first);
+      await t.pump(); // panel closes; the play is STAGED programmatically
+
+      // Confirm the staged hint → it animates (the user did not drag it).
+      await t.tap(find.widgetWithText(FilledButton, 'Confirm'));
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker != null,
+          maxFrames: 800);
+      expect(boardPainterOf(t).overlayChecker, isNotNull,
+          reason: 'a tap-to-apply hint move still animates');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat: a hand-entered move does NOT replay for either side',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = GameController(
+        white: white,
+        black: black,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      await commitFirstMove(t);
+
+      // The mover just performed the move live on the shared board — no replay.
+      // (The other side is human too and will not move on its own.)
+      await t.pump(const Duration(milliseconds: 300));
+      expect(boardPainterOf(t).overlayChecker, isNull,
+          reason: 'hot-seat: a hand-entered move is not replayed');
+
+      c.disposeController();
+    });
+
+    testWidgets('online: a REMOTE move animates', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Opening: Black (the REMOTE side) wins (6 > 3) and is on move first.
+      final log = [
+        const RemoteEvent(
+          seq: 0,
+          gameNo: 1,
+          event: OpeningRollEvent(whiteDie: 3, blackDie: 6),
+        ),
+      ];
+      final api = ScriptedMatchApi(log);
+      addTearDown(api.close);
+      final c = OnlineMatchController(
+        api: api,
+        matchId: 'm',
+        localSide: Player.white, // the remote mover is Black
+        initialSnapshot: _onlineSnap(),
+      );
+
+      // Bring the controller to readiness (folds the opening, subscribes the
+      // poll) BEFORE mounting the screen (whose initState reads `state`). Pumping
+      // flushes the catch-up microtasks; the placeholder keeps the tester alive.
+      await t.pumpWidget(const MaterialApp(home: SizedBox()));
+      unawaited(c.playMatch());
+      await pumpUntil(t, () => c.isReady);
+      await t.pumpWidget(_controllerAnimHarness(c));
+      await t.pump();
+
+      // Inject Black's (remote) move — a legal play for the folded state.
+      final remoteMove = c.state.legalMoves.first;
+      api.push(RemoteEvent(
+          seq: 1, gameNo: 1, event: MoveEvent(Player.black, remoteMove)));
+
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker != null,
+          maxFrames: 800);
+      expect(boardPainterOf(t).overlayChecker, isNotNull,
+          reason: 'a remote opponent move animates');
+
+      // Let the travel finish (bounded), then tear down. Avoids pumpAndSettle,
+      // which never settles against the controller's live poll subscription.
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker == null,
+          maxFrames: 2000);
+      c.disposeController();
+    });
+
+    testWidgets('online: the LOCAL hand-entered move does NOT animate',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Opening: White (the LOCAL side) wins (6 > 3) and is on move first.
+      final log = [
+        const RemoteEvent(
+          seq: 0,
+          gameNo: 1,
+          event: OpeningRollEvent(whiteDie: 6, blackDie: 3),
+        ),
+      ];
+      final api = ScriptedMatchApi(log);
+      addTearDown(api.close);
+      final c = OnlineMatchController(
+        api: api,
+        matchId: 'm',
+        localSide: Player.white,
+        initialSnapshot: _onlineSnap(),
+      );
+
+      await t.pumpWidget(const MaterialApp(home: SizedBox()));
+      unawaited(c.playMatch());
+      await pumpUntil(t, () => c.isReady);
+      await t.pumpWidget(_controllerAnimHarness(c));
+      await t.pump();
+
+      // Enter White's move BY HAND and confirm; the controller submits it to the
+      // server (recorded in the fake), which then echoes it back as a remote
+      // event — the injection below mirrors that echo.
+      await commitFirstMove(t);
+      final submitted = api.lastSubmitted;
+      expect(submitted, isA<MoveEvent>(),
+          reason: 'the confirmed local move was submitted');
+      api.push(RemoteEvent(seq: 1, gameNo: 1, event: submitted!));
+
+      // The echoed local move folds but must NOT replay (the user just entered
+      // it on the board). No overlay ever appears.
+      await pumpUntil(t, () => c.state.turn == Player.black, maxFrames: 800);
+      await t.pump(const Duration(milliseconds: 300));
+      expect(boardPainterOf(t).overlayChecker, isNull,
+          reason: 'a local online move is not replayed');
+
+      c.disposeController();
+    });
+  });
+
+  group('persistent dice pairs', () {
+    // The fold the screen applies: each player's most recent roll of the CURRENT
+    // game (opening seeds the first mover), so a test can compute the expected
+    // pairs directly from the live event log.
+    (Dice?, Dice?) expectedDice(GameController c) {
+      Dice? w;
+      Dice? b;
+      for (final e in c.game.events) {
+        if (e is OpeningRollEvent) {
+          final d = Dice(e.whiteDie, e.blackDie);
+          if (e.firstPlayer == Player.white) {
+            w = d;
+          } else {
+            b = d;
+          }
+        } else if (e is RollEvent) {
+          final d = Dice(e.die1, e.die2);
+          if (e.player == Player.white) {
+            w = d;
+          } else {
+            b = d;
+          }
+        }
+      }
+      return (w, b);
+    }
+
+    testWidgets("opponent's roll stays visible on its pair while the human "
+        'moves', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final ai = FakeAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        // White wins the opening (6 > 1) and plays; Black (AI) then rolls
+        // Dice(6, 5) and moves; play returns to White's gate.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      // White's opening roll shows on White's pair; Black has no roll yet.
+      expect(boardPainterOf(t).whiteDice, Dice(6, 1));
+      expect(boardPainterOf(t).blackDice, isNull,
+          reason: 'Black has not rolled yet: blank pair');
+
+      // White plays; the AI rolls + moves; White returns to its pre-roll gate.
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white);
+
+      final (ew, eb) = expectedDice(c);
+      expect(eb, isNotNull, reason: 'the AI rolled on its turn');
+      // The opponent's roll persists on the black pair even though it is now
+      // White's turn (the mover is White).
+      expect(boardPainterOf(t).blackDice, eb);
+      expect(boardPainterOf(t).whiteDice, ew);
+      expect(boardPainterOf(t).diceMover, Player.white);
+
+      // White rolls and enters its move: its own pair updates to the new roll,
+      // while the AI's roll REMAINS on the black pair (the core fix).
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      final (ew2, eb2) = expectedDice(c);
+      expect(boardPainterOf(t).whiteDice, ew2);
+      expect(boardPainterOf(t).blackDice, eb2,
+          reason: "the opponent's roll is still visible while the human moves");
+      expect(eb2, eb, reason: 'the AI has not rolled again');
+
+      c.disposeController();
+    });
+
+    testWidgets('a new game clears both pairs (scoped to the current game)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: FakeAgent(),
+        black: FakeAgent(),
+        matchLength: 7, // long enough that one game never ends the match
+        diceRoller: DiceRoller(Random(7)),
+      );
+
+      await t.pumpWidget(_harness(c));
+      await t.pumpAndSettle();
+      expect(c.awaitingNextGame, isTrue);
+
+      // Game 1 is over: both players have rolled, so both pairs are populated.
+      final (w1, b1) = expectedDice(c);
+      expect(w1, isNotNull);
+      expect(b1, isNotNull);
+      expect(boardPainterOf(t).whiteDice, w1);
+      expect(boardPainterOf(t).blackDice, b1);
+
+      final g1 = c.game;
+      await t.tap(find.widgetWithText(FilledButton, 'Next game'));
+      await pumpUntil(t, () => !identical(c.game, g1));
+      await t.pumpAndSettle();
+
+      // Game 2's log is fresh: the painted pairs are folded ONLY from the new
+      // game's events (game 1's rolls are gone), proving the reset.
+      expect(c.game.events.contains(g1.events.first), isFalse,
+          reason: 'a new game has its own opening roll');
+      final (w2, b2) = expectedDice(c);
+      expect(boardPainterOf(t).whiteDice, w2);
+      expect(boardPainterOf(t).blackDice, b2);
+
       c.disposeController();
     });
   });
