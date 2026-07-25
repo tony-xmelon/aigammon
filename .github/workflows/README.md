@@ -4,6 +4,7 @@
 |---|---|---|---|
 | CI | `ci.yml` | push to `master`, all PRs | `backgammon_core` + `engine_bindings` + Flutter app tests (Linux) |
 | Android | `android.yml` | `workflow_dispatch`, push to `master` | Cross-compile the Rust engine for Android ABIs, build a release APK, and (when configured) push it to Firebase App Distribution |
+| iOS | `ios.yml` | `workflow_dispatch`, push to `master` | Build the Rust engine staticlib, statically link it into `Runner`, produce an unsigned `Runner.app`, and (when configured) build a signed IPA and push it to Firebase App Distribution |
 
 ## `android.yml` — how it builds
 
@@ -33,6 +34,52 @@ proper upload keystore + `key.properties` signing config. Not done here.
 
 The production ONNX nets ship as Flutter **assets** (`app/assets/nets/`), so the
 APK bundles them automatically. No CI work is needed for nets.
+
+## `ios.yml` — how it builds
+
+Runs on `macos-latest` (Rust cross-compilation to `aarch64-apple-ios` and the
+Xcode build both need macOS).
+
+1. Checks out with `submodules: recursive` (the engine needs `native/wildbg`).
+2. Installs the Rust `aarch64-apple-ios` target and builds the engine staticlib:
+   `cargo build --release --target aarch64-apple-ios` in `native/engine_shim`.
+3. Copies `libaigammon_engine.a` to **`app/ios/Frameworks/`** — the path the
+   `-force_load` in `app/ios/Flutter/Release.xcconfig` expects. Unlike Android
+   (a `.so` opened by path at runtime), iOS forbids `dlopen`, so the engine is
+   linked **statically** into `Runner` and its symbols are resolved at runtime
+   via `DynamicLibrary.process()`. See `native/README.md` "iOS".
+4. `flutter build ios --release --no-codesign` produces `Runner.app`. Same
+   online-play dart-defines as `android.yml` (repo **variables**
+   `AIGAMMON_FIREBASE_PROJECT` / `AIGAMMON_FIREBASE_API_KEY`).
+5. `Runner.app` is a directory tree with internal symlinks, so it is packaged
+   with `ditto -c -k --keepParent` (upload-artifact mangles the symlinks
+   otherwise) and uploaded as the **`aigammon-ios-unsigned`** artifact.
+
+> An **unsigned `.app` cannot be installed on an iPhone.** Signing is the
+> user-gated step below; without the secrets, CI stops after the unsigned
+> artifact.
+
+### Signing + Firebase distribution (secret-gated)
+
+The signing/distribution path is **skipped** until **four** repository secrets
+are all present (plus the existing `FIREBASE_SERVICE_ACCOUNT`, reused from
+Android). When they exist, the workflow imports the certificate into a throwaway
+keychain, installs the provisioning profile, derives the team id / profile name
+/ UUID from the profile itself (nothing hard-coded), writes an
+`ExportOptions.plist` for an **ad-hoc** export, builds a signed IPA
+(`flutter build ipa`), uploads it as `aigammon-ios-signed`, and distributes it
+to the Firebase **`testers`** group.
+
+| Secret | What it is |
+|---|---|
+| `IOS_CERT_P12_BASE64` | base64 of the **Apple Distribution** certificate exported as a `.p12` |
+| `IOS_CERT_PASSWORD` | the password set when exporting that `.p12` |
+| `IOS_PROVISIONING_PROFILE_BASE64` | base64 of the **ad-hoc** `.mobileprovision` (expected profile name `aigammon-adhoc`, bundle id `com.xmelon.aigammon`, with tester device UDIDs) |
+| `FIREBASE_IOS_APP_ID` | the iOS App ID from the Firebase console (`1:…:ios:…`) |
+
+Producing these requires an **Apple Developer Program** membership and is done
+by hand once. The exact enrollment, profile-creation, export, base64-encoding,
+and Firebase-console steps live in **`firebase/DEPLOY.md` → "iOS distribution"**.
 
 ## Firebase App Distribution setup
 
