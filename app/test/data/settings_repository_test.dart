@@ -64,34 +64,42 @@ void main() {
       () async {
     final s = await repo.load();
     expect(s.showHighlights, isTrue);
-    expect(s.enableDrag, isFalse);
+    expect(s.enableDrag, isTrue, reason: 'drag-to-move is ON by default (v4)');
     expect(s.enableCombinedTaps, isTrue);
     expect(s.showScoring, isTrue);
+    expect(s.dragHintShown, isFalse,
+        reason: 'the one-time drag hint has not been shown on a fresh install');
+    // The Dart-side defaults mirror the seeded row.
+    expect(AppSettings.defaults.enableDrag, isTrue);
+    expect(AppSettings.defaults.dragHintShown, isFalse);
   });
 
-  test('save + load round-trips the four gameplay-option fields', () async {
-    // Flip every gameplay toggle away from its default and back.
+  test('save + load round-trips the gameplay-option fields', () async {
+    // Flip every gameplay toggle away from its default (drag off, hint shown).
     final flipped = AppSettings.defaults.copyWith(
       showHighlights: false,
-      enableDrag: true,
+      enableDrag: false,
       enableCombinedTaps: false,
       showScoring: false,
+      dragHintShown: true,
     );
     await repo.save(flipped);
     final loaded = await repo.load();
     expect(loaded, flipped);
     expect(loaded.showHighlights, isFalse);
-    expect(loaded.enableDrag, isTrue);
+    expect(loaded.enableDrag, isFalse);
     expect(loaded.enableCombinedTaps, isFalse);
     expect(loaded.showScoring, isFalse);
+    expect(loaded.dragHintShown, isTrue);
 
     // Each field persists independently (toggle just one back).
-    await repo.save(loaded.copyWith(enableDrag: false));
+    await repo.save(loaded.copyWith(enableDrag: true));
     final again = await repo.load();
-    expect(again.enableDrag, isFalse);
+    expect(again.enableDrag, isTrue);
     expect(again.showHighlights, isFalse, reason: 'others unchanged');
     expect(again.enableCombinedTaps, isFalse);
     expect(again.showScoring, isFalse);
+    expect(again.dragHintShown, isTrue);
   });
 
   test('tutorOverride false persists distinctly from null', () async {

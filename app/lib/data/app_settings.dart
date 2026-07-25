@@ -132,15 +132,16 @@ class AppSettings {
     required this.defaultDifficulty,
     required this.tutorOverride,
     this.showHighlights = true,
-    this.enableDrag = false,
+    this.enableDrag = true,
     this.enableCombinedTaps = true,
     this.showScoring = true,
+    this.dragHintShown = false,
   });
 
   /// The out-of-the-box defaults, matching the `Settings` table's column
   /// defaults (theme: system, animation: normal, length: 5, difficulty:
-  /// medium, tutor override: none, highlights/combined-taps/scoring on, drag
-  /// off).
+  /// medium, tutor override: none, highlights/drag/combined-taps/scoring on,
+  /// drag-hint not yet shown).
   static const AppSettings defaults = AppSettings(
     themeMode: ThemeMode.system,
     animationSpeed: AnimationSpeed.normal,
@@ -168,7 +169,8 @@ class AppSettings {
   /// Whether the board paints selection rings and destination highlights.
   final bool showHighlights;
 
-  /// Whether drag-to-move is enabled (base play is tap-to-move; drag is opt-in).
+  /// Whether drag-to-move is enabled (ON by default as of schema v4; tap-to-move
+  /// always works too).
   final bool enableDrag;
 
   /// Whether combined (multi-hop, same-checker) landing taps are enabled.
@@ -176,6 +178,9 @@ class AppSettings {
 
   /// Whether the HUD shows the running match score.
   final bool showScoring;
+
+  /// Whether the one-time drag/tap discoverability hint has already been shown.
+  final bool dragHintShown;
 
   /// The [AnimationTimings] preset for the current [animationSpeed].
   AnimationTimings get timings => animationSpeed.timings;
@@ -191,6 +196,7 @@ class AppSettings {
     bool? enableDrag,
     bool? enableCombinedTaps,
     bool? showScoring,
+    bool? dragHintShown,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -204,6 +210,7 @@ class AppSettings {
       enableDrag: enableDrag ?? this.enableDrag,
       enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
       showScoring: showScoring ?? this.showScoring,
+      dragHintShown: dragHintShown ?? this.dragHintShown,
     );
   }
 
@@ -218,7 +225,8 @@ class AppSettings {
       other.showHighlights == showHighlights &&
       other.enableDrag == enableDrag &&
       other.enableCombinedTaps == enableCombinedTaps &&
-      other.showScoring == showScoring;
+      other.showScoring == showScoring &&
+      other.dragHintShown == dragHintShown;
 
   @override
   int get hashCode => Object.hash(
@@ -230,7 +238,8 @@ class AppSettings {
       showHighlights,
       enableDrag,
       enableCombinedTaps,
-      showScoring);
+      showScoring,
+      dragHintShown);
 
   @override
   String toString() => 'AppSettings(themeMode: $themeMode, '
@@ -241,7 +250,8 @@ class AppSettings {
       'showHighlights: $showHighlights, '
       'enableDrag: $enableDrag, '
       'enableCombinedTaps: $enableCombinedTaps, '
-      'showScoring: $showScoring)';
+      'showScoring: $showScoring, '
+      'dragHintShown: $dragHintShown)';
 }
 
 /// Sentinel marking an un-passed [AppSettings.copyWith] argument (so a caller

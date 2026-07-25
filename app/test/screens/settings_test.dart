@@ -80,23 +80,23 @@ void main() {
     _feed.add(AppSettings.defaults);
     await t.pumpAndSettle();
 
-    // Defaults: highlights on, drag off, combined on, scoring on.
+    // Defaults (v4): highlights on, drag ON, combined on, scoring on.
     bool switchValue(String title) => t
         .widget<SwitchListTile>(find.widgetWithText(SwitchListTile, title))
         .value;
     expect(switchValue('Move highlights'), isTrue);
-    expect(switchValue('Drag to move'), isFalse);
+    expect(switchValue('Drag to move'), isTrue);
     expect(switchValue('Combined moves'), isTrue);
     expect(switchValue('Show score'), isTrue);
 
-    // Toggle drag ON — it autosaves.
+    // Toggle drag OFF (away from its new ON default) — it autosaves.
     final drag = find.widgetWithText(SwitchListTile, 'Drag to move');
     await t.ensureVisible(drag);
     await t.tap(drag);
     await _refresh(t);
-    expect((await _persisted(t)).enableDrag, isTrue,
+    expect((await _persisted(t)).enableDrag, isFalse,
         reason: 'no save button — the switch writes on toggle');
-    expect(switchValue('Drag to move'), isTrue);
+    expect(switchValue('Drag to move'), isFalse);
 
     // Toggle highlights OFF — independent, does not clobber the drag edit.
     final hl = find.widgetWithText(SwitchListTile, 'Move highlights');
@@ -105,7 +105,7 @@ void main() {
     await _refresh(t);
     final saved = await _persisted(t);
     expect(saved.showHighlights, isFalse);
-    expect(saved.enableDrag, isTrue, reason: 'earlier edit preserved');
+    expect(saved.enableDrag, isFalse, reason: 'earlier edit preserved');
 
     // Toggle scoring OFF too.
     final score = find.widgetWithText(SwitchListTile, 'Show score');

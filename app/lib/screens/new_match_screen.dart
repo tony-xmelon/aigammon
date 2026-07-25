@@ -232,6 +232,12 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
             enableCombinedTaps: settings.enableCombinedTaps,
           ),
           showScoring: settings.showScoring,
+          // One-time drag/tap hint: shown on the first human move when drag is on
+          // and it has not been shown before. Persist the flag fire-and-forget.
+          dragHintShown: settings.dragHintShown,
+          onDragHintShown: () => ref
+              .read(settingsRepositoryProvider)
+              .save(settings.copyWith(dragHintShown: true)),
         ),
       ),
     );

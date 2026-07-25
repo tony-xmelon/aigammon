@@ -62,6 +62,8 @@ class GameScreen extends StatefulWidget {
     this.interactionOptions = const BoardInteractionOptions(),
     this.showScoring = true,
     this.persistedMatchId,
+    this.dragHintShown = true,
+    this.onDragHintShown,
   });
 
   final MatchController controller;
@@ -90,6 +92,19 @@ class GameScreen extends StatefulWidget {
   /// Whether the HUD shows the running match score. Production call sites pass
   /// the persisted `AppSettings.showScoring`.
   final bool showScoring;
+
+  /// Whether the one-time drag/tap discoverability hint has ALREADY been shown
+  /// (the persisted `AppSettings.dragHintShown`). When false AND drag is enabled
+  /// ([BoardInteractionOptions.enableDrag]), the hint SnackBar surfaces once on
+  /// the first human move-entry of the match; see [onDragHintShown]. Defaults to
+  /// true so the hint is opt-in for tests / harnesses that do not wire it.
+  final bool dragHintShown;
+
+  /// Fire-and-forget callback invoked the moment the one-time drag hint is shown,
+  /// so the caller can persist `dragHintShown = true`. Null disables persistence
+  /// (the hint would then re-show on the next match); production call sites pass
+  /// a settings-repository write.
+  final VoidCallback? onDragHintShown;
 
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
@@ -180,6 +195,11 @@ class _GameScreenState extends State<GameScreen> {
   /// Whether the post-match "Match summary" link is awaiting the persisted match
   /// id (a brief spinner in the dialog button until the row insert resolves).
   bool _summaryLoading = false;
+
+  /// Whether the one-time drag/tap hint has been surfaced this session. Seeded
+  /// from the persisted [GameScreen.dragHintShown]; set true the instant the
+  /// hint shows so it can never appear twice within a match.
+  late bool _dragHintShown = widget.dragHintShown;
 
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
@@ -272,7 +292,45 @@ class _GameScreenState extends State<GameScreen> {
     _updatePassDevice();
     _syncRollBeat();
     _syncTutor();
+    _maybeShowDragHint();
     setState(() {});
+  }
+
+  // --- One-time drag/tap hint ------------------------------------------------
+
+  /// Surfaces the one-time drag-to-move discoverability hint the first time a
+  /// human's move-entry affordances appear, then never again. Guarded so it:
+  /// only fires when drag is enabled ([BoardInteractionOptions.enableDrag]) — no
+  /// point advertising a disabled gesture; only fires at a human move (the
+  /// affordances are up); fires at most once (the [_dragHintShown] latch, seeded
+  /// from the persisted flag). On firing it flips the latch, notifies
+  /// [GameScreen.onDragHintShown] so the caller persists it, and shows a
+  /// dismissible [SnackBar] AFTER the current frame (a SnackBar cannot be shown
+  /// during a build/rebuild). The SnackBar is non-blocking — input continues
+  /// underneath it.
+  void _maybeShowDragHint() {
+    if (_dragHintShown) return;
+    if (!widget.interactionOptions.enableDrag) return;
+    final humanMoving =
+        _humanSideWith((s) => _c.pendingMoveOf(s).value != null) != null;
+    if (!humanMoving) return;
+    _dragHintShown = true;
+    widget.onDragHintShown?.call();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content:
+              const Text('Tip: drag checkers or tap them — change in Settings'),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'Got it',
+            onPressed: () =>
+                ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+          ),
+        ),
+      );
+    });
   }
 
   // --- Opponent dice-roll beat ----------------------------------------------

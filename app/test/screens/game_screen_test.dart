@@ -1687,4 +1687,104 @@ void main() {
       c.disposeController();
     });
   });
+
+  group('one-time drag hint', () {
+    const hintText = 'Tip: drag checkers or tap them — change in Settings';
+
+    // White (human) wins the opening (6 > 1) and its move request fires straight
+    // away — the first human move-entry of the match, where the hint may surface.
+    GameController firstMove(LocalHumanAgent human) => GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    Widget hintHarness(
+      GameController c, {
+      required bool enableDrag,
+      required bool dragHintShown,
+      VoidCallback? onDragHintShown,
+    }) =>
+        MaterialApp(
+          home: GameScreen(
+            key: ValueKey(c),
+            controller: c,
+            interactionOptions: BoardInteractionOptions(enableDrag: enableDrag),
+            dragHintShown: dragHintShown,
+            onDragHintShown: onDragHintShown,
+          ),
+        );
+
+    testWidgets('shows once on the first human move (drag on, not yet shown) '
+        'and persists via the callback', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      var persisted = false;
+      await t.pumpWidget(hintHarness(c,
+          enableDrag: true,
+          dragHintShown: false,
+          onDragHintShown: () => persisted = true));
+
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump(); // run the post-frame callback that schedules the SnackBar
+      await t.pump(const Duration(milliseconds: 300)); // animate it in
+
+      expect(find.text(hintText), findsOneWidget,
+          reason: 'the hint surfaces on the first human move-entry');
+      expect(persisted, isTrue,
+          reason: 'showing the hint fires the persistence callback');
+
+      // It is dismissible (non-blocking): tapping the action hides it. (This
+      // also cancels the SnackBar duration timer before teardown.)
+      await t.tap(find.text('Got it'));
+      await t.pumpAndSettle();
+      expect(find.text(hintText), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('does not reappear once dragHintShown is persisted (true)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      // Simulates a later game/screen: the flag was persisted true previously.
+      await t.pumpWidget(
+          hintHarness(c, enableDrag: true, dragHintShown: true));
+
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+
+      expect(find.text(hintText), findsNothing,
+          reason: 'a persisted dragHintShown suppresses the hint forever');
+
+      c.disposeController();
+    });
+
+    testWidgets('never shows when drag is disabled in settings', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      await t.pumpWidget(
+          hintHarness(c, enableDrag: false, dragHintShown: false));
+
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+
+      expect(find.text(hintText), findsNothing,
+          reason: 'no point advertising a disabled gesture');
+
+      c.disposeController();
+    });
+  });
 }

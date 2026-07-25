@@ -74,7 +74,12 @@ Widget _app() => ProviderScope(
         // NewMatchScreen reads its defaults from settingsProvider; serve them
         // from a plain stream so the widget test stays off drift's watch-timer
         // (which otherwise lingers past tree disposal), mirroring history_test.
-        settingsProvider.overrideWith((ref) => Stream.value(AppSettings.defaults)),
+        // dragHintShown is forced true so the one-time drag hint SnackBar does
+        // not surface over the bottom action bar and obscure the Roll/Confirm
+        // buttons these setup-flow tests drive (the hint is covered by
+        // game_screen_test, not here).
+        settingsProvider.overrideWith((ref) =>
+            Stream.value(AppSettings.defaults.copyWith(dragHintShown: true))),
       ],
       child: const MaterialApp(home: HomeScreen()),
     );
