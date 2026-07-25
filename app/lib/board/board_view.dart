@@ -527,38 +527,116 @@ class _BoardViewState extends State<BoardView>
     return board;
   }
 
+  /// Handles a tap. Selection semantics live on the CHECKERS; move targets on
+  /// the destination TRIANGLES. The exact hit-tested [BoardGeometry.locationAt]
+  /// is tried first; when it is not a directly-actionable target the tap is
+  /// forgiven to the NEAREST actionable target (a selectable source's top
+  /// checker, or a highlighted destination's region centre) within
+  /// [BoardGeometry.checkerRadius] * 1.8. Taps near nothing actionable clear the
+  /// selection.
   void _handleTap(BoardGeometry geometry, Offset localPosition) {
     final builder = _builder;
     if (builder == null) return;
     final loc = geometry.locationAt(localPosition);
     setState(() {
-      if (loc == null) {
-        _selectedSource = null; // tap on empty space clears selection
-        return;
-      }
       final selected = _selectedSource;
       if (selected == null) {
-        // Nothing picked up: pick up a highlighted source if this is one.
-        if (builder.selectableSources.contains(loc)) {
+        // Nothing picked up: pick up a source. Direct hit first, then forgive to
+        // the nearest selectable source's checker.
+        if (loc != null && builder.selectableSources.contains(loc)) {
           _selectedSource = loc;
+        } else {
+          _selectedSource = _nearestSource(geometry, localPosition, builder);
         }
         return;
       }
-      if (loc == selected) {
-        _selectedSource = null; // re-tapping the source deselects it
+      // A source is picked up. Prefer completing a hop on a direct destination.
+      if (loc != null && builder.destinationsFor(selected).contains(loc)) {
+        builder.addHop(selected, loc);
+        _selectedSource = null;
         return;
       }
-      if (builder.destinationsFor(selected).contains(loc)) {
-        builder.addHop(selected, loc); // complete a hop
+      // Re-tapping the picked-up source deselects it.
+      if (loc == selected) {
         _selectedSource = null;
-      } else if (builder.selectableSources.contains(loc)) {
-        _selectedSource = loc; // switch pickup to another source
-      } else {
-        _selectedSource = null; // tapped somewhere irrelevant
+        return;
       }
+      // Direct hit on another selectable source switches pickup.
+      if (loc != null && builder.selectableSources.contains(loc)) {
+        _selectedSource = loc;
+        return;
+      }
+      // Forgiving fallbacks: a near destination completes the hop; else a near
+      // source re-selects; else the tap hit nothing actionable, so clear.
+      final nearDest =
+          _nearestDestination(geometry, localPosition, builder, selected);
+      if (nearDest != null) {
+        builder.addHop(selected, nearDest);
+        _selectedSource = null;
+        return;
+      }
+      _selectedSource = _nearestSource(geometry, localPosition, builder);
     });
     _syncEntry();
   }
+
+  /// The maximum distance a tap may miss an actionable target and still count.
+  double _tapTolerance(BoardGeometry geometry) => geometry.checkerRadius * 1.8;
+
+  /// The selectable source whose top-checker anchor is nearest [pos] within
+  /// [_tapTolerance], or `null` when none is close enough. Anchors are computed
+  /// on the PREVIEW board so they match exactly where the painter draws the
+  /// source rings.
+  int? _nearestSource(BoardGeometry geometry, Offset pos, MoveBuilder builder) {
+    final board = _previewBoard();
+    var bestD = _tapTolerance(geometry);
+    int? best;
+    for (final loc in builder.selectableSources) {
+      final c = _sourceAnchor(geometry, board, loc);
+      if (c == null) continue;
+      final d = (c - pos).distance;
+      if (d < bestD) {
+        bestD = d;
+        best = loc;
+      }
+    }
+    return best;
+  }
+
+  /// The legal destination for [source] whose region centre is nearest [pos]
+  /// within [_tapTolerance], or `null` when none is close enough.
+  int? _nearestDestination(
+      BoardGeometry geometry, Offset pos, MoveBuilder builder, int source) {
+    var bestD = _tapTolerance(geometry);
+    int? best;
+    for (final loc in builder.destinationsFor(source)) {
+      final d = (_destAnchor(geometry, loc) - pos).distance;
+      if (d < bestD) {
+        bestD = d;
+        best = loc;
+      }
+    }
+    return best;
+  }
+
+  /// Top-checker centre of source [loc] on [board] — the same anchor the painter
+  /// rings. `null` when the location is empty.
+  Offset? _sourceAnchor(BoardGeometry geometry, BoardState board, int loc) {
+    if (loc == CheckerMove.bar) {
+      final n = board.barFor(widget.state.turn);
+      if (n == 0) return null;
+      return geometry.barCheckerCenter(widget.state.turn, n - 1, n);
+    }
+    final count = board.points[loc].abs();
+    if (count == 0) return null;
+    return geometry.checkerCenter(loc, count - 1, count);
+  }
+
+  /// Region centre of destination [loc]: the target triangle's centre, or the
+  /// moving player's bear-off strip centre for `off`.
+  Offset _destAnchor(BoardGeometry geometry, int loc) => loc == CheckerMove.off
+      ? geometry.offRect(widget.state.turn).center
+      : geometry.pointRect(loc).center;
 
   @override
   Widget build(BuildContext context) {
@@ -603,7 +681,8 @@ class _BoardViewState extends State<BoardView>
                   highlightedDestinations: (builder != null && selected != null)
                       ? builder.destinationsFor(selected)
                       : const {},
-                  selectedSource: selected,
+                  selectedCheckerLocation: selected,
+                  movingPlayer: builder != null ? widget.state.turn : null,
                 );
 
           return widget.interactive

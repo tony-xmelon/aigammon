@@ -100,22 +100,22 @@ void main() {
     )));
 
     // Initially all legal sources are highlighted, nothing selected.
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
     expect(_painterOf(t).highlightedSources, contains(7));
 
     // Pick up the 8-point: destinations for its two dice light up.
     await tapPoint(t, 7);
-    expect(_painterOf(t).selectedSource, 7);
+    expect(_painterOf(t).selectedCheckerLocation, 7);
     expect(_painterOf(t).highlightedDestinations, contains(4)); // die 3
     expect(_painterOf(t).highlightedSources, isEmpty);
 
     // Drop on the 5-point → hop 8/5 recorded, selection cleared.
     await tapPoint(t, 4);
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
 
     // Pick up the 6-point and drop on the 5-point → hop 6/5.
     await tapPoint(t, 5);
-    expect(_painterOf(t).selectedSource, 5);
+    expect(_painterOf(t).selectedCheckerLocation, 5);
     await tapPoint(t, 4);
 
     // Confirm is now enabled (surfaced via the entry controller); committing
@@ -164,17 +164,85 @@ void main() {
     )));
 
     await tapPoint(t, 7);
-    expect(_painterOf(t).selectedSource, 7);
+    expect(_painterOf(t).selectedCheckerLocation, 7);
     // Re-tap the same source → deselect.
     await tapPoint(t, 7);
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
 
     // Select again, then tap the empty middle band (null location) → clear.
     await tapPoint(t, 7);
-    expect(_painterOf(t).selectedSource, 7);
+    expect(_painterOf(t).selectedCheckerLocation, 7);
     await t.tapAt(Offset(_size.width * 0.1, _size.height / 2));
     await t.pump();
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
+  });
+
+  testWidgets('bar entry: the bar is a selectable source and its checker '
+      'highlights when selected', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    // White has a checker on the bar; Black's home (White's entry board,
+    // indices 18..23) is open, so entry with 6-4 is legal.
+    final pts = List<int>.filled(24, 0);
+    pts[0] = 14; // White's other checkers at home
+    pts[23] = -15; // Black stacked off White's entry board
+    final barState = GameState.testState(
+      board: BoardState(points: pts, whiteBar: 1),
+      turn: Player.white,
+      phase: GamePhase.moving,
+      dice: Dice(6, 4),
+    );
+    expect(barState.legalMoves, isNotEmpty);
+
+    await t.pumpWidget(_harness(BoardView(
+      state: barState,
+      interactive: true,
+      onMoveCommitted: (_) {},
+    )));
+
+    // The bar is offered as a selectable source; the painter knows the mover so
+    // it can ring the correct bar half.
+    final painter = _painterOf(t);
+    expect(painter.highlightedSources, contains(CheckerMove.bar));
+    expect(painter.movingPlayer, Player.white);
+    expect(painter.selectedCheckerLocation, isNull);
+
+    // Tapping the beaten checker on the bar selects it (the beaten-chip fix).
+    await t.tapAt(_geometry.barCheckerCenter(Player.white, 0, 1));
+    await t.pump();
+    expect(_painterOf(t).selectedCheckerLocation, CheckerMove.bar);
+    // Its entry destinations now light up.
+    expect(_painterOf(t).highlightedDestinations, isNotEmpty);
+  });
+
+  testWidgets('forgiving tap: a near-miss selects the source; a far tap does not',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(_harness(BoardView(
+      state: goldenState,
+      interactive: true,
+      onMoveCommitted: (_) {},
+    )));
+
+    final r = _geometry.checkerRadius;
+    // Top checker of the 8-point (index 7 holds 3 White checkers in the opening).
+    final anchor = _geometry.checkerCenter(7, 2, 3);
+
+    // A tap 1.5r off the checker centre — landing OUTSIDE the point's own hit
+    // region, over the neighbouring (index 8) column which is NOT a selectable
+    // source — is forgiven to the nearest source checker and selects it.
+    await t.tapAt(anchor + Offset(-1.5 * r, 0));
+    await t.pump();
+    expect(_painterOf(t).selectedCheckerLocation, 7);
+
+    // Clear (tap the empty middle band), then tap 3r away: too far, no selection.
+    await t.tapAt(Offset(_size.width * 0.2, _size.height * 0.5));
+    await t.pump();
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
+    await t.tapAt(anchor + Offset(-3.0 * r, 0));
+    await t.pump();
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
   });
 
   testWidgets('a dance shows Pass and commits Move.none', (t) async {
@@ -238,11 +306,11 @@ void main() {
     expect(painter.board, goldenState.board);
     expect(painter.highlightedSources, isEmpty);
     expect(painter.highlightedDestinations, isEmpty);
-    expect(painter.selectedSource, isNull);
+    expect(painter.selectedCheckerLocation, isNull);
 
     // Taps are ignored (no GestureDetector) — nothing changes or commits.
     await tapPoint(t, 7);
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
     expect(committed, isNull);
   });
 
@@ -273,7 +341,7 @@ void main() {
     await t.pump();
     expect(_painterOf(t).board, isNot(goldenState.board),
         reason: 'staged move should show the play applied in the preview');
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
     expect(committed, isNull, reason: 'staging must not auto-commit');
     expect(control.canConfirm, isTrue);
 
@@ -309,7 +377,7 @@ void main() {
     // Builder reset, no crash: base board, nothing selected, Confirm disabled,
     // and the legal sources are still offered for fresh entry.
     expect(_painterOf(t).board, goldenState.board);
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
     expect(control.canConfirm, isFalse);
     expect(_painterOf(t).highlightedSources, contains(7));
   });
@@ -339,7 +407,7 @@ void main() {
     await t.pumpWidget(_harness(view(stateB)));
     await t.pump();
     expect(_painterOf(t).board, stateB.board);
-    expect(_painterOf(t).selectedSource, isNull);
+    expect(_painterOf(t).selectedCheckerLocation, isNull);
   });
 
   // --- Move animation --------------------------------------------------------

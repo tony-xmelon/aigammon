@@ -20,7 +20,8 @@ class BoardPainter extends CustomPainter {
     this.cube,
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
-    this.selectedSource,
+    this.selectedCheckerLocation,
+    this.movingPlayer,
     this.hiddenChecker,
     this.overlayChecker,
   });
@@ -30,9 +31,26 @@ class BoardPainter extends CustomPainter {
   final BoardTheme theme;
   final Dice? dice;
   final CubeState? cube;
+
+  /// Selectable (but not-yet-picked-up) sources: each renders as a subtle ring
+  /// around its TOP CHECKER (point index 0..23, or [CheckerMove.bar]).
   final Set<int> highlightedSources;
+
+  /// Legal destinations for the picked-up source: each renders as a uniform
+  /// highlight on the target TRIANGLE (point index 0..23, or [CheckerMove.off]
+  /// for the bear-off strip).
   final Set<int> highlightedDestinations;
-  final int? selectedSource;
+
+  /// The picked-up source whose TOP CHECKER wears the bright selection ring:
+  /// a point index 0..23, or [CheckerMove.bar]. `null` when nothing is picked
+  /// up. Anchoring the highlight to the checker (not the triangle) means a
+  /// beaten checker resting on the bar highlights just like any other.
+  final int? selectedCheckerLocation;
+
+  /// The side to move, used only to resolve WHICH bar half a bar source/selection
+  /// refers to (both players may have checkers on the bar at once). Required for
+  /// a bar ring to render; ignored for point sources.
+  final Player? movingPlayer;
 
   /// A single checker to SUPPRESS while it travels as [overlayChecker] during a
   /// move animation: the [stackIndex]-th checker at [location] (a point index
@@ -48,10 +66,14 @@ class BoardPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     _paintBackground(canvas, size);
     _paintTriangles(canvas);
+    _paintOffDestination(canvas);
     _paintBar(canvas);
     _paintPointCheckers(canvas);
     _paintBarCheckers(canvas);
     _paintOffTrays(canvas);
+    // Selection rings ride ABOVE the checkers so they read as haloes, never
+    // hidden behind the discs.
+    _paintSelectionRings(canvas);
     if (dice != null) _paintDice(canvas, size);
     if (cube != null) _paintCube(canvas);
     // The travelling checker rides above every static checker/tray.
@@ -100,21 +122,113 @@ class BoardPainter extends CustomPainter {
       canvas.drawPath(path, Paint()..color = color);
 
       if (highlightedDestinations.contains(i)) {
-        canvas.drawPath(path, Paint()..color = theme.highlightDestination);
-      }
-      if (highlightedSources.contains(i)) {
-        canvas.drawPath(path, Paint()..color = theme.highlightSource);
-      }
-      if (selectedSource == i) {
-        canvas.drawPath(
-          path,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = geometry.checkerRadius * 0.28
-            ..color = theme.selectedOutline,
-        );
+        _paintDestinationTriangle(canvas, path);
       }
     }
+  }
+
+  /// Paints a destination highlight whose resulting pixels do NOT depend on the
+  /// underlying point colour: an OPAQUE uniform fill (which fully neutralises the
+  /// dark/light point beneath) topped by an opaque edge ring. Because the fill
+  /// is opaque, a highlighted destination is pixel-identical over both point
+  /// colours — the user's "different colours on white and red" complaint.
+  void _paintDestinationTriangle(Canvas canvas, Path path) {
+    canvas.drawPath(path, Paint()..color = theme.highlightDestinationFill);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = geometry.checkerRadius * 0.22
+        ..color = theme.highlightDestination,
+    );
+  }
+
+  /// Highlights the moving player's bear-off strip when `off` is a destination,
+  /// using the SAME opaque fill + ring as the triangle destinations so it reads
+  /// uniformly. No-op unless [movingPlayer] is known.
+  void _paintOffDestination(Canvas canvas) {
+    if (!highlightedDestinations.contains(CheckerMove.off)) return;
+    final player = movingPlayer;
+    if (player == null) return;
+    final tray = geometry.offRect(player);
+    canvas.drawRect(tray, Paint()..color = theme.highlightDestinationFill);
+    canvas.drawRect(
+      tray.deflate(geometry.checkerRadius * 0.11),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = geometry.checkerRadius * 0.22
+        ..color = theme.highlightDestination,
+    );
+  }
+
+  // --- Selection rings (checker-anchored) ------------------------------------
+
+  /// Draws the checker-anchored selection haloes ABOVE all checkers: a subtle
+  /// ring on every selectable source's top checker, and a bright glowing ring on
+  /// the picked-up source's top checker.
+  void _paintSelectionRings(Canvas canvas) {
+    for (final loc in highlightedSources) {
+      final c = _topCheckerCenter(loc);
+      if (c != null) _drawSourceRing(canvas, c);
+    }
+    final sel = selectedCheckerLocation;
+    if (sel != null) {
+      final c = _topCheckerCenter(sel);
+      if (c != null) _drawSelectedRing(canvas, c);
+    }
+  }
+
+  /// Centre of the TOP checker resting at [location] (a point index 0..23 or
+  /// [CheckerMove.bar]) on the current [board]. `null` when the location holds
+  /// no checker, or when a bar location is queried without a [movingPlayer].
+  Offset? _topCheckerCenter(int location) {
+    if (location == CheckerMove.bar) {
+      final player = movingPlayer;
+      if (player == null) return null;
+      final n = board.barFor(player);
+      if (n == 0) return null;
+      return geometry.barCheckerCenter(player, n - 1, n);
+    }
+    if (location < 0 || location >= 24) return null;
+    final count = board.points[location].abs();
+    if (count == 0) return null;
+    return geometry.checkerCenter(location, count - 1, count);
+  }
+
+  /// Subtle halo on a selectable-but-unpicked source's top checker.
+  void _drawSourceRing(Canvas canvas, Offset center) {
+    final r = geometry.checkerRadius;
+    canvas.drawCircle(
+      center,
+      r * 1.06,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.13
+        ..color = theme.highlightSource,
+    );
+  }
+
+  /// Bright glowing halo on the picked-up source's top checker.
+  void _drawSelectedRing(Canvas canvas, Offset center) {
+    final r = geometry.checkerRadius;
+    // Soft outer glow.
+    canvas.drawCircle(
+      center,
+      r * 1.24,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.46
+        ..color = theme.selectedOutline.withValues(alpha: 0.30),
+    );
+    // Crisp bright ring.
+    canvas.drawCircle(
+      center,
+      r * 1.14,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = r * 0.22
+        ..color = theme.selectedOutline,
+    );
   }
 
   void _paintBar(Canvas canvas) {
@@ -388,7 +502,8 @@ class BoardPainter extends CustomPainter {
         !identical(old.theme, theme) ||
         old.dice != dice ||
         old.cube != cube ||
-        old.selectedSource != selectedSource ||
+        old.selectedCheckerLocation != selectedCheckerLocation ||
+        old.movingPlayer != movingPlayer ||
         old.hiddenChecker != hiddenChecker ||
         old.overlayChecker != overlayChecker ||
         !setEquals(old.highlightedSources, highlightedSources) ||

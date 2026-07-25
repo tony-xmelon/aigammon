@@ -68,9 +68,14 @@ void main() {
       theme: BoardTheme.dark,
       dice: Dice(6, 4),
       cube: const CubeState(value: 2, owner: Player.black),
+      // Showcases every highlight type at once: subtle source rings on the two
+      // selectable sources' top checkers, uniform green destination triangles,
+      // and the bright selected ring on White's BEATEN checker resting on the
+      // bar (the beaten-chip-highlight fix).
       highlightedSources: const {5, 7},
       highlightedDestinations: const {2, 3},
-      selectedSource: 5,
+      selectedCheckerLocation: CheckerMove.bar,
+      movingPlayer: Player.white,
     );
     await t.pumpWidget(_harness(painter));
     await expectLater(
@@ -88,6 +93,7 @@ void main() {
       Set<int> src = const {},
       Set<int> dst = const {},
       int? sel,
+      Player? mover,
       bool whiteAtBottom = true,
     }) =>
         BoardPainter(
@@ -98,7 +104,8 @@ void main() {
           cube: cube,
           highlightedSources: src,
           highlightedDestinations: dst,
-          selectedSource: sel,
+          selectedCheckerLocation: sel,
+          movingPlayer: mover,
         );
 
     final base = make();
@@ -110,6 +117,7 @@ void main() {
     expect(base.shouldRepaint(make(src: const {1})), isTrue);
     expect(base.shouldRepaint(make(dst: const {2})), isTrue);
     expect(base.shouldRepaint(make(sel: 3)), isTrue);
+    expect(base.shouldRepaint(make(mover: Player.white)), isTrue);
     expect(base.shouldRepaint(make(whiteAtBottom: false)), isTrue);
     expect(
         base.shouldRepaint(make(
