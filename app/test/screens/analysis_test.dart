@@ -59,18 +59,6 @@ List<ScoredMove> _ranking(Move played, double loss) {
   return [_scored(best, 0.5), _scored(played, 0.5 - loss)];
 }
 
-/// Origin (source-ring) and landing (destination-highlight) point sets for a
-/// move — mirrors the analysis screen's overlay derivation.
-(Set<int>, Set<int>) _hopsOf(Move m) {
-  final s = <int>{};
-  final d = <int>{};
-  for (final h in m.checkerMoves) {
-    s.add(h.from);
-    d.add(h.to);
-  }
-  return (s, d);
-}
-
 /// Serves canned rankings, one per rankMoves call (in move order).
 class ScriptedEngine implements EngineFacade {
   ScriptedEngine(this.rankings);
@@ -177,6 +165,36 @@ Future<int> _seedCachedBlunder(WidgetTester t) async {
 }
 
 void main() {
+  group('moveHighlights (true origins/landings only)', () {
+    test('multi-hop single checker marks only the true origin and landing', () {
+      // 24/18/13: one checker via two dice — 18 is a transit point, not a
+      // landing, and not an origin.
+      final (sources, destinations) = moveHighlights(Move(const [
+        CheckerMove(23, 17),
+        CheckerMove(17, 12),
+      ]));
+      expect(sources, {23});
+      expect(destinations, {12});
+      expect(destinations.contains(17), isFalse,
+          reason: 'the pass-through point is not a landing');
+      expect(sources.contains(17), isFalse,
+          reason: 'the pass-through point is not an origin');
+    });
+
+    test('two checkers sharing a point mark it as both origin and landing', () {
+      // One checker leaves 13 (13/7) while another arrives on 13 (24/13); in
+      // notation order the arrival opens its own chain, so 13 is both.
+      final (sources, destinations) = moveHighlights(Move(const [
+        CheckerMove(12, 6),
+        CheckerMove(23, 12),
+      ]));
+      expect(sources, {12, 23});
+      expect(destinations, {6, 12});
+      expect(sources.contains(12), isTrue);
+      expect(destinations.contains(12), isTrue);
+    });
+  });
+
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized();
     _db = newTestDatabase();
@@ -192,7 +210,7 @@ void main() {
 
     final gameId = await _seedCachedBlunder(t);
     final played = _finishedGame().played[0];
-    final (playedSrcs, playedDests) = _hopsOf(played);
+    final (playedSrcs, playedDests) = moveHighlights(played);
 
     await _pumpLoaded(t, _app(gameId));
 

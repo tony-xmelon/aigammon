@@ -80,6 +80,9 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   /// view when the cursor changes (manual scrolls between changes are respected —
   /// we only auto-scroll on a cursor move).
   final ScrollController _listScroll = ScrollController();
+
+  /// Stable per-event-index row keys, allocated once in [_load] and NEVER
+  /// reminted on rebuild, so [Scrollable.ensureVisible] keeps a valid anchor.
   final Map<int, GlobalKey> _rowKeys = {};
 
   @override
@@ -125,12 +128,24 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
       }
 
       if (!mounted) return;
+      final lines = buildGameRecord(events);
       setState(() {
         _states = states;
         _events = events;
-        _lines = buildGameRecord(events);
+        _lines = lines;
         _analysis = analysis;
         _byEventIndex = {for (final m in analysis.moves) m.eventIndex: m};
+        // Allocate a stable per-row key once the record is known (this screen
+        // loads one game, so the record identity never changes afterward). Row
+        // keys must NOT be reminted on rebuild or auto-scroll would lose its
+        // anchor.
+        _rowKeys
+          ..clear()
+          ..addEntries([
+            for (final line in lines)
+              if (line.eventIndex != null)
+                MapEntry(line.eventIndex!, GlobalKey()),
+          ]);
         _cursor = 0;
         _showBest = false;
         _loading = false;
@@ -264,8 +279,9 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     final overlayMove = (a == null)
         ? null
         : (_showBest && hasBest ? a.best : a.played);
-    final (srcs, dests) =
-        overlayMove == null ? (const <int>{}, const <int>{}) : _hops(overlayMove);
+    final (srcs, dests) = overlayMove == null
+        ? (const <int>{}, const <int>{})
+        : moveHighlights(overlayMove);
 
     return Column(
       children: [
@@ -295,19 +311,6 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
         Expanded(child: _moveList()),
       ],
     );
-  }
-
-  /// Extracts a move's origin points (source rings) and landing points
-  /// (destination highlights) from its hops. Origins that hold no checker on the
-  /// pre-move board simply draw no ring, so an intermediate landing is harmless.
-  (Set<int>, Set<int>) _hops(Move m) {
-    final srcs = <int>{};
-    final dests = <int>{};
-    for (final h in m.checkerMoves) {
-      srcs.add(h.from);
-      dests.add(h.to);
-    }
-    return (srcs, dests);
   }
 
   Widget _preMoveCaption({required bool showingBest}) {
@@ -403,7 +406,6 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   /// word + equity loss for assessed moves. The current step is highlighted and
   /// kept in view; any row taps to jump the cursor to that event.
   Widget _moveList() {
-    _rowKeys.clear();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -426,7 +428,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     final index = line.eventIndex;
     final analysis = index == null ? null : _byEventIndex[index];
     final isCurrent = index != null && index == _cursor;
-    final key = index == null ? null : (_rowKeys[index] ??= GlobalKey());
+    final key = index == null ? null : _rowKeys[index];
     final scheme = Theme.of(context).colorScheme;
     final mono = Theme.of(context)
         .textTheme
@@ -623,3 +625,41 @@ class _MetricExplainerDialog extends StatelessWidget {
 }
 
 String _sideLabel(Player p) => p == Player.white ? 'White' : 'Black';
+
+/// The origin (source-ring) and FINAL-landing (destination-highlight) point sets
+/// for a recorded [move], derived by following same-checker chains.
+///
+/// Hops are consumed greedily into chains: a hop that STARTS where an existing
+/// chain currently ENDS extends that chain (its end advances); any other hop
+/// opens a new chain. A chain's start is a true origin; its end is a true
+/// landing. A chain's intermediate pass-through points are neither — so a
+/// multi-hop single-checker move like `24/18/13` marks only `24` (origin) and
+/// `13` (landing), never the transit point `18` (which would read as a false
+/// destination).
+///
+/// With multiset hops a single checker's chain cannot always be told apart from
+/// two different checkers; this greedy heuristic matches how [MoveBuilder] chains
+/// hops and how the notation reads. A point that is genuinely BOTH a landing of
+/// one chain and the origin of another (two checkers, one departing where the
+/// other arrives, in notation order) correctly appears in both sets.
+(Set<int> sources, Set<int> destinations) moveHighlights(Move move) {
+  final starts = <int>[];
+  final ends = <int>[];
+  for (final hop in move.checkerMoves) {
+    var extended = false;
+    // Extend the most recently opened chain whose current end matches the hop's
+    // origin (later chains take precedence, mirroring hop-by-hop entry).
+    for (var i = ends.length - 1; i >= 0; i--) {
+      if (ends[i] == hop.from) {
+        ends[i] = hop.to;
+        extended = true;
+        break;
+      }
+    }
+    if (!extended) {
+      starts.add(hop.from);
+      ends.add(hop.to);
+    }
+  }
+  return ({...starts}, {...ends});
+}
