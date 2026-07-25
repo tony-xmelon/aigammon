@@ -39,3 +39,7 @@
 
 ### Task 5: Verify, review, merge, ship v0.4.0
 Full matrix, whole-branch review vs the 4 feedback items, merge → push (auto-distributes), bump version 0.4.0+4, memory update, feedback→resolution report.
+
+### Task 6 (added from live feedback): end-game analysis always reachable
+Verbatim: ''also did not see the end game analysis''. Root cause: P7's Match-summary button was gated on tutor!=null (live-tutor toggle) — wrong: post-game analysis needs only the ENGINE. Fix: game/match-end dialogs always show ''Match summary'' when the match is persisted (construct the TutorService/GameAnalyzer on demand from engineFacadeProvider regardless of the live-tutor setting); AnalysisScreen already self-serves. Add a ''Saved to History'' hint line on the match-end dialog. Tests: buttons present with tutor OFF; analysis runs from the dialog with tutor OFF.
+
