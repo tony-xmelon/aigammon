@@ -108,9 +108,13 @@ jobs:
           IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           FIREBASE_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          # FIREBASE_SERVICE_ACCOUNT is reused from Android; gate on it too so a
+          # missing service account skips cleanly instead of failing at distribute.
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           if [ -n "$IOS_CERT_P12_BASE64" ] && [ -n "$IOS_CERT_PASSWORD" ] \
-             && [ -n "$IOS_PROVISIONING_PROFILE_BASE64" ] && [ -n "$FIREBASE_IOS_APP_ID" ]; then
+             && [ -n "$IOS_PROVISIONING_PROFILE_BASE64" ] && [ -n "$FIREBASE_IOS_APP_ID" ] \
+             && [ -n "$FIREBASE_SERVICE_ACCOUNT" ]; then
             echo "has_signing=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_signing=false" >> "$GITHUB_OUTPUT"
@@ -192,10 +196,37 @@ jobs:
             DEFINES="--dart-define=AIGAMMON_FIREBASE_PROJECT=$FB_PROJECT --dart-define=AIGAMMON_FIREBASE_API_KEY=$FB_API_KEY"
           fi
 
-          flutter build ipa --release \
+          # We deliberately do NOT use `flutter build ipa`: its internal
+          # `xcodebuild archive` inherits the project's target-level build
+          # settings (CODE_SIGN_STYLE=Automatic, no DEVELOPMENT_TEAM in
+          # Runner.xcodeproj/project.pbxproj), which fails on a headless runner
+          # with "Signing for Runner requires a development team" BEFORE our
+          # ExportOptions.plist is ever consulted — and pbxproj target settings
+          # outrank xcconfig, so an xcconfig override can't fix it. Instead we
+          # compile with Flutter (no codesign), then archive with manual-signing
+          # settings passed on the xcodebuild command line (these DO override the
+          # pbxproj), then export the IPA. --build-number flows into the archive
+          # via FLUTTER_BUILD_NUMBER in Generated.xcconfig.
+          flutter build ios --release --no-codesign \
             --build-number=${{ github.run_number }} \
-            --export-options-plist="$RUNNER_TEMP/ExportOptions.plist" \
             $DEFINES
+
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            archive \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            "CODE_SIGN_IDENTITY=Apple Distribution"
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath build/ios/ipa
 
           IPA="$(ls build/ios/ipa/*.ipa | head -1)"
           echo "Built IPA: $IPA"

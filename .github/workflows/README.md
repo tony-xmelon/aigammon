@@ -62,13 +62,23 @@ Xcode build both need macOS).
 ### Signing + Firebase distribution (secret-gated)
 
 The signing/distribution path is **skipped** until **four** repository secrets
-are all present (plus the existing `FIREBASE_SERVICE_ACCOUNT`, reused from
-Android). When they exist, the workflow imports the certificate into a throwaway
-keychain, installs the provisioning profile, derives the team id / profile name
-/ UUID from the profile itself (nothing hard-coded), writes an
-`ExportOptions.plist` for an **ad-hoc** export, builds a signed IPA
-(`flutter build ipa`), uploads it as `aigammon-ios-signed`, and distributes it
-to the Firebase **`testers`** group.
+are all present **together with** the existing `FIREBASE_SERVICE_ACCOUNT`
+(reused from Android) — the gate requires all five so a missing service account
+skips cleanly instead of failing at the distribute step. When they exist, the
+workflow imports the certificate into a throwaway keychain, installs the
+provisioning profile, derives the team id / profile name / UUID from the profile
+itself (nothing hard-coded), and writes an `ExportOptions.plist` for an
+**ad-hoc** export. It then builds the signed IPA in three explicit commands
+rather than `flutter build ipa`: `flutter build ios --release --no-codesign`
+(compile), then `xcodebuild … archive` with **manual** signing settings passed
+on the command line (`CODE_SIGN_STYLE=Manual`, `DEVELOPMENT_TEAM`,
+`PROVISIONING_PROFILE_SPECIFIER`, `CODE_SIGN_IDENTITY`), then `xcodebuild
+-exportArchive`. This is necessary because `Runner.xcodeproj` ships
+`CODE_SIGN_STYLE=Automatic` with no `DEVELOPMENT_TEAM`, and those target-level
+pbxproj settings outrank xcconfig — only command-line build settings override
+them, so `flutter build ipa`'s internal archive would fail with "Signing for
+Runner requires a development team" on the headless runner. The IPA is uploaded
+as `aigammon-ios-signed` and distributed to the Firebase **`testers`** group.
 
 | Secret | What it is |
 |---|---|
