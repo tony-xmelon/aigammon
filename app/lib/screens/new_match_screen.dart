@@ -31,6 +31,9 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
   Difficulty _difficulty = Difficulty.medium;
   _SideChoice _side = _SideChoice.white;
 
+  /// Hot-seat only: rotate the board so the active player is at the bottom.
+  bool _rotateForBlack = true;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -101,6 +104,15 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                         ),
                       ),
                     ],
+                    if (!widget.vsComputer) ...[
+                      const SizedBox(height: 24),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Rotate board for Black'),
+                        value: _rotateForBlack,
+                        onChanged: (v) => setState(() => _rotateForBlack = v),
+                      ),
+                    ],
                     const SizedBox(height: 40),
                     SizedBox(
                       width: double.infinity,
@@ -123,23 +135,34 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
   }
 
   void _startMatch() {
-    final controller = _buildController();
+    final (controller, orientation) = _buildController();
     Navigator.of(context).push(
       MaterialPageRoute(
         // Key by the controller so a fresh GameScreen State is mounted per
         // match (a new match never reuses stale State) — see GameScreen docs.
-        builder: (_) =>
-            GameScreen(key: ValueKey(controller), controller: controller),
+        builder: (_) => GameScreen(
+          key: ValueKey(controller),
+          controller: controller,
+          orientation: orientation,
+        ),
       ),
     );
   }
 
-  GameController _buildController() {
+  /// Builds the controller and picks the board orientation: hot-seat follows
+  /// the active player when "Rotate board for Black" is on (else White stays
+  /// fixed at the bottom); vs-AI pins the human's side at the bottom.
+  (GameController, BoardOrientationMode) _buildController() {
     if (!widget.vsComputer) {
-      return GameController(
-        white: LocalHumanAgent(),
-        black: LocalHumanAgent(),
-        matchLength: _matchLength,
+      return (
+        GameController(
+          white: LocalHumanAgent(),
+          black: LocalHumanAgent(),
+          matchLength: _matchLength,
+        ),
+        _rotateForBlack
+            ? BoardOrientationMode.followActive
+            : BoardOrientationMode.fixedWhite,
       );
     }
 
@@ -151,10 +174,15 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
       _SideChoice.black => false,
       _SideChoice.random => Random().nextBool(),
     };
-    return GameController(
-      white: humanIsWhite ? human : ai,
-      black: humanIsWhite ? ai : human,
-      matchLength: _matchLength,
+    return (
+      GameController(
+        white: humanIsWhite ? human : ai,
+        black: humanIsWhite ? ai : human,
+        matchLength: _matchLength,
+      ),
+      humanIsWhite
+          ? BoardOrientationMode.fixedWhite
+          : BoardOrientationMode.fixedBlack,
     );
   }
 }

@@ -1,4 +1,3 @@
-import 'package:aigammon_app/board/board_geometry.dart';
 import 'package:aigammon_app/board/board_painter.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
@@ -76,7 +75,9 @@ Rect _boardRect(WidgetTester t) => t.getRect(
 
 Future<void> _tapPoint(WidgetTester t, int index) async {
   final r = _boardRect(t);
-  final g = BoardGeometry(r.size, whiteAtBottom: true);
+  // Read the painter's real orientation so taps land correctly even when the
+  // board is flipped for Black in a hot-seat (rotate-for-Black) match.
+  final g = _painterOf(t).geometry;
   await t.tapAt(r.topLeft + g.pointRect(index).center);
   await t.pump();
 }
@@ -145,6 +146,8 @@ void main() {
     expect(find.byType(NewMatchScreen), findsOneWidget);
     expect(find.text('Difficulty'), findsOneWidget);
     expect(find.text('Your side'), findsOneWidget);
+    // vs-computer has no hot-seat rotate toggle.
+    expect(find.text('Rotate board for Black'), findsNothing);
 
     // Back to home, then Two Players → those selectors are gone.
     await t.pageBack();
@@ -155,6 +158,8 @@ void main() {
     expect(find.text('Match length'), findsOneWidget);
     expect(find.text('Difficulty'), findsNothing);
     expect(find.text('Your side'), findsNothing);
+    // Hot-seat exposes the rotate-for-Black toggle.
+    expect(find.text('Rotate board for Black'), findsOneWidget);
   });
 
   testWidgets('vs computer: Start builds a controller and the match runs to a '

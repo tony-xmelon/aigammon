@@ -34,13 +34,42 @@ import '../game/player_agent.dart';
 /// turn gate instead). A human's double is driven by the pre-roll action bar
 /// ([GameController.offerDouble]), so `pendingDoubleRequest` never fires for a
 /// human in practice and this screen deliberately does not observe it.
+///
+/// ## Board orientation
+///
+/// [BoardOrientationMode] chooses which side sits at the bottom of the board.
+/// [BoardOrientationMode.fixedWhite] / [BoardOrientationMode.fixedBlack] pin a
+/// side (vs-AI: the human's side stays at the bottom for the whole match).
+/// [BoardOrientationMode.followActive] (hot-seat "rotate for Black") flips the
+/// board so the active player is always at the bottom — but ONLY while the
+/// pass-device overlay hides the board, so the rotation is never seen mid-turn.
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key, required this.controller});
+  const GameScreen({
+    super.key,
+    required this.controller,
+    this.orientation = BoardOrientationMode.fixedWhite,
+  });
 
   final GameController controller;
 
+  /// Which side sits at the bottom of the board. See [BoardOrientationMode].
+  final BoardOrientationMode orientation;
+
   @override
   State<GameScreen> createState() => _GameScreenState();
+}
+
+/// How [GameScreen] orients the board.
+enum BoardOrientationMode {
+  /// White is always at the bottom (the canonical layout).
+  fixedWhite,
+
+  /// Black is always at the bottom (vs-AI when the human plays Black).
+  fixedBlack,
+
+  /// The active player is at the bottom; the board flips behind the
+  /// pass-device overlay when the actor changes (hot-seat rotate-for-Black).
+  followActive,
 }
 
 class _GameScreenState extends State<GameScreen> {
@@ -57,6 +86,13 @@ class _GameScreenState extends State<GameScreen> {
   /// Hot-seat only: true while the pass-device overlay is gating the reveal for
   /// a new actor. Cleared when the user taps to continue.
   bool _passDevicePending = false;
+
+  /// followActive only: whether White currently sits at the bottom. Updated
+  /// exactly when the pass-device overlay raises (behind the opaque overlay),
+  /// so the board never flips while it is visible mid-turn. Ignored by the
+  /// fixed orientation modes.
+  late bool _displayedWhiteAtBottom =
+      _c.state.turn == Player.white;
 
   bool get _hotSeat =>
       _c.white is LocalHumanAgent && _c.black is LocalHumanAgent;
@@ -101,8 +137,12 @@ class _GameScreenState extends State<GameScreen> {
     final actor = _c.state.turn;
     if (_lastActor == null) {
       _lastActor = actor; // first turn: reveal immediately, no overlay
+      _displayedWhiteAtBottom = actor == Player.white; // orient to first actor
     } else if (actor != _lastActor && !_passDevicePending) {
       _passDevicePending = true;
+      // Flip now, while the overlay that is about to raise hides the board;
+      // the new orientation is revealed only when the user taps to continue.
+      _displayedWhiteAtBottom = actor == Player.white;
     }
   }
 
@@ -137,6 +177,11 @@ class _GameScreenState extends State<GameScreen> {
     final moveHuman = _humanWith((a) => a.pendingMoveRequest.value != null);
     final cubeHuman = _humanWith((a) => a.pendingCubeRequest.value != null);
     final resignHuman = _humanWith((a) => a.pendingResignRequest.value != null);
+    final whiteAtBottom = switch (widget.orientation) {
+      BoardOrientationMode.fixedWhite => true,
+      BoardOrientationMode.fixedBlack => false,
+      BoardOrientationMode.followActive => _displayedWhiteAtBottom,
+    };
 
     return Scaffold(
       body: SafeArea(
@@ -154,6 +199,7 @@ class _GameScreenState extends State<GameScreen> {
                         state: state,
                         interactive: moveHuman != null,
                         onMoveCommitted: (move) => moveHuman?.submitMove(move),
+                        whiteAtBottom: whiteAtBottom,
                       ),
                     ),
                   ),

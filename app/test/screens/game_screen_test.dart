@@ -99,6 +99,11 @@ Widget _harness(GameController c) => MaterialApp(
       home: GameScreen(key: ValueKey(c), controller: c),
     );
 
+Widget _harnessOriented(GameController c, BoardOrientationMode mode) =>
+    MaterialApp(
+      home: GameScreen(key: ValueKey(c), controller: c, orientation: mode),
+    );
+
 // pumpUntil, boardPainterOf, tapBoardPoint, isButtonEnabled, and commitFirstMove
 // come from the shared board-driving helpers (test/helpers/board_driving.dart),
 // reused by the desktop end-to-end integration test.
@@ -353,6 +358,135 @@ void main() {
           t, () => c.awaitingHumanTurn && c.state.turn == Player.white,
           maxFrames: 1200);
       expect(find.text('Pass the device'), findsNothing);
+
+      c.disposeController();
+    });
+  });
+
+  group('board orientation', () {
+    // A hot-seat controller: White wins the opening (6 > 1) and plays, after
+    // which Black's turn opens behind the pass-device overlay.
+    GameController hotSeat(LocalHumanAgent white, LocalHumanAgent black) =>
+        GameController(
+          white: white,
+          black: black,
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    bool whiteAtBottom(WidgetTester t) =>
+        boardPainterOf(t).geometry.whiteAtBottom;
+
+    testWidgets('hot-seat followActive: flips to the active player, '
+        'revealed after the overlay', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(
+          _harnessOriented(c, BoardOrientationMode.followActive));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      // White is the active player: White at the bottom.
+      expect(whiteAtBottom(t), isTrue);
+
+      // White commits; Black's turn opens behind the pass-device overlay.
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(find.text('Pass the device'), findsOneWidget);
+
+      // Tapping through the overlay reveals a board flipped to Black-at-bottom.
+      await t.tap(find.text('Tap to continue'));
+      await t.pump();
+      expect(whiteAtBottom(t), isFalse);
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat fixedWhite (toggle off): White stays at the bottom',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(
+          _harnessOriented(c, BoardOrientationMode.fixedWhite));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(whiteAtBottom(t), isTrue);
+
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      await t.tap(find.text('Tap to continue'));
+      await t.pump();
+      // Actor changed to Black, but the fixed mode never flips.
+      expect(whiteAtBottom(t), isTrue);
+
+      c.disposeController();
+    });
+
+    testWidgets('vs-AI fixedBlack (human plays Black): Black at bottom, '
+        'never flips', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: FakeAgent(),
+        black: human,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(
+          _harnessOriented(c, BoardOrientationMode.fixedBlack));
+      // Black at the bottom from the very first frame.
+      expect(whiteAtBottom(t), isFalse);
+
+      // White (AI) plays the opening; the human's pre-roll gate opens — still
+      // Black-at-bottom, and no pass-device overlay in a vs-AI match.
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(whiteAtBottom(t), isFalse);
+      expect(find.text('Pass the device'), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('followActive: orientation is constant within a turn '
+        '(no flip mid-turn)', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(
+          _harnessOriented(c, BoardOrientationMode.followActive));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+
+      // Advance to Black's turn and dismiss the overlay: Black now at bottom.
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      await t.tap(find.text('Tap to continue'));
+      await t.pump();
+      expect(whiteAtBottom(t), isFalse, reason: 'Black is the active player');
+
+      // Black rolls: the phase advances pre-roll → moving within the same turn.
+      // No overlay is up, so the orientation must not change.
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => black.pendingMoveRequest.value != null);
+      expect(find.text('Pass the device'), findsNothing);
+      expect(whiteAtBottom(t), isFalse,
+          reason: 'orientation is stable across intra-turn state changes');
 
       c.disposeController();
     });

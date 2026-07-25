@@ -1,4 +1,3 @@
-import 'package:aigammon_app/board/board_geometry.dart';
 import 'package:aigammon_app/board/board_painter.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/material.dart';
@@ -48,7 +47,9 @@ Rect boardRect(WidgetTester t) => t.getRect(
 /// White's half is a valid tap target regardless of which side is on the bar.
 Future<void> tapBoardPoint(WidgetTester t, int index) async {
   final r = boardRect(t);
-  final g = BoardGeometry(r.size, whiteAtBottom: true);
+  // Use the painter's actual geometry so taps land correctly whichever side is
+  // at the bottom (the board flips for the active player in hot-seat).
+  final g = boardPainterOf(t).geometry;
   final Rect target = index == CheckerMove.bar
       ? g.barRect(Player.white)
       : index == CheckerMove.off
