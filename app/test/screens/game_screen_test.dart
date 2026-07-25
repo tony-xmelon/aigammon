@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:aigammon_app/board/board_view.dart';
@@ -77,6 +78,36 @@ class ThrowingAgent implements PlayerAgent {
   @override
   Future<Move> chooseMove(GameState state) async =>
       throw StateError('boom from agent');
+
+  @override
+  Future<bool> considerDouble(GameState state, MatchContext ctx) async => false;
+
+  @override
+  Future<CubeAction> chooseCubeResponse(
+          GameState state, MatchContext ctx) async =>
+      CubeAction.take;
+
+  @override
+  Future<bool> chooseResignResponse(
+          GameState state, ResignValue value, MatchContext ctx) async =>
+      true;
+
+  @override
+  void dispose() {}
+}
+
+/// An AI whose [chooseMove] never completes (until teardown), FREEZING the game
+/// in the mover's moving phase. Lets a test observe the board's dice right after
+/// a non-local roll without the turn advancing past the beat window. Everything
+/// else mirrors [FakeAgent] (it will roll pre-roll, never doubles).
+class HangingMoveAgent implements PlayerAgent {
+  final Completer<Move> _moveGate = Completer<Move>();
+
+  @override
+  bool get wantsDoublePrompts => true;
+
+  @override
+  Future<Move> chooseMove(GameState state) => _moveGate.future;
 
   @override
   Future<bool> considerDouble(GameState state, MatchContext ctx) async => false;
@@ -203,6 +234,21 @@ Widget _harness(GameController c) => MaterialApp(
 Widget _harnessOriented(GameController c, BoardOrientationMode mode) =>
     MaterialApp(
       home: GameScreen(key: ValueKey(c), controller: c, orientation: mode),
+    );
+
+/// A [GameScreen] harness with animation ENABLED (a nonzero per-hop duration),
+/// so the opponent dice-roll beat runs. All other tests use the [Duration.zero]
+/// harnesses above (animation off), where the beat is skipped entirely.
+Widget _animHarness(
+  GameController c, {
+  Duration animationDuration = const Duration(milliseconds: 150),
+}) =>
+    MaterialApp(
+      home: GameScreen(
+        key: ValueKey(c),
+        controller: c,
+        animationDuration: animationDuration,
+      ),
     );
 
 /// Mounts a [GameScreen] whose interaction options + scoring are derived from
@@ -749,6 +795,106 @@ void main() {
     expect(find.textContaining('boom from agent'), findsOneWidget);
 
     c.disposeController();
+  });
+
+  group('opponent dice-roll beat', () {
+    // Reaches a NON-local (AI Black) roll: White (human) wins the opening
+    // (6 > 1) and plays, then Black auto-rolls its first turn. [HangingMoveAgent]
+    // then freezes Black in its moving phase so the dice stay put — Black's roll
+    // is the roller's first `roll()` (index 0), i.e. Dice(6, 5).
+    (GameController, LocalHumanAgent, HangingMoveAgent) freezeOnAiRoll() {
+      final human = LocalHumanAgent();
+      final ai = HangingMoveAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      return (c, human, ai);
+    }
+
+    Future<void> driveToAiRoll(WidgetTester t, GameController c,
+        LocalHumanAgent human) async {
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<RollEvent>()
+              .any((e) => e.player == Player.black));
+    }
+
+    testWidgets('AI roll shows a cycling override, then settles to the real roll',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human, _) = freezeOnAiRoll();
+      await t.pumpWidget(_animHarness(c));
+      await driveToAiRoll(t, c, human);
+
+      const realRoll = (6, 5);
+      expect(c.state.dice, Dice(realRoll.$1, realRoll.$2),
+          reason: 'Black settled on its real roll internally');
+
+      // The beat is live: the board paints override faces, NOT the real roll.
+      expect(boardPainterOf(t).dice, isNot(Dice(realRoll.$1, realRoll.$2)),
+          reason: 'the roll beat overrides the displayed dice');
+
+      // After the ~400ms beat the override clears and the real roll shows.
+      await t.pump(const Duration(milliseconds: 500));
+      expect(boardPainterOf(t).dice, Dice(realRoll.$1, realRoll.$2),
+          reason: 'the beat settled to the real roll');
+
+      c.disposeController();
+    });
+
+    testWidgets('animation off (Duration.zero): AI roll has no beat', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human, _) = freezeOnAiRoll();
+      await t.pumpWidget(_harness(c)); // Duration.zero: animation off
+      await driveToAiRoll(t, c, human);
+
+      // No override ever: the board shows Black's real roll immediately.
+      expect(boardPainterOf(t).dice, Dice(6, 5));
+      expect(boardPainterOf(t).dice, c.state.dice);
+
+      c.disposeController();
+    });
+
+    testWidgets('local human roll is instant (no beat override)', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // Black (AI) wins the opening and moves; White (human) then rolls at its
+        // gate — its own roll must never trigger a beat.
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+
+      await t.pumpWidget(_animHarness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      final realRoll = c.state.dice;
+      expect(realRoll, isNotNull);
+      // The human's own roll shows immediately: the painter's dice equal the
+      // real state dice with no override in between.
+      expect(boardPainterOf(t).dice, realRoll,
+          reason: 'a local roll is instant — no beat override');
+
+      // Let any move animation from the AI opening finish before teardown.
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
   });
 
   group('tutor UI', () {

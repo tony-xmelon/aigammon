@@ -235,6 +235,7 @@ class BoardView extends StatefulWidget {
     this.entryControl,
     this.animationDuration = const Duration(milliseconds: 150),
     this.interactionOptions = const BoardInteractionOptions(),
+    this.diceOverride,
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -280,6 +281,13 @@ class BoardView extends StatefulWidget {
   /// Toggles for drag-to-move and combined-move taps. See
   /// [BoardInteractionOptions].
   final BoardInteractionOptions interactionOptions;
+
+  /// When non-null, these faces REPLACE [state]'s dice on the painted board —
+  /// purely cosmetic. Used by the opponent dice-roll animation beat (see
+  /// [GameScreen]), which cycles pseudo-random faces for ~400ms before the real
+  /// roll settles (the override then clears back to `null`). Never affects move
+  /// entry or state; it only changes what the dice show.
+  final Dice? diceOverride;
 
   @override
   State<BoardView> createState() => _BoardViewState();
@@ -862,6 +870,10 @@ class _BoardViewState extends State<BoardView>
           final dragPointer = _dragPointer;
           final dragging = dragSource != null && dragPointer != null;
 
+          // The dice faces to paint: the roll-beat override when one is active,
+          // otherwise the state's real dice. Cosmetic only.
+          final displayDice = widget.diceOverride ?? widget.state.dice;
+
           // Highlights are a pure visual layer: when off, taps/drag still drive
           // entry but no rings or destination fills are painted (see
           // [BoardInteractionOptions.showHighlights]).
@@ -878,7 +890,7 @@ class _BoardViewState extends State<BoardView>
               board: preview,
               geometry: geometry,
               theme: theme,
-              dice: widget.state.dice,
+              dice: displayDice,
               cube: widget.state.cube,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
@@ -900,7 +912,7 @@ class _BoardViewState extends State<BoardView>
               board: frame.board,
               geometry: geometry,
               theme: theme,
-              dice: widget.state.dice,
+              dice: displayDice,
               cube: widget.state.cube,
               hiddenChecker: frame.hidden,
               overlayChecker: frame.overlay,
@@ -910,7 +922,7 @@ class _BoardViewState extends State<BoardView>
               board: _previewBoard(),
               geometry: geometry,
               theme: theme,
-              dice: widget.state.dice,
+              dice: displayDice,
               cube: widget.state.cube,
               highlightedSources: (showHl && builder != null && selected == null)
                   ? builder.selectableSources
