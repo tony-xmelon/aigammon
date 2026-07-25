@@ -1,0 +1,16 @@
+name: online_client
+description: Pure-Dart REST transport (Firestore/Auth/Functions) + MatchApi facade for AIGammon online play.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  backgammon_core:
+    path: ../backgammon_core
+  http: ^1.2.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0
