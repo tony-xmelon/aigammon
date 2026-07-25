@@ -1699,44 +1699,50 @@ class _Hud extends StatelessWidget {
         child: Row(
           children: [
             // The left group (score, Crawford badge, cube chip) takes ALL the
-            // space the right-hand controls leave, and the score flexes within
-            // it. A bare `Flexible` + `Spacer` split the free space evenly
-            // instead, which truncated the longer "You 0–1 AI · to 3" score to
-            // "You 0–1 AI · t…" on a phone.
+            // space the right-hand controls leave. A bare `Flexible` + `Spacer`
+            // split the free space evenly instead, which truncated the longer
+            // "You 0–1 AI · to 3" score to "You 0–1 AI · t…" on a phone.
+            //
+            // The group scales to fit as ONE unit rather than flexing the score
+            // alone: a clipped score ("You 0–1 AI · t…") tells the player
+            // nothing, whereas a slightly smaller row still reads — and the
+            // badge and chip beside it are RIGID, so a flexing score could not
+            // absorb them. In a 1-point match (Crawford from the first roll)
+            // that rigid pair plus the score overflowed the row by a hair on a
+            // 390pt phone. Scaling the whole group can never overflow, at any
+            // width or system text scale, and only kicks in when the group
+            // genuinely outgrows the row — long names, two-digit scores, an
+            // 11-point match, the Crawford badge.
             Expanded(
-              child: Row(
-                children: [
-                  // The score segment is hidden entirely when scoring is off; the
-                  // rest of the header (Crawford badge, cube chip, Double,
-                  // overflow) stays.
-                  if (showScoring)
-                    Flexible(
-                      // Scale-to-fit rather than ellipsize: a clipped score
-                      // ("You 0–1 AI · t…") tells the player nothing, whereas a
-                      // slightly smaller one still reads. Only kicks in when the
-                      // score genuinely outgrows its share of the row — long
-                      // names, two-digit scores, an 11-point match.
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          _compactScore(controller, opponentLabel),
-                          maxLines: 1,
-                          softWrap: false,
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  // Unbounded inside the FittedBox: measured at natural size,
+                  // then scaled — so no child here may be Flexible.
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // The score segment is hidden entirely when scoring is off;
+                    // the rest of the header (Crawford badge, cube chip, Double,
+                    // overflow) stays.
+                    if (showScoring)
+                      Text(
+                        _compactScore(controller, opponentLabel),
+                        maxLines: 1,
+                        softWrap: false,
+                        style: Theme.of(context).textTheme.titleSmall,
                       ),
-                    ),
-                  if (state.isCrawfordGame) ...[
-                    if (showScoring) const SizedBox(width: 8),
-                    const _MiniBadge(icon: Icons.star, label: 'Crawford'),
+                    if (state.isCrawfordGame) ...[
+                      if (showScoring) const SizedBox(width: 8),
+                      const _MiniBadge(icon: Icons.star, label: 'Crawford'),
+                    ],
+                    // The cube chip is hidden in a cubeless match (no cube).
+                    if (!controller.cubeless) ...[
+                      const SizedBox(width: 8),
+                      _CubeChip(value: cube.value, owner: cube.owner),
+                    ],
                   ],
-                  // The cube chip is hidden in a cubeless match (no cube).
-                  if (!controller.cubeless) ...[
-                    const SizedBox(width: 8),
-                    _CubeChip(value: cube.value, owner: cube.owner),
-                  ],
-                ],
+                ),
               ),
             ),
             if (showThinking) ...[

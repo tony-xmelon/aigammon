@@ -480,6 +480,32 @@ void main() {
     c.disposeController();
   });
 
+  testWidgets('the header fits its widest load on a phone (Crawford badge)',
+      (t) async {
+    // The fullest the left group ever gets: a 1-point match is Crawford from
+    // the first roll, so score + Crawford badge + cube chip all share the row
+    // with Double and the overflow menu. On a 390pt phone that group outgrew
+    // the row — flutter_test turns the resulting RenderFlex overflow into a
+    // failure, so simply pumping the screen is the assertion.
+    await t.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final human = LocalHumanAgent();
+    final c = GameController(
+      white: human,
+      black: FakeAgent(),
+      matchLength: 1,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+
+    // Guard the guard: the badge really is in the row being measured.
+    expect(c.state.isCrawfordGame, isTrue);
+    expect(find.text('Crawford'), findsOneWidget);
+    expect(find.textContaining('to 1'), findsOneWidget);
+    c.disposeController();
+  });
+
   testWidgets('Resign lives behind the header overflow (⋮) menu', (t) async {
     await t.binding.setSurfaceSize(_surface);
     addTearDown(() => t.binding.setSurfaceSize(null));
@@ -1175,9 +1201,8 @@ void main() {
       final c = GameController(
         white: human,
         black: ThrowingAgent(),
-        // 3, not 1: a 1-point match is Crawford from the off, and the HUD's
-        // Crawford badge overflows its row by ~1px at 390pt — a pre-existing
-        // header issue, not what this test is about.
+        // 3, not 1: an ordinary non-Crawford match, so the header carries its
+        // usual load. The widest header is covered by its own test.
         matchLength: 3,
         // White (human) wins the opening and moves; Black's agent then throws.
         diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
