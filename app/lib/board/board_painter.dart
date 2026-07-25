@@ -134,10 +134,10 @@ class BoardPainter extends CustomPainter {
       final n = count.abs();
       for (var s = 0; s < n; s++) {
         if (_isHidden(i, s, isWhite)) continue;
-        _drawChecker(canvas, geometry.checkerCenter(i, s), isWhite);
+        _drawChecker(canvas, geometry.checkerCenter(i, s, n), isWhite);
       }
       if (n > 5) {
-        _drawCountLabel(canvas, geometry.checkerCenter(i, n - 1), n, isWhite);
+        _drawCountLabel(canvas, geometry.checkerCenter(i, n - 1, n), n, isWhite);
       }
     }
   }
@@ -148,11 +148,11 @@ class BoardPainter extends CustomPainter {
       final isWhite = player == Player.white;
       for (var s = 0; s < n; s++) {
         if (_isHidden(CheckerMove.bar, s, isWhite)) continue;
-        _drawChecker(canvas, geometry.barCheckerCenter(player, s), isWhite);
+        _drawChecker(canvas, geometry.barCheckerCenter(player, s, n), isWhite);
       }
       if (n > 5) {
         _drawCountLabel(
-            canvas, geometry.barCheckerCenter(player, n - 1), n, isWhite);
+            canvas, geometry.barCheckerCenter(player, n - 1, n), n, isWhite);
       }
     }
   }
@@ -184,59 +184,64 @@ class BoardPainter extends CustomPainter {
   }
 
   void _drawCountLabel(Canvas canvas, Offset center, int count, bool isWhite) {
-    _drawText(
+    _outlinedText(
       canvas,
       '$count',
       center,
       geometry.checkerRadius * 1.05,
       isWhite ? theme.blackChecker : theme.whiteChecker,
+      isWhite ? theme.whiteChecker : theme.blackChecker,
       bold: true,
     );
   }
 
   // --- Bear-off trays --------------------------------------------------------
 
+  /// Draws a player's borne-off checkers as a horizontal row of discs from the
+  /// tray strip's leading (left) edge, with an outlined count at the trailing
+  /// (right) end. Discs compress horizontally if 15 would overflow the row.
   void _paintOffTrays(Canvas canvas) {
     for (final player in Player.values) {
       final n = board.offFor(player);
       if (n == 0) continue;
       final tray = geometry.offRect(player);
       final isWhite = player == Player.white;
-      // Whether the tray's outer edge (where checkers pile from) is at bottom.
-      final fillFromBottom =
-          geometry.whiteAtBottom ? isWhite : !isWhite;
-      final slabH = tray.height / 15; // up to 15 borne off
-      final inset = tray.width * 0.12;
-      final paint = Paint()
+      final r = tray.height * 0.38;
+      final cy = tray.center.dy;
+      final pad = tray.height * 0.28;
+      // Reserve a slot at the trailing end for the count text.
+      final textW = tray.height * 1.1;
+      final rowLeft = tray.left + pad + r;
+      final rowRight = tray.right - pad - textW - r;
+      final avail = math.max(0.0, rowRight - rowLeft);
+      final step = n > 1 ? math.min(_off2r(r), avail / (n - 1)) : 0.0;
+      final disc = Paint()
         ..color = isWhite ? theme.whiteChecker : theme.blackChecker;
       final border = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = slabH * 0.18
+        ..strokeWidth = r * 0.14
         ..color = theme.checkerBorder;
       for (var s = 0; s < n; s++) {
-        final top = fillFromBottom
-            ? tray.bottom - (s + 1) * slabH
-            : tray.top + s * slabH;
-        final slab = Rect.fromLTWH(
-          tray.left + inset,
-          top + slabH * 0.12,
-          tray.width - inset * 2,
-          slabH * 0.76,
-        );
-        final rr = RRect.fromRectXY(slab, slabH * 0.2, slabH * 0.2);
-        canvas.drawRRect(rr, paint);
-        canvas.drawRRect(rr, border);
+        final c = Offset(rowLeft + step * s, cy);
+        canvas.drawCircle(c, r, disc);
+        canvas.drawCircle(c, r, border);
       }
-      _drawText(
+      // Outlined count at the trailing end: light fill, contrasting outline so
+      // it reads clearly whether it sits over felt or over a disc.
+      _outlinedText(
         canvas,
         '$n',
-        tray.center,
-        tray.width * 0.42,
-        theme.textColor,
+        Offset(tray.right - pad - textW / 2, cy),
+        tray.height * 0.62,
+        theme.whiteChecker,
+        theme.blackChecker,
         bold: true,
       );
     }
   }
+
+  /// Full-diameter spacing for the tray discs.
+  double _off2r(double r) => r * 2;
 
   // --- Dice ------------------------------------------------------------------
 
@@ -289,15 +294,18 @@ class BoardPainter extends CustomPainter {
   void _paintCube(Canvas canvas) {
     final c = cube!;
     final side = geometry.checkerRadius * 2.1;
-    final barCx =
-        (geometry.barRect(Player.white).left +
-                geometry.barRect(Player.white).right) /
-            2;
+    final barRect = geometry.barRect(Player.white);
+    final barCx = (barRect.left + barRect.right) / 2;
+    final midY = size().height / 2;
     final Offset center;
     if (c.owner == null) {
-      center = Offset(barCx, size().height / 2);
+      center = Offset(barCx, midY);
     } else {
-      center = Offset(barCx, geometry.offRect(c.owner!).center.dy);
+      // Nudge the owned cube along the bar toward its owner's half so ownership
+      // reads at a glance (bottom half = local-bottom player), staying clear of
+      // the resting bar checkers that pile from the outer ends.
+      final ownerAtBottom = geometry.barRect(c.owner!).center.dy > midY;
+      center = Offset(barCx, midY + (ownerAtBottom ? side : -side));
     }
     final rect = Rect.fromCenter(center: center, width: side, height: side);
     final rr = RRect.fromRectXY(rect, side * 0.18, side * 0.18);
@@ -335,6 +343,41 @@ class BoardPainter extends CustomPainter {
       canvas,
       center - Offset(tp.width / 2, tp.height / 2),
     );
+  }
+
+  /// Draws [text] centred at [center] with a [fill] over a contrasting [outline]
+  /// stroke, so the glyphs stay legible over checkers or felt. Painted twice:
+  /// the stroke pass first, the fill on top.
+  void _outlinedText(Canvas canvas, String text, Offset center, double fontSize,
+      Color fill, Color outline,
+      {bool bold = false}) {
+    final weight = bold ? FontWeight.bold : FontWeight.normal;
+    final strokeWidth = math.max(1.0, fontSize * 0.14);
+    final stroke = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: weight,
+          foreground: Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = strokeWidth
+            ..strokeJoin = StrokeJoin.round
+            ..color = outline,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final fillTp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(color: fill, fontSize: fontSize, fontWeight: weight),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final origin = center - Offset(fillTp.width / 2, fillTp.height / 2);
+    stroke.paint(canvas, origin);
+    fillTp.paint(canvas, origin);
   }
 
   @override

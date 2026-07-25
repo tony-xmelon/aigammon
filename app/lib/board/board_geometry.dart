@@ -11,34 +11,44 @@ import 'package:backgammon_core/backgammon_core.dart';
 ///
 /// ## Layout (canonical `whiteAtBottom == true`)
 ///
-/// Horizontally the width splits into: a left half of 6 point columns, a
-/// central bar strip, a right half of 6 point columns, and a bear-off tray
-/// column pinned to the right edge. Vertically the top ~42% and bottom ~42%
-/// hold the triangles; the middle band is empty (the resting bar / gap).
+/// Vertically the widget splits into three horizontal bands: a TOP bear-off
+/// tray strip (7% height), the BOARD band (86% height), and a BOTTOM bear-off
+/// tray strip (7% height). The board band is full-width and symmetric: a
+/// central bar strip (8% width, centred) with six point columns on each side
+/// that together fill the remaining 92% — there is NO right-edge tray column,
+/// so the leftmost column touches x=0 and the rightmost touches x=width. Within
+/// the board band the top ~44% and bottom ~44% hold the triangles; the middle
+/// gap is empty (dice / cube / resting bar).
 ///
 /// ```
-/// col:  0  1  2  3  4  5 |bar| 6  7  8  9 10 11 | off
-///     +---------------------------------------------+
-/// top | 12 13 14 15 16 17| B | 18 19 20 21 22 23| K |   <- indices 12..23,
-///     |  \  \  \  \  \  \ | A |  \  \  \  \  \  \ | b |      left->right
-///     |   (triangles)     | R |   (triangles)    | l |
-///     |                   |   |                  | a |
-///     |   (triangles)     |   |   (triangles)    | c |   <- middle gap
-///     |  /  /  /  /  /  / |   |  /  /  /  /  /  / | k |
-/// bot | 11 10  9  8  7  6 | W | 5  4  3  2  1  0 | W |   <- indices 0..11,
-///     +---------------------------------------------+      right->left
+///        col: 0  1  2  3  4  5 |bar| 6  7  8  9 10 11
+///     +-------------------------------------------------+
+/// tray|  black's borne-off checkers  ·····   count [N]  |  <- TOP strip (7%)
+///     +-------------------------------------------------+
+///  top| 12 13 14 15 16 17 | BAR | 18 19 20 21 22 23     |  <- indices 12..23,
+///     |  \  \  \  \  \  \  |     |  \  \  \  \  \  \      |     left -> right
+///     |   (triangles)      |     |   (triangles)         |
+///     |                    |     |                       |  <- middle gap
+///     |   (triangles)      |     |   (triangles)         |     (dice/cube)
+///     |  /  /  /  /  /  /   |     |  /  /  /  /  /  /      |
+///  bot| 11 10  9  8  7  6  |     | 5  4  3  2  1  0       |  <- indices 0..11,
+///     +-------------------------------------------------+     right -> left
+/// tray|  white's borne-off checkers  ·····   count [N]  |  <- BOTTOM strip (7%)
+///     +-------------------------------------------------+
 /// ```
 ///
 /// * Bottom row holds indices 0..11 running **right to left**: index 0 is the
 ///   rightmost bottom slot (White's 1-point, home board), index 11 the far
-///   left. Bar splits the row between indices 5 and 6.
-/// * Top row holds indices 12..23 running **left to right**: index 12 far
-///   left, index 23 rightmost. Bar splits the row between indices 17 and 18.
-/// * The bar's lower half holds White's captured checkers, the upper half
-///   Black's; the bear-off tray's lower half is White's, upper half Black's.
+///   left. The bar splits the row between indices 5 and 6.
+/// * Top row holds indices 12..23 running **left to right**: index 12 far left,
+///   index 23 rightmost. The bar splits the row between indices 17 and 18.
+/// * The bar's lower half (canonically) holds White's captured checkers, the
+///   upper half Black's. The BOTTOM tray strip is White's (their checkers bear
+///   off toward them, at the bottom); the TOP tray strip is Black's.
 ///
 /// When [whiteAtBottom] is `false` the whole board is rotated 180° about its
-/// centre, so a location at canonical `p` renders at `size - p`.
+/// centre, so a location at canonical `p` renders at `size - p`. The strips
+/// swap: White's tray moves to the top, Black's to the bottom.
 class BoardGeometry {
   BoardGeometry(this.size, {required this.whiteAtBottom})
       : assert(size.width > 0 && size.height > 0, 'size must be positive');
@@ -47,25 +57,30 @@ class BoardGeometry {
   final bool whiteAtBottom;
 
   // --- Layout fractions (of width / height). ---------------------------------
-  static const double _offFraction = 0.08; // bear-off tray column width
+  static const double _trayFraction = 0.07; // top/bottom bear-off strip height
   static const double _barFraction = 0.08; // central bar strip width
-  static const double _pointHeightFraction = 0.42; // each triangle band height
+  static const double _pointHeightFraction = 0.44; // triangle band, of the band
 
   double get _w => size.width;
   double get _h => size.height;
 
-  double get _colWidth => (_w * (1 - _offFraction - _barFraction)) / 12;
+  // The board band (between the two tray strips).
+  double get _trayHeight => _h * _trayFraction;
+  double get _bandTop => _trayHeight;
+  double get _bandBottom => _h - _trayHeight;
+  double get _bandHeight => _bandBottom - _bandTop;
+
+  // Full-width, symmetric horizontal layout: 12 columns + a centred bar fill
+  // the whole width (no side tray).
+  double get _colWidth => (_w * (1 - _barFraction)) / 12;
   double get _halfWidth => _colWidth * 6;
   double get _barLeft => _halfWidth;
   double get _barRight => _halfWidth + _w * _barFraction;
-  double get _offLeft => _barRight + _halfWidth;
-  double get _offWidth => _w * _offFraction;
-  double get _pointHeight => _h * _pointHeightFraction;
+  double get _pointHeight => _bandHeight * _pointHeightFraction;
 
-  /// Radius of a rendered checker. Bounded so five checkers stack within a
-  /// point's height and a checker fits within its column.
-  double get checkerRadius =>
-      math.min(_pointHeight / 10, _colWidth * 0.46);
+  /// Radius of a rendered checker. Bounded so five checkers stack (at full 2r
+  /// spacing) within a point's height, and a checker fits within its column.
+  double get checkerRadius => math.min(_colWidth * 0.42, _pointHeight / 10);
 
   double get _diameter => checkerRadius * 2;
 
@@ -80,55 +95,64 @@ class BoardGeometry {
   /// The [player]'s half of the central bar strip (where hit checkers rest).
   Rect barRect(Player player) => _orient(_canonicalBarRect(player));
 
-  /// The [player]'s half of the bear-off tray column.
+  /// The [player]'s full-width bear-off tray strip (top or bottom). The
+  /// local-bottom player's tray is the BOTTOM strip; the opponent's is the TOP.
   Rect offRect(Player player) => _orient(_canonicalOffRect(player));
 
   /// Centre of the [stackPosition]-th checker (0-based, from the point's base)
-  /// on point [pointIndex]. Stacks compress smoothly so any count stays within
-  /// the point's rectangle.
-  Offset checkerCenter(int pointIndex, int stackPosition) {
+  /// on point [pointIndex], in a stack of [stackCount] checkers. The first five
+  /// sit at full 2r spacing (no overlap); larger stacks compress the whole
+  /// stack uniformly so up to 15 stay within the point's height.
+  Offset checkerCenter(int pointIndex, int stackPosition, int stackCount) {
     assert(pointIndex >= 0 && pointIndex < 24, 'point index must be 0..23');
     final rect = _canonicalPointRect(pointIndex);
     final isBottom = pointIndex < 12;
-    final travel = checkerRadius + _stackOffset(stackPosition, _pointHeight);
+    final travel = _stackTravel(stackPosition, stackCount, _pointHeight);
     final cx = rect.center.dx;
-    final cy = isBottom ? _h - travel : travel;
+    final cy = isBottom ? _bandBottom - travel : _bandTop + travel;
     return _orientPoint(Offset(cx, cy));
   }
 
-  /// Centre of the [stackPosition]-th checker resting on [player]'s bar half.
-  Offset barCheckerCenter(Player player, int stackPosition) {
+  /// Centre of the [stackPosition]-th checker (in a stack of [stackCount])
+  /// resting on [player]'s bar half.
+  Offset barCheckerCenter(Player player, int stackPosition, int stackCount) {
     final cx = (_barLeft + _barRight) / 2;
     final isBottomHalf = player == Player.white; // canonical
-    final travel = checkerRadius + _stackOffset(stackPosition, _h / 2);
-    final cy = isBottomHalf ? _h - travel : travel;
+    final half = _bandHeight / 2;
+    final travel = _stackTravel(stackPosition, stackCount, half);
+    final cy = isBottomHalf ? _bandBottom - travel : _bandTop + travel;
     return _orientPoint(Offset(cx, cy));
   }
 
   /// The board location under point [p]: a point index (0..23),
   /// [CheckerMove.bar] (24), [CheckerMove.off] (-1), or `null` for the empty
-  /// middle band / outside the board.
+  /// middle gap / outside the board.
   int? locationAt(Offset p) {
-    // Rotate the query back into canonical space when board is flipped.
+    // Rotate the query back into canonical space when the board is flipped.
     final q = whiteAtBottom ? p : Offset(_w - p.dx, _h - p.dy);
     if (q.dx < 0 || q.dx > _w || q.dy < 0 || q.dy > _h) return null;
 
-    if (q.dx >= _offLeft) return CheckerMove.off;
+    // The tray strips (top and bottom) are the bear-off destinations. Bear-off
+    // is unambiguous, so either strip maps to `off` regardless of player.
+    if (q.dy < _bandTop || q.dy > _bandBottom) return CheckerMove.off;
+
+    // The centred bar strip.
     if (q.dx >= _barLeft && q.dx < _barRight) return CheckerMove.bar;
 
-    // A point column: resolve the row, then the visual column.
-    final int? isBottomRow = q.dy >= _h - _pointHeight
-        ? 1
-        : (q.dy <= _pointHeight ? 0 : null);
+    // A point column: resolve the row (top / bottom triangle band), then the
+    // visual column.
+    final topBandBottom = _bandTop + _pointHeight;
+    final botBandTop = _bandBottom - _pointHeight;
+    final int? isBottomRow =
+        q.dy >= botBandTop ? 1 : (q.dy <= topBandBottom ? 0 : null);
     if (isBottomRow == null) return null; // middle gap
 
     final int col;
     if (q.dx < _barLeft) {
       col = (q.dx / _colWidth).floor().clamp(0, 5);
-    } else if (q.dx >= _barRight && q.dx < _offLeft) {
-      col = 6 + ((q.dx - _barRight) / _colWidth).floor().clamp(0, 5);
     } else {
-      return null;
+      // q.dx >= _barRight (the bar case returned above).
+      col = 6 + ((q.dx - _barRight) / _colWidth).floor().clamp(0, 5);
     }
     return isBottomRow == 1 ? 11 - col : col + 12;
   }
@@ -146,35 +170,38 @@ class BoardGeometry {
       isBottom = false;
     }
     final left = _colLeft(col);
-    final top = isBottom ? _h - _pointHeight : 0.0;
+    final top = isBottom ? _bandBottom - _pointHeight : _bandTop;
     return Rect.fromLTWH(left, top, _colWidth, _pointHeight);
   }
 
   Rect _canonicalBarRect(Player player) {
     final isBottomHalf = player == Player.white;
-    final top = isBottomHalf ? _h / 2 : 0.0;
-    return Rect.fromLTWH(_barLeft, top, _barRight - _barLeft, _h / 2);
+    final mid = (_bandTop + _bandBottom) / 2;
+    final top = isBottomHalf ? mid : _bandTop;
+    return Rect.fromLTWH(_barLeft, top, _barRight - _barLeft, _bandHeight / 2);
   }
 
   Rect _canonicalOffRect(Player player) {
-    final isBottomHalf = player == Player.white;
-    final top = isBottomHalf ? _h / 2 : 0.0;
-    return Rect.fromLTWH(_offLeft, top, _offWidth, _h / 2);
+    // White (the canonical bottom player) bears off toward the BOTTOM strip;
+    // Black toward the TOP strip.
+    final isBottomStrip = player == Player.white;
+    final top = isBottomStrip ? _bandBottom : 0.0;
+    return Rect.fromLTWH(0, top, _w, _trayHeight);
   }
 
   /// Left edge x of visual column [col] (0..11).
   double _colLeft(int col) =>
       col < 6 ? col * _colWidth : _barRight + (col - 6) * _colWidth;
 
-  /// Distance a checker's centre sits from the stack base for [k] (0-based),
-  /// within a usable [range] of travel. Grows by a full diameter for the
-  /// first gap, then compresses geometrically so the offset is bounded by
-  /// `range - diameter`, keeping every checker inside the rectangle.
-  double _stackOffset(int k, double range) {
-    final usable = range - _diameter;
-    if (usable <= 0) return 0;
-    final f = 1 - _diameter / usable; // in (0,1); offset(1) == diameter
-    return usable * (1 - math.pow(f, k));
+  /// Centre distance from the stack base for checker [s] (0-based) in a stack of
+  /// [count], within a usable [range] of travel. Checkers sit at full diameter
+  /// spacing until that would exceed the range, then the whole stack compresses
+  /// uniformly: spacing = min(2r, (range - 2r) / (count - 1)), first centre at r.
+  double _stackTravel(int s, int count, double range) {
+    final r = checkerRadius;
+    if (count <= 1) return r;
+    final spacing = math.min(_diameter, (range - _diameter) / (count - 1));
+    return r + spacing * s;
   }
 
   // --- Orientation -----------------------------------------------------------

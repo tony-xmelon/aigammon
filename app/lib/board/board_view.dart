@@ -484,12 +484,14 @@ class _BoardViewState extends State<BoardView>
     final int fromStack;
     if (hop.from == CheckerMove.bar) {
       fromLoc = CheckerMove.bar;
-      fromStack = (board.barFor(anim.player) - 1).clamp(0, 1 << 30);
-      from = geometry.barCheckerCenter(anim.player, fromStack);
+      final barCount = board.barFor(anim.player);
+      fromStack = (barCount - 1).clamp(0, 1 << 30);
+      from = geometry.barCheckerCenter(anim.player, fromStack, barCount);
     } else {
       fromLoc = hop.from;
-      fromStack = (board.points[hop.from].abs() - 1).clamp(0, 1 << 30);
-      from = geometry.checkerCenter(hop.from, fromStack);
+      final srcCount = board.points[hop.from].abs();
+      fromStack = (srcCount - 1).clamp(0, 1 << 30);
+      from = geometry.checkerCenter(hop.from, fromStack, srcCount);
     }
 
     // Destination: the moving checker's landing spot (its own stack top, or the
@@ -500,7 +502,10 @@ class _BoardViewState extends State<BoardView>
     } else {
       final at = board.points[hop.to];
       final sameSign = isWhite ? at > 0 : at < 0;
-      to = geometry.checkerCenter(hop.to, sameSign ? at.abs() : 0);
+      // Lands on top of an existing same-colour stack, or as the first checker
+      // on an empty / just-hit point.
+      final landStack = sameSign ? at.abs() : 0;
+      to = geometry.checkerCenter(hop.to, landStack, landStack + 1);
     }
 
     return (
