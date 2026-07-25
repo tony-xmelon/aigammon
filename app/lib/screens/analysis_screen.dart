@@ -175,6 +175,14 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   Widget _loaded(List<GameState> states) {
     final analysis = _analysis!;
     final current = _byEventIndex[_cursor];
+    // When the cursor sits on an assessed move, frame the PRE-move position: the
+    // board as it stood BEFORE the move, so the verdict is read against the
+    // choice that was faced. `_states[i]` is the state after events[0..i], so the
+    // pre-move state for the move at event `i` is `_states[i-1]` (the post-roll
+    // state — its dice are already set). Assessed moves are never at index 0
+    // (index 0 is the opening roll), so `_cursor - 1` is always valid here.
+    final preMove = current != null && _cursor > 0;
+    final shownState = preMove ? states[_cursor - 1] : states[_cursor];
     return Column(
       children: [
         _SummaryHeader(analysis: analysis),
@@ -183,17 +191,34 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
             padding: const EdgeInsets.all(8),
             child: Center(
               child: BoardView(
-                state: states[_cursor],
+                state: shownState,
                 interactive: false,
                 onMoveCommitted: (_) {},
               ),
             ),
           ),
         ),
+        if (preMove) _preMoveCaption(),
         if (current != null) _moveInfo(current),
         _cursorBar(states.length),
         _blunderList(analysis),
       ],
+    );
+  }
+
+  Widget _preMoveCaption() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.visibility_outlined,
+              size: 14, color: Theme.of(context).colorScheme.outline),
+          const SizedBox(width: 6),
+          Text('Showing position before the move',
+              style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
     );
   }
 

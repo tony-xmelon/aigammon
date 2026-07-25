@@ -1,4 +1,5 @@
 import 'package:backgammon_core/backgammon_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'board_geometry.dart';
@@ -27,6 +28,24 @@ import 'board_theme.dart';
 /// entry could momentarily show a phantom-hit intermediate in the preview; this
 /// is a known, accepted, display-only cosmetic risk (see [MoveBuilder]). No
 /// board corruption is possible because the preview board is discarded.
+///
+/// ## Staging a full move externally ([externalMove])
+///
+/// A tap-to-apply hint needs to preload a complete play into the in-progress
+/// entry without committing it. Because the [MoveBuilder] is private (created
+/// from `state.legalMoves` inside this widget), callers hand in an
+/// [externalMove] `ValueListenable<Move?>`; whenever it fires with a non-null
+/// [Move] the view resets its builder and re-enters that move's hops *one at a
+/// time* via `addHop`, in the move's canonical (generator) order — so the play
+/// lands STAGED (`isComplete`, preview shows it applied, Confirm enabled) but
+/// NOT committed. The user still presses Confirm. Selection is cleared.
+///
+/// The move is expected to be a *current* legal play, so hop-by-hop entry in
+/// canonical order is always offered by the builder. Defensively, if any hop is
+/// rejected (an [ArgumentError] — a stale/illegal move fired after the position
+/// moved on), the builder is reset and the fire is ignored: never a crash, and
+/// the board falls back to the clean base position. External application is a
+/// no-op unless [interactive] and a builder exists (the moving phase).
 class BoardView extends StatefulWidget {
   const BoardView({
     super.key,
@@ -35,6 +54,7 @@ class BoardView extends StatefulWidget {
     required this.onMoveCommitted,
     this.whiteAtBottom = true,
     this.theme, // defaults by brightness
+    this.externalMove,
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -49,6 +69,11 @@ class BoardView extends StatefulWidget {
 
   /// Board orientation. When false the board is rotated 180°.
   final bool whiteAtBottom;
+
+  /// Optional stream of full moves to STAGE (not commit) into the in-progress
+  /// entry — e.g. a tap-to-apply hint. Each non-null fire resets the builder and
+  /// re-enters the move's hops, leaving it staged for Confirm. See the class doc.
+  final ValueListenable<Move?>? externalMove;
 
   /// Palette override. Defaults to [BoardTheme.dark]/[BoardTheme.light] by the
   /// ambient [Theme] brightness.
@@ -75,6 +100,7 @@ class _BoardViewState extends State<BoardView> {
   void initState() {
     super.initState();
     _resetBuilder();
+    widget.externalMove?.addListener(_applyExternalMove);
   }
 
   @override
@@ -87,6 +113,40 @@ class _BoardViewState extends State<BoardView> {
         oldWidget.interactive != widget.interactive) {
       _resetBuilder();
     }
+    // Re-subscribe if the external-move listenable instance was swapped.
+    if (!identical(oldWidget.externalMove, widget.externalMove)) {
+      oldWidget.externalMove?.removeListener(_applyExternalMove);
+      widget.externalMove?.addListener(_applyExternalMove);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.externalMove?.removeListener(_applyExternalMove);
+    super.dispose();
+  }
+
+  /// Stages the current [BoardView.externalMove] value into the builder: resets
+  /// entry and re-enters the move's hops in canonical order, leaving it complete
+  /// but uncommitted (Confirm remains the user's action). Ignores a null fire or
+  /// a fire while not in the interactive moving phase. A rejected hop (stale or
+  /// illegal move) resets the builder and is silently dropped — never a crash.
+  void _applyExternalMove() {
+    final move = widget.externalMove?.value;
+    if (move == null) return;
+    final builder = _builder;
+    if (!widget.interactive || builder == null) return;
+    setState(() {
+      _selectedSource = null;
+      builder.reset();
+      try {
+        for (final hop in move.checkerMoves) {
+          builder.addHop(hop.from, hop.to);
+        }
+      } on ArgumentError {
+        builder.reset(); // stale/illegal move: leave a clean base position
+      }
+    });
   }
 
   /// Creates a fresh builder from the current legal moves (or clears it) and

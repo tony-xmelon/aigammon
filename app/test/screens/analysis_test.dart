@@ -179,33 +179,51 @@ void main() {
     expect(find.text('Blunders 1'), findsOneWidget); // White's summary
     expect(find.textContaining('Blunders (1)'), findsOneWidget); // list header
 
-    // Cursor starts at position 0 (opening); capture that board.
+    // Cursor starts at position 0 (opening roll — not an assessed move), so the
+    // post-event board is shown and there is no pre-move caption.
+    const caption = 'Showing position before the move';
     final boardAt0 = _painterOf(t).board;
     expect(find.text('1 / 6'), findsOneWidget);
+    expect(find.text(caption), findsNothing);
 
-    // Next advances the cursor and repaints a different board (White's move).
+    // Next lands on White's move (event index 1). It is an assessed move, so the
+    // PRE-move board is framed: the position BEFORE the move — which, for the
+    // first move of the game, is exactly the opening position (states[0]). The
+    // verdict and the caption both show.
     await t.tap(find.byTooltip('Next'));
     await t.pumpAndSettle();
     expect(find.text('2 / 6'), findsOneWidget);
-    final boardAt1 = _painterOf(t).board;
-    expect(boardAt1, isNot(equals(boardAt0)),
-        reason: 'stepping the cursor must repaint the replayed position');
-
-    // On White's move (event index 1) the move verdict is shown.
+    expect(_painterOf(t).board, equals(boardAt0),
+        reason: 'an assessed move frames the precomputed pre-move (states[0])');
+    expect(find.text(caption), findsOneWidget);
     expect(find.textContaining('White: Blunder'), findsOneWidget);
     expect(find.textContaining('Best:'), findsOneWidget);
 
-    // Prev returns to the opening position.
+    // Next again lands on Black's roll event (index 2) — NOT an assessed move —
+    // so the post-event board shows (differs from the opening) and no caption.
+    await t.tap(find.byTooltip('Next'));
+    await t.pumpAndSettle();
+    expect(find.text('3 / 6'), findsOneWidget);
+    final boardAt2 = _painterOf(t).board;
+    expect(boardAt2, isNot(equals(boardAt0)),
+        reason: 'a roll event shows its post-event board');
+    expect(find.text(caption), findsNothing);
+
+    // Back to the opening position.
+    await t.tap(find.byTooltip('Previous'));
     await t.tap(find.byTooltip('Previous'));
     await t.pumpAndSettle();
     expect(find.text('1 / 6'), findsOneWidget);
     expect(_painterOf(t).board, equals(boardAt0));
+    expect(find.text(caption), findsNothing);
 
-    // Tapping the blunder chip jumps the cursor onto White's move.
+    // Tapping the blunder chip jumps the cursor onto White's move: pre-move
+    // framing again (board == states[0]) with the caption.
     await t.tap(find.byType(ActionChip));
     await t.pumpAndSettle();
     expect(find.text('2 / 6'), findsOneWidget);
-    expect(_painterOf(t).board, equals(boardAt1));
+    expect(_painterOf(t).board, equals(boardAt0));
+    expect(find.text(caption), findsOneWidget);
   });
 
   testWidgets('no cache: runs the analyzer and persists the analysis',

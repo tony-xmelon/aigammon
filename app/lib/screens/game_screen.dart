@@ -146,6 +146,11 @@ class _GameScreenState extends State<GameScreen> {
   List<ScoredMove>? _hintMoves;
   int _hintSeq = 0;
 
+  /// Full move to STAGE into the interactive board (tap-to-apply hint). Fired
+  /// when a hint row is tapped; the [BoardView] resets its builder and re-enters
+  /// the move's hops, leaving it complete but uncommitted for the user's Confirm.
+  final ValueNotifier<Move?> _stagedMove = ValueNotifier<Move?>(null);
+
   @override
   void initState() {
     super.initState();
@@ -159,6 +164,7 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void dispose() {
     _observable.removeListener(_onChange);
+    _stagedMove.dispose();
     _c.disposeController();
     super.dispose();
   }
@@ -297,6 +303,9 @@ class _GameScreenState extends State<GameScreen> {
       _hintOpen = true;
       _hintLoading = true;
       _hintMoves = null;
+      // Clear any prior staged move so re-tapping the same play in a later panel
+      // is a fresh null→move transition (and thus fires the board listener).
+      _stagedMove.value = null;
     });
     final seq = ++_hintSeq;
     final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
@@ -395,6 +404,7 @@ class _GameScreenState extends State<GameScreen> {
                           if (moveSide != null) _c.submitMove(moveSide, move);
                         },
                         whiteAtBottom: whiteAtBottom,
+                        externalMove: _stagedMove,
                       ),
                     ),
                   ),
@@ -707,24 +717,39 @@ class _GameScreenState extends State<GameScreen> {
         .textTheme
         .bodyMedium
         ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            child: Text('${i + 1}.', style: mono),
-          ),
-          Expanded(child: Text('${sm.move}', style: mono)),
-          const SizedBox(width: 8),
-          Text(sm.equity.toStringAsFixed(3), style: mono),
-          SizedBox(
-            width: 64,
-            child: Text(delta, style: mono, textAlign: TextAlign.right),
-          ),
-        ],
+    // Tap-to-apply: stage the play onto the interactive board and close the
+    // panel. Guarded to the human's own moving phase (where the board is
+    // interactive); if no move is pending it degrades to just closing the panel.
+    return InkWell(
+      onTap: () => _applyHint(sm.move),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              child: Text('${i + 1}.', style: mono),
+            ),
+            Expanded(child: Text('${sm.move}', style: mono)),
+            const SizedBox(width: 8),
+            Text(sm.equity.toStringAsFixed(3), style: mono),
+            SizedBox(
+              width: 64,
+              child: Text(delta, style: mono, textAlign: TextAlign.right),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  /// Stages [move] onto the interactive board (via [_stagedMove]) and closes the
+  /// hint panel. Only stages when a human move is actually pending — otherwise
+  /// the board is not interactive and would ignore it, so we simply close.
+  void _applyHint(Move move) {
+    final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    if (moveSide != null) _stagedMove.value = move;
+    _closeHint();
   }
 
   TextStyle get _titleStyle =>

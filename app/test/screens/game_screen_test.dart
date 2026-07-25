@@ -153,6 +153,35 @@ class TutorEngine implements EngineFacade {
   static Probabilities get flat => _flat;
 }
 
+/// Like [TutorEngine] for cube advice, but ranks the REAL legal moves (top =
+/// `MoveGenerator.legalMoves(...).first`) so a hint row stages a genuine play.
+class RealRankEngine implements EngineFacade {
+  static const _flat = Probabilities(
+    win: 0.5,
+    winGammon: 0,
+    winBackgammon: 0,
+    loseGammon: 0,
+    loseBackgammon: 0,
+  );
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) async => _flat;
+
+  @override
+  Future<List<ScoredMove>> rankMoves(
+      BoardState board, Player mover, Dice dice) async {
+    final legal = MoveGenerator.legalMoves(board, mover, dice);
+    return [
+      for (final move in legal)
+        ScoredMove(move: move, probabilities: _flat),
+    ];
+  }
+
+  @override
+  Future<CubeAdvice> cubeInfo(BoardState board, Player mover) async =>
+      throw UnimplementedError();
+}
+
 // --- Widget-test helpers -----------------------------------------------------
 
 const _surface = Size(900, 1300);
@@ -605,6 +634,65 @@ void main() {
       expect(find.text('Top plays'), findsOneWidget);
       expect(find.textContaining('0.100'), findsWidgets);
       expect(find.textContaining('0.040'), findsWidgets);
+
+      c.disposeController();
+    });
+
+    testWidgets('tapping a hint row stages the play; Confirm commits it',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      final tutor = TutorService(RealRankEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      // The top hint is the first legal move (the engine ranks them in order).
+      final s = c.state;
+      final expected =
+          MoveGenerator.legalMoves(s.board, s.turn, s.dice!).first;
+      final baseBoard = boardPainterOf(t).board;
+
+      await t.tap(find.widgetWithText(OutlinedButton, 'Hint'));
+      await pumpUntil(t, () => find.text('Top plays').evaluate().isNotEmpty);
+
+      // Tap the top row (the move text of the first-ranked play).
+      await t.tap(find.text('$expected').first);
+      await t.pump();
+
+      // Panel closed and the play is STAGED: the preview diverges from the base
+      // board, but nothing is committed yet (state is unchanged).
+      expect(find.text('Top plays'), findsNothing);
+      expect(boardPainterOf(t).board, isNot(baseBoard),
+          reason: 'the hinted play should be staged on the board');
+      expect(c.state, s, reason: 'staging must not commit');
+
+      // Confirm commits the hinted move. (The loop then advances — the AI moves
+      // next — so assert against White's own move event, not the latest event.)
+      final confirm = find.widgetWithText(FilledButton, 'Confirm');
+      expect(isButtonEnabled(t, confirm), isTrue);
+      await t.tap(confirm);
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<MoveEvent>()
+              .any((e) => e.player == Player.white));
+      final played = c.game.events
+          .whereType<MoveEvent>()
+          .firstWhere((e) => e.player == Player.white)
+          .move;
+      expect(played.sameAs(expected), isTrue,
+          reason: 'committed $played should equal hinted $expected');
 
       c.disposeController();
     });

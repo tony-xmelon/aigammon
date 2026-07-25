@@ -206,6 +206,69 @@ void main() {
     expect(committed, isNull);
   });
 
+  testWidgets('external move stages the play; Confirm commits the canonical move',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final external = ValueNotifier<Move?>(null);
+    addTearDown(external.dispose);
+    Move? committed;
+    await t.pumpWidget(_harness(BoardView(
+      state: goldenState,
+      interactive: true,
+      onMoveCommitted: (m) => committed = m,
+      externalMove: external,
+    )));
+
+    // Nothing staged yet: base board, Confirm disabled.
+    expect(_painterOf(t).board, goldenState.board);
+    final confirm = find.widgetWithText(FilledButton, 'Confirm');
+    expect(_isEnabled(t, confirm), isFalse);
+
+    // Fire the full golden move: it is staged (preview applied, Confirm on) but
+    // NOT committed.
+    external.value = goldenMove;
+    await t.pump();
+    expect(_painterOf(t).board, isNot(goldenState.board),
+        reason: 'staged move should show the play applied in the preview');
+    expect(_painterOf(t).selectedSource, isNull);
+    expect(committed, isNull, reason: 'staging must not auto-commit');
+    expect(_isEnabled(t, confirm), isTrue);
+
+    // Confirm commits the SAME canonical move.
+    await t.tap(confirm);
+    await t.pump();
+    expect(committed, isNotNull);
+    expect(committed!.sameAs(goldenMove), isTrue,
+        reason: 'committed $committed should equal $goldenMove');
+  });
+
+  testWidgets('a stale/illegal external move is ignored without crashing',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final external = ValueNotifier<Move?>(null);
+    addTearDown(external.dispose);
+    await t.pumpWidget(_harness(BoardView(
+      state: goldenState,
+      interactive: true,
+      onMoveCommitted: (_) {},
+      externalMove: external,
+    )));
+
+    // A bogus move never offered by the builder: point 2 is empty in the
+    // opening, so 2/1 is not a selectable source (addHop throws ArgumentError).
+    external.value = Move(const [CheckerMove(2, 1)]);
+    await t.pump();
+
+    // Builder reset, no crash: base board, nothing selected, Confirm disabled,
+    // and the legal sources are still offered for fresh entry.
+    expect(_painterOf(t).board, goldenState.board);
+    expect(_painterOf(t).selectedSource, isNull);
+    expect(_isEnabled(t, find.widgetWithText(FilledButton, 'Confirm')), isFalse);
+    expect(_painterOf(t).highlightedSources, contains(7));
+  });
+
   testWidgets('a new game state resets in-progress entry', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
