@@ -10,7 +10,8 @@ class BoardTheme {
     required this.barColor,
     required this.whiteChecker,
     required this.blackChecker,
-    required this.checkerBorder,
+    required this.whiteCheckerBorder,
+    required this.blackCheckerBorder,
     required this.highlightSource,
     required this.highlightDestination,
     required this.highlightDestinationFill,
@@ -35,8 +36,12 @@ class BoardTheme {
   final Color whiteChecker;
   final Color blackChecker;
 
-  /// Ring drawn around every checker.
-  final Color checkerBorder;
+  /// Ring drawn around each checker — PER PLAYER so the rim can invert against
+  /// the fill: a light checker wears a DARK rim, a dark checker a LIGHT rim.
+  /// This is what keeps a checker's silhouette legible on any surface (a dark
+  /// checker on dark felt is defined by its light rim, and vice versa).
+  final Color whiteCheckerBorder;
+  final Color blackCheckerBorder;
 
   /// Ring drawn around a selectable (but not-yet-picked-up) source's TOP
   /// CHECKER. A checker-anchored halo, not a triangle tint, so its result never
@@ -63,15 +68,19 @@ class BoardTheme {
   /// Colour for count labels, cube value, and other text.
   final Color textColor;
 
-  /// Warm felt-brown board, cream/maroon points, ivory/ebony checkers.
+  /// Warm tan felt, rich crimson / cream points, ivory / ebony checkers with
+  /// inverted rims. Tuned so every checker's silhouette clears WCAG 3:1 against
+  /// every surface and the crimson points visibly pop off the felt (see
+  /// board_contrast_test.dart).
   static const BoardTheme light = BoardTheme(
-    boardColor: Color(0xFF6B4A2B), // walnut felt
-    pointDark: Color(0xFF7B1E22), // maroon
-    pointLight: Color(0xFFEBD9B4), // cream
-    barColor: Color(0xFF4A3018), // darker wood
-    whiteChecker: Color(0xFFF5ECD8), // ivory
-    blackChecker: Color(0xFF241C16), // ebony
-    checkerBorder: Color(0xFF120C08),
+    boardColor: Color(0xFFB8814D), // warm tan felt
+    pointDark: Color(0xFFC62A2F), // rich crimson
+    pointLight: Color(0xFFF0DEBC), // cream
+    barColor: Color(0xFF4A3218), // dark walnut
+    whiteChecker: Color(0xFFF7EEDA), // ivory
+    blackChecker: Color(0xFF1E1712), // ebony
+    whiteCheckerBorder: Color(0xFF241608), // deep espresso rim on ivory
+    blackCheckerBorder: Color(0xFFF2E4C6), // warm off-white rim on ebony
     highlightSource: Color(0xCCFFD24A), // dim amber source-checker ring
     highlightDestination: Color(0xFF5FD98C), // opaque green edge ring
     highlightDestinationFill: Color(0xFF357A52), // opaque uniform green fill
@@ -82,15 +91,18 @@ class BoardTheme {
     textColor: Color(0xFFF5ECD8),
   );
 
-  /// Muted low-light palette.
+  /// Muted low-light palette. Same silhouette-first rules as [light]: the crimson
+  /// points are raised clear of the slate felt, and the dark checkers wear a
+  /// light rim so they never vanish into the board (see board_contrast_test.dart).
   static const BoardTheme dark = BoardTheme(
-    boardColor: Color(0xFF23303A), // slate felt
-    pointDark: Color(0xFF3A4650), // steel
-    pointLight: Color(0xFF8A97A3), // pewter
-    barColor: Color(0xFF16202A),
-    whiteChecker: Color(0xFFDCE3EA), // pale
-    blackChecker: Color(0xFF11171C), // near-black
-    checkerBorder: Color(0xFF05090C),
+    boardColor: Color(0xFF2A3742), // slate felt
+    pointDark: Color(0xFF8A4248), // warm muted crimson
+    pointLight: Color(0xFFA6B2BE), // pewter
+    barColor: Color(0xFF121B24),
+    whiteChecker: Color(0xFFE4EBF2), // pale
+    blackChecker: Color(0xFF0D1216), // near-black
+    whiteCheckerBorder: Color(0xFF05090C), // near-black rim on pale checker
+    blackCheckerBorder: Color(0xFFB8C6D2), // light pewter rim on dark checker
     highlightSource: Color(0xCCFFC53D), // dim amber source-checker ring
     highlightDestination: Color(0xFF62E2A0), // opaque green edge ring
     highlightDestinationFill: Color(0xFF2F6B4A), // opaque uniform green fill

@@ -249,18 +249,19 @@ Widget _harnessOriented(GameController c, BoardOrientationMode mode) =>
       home: GameScreen(key: ValueKey(c), controller: c, orientation: mode),
     );
 
-/// A [GameScreen] harness with animation ENABLED (a nonzero per-hop duration),
-/// so the opponent dice-roll beat runs. All other tests use the [Duration.zero]
-/// harnesses above (animation off), where the beat is skipped entirely.
+/// A [GameScreen] harness with animation ENABLED (a nonzero [AnimationTimings]
+/// preset), so the opponent dice-roll beat runs. All other tests use the
+/// [AnimationTimings.off] harnesses above (animation off), where the beat is
+/// skipped entirely.
 Widget _animHarness(
   GameController c, {
-  Duration animationDuration = const Duration(milliseconds: 150),
+  AnimationTimings timings = AnimationTimings.normal,
 }) =>
     MaterialApp(
       home: GameScreen(
         key: ValueKey(c),
         controller: c,
-        animationDuration: animationDuration,
+        timings: timings,
       ),
     );
 
@@ -544,7 +545,10 @@ void main() {
     // White is asked to respond (behind its own pass-device overlay).
     await pumpUntil(t, () => white.pendingResignRequest.value != null);
     await _dismissPassDevice(t);
-    expect(find.textContaining('resign a gammon'), findsOneWidget);
+    // The dialog message is present. (The always-on history strip also shows the
+    // matching record line "… offers to resign a gammon", so match both.)
+    expect(find.textContaining('Accept or decline'), findsOneWidget);
+    expect(find.textContaining('resign a gammon'), findsWidgets);
 
     await t.tap(find.widgetWithText(FilledButton, 'Accept'));
     await pumpUntil(t, () => c.awaitingNextGame);
@@ -703,7 +707,7 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('game-end: shows the "Match summary" button (tutor+id present)',
+    testWidgets('game-end: shows the "Analyze game" button (tutor+id present)',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -716,14 +720,33 @@ void main() {
       await t.pumpAndSettle();
 
       expect(find.text('Game over'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Match summary'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Analyze game'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Next game'), findsOneWidget);
 
       c.disposeController();
     });
 
-    testWidgets('absent when tutor is null (even with a persisted id)',
+    testWidgets('game-end: "Analyze game" shows with tutor OFF (id present)',
         (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final c = gameOver();
+      // Tutor OFF: post-game analysis needs only the engine, so the entry point
+      // must still appear when the match is persisted.
+      await t.pumpWidget(harness(c, matchId: 42, tutor: null, db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Game over'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Analyze game'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('match-end: "Match summary" + "Saved to History" show with '
+        'tutor OFF (id present)', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -734,7 +757,58 @@ void main() {
       await t.pumpAndSettle();
 
       expect(find.text('Match over'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Match summary'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Match summary'), findsOneWidget);
+      expect(find.text('Saved to History'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('tutor OFF: tapping "Match summary" pushes MatchDetailScreen',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final repo = MatchRepository(db);
+      late int matchId;
+      final game = _finishedGame();
+      await t.runAsync(() async {
+        matchId = await repo.startMatch(
+            matchLength: 1,
+            mode: 'vsComputer',
+            whiteType: 'human',
+            blackType: 'ai:expert');
+        await repo.recordGame(
+          matchId: matchId,
+          gameNumber: 1,
+          isCrawford: game.state.isCrawfordGame,
+          events: game.events,
+          result: game.state.result!,
+        );
+      });
+
+      final c = matchOver();
+      // No live tutor — the analysis route must still be reachable and build its
+      // own analyzer from the engine provider.
+      await t.pumpWidget(harness(c, matchId: matchId, tutor: null, db: db));
+      await t.pumpAndSettle();
+      expect(find.text('Match over'), findsOneWidget);
+
+      final summary = find.widgetWithText(TextButton, 'Match summary');
+      expect(summary, findsOneWidget);
+      await t.runAsync(() async {
+        await t.tap(summary);
+      });
+      for (var i = 0; i < 20; i++) {
+        await t.runAsync(() async =>
+            Future<void>.delayed(const Duration(milliseconds: 10)));
+        await t.pump();
+      }
+      await t.pumpAndSettle();
+
+      expect(find.byType(MatchDetailScreen), findsOneWidget);
+      expect(find.text('Game 1'), findsOneWidget);
 
       c.disposeController();
     });
@@ -752,7 +826,27 @@ void main() {
       await t.pumpAndSettle();
 
       expect(find.text('Match over'), findsOneWidget);
+      // No persisted record → no analysis entry point and no History hint.
       expect(find.widgetWithText(TextButton, 'Match summary'), findsNothing);
+      expect(find.text('Saved to History'), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('game-end "Analyze game" absent when there is no persisted id',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final c = gameOver();
+      await t.pumpWidget(harness(c,
+          matchId: null, tutor: TutorService(RealRankEngine()), db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Game over'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Analyze game'), findsNothing);
 
       c.disposeController();
     });
@@ -998,11 +1092,14 @@ void main() {
       expect(boardPainterOf(t).dice, isNot(Dice(realRoll.$1, realRoll.$2)),
           reason: 'the roll beat overrides the displayed dice');
 
-      // After the ~400ms beat the override clears and the real roll shows.
-      await t.pump(const Duration(milliseconds: 500));
+      // After the tumble frames (6 × 140ms) the override clears and the real
+      // roll shows. Pump comfortably past the cycling window.
+      await t.pump(const Duration(milliseconds: 1000));
       expect(boardPainterOf(t).dice, Dice(realRoll.$1, realRoll.$2),
           reason: 'the beat settled to the real roll');
 
+      // Let the settle-pause timer fire before teardown so no timer outlives it.
+      await t.pumpAndSettle();
       c.disposeController();
     });
 
@@ -1018,6 +1115,57 @@ void main() {
       expect(boardPainterOf(t).dice, Dice(6, 5));
       expect(boardPainterOf(t).dice, c.state.dice);
 
+      c.disposeController();
+    });
+
+    testWidgets('AI move is HELD through the dice presentation, then plays',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // White (human) wins the opening (6 > 1) and plays; Black (AI, instant)
+      // then rolls AND moves. Black's move event fires WHILE the dice beat is
+      // still presenting, so its travel must be queued (held) until the tumble
+      // frames + settle pause finish (~6×140 + 500ms).
+      final human = LocalHumanAgent();
+      final ai = FakeAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+
+      // Wait until Black has both rolled AND moved (its MoveEvent → lastMove
+      // fired, so the board queued the held travel).
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<MoveEvent>()
+              .any((e) => e.player == Player.black));
+
+      // White's own (immediate) opening-move animation may still be finishing
+      // (up to ~820ms for a 2-hop play at the normal preset); once it clears,
+      // Black's queued move must NOT show any travelling overlay — it is held
+      // for the whole dice presentation (~6×140 + 500ms ≈ 1340ms).
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker == null,
+          maxFrames: 1000);
+      await t.pump(const Duration(milliseconds: 150));
+      expect(boardPainterOf(t).overlayChecker, isNull,
+          reason: 'the opponent move stays held while the dice are presented');
+
+      // After the tumble frames + settle pause the hold releases and the queued
+      // move finally travels — the overlay appears.
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker != null,
+          maxFrames: 2000);
+      expect(boardPainterOf(t).overlayChecker, isNotNull,
+          reason: 'the held move plays once the dice presentation completes');
+
+      await t.pumpAndSettle();
       c.disposeController();
     });
 
@@ -1145,7 +1293,99 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('assessment chip appears after a human move, not an AI move',
+    testWidgets('history strip shows the score for the latest (human) line, '
+        'not an AI move', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // White (human) wins the opening (6 > 1) and moves first; Black is a
+      // hanging AI, so after Black auto-rolls (a scoreless roll line) it freezes
+      // — White's assessed move stays the LATEST record line for the strip.
+      final human = LocalHumanAgent();
+      final ai = HangingMoveAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      // Before any move is assessed, the strip carries no mark (coloured dot).
+      expect(find.byIcon(Icons.circle), findsNothing,
+          reason: 'nothing assessed yet — no mark on the strip');
+
+      await commitFirstMove(t);
+      await pumpUntil(t, () => find.textContaining('−0.060').evaluate().isNotEmpty);
+      // 0.10 - 0.04 = 0.06 give-up, shown as "−0.060" with the mark dot on the
+      // collapsed strip (the latest line is White's assessed move).
+      final strip = find.byKey(const ValueKey('historyStrip'));
+      expect(find.descendant(of: strip, matching: find.textContaining('−0.060')),
+          findsOneWidget);
+      expect(find.descendant(of: strip, matching: find.byIcon(Icons.circle)),
+          findsOneWidget,
+          reason: 'the assessed latest line carries a mark dot on the strip');
+
+      c.disposeController();
+    });
+
+    testWidgets('strip shows the latest record line; expanding reveals the '
+        'full scrollable record with scores and best', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // White (human) starts and moves; Black (hanging AI) freezes after its
+      // roll, so White's move remains the latest record line.
+      final human = LocalHumanAgent();
+      final ai = HangingMoveAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      final strip = find.byKey(const ValueKey('historyStrip'));
+      expect(strip, findsOneWidget, reason: 'the strip is always present');
+      // Before any move, the strip shows the only line so far — the opening.
+      expect(
+          find.descendant(
+              of: strip, matching: find.textContaining('Opening:')),
+          findsOneWidget);
+      // The sheet is closed: only the strip's single latest line is shown.
+      expect(find.text('Game record'), findsNothing);
+
+      // Commit White's move so there is an assessed row to reveal a best for.
+      await commitFirstMove(t);
+      await pumpUntil(t, () => find.textContaining('−0.060').evaluate().isNotEmpty);
+
+      // Tapping the strip expands the full sheet: header, score context, and the
+      // opening line (which is no longer the strip's latest line).
+      await t.tap(strip);
+      await t.pumpAndSettle();
+      expect(find.text('Game record'), findsOneWidget);
+      expect(find.textContaining('to 5'), findsWidgets,
+          reason: 'the sheet header carries the match score context');
+      expect(find.text('Opening: W 6 — B 1 (W starts)'), findsOneWidget);
+
+      // The assessed White row's best line is hidden until the row is tapped.
+      expect(find.textContaining('Best:'), findsNothing);
+      // Tap the White move row (inside the sheet) to reveal its best play.
+      await t.tap(find.textContaining('1. W').last);
+      await t.pumpAndSettle();
+      expect(find.textContaining('Best:'), findsOneWidget,
+          reason: 'tap-to-reveal shows the best move under the assessed row');
+
+      c.disposeController();
+    });
+
+    testWidgets('tutor off: record rows are plain (no assessment marks)',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -1155,26 +1395,54 @@ void main() {
         white: human,
         black: FakeAgent(),
         matchLength: 5,
-        // Black (AI) wins the opening (6 > 1) and moves first; White then plays.
         diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
       );
-      final tutor = TutorService(TutorEngine());
 
-      await t.pumpWidget(_tutorHarness(c, tutor));
-      // After the AI's opening move, the human reaches its gate — no chip for
-      // the AI move.
+      // No tutor: commit a human move, then open the record.
+      await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
-      expect(find.textContaining('Error'), findsNothing,
-          reason: 'AI moves are not assessed');
-
-      // White rolls and commits a (second-best) move: the chip lands.
       await t.tap(find.widgetWithText(FilledButton, 'Roll'));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
       await commitFirstMove(t);
-      await pumpUntil(t, () => find.textContaining('Error').evaluate().isNotEmpty);
-      expect(find.textContaining('Error'), findsOneWidget);
-      // 0.10 - 0.04 = 0.06 give-up.
-      expect(find.textContaining('0.060'), findsOneWidget);
+      // Wait on the controller (not the strip text, which the AI's reply quickly
+      // supersedes) until White's move has landed in the log.
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<MoveEvent>()
+              .any((e) => e.player == Player.white));
+
+      await t.tap(find.byKey(const ValueKey('historyStrip')));
+      await t.pumpAndSettle();
+      // The sheet lists White's move, but with no assessment marks/losses.
+      expect(find.textContaining('2. W'), findsWidgets);
+      expect(find.byIcon(Icons.circle), findsNothing);
+      expect(find.textContaining('−0.'), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('board does not reflow when the strip expands', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final before = t.getRect(find.byType(BoardView));
+      await t.tap(find.byKey(const ValueKey('historyStrip')));
+      await t.pumpAndSettle();
+      final after = t.getRect(find.byType(BoardView));
+      expect(after, before,
+          reason: 'the sheet floats over the board — no reflow on expand');
 
       c.disposeController();
     });
@@ -1310,10 +1578,13 @@ void main() {
       await t.pumpAndSettle();
 
       // The panel (its "Game record" title, the menu now closed) lists the
-      // opening header and Black's first move (6-1 from the opening dice).
+      // opening header and Black's first move (6-1 from the opening dice). The
+      // move line also appears on the always-present collapsed strip, so it is
+      // matched by findsWidgets (strip + sheet), while the opening header lives
+      // only in the sheet.
       expect(find.text('Game record'), findsOneWidget);
       expect(find.text('Opening: W 1 — B 6 (B starts)'), findsOneWidget);
-      expect(find.textContaining('1. B 6-1:'), findsOneWidget);
+      expect(find.textContaining('1. B 6-1:'), findsWidgets);
 
       c.disposeController();
     });
@@ -1342,7 +1613,8 @@ void main() {
       human.submitMove(c.state.legalMoves.first);
       await pumpUntil(
           t, () => find.textContaining('2. W 3-1:').evaluate().isNotEmpty);
-      expect(find.textContaining('2. W 3-1:'), findsOneWidget,
+      // The new line appears in the open sheet AND on the collapsed strip.
+      expect(find.textContaining('2. W 3-1:'), findsWidgets,
           reason: 'the new move appended live while the panel was open');
 
       c.disposeController();
@@ -1501,6 +1773,150 @@ void main() {
       expect(c.game.events.whereType<DoubleEvent>(), isEmpty,
           reason: 'a cubeless match never produces a DoubleEvent');
       expect(c.state.cube.value, 1, reason: 'the cube never moved off 1');
+
+      c.disposeController();
+    });
+  });
+
+  group('one-time drag hint', () {
+    const hintText = 'Tip: drag checkers or tap them — change in Settings';
+
+    // White (human) wins the opening (6 > 1) and its move request fires straight
+    // away — the first human move-entry of the match, where the hint may surface.
+    GameController firstMove(LocalHumanAgent human) => GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    Widget hintHarness(
+      GameController c, {
+      required bool enableDrag,
+      required bool dragHintShown,
+      VoidCallback? onDragHintShown,
+    }) =>
+        MaterialApp(
+          home: GameScreen(
+            key: ValueKey(c),
+            controller: c,
+            interactionOptions: BoardInteractionOptions(enableDrag: enableDrag),
+            dragHintShown: dragHintShown,
+            onDragHintShown: onDragHintShown,
+          ),
+        );
+
+    testWidgets('shows once on the first human move (drag on, not yet shown) '
+        'and persists via the callback', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      var persisted = false;
+      await t.pumpWidget(hintHarness(c,
+          enableDrag: true,
+          dragHintShown: false,
+          onDragHintShown: () => persisted = true));
+
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump(); // run the post-frame callback that schedules the SnackBar
+      await t.pump(const Duration(milliseconds: 300)); // animate it in
+
+      expect(find.text(hintText), findsOneWidget,
+          reason: 'the hint surfaces on the first human move-entry');
+      expect(persisted, isTrue,
+          reason: 'showing the hint fires the persistence callback');
+
+      // It is dismissible (non-blocking): tapping the action hides it. (This
+      // also cancels the SnackBar duration timer before teardown.)
+      await t.tap(find.text('Got it'));
+      await t.pumpAndSettle();
+      expect(find.text(hintText), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('latches: does not re-fire on a later move-entry of the same '
+        'game screen', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      var shownCount = 0;
+      await t.pumpWidget(hintHarness(c,
+          enableDrag: true,
+          dragHintShown: false,
+          onDragHintShown: () => shownCount++));
+
+      // First move-entry: the hint shows exactly once.
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text(hintText), findsOneWidget);
+      expect(shownCount, 1);
+
+      // Dismiss it, then commit White's move; the AI replies and play returns to
+      // White for a SECOND human move-entry on the very same GameScreen State.
+      await t.tap(find.text('Got it'));
+      await t.pumpAndSettle();
+      expect(find.text(hintText), findsNothing);
+
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white,
+          maxFrames: 1200);
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+
+      // The latch held across the intervening _onChange notifications: no second
+      // SnackBar, and the persistence callback fired only once.
+      expect(find.text(hintText), findsNothing,
+          reason: 'the one-time hint never re-fires within a session');
+      expect(shownCount, 1);
+
+      c.disposeController();
+    });
+
+    testWidgets('does not reappear once dragHintShown is persisted (true)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      // Simulates a later game/screen: the flag was persisted true previously.
+      await t.pumpWidget(
+          hintHarness(c, enableDrag: true, dragHintShown: true));
+
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+
+      expect(find.text(hintText), findsNothing,
+          reason: 'a persisted dragHintShown suppresses the hint forever');
+
+      c.disposeController();
+    });
+
+    testWidgets('never shows when drag is disabled in settings', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      await t.pumpWidget(
+          hintHarness(c, enableDrag: false, dragHintShown: false));
+
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+
+      expect(find.text(hintText), findsNothing,
+          reason: 'no point advertising a disabled gesture');
 
       c.disposeController();
     });

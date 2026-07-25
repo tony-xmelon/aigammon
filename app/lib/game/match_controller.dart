@@ -30,6 +30,11 @@ abstract interface class MatchController implements Listenable {
   /// The running match score.
   MatchState get match;
 
+  /// The 1-based number of the current game within the match (1 for the first
+  /// game). `0` before the first game has started. Shown in the move-history
+  /// sheet's score context.
+  int get gameNumber;
+
   /// The current event-sourced game (the tutor/assessment reads its log).
   Game get game;
 

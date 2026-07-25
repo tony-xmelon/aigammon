@@ -2,6 +2,7 @@ import 'package:aigammon_app/board/board_geometry.dart';
 import 'package:aigammon_app/board/board_painter.dart';
 import 'package:aigammon_app/board/board_view.dart';
 import 'package:backgammon_core/backgammon_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -36,7 +37,9 @@ BoardPainter _painterOf(WidgetTester t) {
 Widget _animHarness(
   GameState state,
   ValueNotifier<MoveEvent?> lastMove, {
-  Duration animationDuration = const Duration(milliseconds: 150),
+  Duration hopDuration = const Duration(milliseconds: 150),
+  Duration interHopDuration = Duration.zero,
+  ValueListenable<bool>? holdMoveAnimation,
 }) =>
     MaterialApp(
       home: MediaQuery(
@@ -51,7 +54,9 @@ Widget _animHarness(
                 interactive: false,
                 onMoveCommitted: (_) {},
                 lastMove: lastMove,
-                animationDuration: animationDuration,
+                holdMoveAnimation: holdMoveAnimation,
+                hopDuration: hopDuration,
+                interHopDuration: interHopDuration,
               ),
             ),
           ),
@@ -468,14 +473,132 @@ void main() {
     addTearDown(lastMove.dispose);
 
     await t.pumpWidget(
-        _animHarness(goldenState, lastMove, animationDuration: Duration.zero));
+        _animHarness(goldenState, lastMove, hopDuration: Duration.zero));
     lastMove.value = MoveEvent(Player.white, goldenMove);
     await t.pumpWidget(
-        _animHarness(postState, lastMove, animationDuration: Duration.zero));
+        _animHarness(postState, lastMove, hopDuration: Duration.zero));
     await t.pump();
 
     // No animation ever ran: no overlay, board is immediately post-move.
     expect(_painterOf(t).overlayChecker, isNull);
+    expect(_painterOf(t).board, postBoard);
+  });
+
+  testWidgets('holdMoveAnimation defers the travel: no overlay while held, '
+      'the move plays after release', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+    final hold = ValueNotifier<bool>(true);
+    addTearDown(hold.dispose);
+
+    // Mount PRE-move (held), fire the move, then rebuild POST-move — exactly as
+    // the game screen does while the opponent dice beat is still presenting.
+    await t.pumpWidget(
+        _animHarness(goldenState, lastMove, holdMoveAnimation: hold));
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(
+        _animHarness(postState, lastMove, holdMoveAnimation: hold));
+
+    // While held, pumping past a full travel window shows NO travelling overlay
+    // and the board is FROZEN at the pre-move position (the checker sits at its
+    // source), even though lastMove already fired.
+    await t.pump(const Duration(milliseconds: 500));
+    expect(_painterOf(t).overlayChecker, isNull,
+        reason: 'the move must not travel while held');
+    expect(_painterOf(t).board, goldenState.board,
+        reason: 'the board is frozen pre-move during the hold');
+
+    // Release the hold: the queued move now begins travelling.
+    hold.value = false;
+    await t.pump(const Duration(milliseconds: 75));
+    expect(_painterOf(t).overlayChecker, isNotNull,
+        reason: 'releasing the hold starts the queued travel');
+    expect(_painterOf(t).board, isNot(postBoard));
+
+    await t.pumpAndSettle();
+    expect(_painterOf(t).overlayChecker, isNull);
+    expect(_painterOf(t).board, postBoard);
+  });
+
+  testWidgets('inter-hop pause: the overlay is stationary between hops',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+
+    // 2 hops × 100ms travel with a 100ms pause between them → 300ms total.
+    // Timeline: hop0 [0,100], pause [100,200], hop1 [200,300].
+    await t.pumpWidget(_animHarness(goldenState, lastMove,
+        hopDuration: const Duration(milliseconds: 100),
+        interHopDuration: const Duration(milliseconds: 100)));
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(_animHarness(postState, lastMove,
+        hopDuration: const Duration(milliseconds: 100),
+        interHopDuration: const Duration(milliseconds: 100)));
+
+    // Mid hop0 travel (~t=50).
+    await t.pump(const Duration(milliseconds: 50));
+    final travelling = _painterOf(t).overlayChecker!.center;
+
+    // Two probes INSIDE the inter-hop pause (~t=120 and ~t=180): the overlay
+    // must sit at the same spot (hop0's landing) — stationary between hops.
+    await t.pump(const Duration(milliseconds: 70));
+    final pauseA = _painterOf(t).overlayChecker!.center;
+    await t.pump(const Duration(milliseconds: 60));
+    final pauseB = _painterOf(t).overlayChecker!.center;
+
+    expect((pauseA - pauseB).distance, lessThan(0.5),
+        reason: 'the overlay is stationary during the inter-hop pause');
+    expect((travelling - pauseA).distance, greaterThan(1.0),
+        reason: 'the mid-travel position differs from the paused position');
+
+    await t.pumpAndSettle();
+  });
+
+  testWidgets('no total cap: a multi-hop move travels for the full '
+      'n·hop + (n-1)·interHop', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+
+    // 2 hops × 400ms = 800ms total — deliberately past the old 600ms cap.
+    await t.pumpWidget(_animHarness(goldenState, lastMove,
+        hopDuration: const Duration(milliseconds: 400)));
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(_animHarness(postState, lastMove,
+        hopDuration: const Duration(milliseconds: 400)));
+
+    // At 700ms the old cap (600ms) would have finished; with no cap the move is
+    // still travelling.
+    await t.pump(const Duration(milliseconds: 700));
+    expect(_painterOf(t).overlayChecker, isNotNull,
+        reason: 'an 800ms move is still animating at 700ms (no 600ms cap)');
+    expect(_painterOf(t).board, isNot(postBoard));
+
+    await t.pumpAndSettle();
+    expect(_painterOf(t).board, postBoard);
+  });
+
+  testWidgets('a shorter hop duration (fast) settles sooner than a longer one',
+      (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<MoveEvent?>(null);
+    addTearDown(lastMove.dispose);
+
+    // Fast: 2 hops × 100ms = 200ms total → settled by 260ms.
+    await t.pumpWidget(_animHarness(goldenState, lastMove,
+        hopDuration: const Duration(milliseconds: 100)));
+    lastMove.value = MoveEvent(Player.white, goldenMove);
+    await t.pumpWidget(_animHarness(postState, lastMove,
+        hopDuration: const Duration(milliseconds: 100)));
+    await t.pump(const Duration(milliseconds: 260));
+    expect(_painterOf(t).overlayChecker, isNull,
+        reason: 'a fast (200ms) move has settled by 260ms');
     expect(_painterOf(t).board, postBoard);
   });
 

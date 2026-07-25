@@ -5,11 +5,19 @@ import 'package:backgammon_core/backgammon_core.dart';
 /// [text] is the fully-formatted line (turn number, roll, notation, …) and
 /// [actor] is the player whose action the line describes — used by the UI to
 /// tint a leading dot — or `null` for a neutral line such as the opening roll.
+///
+/// [eventIndex] is the index of the source [GameEvent] in the event log the
+/// line was folded from (each line comes from exactly one event). It lets the
+/// UI correlate a line back to a per-move assessment keyed by event index. It is
+/// DELIBERATELY excluded from [==]/[hashCode] (which compare on [text]/[actor]
+/// only): it is positional display metadata, so existing equality-based record
+/// assertions keep matching lines built without an index.
 class RecordLine {
-  const RecordLine(this.text, {this.actor});
+  const RecordLine(this.text, {this.actor, this.eventIndex});
 
   final String text;
   final Player? actor;
+  final int? eventIndex;
 
   @override
   bool operator ==(Object other) =>
@@ -39,12 +47,14 @@ List<RecordLine> buildGameRecord(List<GameEvent> events) {
   // mover, otherwise from the most recent RollEvent.
   Dice? pending;
 
-  for (final event in events) {
+  for (var i = 0; i < events.length; i++) {
+    final event = events[i];
     switch (event) {
       case OpeningRollEvent(:final whiteDie, :final blackDie):
         pending = Dice(whiteDie, blackDie);
         lines.add(RecordLine(
           'Opening: W $whiteDie — B $blackDie (${_p(event.firstPlayer)} starts)',
+          eventIndex: i,
         ));
       case RollEvent(:final die1, :final die2):
         pending = Dice(die1, die2);
@@ -52,26 +62,30 @@ List<RecordLine> buildGameRecord(List<GameEvent> events) {
         turn++;
         final roll = pending == null ? '' : '${pending.high}-${pending.low}: ';
         pending = null;
-        lines.add(RecordLine('$turn. ${_p(player)} $roll$move', actor: player));
+        lines.add(RecordLine('$turn. ${_p(player)} $roll$move',
+            actor: player, eventIndex: i));
       case DoubleEvent(:final player):
         turn++;
         cubeValue *= 2;
-        lines.add(
-            RecordLine('$turn. ${_p(player)} doubles → $cubeValue', actor: player));
+        lines.add(RecordLine('$turn. ${_p(player)} doubles → $cubeValue',
+            actor: player, eventIndex: i));
       case TakeEvent(:final player):
-        lines.add(RecordLine('${_p(player)} takes', actor: player));
+        lines.add(RecordLine('${_p(player)} takes', actor: player, eventIndex: i));
       case DropEvent(:final player):
-        lines.add(RecordLine('${_p(player)} drops', actor: player));
+        lines.add(RecordLine('${_p(player)} drops', actor: player, eventIndex: i));
       case ResignOfferEvent(:final player, :final value):
         turn++;
         lines.add(RecordLine(
           '$turn. ${_p(player)} offers to resign a ${_resign(value)}',
           actor: player,
+          eventIndex: i,
         ));
       case ResignAcceptEvent(:final player):
-        lines.add(RecordLine('${_p(player)} accepts', actor: player));
+        lines.add(
+            RecordLine('${_p(player)} accepts', actor: player, eventIndex: i));
       case ResignDeclineEvent(:final player):
-        lines.add(RecordLine('${_p(player)} declines', actor: player));
+        lines.add(
+            RecordLine('${_p(player)} declines', actor: player, eventIndex: i));
     }
   }
   return lines;

@@ -1,7 +1,7 @@
 ﻿name: aigammon_app
 description: AIGammon â€” backgammon with a neural-net engine.
 publish_to: 'none'
-version: 0.3.0+3
+version: 0.4.0+4
 
 environment:
   sdk: ^3.12.2

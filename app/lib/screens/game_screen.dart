@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../board/board_theme.dart';
 import '../board/board_view.dart';
+import '../data/app_settings.dart';
 import '../game/game_record.dart';
 import '../game/match_controller.dart';
 import '../game/player_agent.dart';
@@ -57,10 +58,12 @@ class GameScreen extends StatefulWidget {
     required this.controller,
     this.orientation = BoardOrientationMode.fixedWhite,
     this.tutor,
-    this.animationDuration = Duration.zero,
+    this.timings = AnimationTimings.off,
     this.interactionOptions = const BoardInteractionOptions(),
     this.showScoring = true,
     this.persistedMatchId,
+    this.dragHintShown = true,
+    this.onDragHintShown,
   });
 
   final MatchController controller;
@@ -68,17 +71,21 @@ class GameScreen extends StatefulWidget {
   /// The persisted match row's id (resolving asynchronously — the setup screen
   /// inserts it fire-and-forget), or `null` when this match is not persisted.
   ///
-  /// When non-null AND a [tutor] is configured (analysis needs the engine), the
-  /// game-end and match-end dialogs offer a "Match summary" button that awaits
-  /// this id and pushes the [MatchDetailScreen] (its games list drills through
-  /// to per-game [AnalysisScreen]).
+  /// When non-null the game-end dialog offers an "Analyze game" button and the
+  /// match-end dialog a "Match summary" button; both await this id and push the
+  /// [MatchDetailScreen] (its games list drills through to per-game
+  /// [AnalysisScreen]). Post-game analysis needs only the ENGINE — the
+  /// [AnalysisScreen] builds its own [TutorService] from the engine provider on
+  /// demand — so this is gated purely on persistence, NOT on the live [tutor]
+  /// (which defaults off for hard/expert and hot-seat matches).
   final Future<int>? persistedMatchId;
 
-  /// Per-hop checker-movement animation duration passed to the [BoardView].
-  /// Defaults to [Duration.zero] (animation off) so widget tests are unaffected;
-  /// production call sites pass the user's chosen speed (`AnimationSpeed`, via
-  /// the settings-backed `AppSettings.hopDuration`).
-  final Duration animationDuration;
+  /// The animation pacing (checker hop/inter-hop travel + the dice-roll beat's
+  /// tumble/settle timings) passed to the [BoardView] and used by this screen's
+  /// opponent dice-roll beat. Defaults to [AnimationTimings.off] (everything
+  /// disabled) so widget tests are unaffected; production call sites pass the
+  /// user's chosen speed via the settings-backed `AppSettings.timings`.
+  final AnimationTimings timings;
 
   /// Board interaction toggles (highlights / drag / combined taps) forwarded to
   /// the [BoardView]. Production call sites build this from the persisted
@@ -89,13 +96,27 @@ class GameScreen extends StatefulWidget {
   /// the persisted `AppSettings.showScoring`.
   final bool showScoring;
 
+  /// Whether the one-time drag/tap discoverability hint has ALREADY been shown
+  /// (the persisted `AppSettings.dragHintShown`). When false AND drag is enabled
+  /// ([BoardInteractionOptions.enableDrag]), the hint SnackBar surfaces once on
+  /// the first human move-entry of the match; see [onDragHintShown]. Defaults to
+  /// true so the hint is opt-in for tests / harnesses that do not wire it.
+  final bool dragHintShown;
+
+  /// Fire-and-forget callback invoked the moment the one-time drag hint is shown,
+  /// so the caller can persist `dragHintShown = true`. Null disables persistence
+  /// (the hint would then re-show on the next match); production call sites pass
+  /// a settings-repository write.
+  final VoidCallback? onDragHintShown;
+
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
 
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
-  /// surfaces a hint button (top-5 plays), a post-move assessment chip for
-  /// HUMAN moves, and cube advice at the human's pre-roll gate / cube-offer
-  /// dialog. Display-only: hints never auto-apply.
+  /// surfaces a hint button (top-5 plays), post-move assessments for HUMAN moves
+  /// (a mark + equity loss on the collapsed history strip and the expanded
+  /// record sheet's rows), and cube advice at the human's pre-roll gate /
+  /// cube-offer dialog. Display-only: hints never auto-apply.
   final TutorService? tutor;
 
   @override
@@ -148,16 +169,19 @@ class _GameScreenState extends State<GameScreen> {
   /// be detected (and a new game — a shorter event list — resets the tutor).
   late int _lastEventCount = _c.game.events.length;
 
-  /// The current post-move assessment chip (HUMAN moves only), or `null`. Each
-  /// new human move replaces it; it is dismissible and cleared on game end.
-  MoveAssessment? _chip;
+  /// Post-move assessments for HUMAN moves, keyed by the source [MoveEvent]'s
+  /// index in the event log (the same index [RecordLine.eventIndex] carries).
+  /// The latest entry drives the collapsed history strip; every entry enriches
+  /// its row in the expanded sheet. Cleared when a new game begins.
+  final Map<int, MoveAssessment> _assessmentsByEventIndex = {};
 
-  /// Whether the chip is expanded to reveal the best play.
-  bool _chipExpanded = false;
+  /// Event indices whose expanded-sheet row has its best-move line revealed
+  /// (tap-to-reveal). Cleared when a new game begins.
+  final Set<int> _revealedBest = {};
 
-  /// Monotonic token guarding the async [TutorService.assess]: a resolved future
-  /// is applied only if it is still the latest request (and the screen mounted).
-  int _assessSeq = 0;
+  /// Bumped when a new game starts, so an in-flight [TutorService.assess] from
+  /// the previous game is discarded rather than written into a fresh log's map.
+  int _gameGeneration = 0;
 
   /// Cube advice for the human's currently-open pre-roll gate, or `null`. Keyed
   /// by [_cubeAdviceKey] so it is computed once per gate, not per rebuild.
@@ -174,6 +198,18 @@ class _GameScreenState extends State<GameScreen> {
   /// Whether the post-match "Match summary" link is awaiting the persisted match
   /// id (a brief spinner in the dialog button until the row insert resolves).
   bool _summaryLoading = false;
+
+  /// Whether the one-time drag/tap hint has been surfaced this session. Seeded
+  /// from the persisted [GameScreen.dragHintShown]; set true the instant the
+  /// hint actually shows (after the mounted check) so it can never appear twice
+  /// within a match.
+  late bool _dragHintShown = widget.dragHintShown;
+
+  /// Whether a hint SnackBar has already been SCHEDULED (its post-frame callback
+  /// queued) but not yet run. Prevents a burst of [_onChange] notifications
+  /// between the schedule and the frame from queuing several SnackBars, without
+  /// prematurely committing the persisted [_dragHintShown] latch.
+  bool _dragHintScheduled = false;
 
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
@@ -223,6 +259,13 @@ class _GameScreenState extends State<GameScreen> {
   /// advance a fresher one.
   int _rollBeatSeq = 0;
 
+  /// Whether the opponent's dice are currently being PRESENTED — true from the
+  /// moment a roll beat begins until its tumble frames AND the settle pause have
+  /// elapsed. Handed to the [BoardView] as `holdMoveAnimation` so the opponent's
+  /// move animation is deferred until the dice are readable. Never true for the
+  /// local player's own (instant) roll, since no beat runs.
+  final ValueNotifier<bool> _dicePresenting = ValueNotifier<bool>(false);
+
   @override
   void initState() {
     super.initState();
@@ -237,6 +280,7 @@ class _GameScreenState extends State<GameScreen> {
   void dispose() {
     _rollBeatTimer?.cancel();
     _observable.removeListener(_onChange);
+    _dicePresenting.dispose();
     _stagedMove.dispose();
     _recordScroll.dispose();
     _entryControl.dispose();
@@ -258,7 +302,54 @@ class _GameScreenState extends State<GameScreen> {
     _updatePassDevice();
     _syncRollBeat();
     _syncTutor();
+    _maybeShowDragHint();
     setState(() {});
+  }
+
+  // --- One-time drag/tap hint ------------------------------------------------
+
+  /// Surfaces the one-time drag-to-move discoverability hint the first time a
+  /// human's move-entry affordances appear, then never again. Guarded so it:
+  /// only fires when drag is enabled ([BoardInteractionOptions.enableDrag]) — no
+  /// point advertising a disabled gesture; only fires at a human move (the
+  /// affordances are up); fires at most once (the [_dragHintShown] latch, seeded
+  /// from the persisted flag, plus [_dragHintScheduled] to coalesce a burst of
+  /// notifications before the frame). The persisted latch flip and the
+  /// [GameScreen.onDragHintShown] persistence callback run INSIDE the post-frame
+  /// callback, AFTER the mounted check — so a hint that never actually displays
+  /// (screen torn down before the frame) is never recorded as shown. A SnackBar
+  /// cannot be shown during a build/rebuild, hence the post-frame deferral.
+  ///
+  /// The SnackBar floats [SnackBarBehavior.floating] with a bottom margin that
+  /// clears both the fixed 64px bottom action bar and the 32px history strip
+  /// above it, so Confirm / Roll and the strip stay visible and tappable —
+  /// the hint is genuinely non-blocking, not just logically so.
+  void _maybeShowDragHint() {
+    if (_dragHintShown || _dragHintScheduled) return;
+    if (!widget.interactionOptions.enableDrag) return;
+    final humanMoving =
+        _humanSideWith((s) => _c.pendingMoveOf(s).value != null) != null;
+    if (!humanMoving) return;
+    _dragHintScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _dragHintShown = true;
+      widget.onDragHintShown?.call();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.only(bottom: 104, left: 12, right: 12),
+          content:
+              const Text('Tip: drag checkers or tap them — change in Settings'),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'Got it',
+            onPressed: () =>
+                ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+          ),
+        ),
+      );
+    });
   }
 
   // --- Opponent dice-roll beat ----------------------------------------------
@@ -269,11 +360,10 @@ class _GameScreenState extends State<GameScreen> {
   /// skipped, as is every non-roll event. A shorter event list means a new game
   /// began: reset the cursor and cancel any live beat.
   ///
-  /// The beat is gated on [GameScreen.animationDuration]: with it at
-  /// [Duration.zero] (animation off — the widget-test default) no beat ever runs
-  /// and the board shows the real roll immediately. Called from [_onChange]
-  /// before its [setState], so the first override frame it sets is painted by
-  /// that rebuild.
+  /// The beat is gated on [GameScreen.timings]: with the [AnimationTimings.off]
+  /// preset (animation off — the widget-test default) no beat ever runs and the
+  /// board shows the real roll immediately. Called from [_onChange] before its
+  /// [setState], so the first override frame it sets is painted by that rebuild.
   void _syncRollBeat() {
     final events = _c.game.events;
     final len = events.length;
@@ -292,27 +382,40 @@ class _GameScreenState extends State<GameScreen> {
     _lastRollEventCount = len;
   }
 
-  /// Begins (or restarts) the roll beat toward [realRoll]: five cycling frames
-  /// ~80ms apart (~400ms total) of deterministic pseudo-random faces, after
-  /// which the override clears and the real roll shows through [GameState.dice].
-  /// The faces are seeded off [realRoll] so the sequence is stable under test,
-  /// and each cycling face differs from the real roll (the dice visibly tumble).
-  /// No-op when animation is off. The first frame is set synchronously; the
-  /// [_onChange] `setState` that follows paints it.
+  /// Begins (or restarts) the roll beat toward [realRoll]:
+  /// [AnimationTimings.diceFrames] cycling frames [AnimationTimings.diceFrame]
+  /// apart of deterministic pseudo-random faces, after which the override clears
+  /// and the real roll shows through [GameState.dice]. The faces are seeded off
+  /// [realRoll] so the sequence is stable under test, and each cycling face
+  /// differs from the real roll (the dice visibly tumble). No-op when animation
+  /// is off. The first frame is set synchronously; the [_onChange] `setState`
+  /// that follows paints it.
+  ///
+  /// While the beat runs — AND for [AnimationTimings.diceSettlePause] after the
+  /// dice settle — [_dicePresenting] is held `true` so the opponent's move
+  /// animation (queued in the [BoardView]) does not start until the dice are
+  /// readable.
   void _startRollBeat(Dice realRoll) {
-    if (widget.animationDuration <= Duration.zero) return;
+    if (!widget.timings.enabled) return;
     _cancelRollBeat();
     final seq = ++_rollBeatSeq;
-    const frameCount = 5;
-    const frameDuration = Duration(milliseconds: 80);
+    final frameCount = widget.timings.diceFrames;
+    final frameDuration = widget.timings.diceFrame;
+    _dicePresenting.value = true; // hold the move animation until dice settle
     _rollBeatDice = _beatFace(realRoll, 0);
     var frame = 0;
     void nextFrame() {
       if (!mounted || seq != _rollBeatSeq) return;
       frame++;
       if (frame >= frameCount) {
-        _rollBeatTimer = null;
-        setState(() => _rollBeatDice = null); // settle to the real roll
+        // Dice settle to the real roll now; hold the move animation for one more
+        // settle pause so the roll is legible before the checker travels.
+        setState(() => _rollBeatDice = null);
+        _rollBeatTimer = Timer(widget.timings.diceSettlePause, () {
+          if (!mounted || seq != _rollBeatSeq) return;
+          _rollBeatTimer = null;
+          _dicePresenting.value = false; // release: queued move animation begins
+        });
         return;
       }
       _rollBeatTimer = Timer(frameDuration, nextFrame);
@@ -323,13 +426,14 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   /// Cancels any live beat and clears the override (fencing pending callbacks by
-  /// bumping [_rollBeatSeq]). Does not call [setState]; callers are already in a
-  /// rebuild path (or disposing).
+  /// bumping [_rollBeatSeq]), and releases the dice-presenting hold. Does not
+  /// call [setState]; callers are already in a rebuild path (or disposing).
   void _cancelRollBeat() {
     _rollBeatTimer?.cancel();
     _rollBeatTimer = null;
     _rollBeatSeq++;
     _rollBeatDice = null;
+    _dicePresenting.value = false;
   }
 
   /// A deterministic dice pair for beat [frame], derived from the settled
@@ -354,23 +458,21 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   /// Detects a new [MoveEvent] in the current game's event log and, when the
-  /// mover is a human, kicks off an async assessment whose result becomes the
-  /// chip. A shorter event list means a new game began: reset and clear.
+  /// mover is a human, kicks off an async assessment stored under the move's
+  /// event index (see [_assessmentsByEventIndex]). A shorter event list means a
+  /// new game began: reset and clear the accumulated assessments.
   void _syncAssessment() {
     final events = _c.game.events;
     final len = events.length;
 
     if (len < _lastEventCount) {
-      // A new game started (the event log reset). Clear the previous chip.
+      // A new game started (the event log reset). Discard the old game's
+      // assessments and abandon any in-flight ones.
       _lastEventCount = len;
-      _chip = null;
-      _chipExpanded = false;
-      _assessSeq++; // abandon any in-flight assessment from the old game
+      _assessmentsByEventIndex.clear();
+      _revealedBest.clear();
+      _gameGeneration++;
       return;
-    }
-    if (_c.state.phase == GamePhase.gameOver) {
-      _chip = null;
-      _chipExpanded = false;
     }
     if (len == _lastEventCount) return;
 
@@ -384,21 +486,19 @@ class _GameScreenState extends State<GameScreen> {
         events.sublist(0, i),
         isCrawfordGame: _c.state.isCrawfordGame,
       ).state;
-      _fireAssessment(before, event.move);
+      _fireAssessment(i, before, event.move);
     }
     _lastEventCount = len;
   }
 
-  void _fireAssessment(GameState before, Move played) {
-    final seq = ++_assessSeq;
-    _chip = null; // show a fresh (empty) slot until the future resolves
-    _chipExpanded = false;
+  /// Assesses a human [played] move (whose event sits at [eventIndex]) and, on
+  /// resolution, files it under that index — unless the game has since reset
+  /// (a [_gameGeneration] mismatch) or the screen unmounted.
+  void _fireAssessment(int eventIndex, GameState before, Move played) {
+    final gen = _gameGeneration;
     unawaited(_tutor!.assess(before, played).then((assessment) {
-      if (!mounted || seq != _assessSeq) return;
-      setState(() {
-        _chip = assessment;
-        _chipExpanded = false;
-      });
+      if (!mounted || gen != _gameGeneration) return;
+      setState(() => _assessmentsByEventIndex[eventIndex] = assessment);
     }));
   }
 
@@ -566,7 +666,6 @@ class _GameScreenState extends State<GameScreen> {
                   showScoring: widget.showScoring,
                   onGameRecord: _openRecord,
                 ),
-                if (_chip != null) _tutorChip(_chip!),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(8),
@@ -580,14 +679,17 @@ class _GameScreenState extends State<GameScreen> {
                         whiteAtBottom: whiteAtBottom,
                         externalMove: _stagedMove,
                         lastMove: _c.lastMove,
+                        holdMoveAnimation: _dicePresenting,
                         entryControl: _entryControl,
-                        animationDuration: widget.animationDuration,
+                        hopDuration: widget.timings.hop,
+                        interHopDuration: widget.timings.interHop,
                         interactionOptions: widget.interactionOptions,
                         diceOverride: _rollBeatDice,
                       ),
                     ),
                   ),
                 ),
+                _historyStrip(),
                 _bottomRegion(moveSide),
               ],
             ),
@@ -692,7 +794,7 @@ class _GameScreenState extends State<GameScreen> {
           '(${_outcomeName(result.outcome)}).\n'
           '${_scoreLine(_c)}',
       actions: [
-        if (_canShowSummary) _summaryAction(),
+        if (_canShowSummary) _summaryAction('Analyze game'),
         _CardAction(
           label: 'Next game',
           filled: true,
@@ -708,8 +810,11 @@ class _GameScreenState extends State<GameScreen> {
       title: 'Match over',
       message: '${winner == null ? 'Nobody' : _playerName(winner)} wins the '
           'match.\n${_scoreLine(_c)}',
+      // A subtle reassurance that a finished match can be revisited later from
+      // the home screen's History, even after this dialog is dismissed.
+      footnote: _canShowSummary ? 'Saved to History' : null,
       actions: [
-        if (_canShowSummary) _summaryAction(),
+        if (_canShowSummary) _summaryAction('Match summary'),
         _CardAction(
           label: 'Done',
           filled: true,
@@ -719,14 +824,15 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  /// The post-match "Match summary" link is offered only when the match is
-  /// persisted ([GameScreen.persistedMatchId] set) AND analysis is available
-  /// (a [GameScreen.tutor] — it needs the engine). Same in both end dialogs.
-  bool get _canShowSummary =>
-      widget.persistedMatchId != null && widget.tutor != null;
+  /// The post-game analysis link is offered whenever the match is PERSISTED
+  /// ([GameScreen.persistedMatchId] set) — regardless of the live [GameScreen.tutor]
+  /// setting. Analysis runs off the engine (the [AnalysisScreen] builds its own
+  /// [TutorService] on demand), not the live tutor, so the tutor being off must
+  /// not hide the entry point. Same gate for both end dialogs.
+  bool get _canShowSummary => widget.persistedMatchId != null;
 
-  _CardAction _summaryAction() => _CardAction(
-        label: 'Match summary',
+  _CardAction _summaryAction(String label) => _CardAction(
+        label: label,
         busy: _summaryLoading,
         onPressed: _summaryLoading ? null : _openMatchSummary,
       );
@@ -855,54 +961,81 @@ class _GameScreenState extends State<GameScreen> {
     return "${_playerName(_c.state.turn)}'s turn";
   }
 
-  /// The dismissible post-move assessment chip: a coloured mark, the equity
-  /// loss, and (tap to expand) the best play. HUMAN moves only.
-  Widget _tutorChip(MoveAssessment a) {
+  /// The always-present collapsed history strip. Fixed 32px height, rendered
+  /// between the board and the action bar so the board never reflows (F6). It
+  /// shows the LATEST record line (ellipsized), that line's assessment score
+  /// when its move was assessed (coloured dot + loss), and a chevron. Tapping
+  /// anywhere expands the full scrollable record sheet ([_recordPanel]).
+  Widget _historyStrip() {
+    final scheme = Theme.of(context).colorScheme;
+    final lines = buildGameRecord(_c.game.events);
+    final latest = lines.isEmpty ? null : lines.last;
+    final assessment = (latest == null || latest.eventIndex == null)
+        ? null
+        : _assessmentsByEventIndex[latest.eventIndex];
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      child: InkWell(
+        onTap: _openRecord,
+        child: SizedBox(
+          key: const ValueKey('historyStrip'),
+          height: 32,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    latest?.text ?? 'No moves yet',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: latest == null
+                          ? scheme.onSurfaceVariant
+                          : scheme.onSurface,
+                    ),
+                  ),
+                ),
+                if (assessment != null) ...[
+                  const SizedBox(width: 8),
+                  _assessmentMark(assessment),
+                ],
+                const SizedBox(width: 4),
+                Icon(Icons.expand_less,
+                    size: 18, color: scheme.onSurfaceVariant),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The compact assessment indicator: a mark-coloured dot, the mark WORD, and
+  /// (when the move gave up measurable equity) the loss — e.g. a red dot +
+  /// "Error −0.061". The word is carried alongside the colour so the mark reads
+  /// without relying on colour alone (a colour-blind accessibility guard). A
+  /// best play (loss below the display threshold) shows just the dot + "Best".
+  Widget _assessmentMark(MoveAssessment a) {
     final (color, label) = _markStyle(a.mark);
     final loss = a.equityLoss;
     final lossText = loss >= 0.001 ? ' −${loss.toStringAsFixed(3)}' : '';
-    final showBest = _chipExpanded && a.best.checkerMoves.isNotEmpty;
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: InkWell(
-                onTap: () => setState(() => _chipExpanded = !_chipExpanded),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    children: [
-                      Icon(Icons.circle, size: 12, color: color),
-                      const SizedBox(width: 8),
-                      Text('$label$lossText',
-                          style: TextStyle(
-                              color: color, fontWeight: FontWeight.w600)),
-                      if (showBest) ...[
-                        const SizedBox(width: 12),
-                        Flexible(
-                          child: Text('Best: ${a.best}',
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: 'Dismiss',
-              icon: const Icon(Icons.close, size: 18),
-              onPressed: () => setState(() {
-                _chip = null;
-                _chipExpanded = false;
-              }),
-            ),
-          ],
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.circle, size: 10, color: color),
+        const SizedBox(width: 4),
+        Text(
+          '$label$lossText',
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -1044,10 +1177,15 @@ class _GameScreenState extends State<GameScreen> {
     _closeHint();
   }
 
-  /// The in-tree move-history bottom panel: a scrollable list of the CURRENT
-  /// game's record lines (see [buildGameRecord]), each with an actor-coloured
-  /// leading dot. Height is ~55% of the screen. Auto-scrolls to the newest line
-  /// on open and whenever a fresh event appends while it is open.
+  /// The in-tree move-history bottom sheet (the expanded form of
+  /// [_historyStrip]): a scrollable list of the CURRENT game's record lines
+  /// (see [buildGameRecord]), each with an actor-coloured leading dot and, for
+  /// assessed human moves, a trailing mark + loss with a tap-to-reveal best
+  /// line. It floats OVER the board as a scrimmed overlay layer of the screen
+  /// [Stack], so opening it never reflows the board (F6). Height is ~40% of the
+  /// screen. Auto-scrolls to the newest line on open and whenever a fresh event
+  /// appends while it is open; a manual scroll-up is respected until the next
+  /// event. Both the ⋮ "Game record" entry and the strip route here.
   Widget _recordPanel() {
     final lines = buildGameRecord(_c.game.events);
     final count = _c.game.events.length;
@@ -1060,7 +1198,7 @@ class _GameScreenState extends State<GameScreen> {
         }
       });
     }
-    final height = MediaQuery.of(context).size.height * 0.55;
+    final height = MediaQuery.of(context).size.height * 0.4;
     return Stack(
       children: [
         Positioned.fill(
@@ -1086,8 +1224,28 @@ class _GameScreenState extends State<GameScreen> {
                       Row(
                         children: [
                           Expanded(
-                            child: Text('Game record',
-                                style: Theme.of(context).textTheme.titleMedium),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('Game record',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _recordScoreContext(),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                ),
+                              ],
+                            ),
                           ),
                           IconButton(
                             tooltip: 'Close',
@@ -1120,12 +1278,28 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
+  /// The sheet's score context: "Game 3 · W 2–1 B · to 5".
+  String _recordScoreContext() {
+    final m = _c.match;
+    return 'Game ${_c.gameNumber} · W ${m.whiteScore}–${m.blackScore} B · '
+        'to ${m.matchLength}';
+  }
+
+  /// One record row. Assessed HUMAN moves (an entry in
+  /// [_assessmentsByEventIndex] for [RecordLine.eventIndex]) get a trailing
+  /// mark + loss and become tappable: a tap toggles a one-line "Best: …" reveal
+  /// beneath the row. Unassessed lines render plainly.
   Widget _recordRow(RecordLine line) {
     final mono = Theme.of(context)
         .textTheme
         .bodyMedium
         ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
-    return Padding(
+    final index = line.eventIndex;
+    final assessment =
+        index == null ? null : _assessmentsByEventIndex[index];
+    final revealed = index != null && _revealedBest.contains(index);
+
+    final row = Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1136,6 +1310,41 @@ class _GameScreenState extends State<GameScreen> {
           ),
           const SizedBox(width: 10),
           Expanded(child: Text(line.text, style: mono)),
+          if (assessment != null) ...[
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: _assessmentMark(assessment),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (assessment == null) return row;
+
+    // Assessed: tappable, with a tap-to-reveal best-move line under the row.
+    final best = assessment.best;
+    return InkWell(
+      onTap: () => setState(() {
+        if (revealed) {
+          _revealedBest.remove(index);
+        } else {
+          _revealedBest.add(index!);
+        }
+      }),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          row,
+          if (revealed && best.checkerMoves.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 20, bottom: 4),
+              child: Text('Best: $best',
+                  style: mono?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  )),
+            ),
         ],
       ),
     );
@@ -1145,16 +1354,19 @@ class _GameScreenState extends State<GameScreen> {
   /// for Black), or an empty transparent slot for a neutral line (the opening).
   Widget _actorDot(Player? actor) {
     if (actor == null) return const SizedBox(width: 10, height: 10);
-    final color = actor == Player.white
-        ? BoardTheme.light.whiteChecker
-        : BoardTheme.light.blackChecker;
+    final isWhite = actor == Player.white;
+    final color =
+        isWhite ? BoardTheme.light.whiteChecker : BoardTheme.light.blackChecker;
+    final border = isWhite
+        ? BoardTheme.light.whiteCheckerBorder
+        : BoardTheme.light.blackCheckerBorder;
     return Container(
       width: 10,
       height: 10,
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        border: Border.all(color: BoardTheme.light.checkerBorder, width: 1),
+        border: Border.all(color: border, width: 1),
       ),
     );
   }
@@ -1472,11 +1684,16 @@ class _ModalCard extends StatelessWidget {
     required this.title,
     required this.message,
     required this.actions,
+    this.footnote,
   });
 
   final String title;
   final String message;
   final List<_CardAction> actions;
+
+  /// An optional subtle line (bodySmall) shown between the message and the
+  /// action row — e.g. the match-end "Saved to History" reassurance.
+  final String? footnote;
 
   /// Renders one action as a filled or text button, showing a small spinner in
   /// place of the label while [_CardAction.busy].
@@ -1515,6 +1732,16 @@ class _ModalCard extends StatelessWidget {
                         style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 12),
                     Text(message),
+                    if (footnote != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        footnote!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color:
+                                  Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ],
                     const SizedBox(height: 24),
                     // Wrap (not Row) so a second action — e.g. the post-match
                     // "Match summary" link alongside "Next game" / "Done" — flows

@@ -41,6 +41,7 @@ class SettingsRepository {
         enableDrag: row.enableDrag,
         enableCombinedTaps: row.enableCombinedTaps,
         showScoring: row.showScoring,
+        dragHintShown: row.dragHintShown,
       );
 
   static SettingsCompanion _toCompanion(AppSettings s) => SettingsCompanion(
@@ -54,6 +55,7 @@ class SettingsRepository {
         enableDrag: Value(s.enableDrag),
         enableCombinedTaps: Value(s.enableCombinedTaps),
         showScoring: Value(s.showScoring),
+        dragHintShown: Value(s.dragHintShown),
       );
 
   // --- Enum <-> string codecs (tolerant of unknown values) -------------------

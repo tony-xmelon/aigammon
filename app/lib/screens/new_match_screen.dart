@@ -225,13 +225,19 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           orientation: orientation,
           tutor: tutor,
           persistedMatchId: matchIdFuture,
-          animationDuration: settings.hopDuration,
+          timings: settings.timings,
           interactionOptions: BoardInteractionOptions(
             showHighlights: settings.showHighlights,
             enableDrag: settings.enableDrag,
             enableCombinedTaps: settings.enableCombinedTaps,
           ),
           showScoring: settings.showScoring,
+          // One-time drag/tap hint: shown on the first human move when drag is on
+          // and it has not been shown before. Persist the flag fire-and-forget.
+          dragHintShown: settings.dragHintShown,
+          onDragHintShown: () => ref
+              .read(settingsRepositoryProvider)
+              .save(settings.copyWith(dragHintShown: true)),
         ),
       ),
     );
