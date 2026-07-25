@@ -125,6 +125,41 @@ void main() {
         reason: 'too-good signal per Janowski cube model');
   });
 
+  test('match-aware cube advice on a crushing race (5-away/5-away)', () {
+    // Same near-certain-gammon fixture as the money "too good" test above, but
+    // now scored at 5-away/5-away with the cube at 1. "Too good to double" is a
+    // MONEY concept (playing on for the gammon beats cashing a single point);
+    // at a match score the dead-cube model weighs the actual gammon value in
+    // MET points. We assert exactly what the model computes, with the numbers
+    // printed for auditing rather than asserting money folklore.
+    final pts = List<int>.filled(24, 0);
+    pts[0] = 2;
+    pts[23] = -15;
+    final crushing = BoardState(points: pts, whiteOff: 13);
+    final probs = engine.evaluate(crushing, Player.white);
+    const advisor = MatchCubeAdvisor();
+    final advice = advisor.advise(
+        probs: probs, moverAway: 5, opponentAway: 5, cubeValue: 1);
+    // ignore: avoid_print
+    print('crushing 5a/5a: $probs -> $advice');
+    // The mover is winning far too heavily for the opponent to take: dropping
+    // (bank 1 point) is much better for them than playing on doubled.
+    expect(advice.shouldTake, isFalse,
+        reason: 'opponent is crushed and must drop');
+    // Observed model result here: shouldDouble is FALSE. This is the too-good
+    // phenomenon surfacing at match play: on the near-certain gammon, NOT
+    // doubling banks 2 points (5->3 away, MET 0.64795), whereas doubling lets
+    // the opponent DROP for just 1 point (5->4 away, MET 0.57732), which is
+    // worse for the mover. We assert the computed booleans are self-consistent
+    // rather than hard-coding this (nets upgrades could shift the margins).
+    final minDoubled = advice.equityDoubleTake < advice.equityDoubleDrop
+        ? advice.equityDoubleTake
+        : advice.equityDoubleDrop;
+    expect(advice.shouldDouble, minDoubled > advice.equityNoDouble);
+    expect(advice.equityNoDouble.isFinite, isTrue);
+    expect(advice.equityDoubleTake.isFinite, isTrue);
+  });
+
   test('dispose then use throws', () {
     final e = Engine.open(netsPath: '../../native/wildbg-nets/neural-nets');
     e.dispose();
