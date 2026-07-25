@@ -1,4 +1,4 @@
-// Tests for MatchCubeAdvisor (dead-cube v1 match-aware cube decisions).
+// Tests for MatchCubeAdvisor (Janowski cube-life match-aware cube decisions).
 //
 // PURE test (not engine-tagged): no native library, no isolate. Expected
 // equities are derived BY HAND in comments from the model formula and the
@@ -7,6 +7,11 @@
 // copying the advisor's own output). Formula-consistency tests recompute the
 // expected equities from the same public building blocks and assert the
 // advisor agrees, so they cannot silently drift from folklore.
+//
+// CUBE-LIFE REGRESSION ANCHOR: every legacy test below passes `cubeLife: 0`
+// and keeps its ORIGINAL hand-computed numbers — proving the dead-cube limit is
+// byte-for-byte the old v1 model. The cube-life groups at the end exercise
+// `cubeLife > 0` with their own independent hand derivations.
 import 'package:engine_bindings/engine_bindings.dart';
 import 'package:test/test.dart';
 
@@ -74,7 +79,7 @@ void main() {
     test('exact equities match the hand derivation', () {
       const w = 0.60;
       final a = advisor.advise(
-          probs: gammonless(w), moverAway: 2, opponentAway: 2, cubeValue: 1);
+          probs: gammonless(w), moverAway: 2, opponentAway: 2, cubeValue: 1, cubeLife: 0);
       expect(a.equityNoDouble, closeTo(0.32264 + 0.35472 * w, 1e-9));
       expect(a.equityDoubleTake, closeTo(w, 1e-9));
       expect(a.equityDoubleDrop, closeTo(p12, 1e-9));
@@ -83,7 +88,7 @@ void main() {
     test('doubling is correct for every winning edge w > 0.5', () {
       for (final w in [0.501, 0.55, 0.60, 0.67736, 0.72, 0.90, 0.99]) {
         final a = advisor.advise(
-            probs: gammonless(w), moverAway: 2, opponentAway: 2, cubeValue: 1);
+            probs: gammonless(w), moverAway: 2, opponentAway: 2, cubeValue: 1, cubeLife: 0);
         expect(a.shouldDouble, isTrue, reason: 'should double at w=$w');
       }
     });
@@ -93,12 +98,12 @@ void main() {
           probs: gammonless(p12 - 1e-6),
           moverAway: 2,
           opponentAway: 2,
-          cubeValue: 1);
+          cubeValue: 1, cubeLife: 0);
       final justOver = advisor.advise(
           probs: gammonless(p12 + 1e-6),
           moverAway: 2,
           opponentAway: 2,
-          cubeValue: 1);
+          cubeValue: 1, cubeLife: 0);
       expect(justUnder.shouldTake, isTrue,
           reason: 'w just under 0.67736: opponent still takes');
       expect(justOver.shouldTake, isFalse,
@@ -125,6 +130,7 @@ void main() {
         opponentAway: 1,
         cubeValue: 1,
         crawfordPlayed: true,
+        cubeLife: 0,
       );
       final post2 = MatchEquityTable.postCrawford(2);
       final post3 = MatchEquityTable.postCrawford(3);
@@ -148,7 +154,7 @@ void main() {
     test('advisor equities match the independent formula', () {
       for (final w in [0.20, 0.40, 0.51, 0.60, 0.748, 0.85]) {
         final a = advisor.advise(
-            probs: p(w), moverAway: 25, opponentAway: 25, cubeValue: 1);
+            probs: p(w), moverAway: 25, opponentAway: 25, cubeValue: 1, cubeLife: 0);
         final nd = eqAtStake(
             singleWin: w,
             gammonWin: 0,
@@ -185,7 +191,7 @@ void main() {
       for (var i = 1; i < 1000; i++) {
         final w = i / 1000.0;
         final a = advisor.advise(
-            probs: p(w), moverAway: 25, opponentAway: 25, cubeValue: 1);
+            probs: p(w), moverAway: 25, opponentAway: 25, cubeValue: 1, cubeLife: 0);
         if (!a.shouldTake) {
           flipW = w;
           break;
@@ -225,6 +231,7 @@ void main() {
         moverAway: 5,
         opponentAway: 5,
         cubeValue: 1,
+        cubeLife: 0,
       );
       final expectedNd = 0.3 * MatchEquityTable.preCrawford(4, 5) +
           0.25 * MatchEquityTable.preCrawford(3, 5) +
@@ -283,7 +290,7 @@ void main() {
           probs: gammonless(1.0),
           moverAway: 2,
           opponentAway: 5,
-          cubeValue: 2);
+          cubeValue: 2, cubeLife: 0);
       expect(a.equityNoDouble, closeTo(1.0, 1e-12));
       expect(a.equityDoubleTake, closeTo(1.0, 1e-12));
       expect(a.equityDoubleDrop, closeTo(1.0, 1e-12));
@@ -306,7 +313,7 @@ void main() {
         loseBackgammon: lbg,
       );
       final a = advisor.advise(
-          probs: probs, moverAway: 7, opponentAway: 7, cubeValue: 2);
+          probs: probs, moverAway: 7, opponentAway: 7, cubeValue: 2, cubeLife: 0);
       final sw = w - wg, gw = wg - wbg, bw = wbg;
       final sl = (1 - w) - lg, gl = lg - lbg, bl = lbg;
       double e(int stake) => eqAtStake(
@@ -328,6 +335,186 @@ void main() {
       final minDoubled = dt < dd ? dt : dd;
       expect(a.shouldDouble, minDoubled > nd);
       expect(a.shouldTake, dt <= dd);
+    });
+  });
+
+  group('MatchCubeAdvisor cube life at 2-away/2-away (coincidence check)', () {
+    // MODEL SANITY. At 2a/2a with cube 1, a double to 2 already stakes the whole
+    // match: whoever wins the doubled game reaches 0-away. So the taker's recube
+    // (2 -> 4) is WORTHLESS — winning at 2 already wins the match. The live and
+    // dead models MUST therefore coincide, and the whole advice must be
+    // cube-life-INDEPENDENT.
+    //
+    // BY HAND: recubeSwing = eqAfter(2, 2-2) - eqAfter(2, 2-4)
+    //                      = eqAfter(2, 0) - eqAfter(2, -2) = 0 - 0 = 0.
+    // So equityDoubleTake(x) = E(2) - x*0.5*q*0 = E(2) for EVERY x.
+    test('advice is identical for cubeLife 0, 0.7 and 1 (recube worthless)', () {
+      for (final w in [0.55, 0.62, 0.70, 0.80]) {
+        final dead = advisor.advise(
+            probs: gammonless(w),
+            moverAway: 2,
+            opponentAway: 2,
+            cubeValue: 1,
+            cubeLife: 0);
+        final mid = advisor.advise(
+            probs: gammonless(w),
+            moverAway: 2,
+            opponentAway: 2,
+            cubeValue: 1,
+            cubeLife: 0.7);
+        final live = advisor.advise(
+            probs: gammonless(w),
+            moverAway: 2,
+            opponentAway: 2,
+            cubeValue: 1,
+            cubeLife: 1);
+        expect(mid.equityDoubleTake, closeTo(dead.equityDoubleTake, 1e-12),
+            reason: 'recube worthless at 2a/2a: cubeLife 0.7 == dead, w=$w');
+        expect(live.equityDoubleTake, closeTo(dead.equityDoubleTake, 1e-12),
+            reason: 'recube worthless at 2a/2a: cubeLife 1 == dead, w=$w');
+        expect(mid.shouldTake, dead.shouldTake);
+        expect(live.shouldTake, dead.shouldTake);
+        expect(mid.shouldDouble, dead.shouldDouble);
+        expect(live.shouldDouble, dead.shouldDouble);
+      }
+    });
+  });
+
+  group('MatchCubeAdvisor cube life at 5-away/5-away (real x-effect)', () {
+    // BY HAND. Gammonless w = 0.78, cube 1, 5a/5a, cubeLife x = 0.7. Here the
+    // taker is 5-away, so winning the doubled game (banks 2) does NOT end the
+    // match and the recube (2 -> 4) has real value: the live take is MORE
+    // generous than the dead one, and this w sits between the two take points,
+    // so the take decision FLIPS between x = 0 (drop) and x = 0.7 (take).
+    //
+    // Table (preCrawford):
+    //   (4,5)=0.57732 (3,5)=0.64795 (5,4)=0.42268 (5,3)=0.35205 (5,1)=0.15821
+    //
+    //   nd = E(1)  = 0.78*(4,5) + 0.22*(5,4)
+    //              = 0.78*0.57732 + 0.22*0.42268           = 0.5432992
+    //   E(2)_dead  = 0.78*(3,5) + 0.22*(5,3)
+    //              = 0.78*0.64795 + 0.22*0.35205           = 0.582852
+    //   q          = 1 - 0.78 = 0.22
+    //   recubeSwing= eqAfter(5, 5-2) - eqAfter(5, 5-4)
+    //              = (5,3) - (5,1) = 0.35205 - 0.15821     = 0.19384
+    //   correction = x * 0.5 * q * recubeSwing
+    //              = 0.7 * 0.5 * 0.22 * 0.19384            = 0.014922...
+    //   dt(0.7)    = 0.582852 - 0.0149221...              = 0.56792632 (5 d.p.)
+    //   dd = eqAfter(4,5) = (4,5)                          = 0.57732
+    //
+    //   shouldTake: dt(0.7)=0.5679263 <= dd=0.57732 -> TRUE  (take)
+    //   BUT dead:   E(2)=0.582852     >  dd=0.57732 -> FALSE (drop) — the flip.
+    //   shouldDouble: min(0.5679263, 0.57732)=0.5679263 > nd=0.5432992 -> TRUE.
+    const w = 0.78;
+    final p45 = MatchEquityTable.preCrawford(4, 5); // 0.57732
+    final p35 = MatchEquityTable.preCrawford(3, 5); // 0.64795
+    final p54 = MatchEquityTable.preCrawford(5, 4); // 0.42268
+    final p53 = MatchEquityTable.preCrawford(5, 3); // 0.35205
+    final p51 = MatchEquityTable.preCrawford(5, 1); // 0.15821
+
+    final expectedNd = w * p45 + (1 - w) * p54;
+    final e2Dead = w * p35 + (1 - w) * p53;
+    final recubeSwing = p53 - p51;
+    final expectedDt07 = e2Dead - 0.7 * 0.5 * (1 - w) * recubeSwing;
+
+    test('x = 0.7: equities match the hand derivation', () {
+      final a = advisor.advise(
+          probs: gammonless(w),
+          moverAway: 5,
+          opponentAway: 5,
+          cubeValue: 1,
+          cubeLife: 0.7);
+      expect(a.equityNoDouble, closeTo(expectedNd, 1e-12));
+      expect(a.equityNoDouble, closeTo(0.5432992, 1e-7));
+      expect(a.equityDoubleTake, closeTo(expectedDt07, 1e-12));
+      expect(a.equityDoubleTake, closeTo(0.56792632, 1e-7));
+      expect(a.equityDoubleDrop, closeTo(p45, 1e-12));
+    });
+
+    test('the take decision flips: DROP dead, TAKE at cubeLife 0.7', () {
+      final dead = advisor.advise(
+          probs: gammonless(w),
+          moverAway: 5,
+          opponentAway: 5,
+          cubeValue: 1,
+          cubeLife: 0);
+      final live = advisor.advise(
+          probs: gammonless(w),
+          moverAway: 5,
+          opponentAway: 5,
+          cubeValue: 1,
+          cubeLife: 0.7);
+      expect(dead.shouldTake, isFalse, reason: 'dead cube: too good, drop');
+      expect(live.shouldTake, isTrue, reason: 'live cube: recube makes it a take');
+      // Both double (min doubled equity still beats holding the cube).
+      expect(dead.shouldDouble, isTrue);
+      expect(live.shouldDouble, isTrue);
+      // Live take equity is strictly below the dead value (taker gains).
+      expect(live.equityDoubleTake, lessThan(dead.equityDoubleTake));
+    });
+  });
+
+  group('MatchCubeAdvisor take threshold is monotone in cube life', () {
+    // The mover's win-probability take threshold (highest w at which the taker
+    // still takes) must be NON-DECREASING in cubeLife: a livelier cube only ever
+    // widens takes. We locate the threshold by bisection over w (gammonless,
+    // 5a/5a, cube 1) for a grid of x and assert the sequence never decreases.
+    double takeThreshold(double x) {
+      var lo = 0.0, hi = 1.0;
+      for (var i = 0; i < 60; i++) {
+        final mid = (lo + hi) / 2;
+        final a = advisor.advise(
+            probs: gammonless(mid),
+            moverAway: 5,
+            opponentAway: 5,
+            cubeValue: 1,
+            cubeLife: x);
+        // shouldTake holds for LOW w and fails past the threshold, so move up
+        // while still a take.
+        if (a.shouldTake) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      return lo;
+    }
+
+    test('thresholds are non-decreasing across x in {0,.25,.5,.75,1}', () {
+      const grid = [0.0, 0.25, 0.5, 0.75, 1.0];
+      final thresholds = [for (final x in grid) takeThreshold(x)];
+      for (var i = 1; i < thresholds.length; i++) {
+        expect(thresholds[i], greaterThanOrEqualTo(thresholds[i - 1] - 1e-9),
+            reason: 'threshold dropped from x=${grid[i - 1]} to x=${grid[i]}: '
+                '$thresholds');
+      }
+      // Endpoints match the known dead/live take points (sanity, not folklore):
+      // dead ~0.7613, fully live ~0.8202 for this MET.
+      expect(thresholds.first, closeTo(0.7613, 2e-3));
+      expect(thresholds.last, closeTo(0.8202, 2e-3));
+      expect(thresholds.last, greaterThan(thresholds.first + 0.02),
+          reason: 'cube life must move the take point by a real margin');
+    });
+  });
+
+  group('MatchCubeAdvisor cube-life guard', () {
+    test('cubeLife outside [0, 1] throws ArgumentError', () {
+      expect(
+          () => advisor.advise(
+              probs: gammonless(0.6),
+              moverAway: 5,
+              opponentAway: 5,
+              cubeValue: 1,
+              cubeLife: -0.01),
+          throwsArgumentError);
+      expect(
+          () => advisor.advise(
+              probs: gammonless(0.6),
+              moverAway: 5,
+              opponentAway: 5,
+              cubeValue: 1,
+              cubeLife: 1.5),
+          throwsArgumentError);
     });
   });
 }

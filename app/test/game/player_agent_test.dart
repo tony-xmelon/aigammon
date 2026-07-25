@@ -290,11 +290,15 @@ void main() {
       // cubeOffered: turn = black (decider), doubler = white. ctx is anchored
       // to the DECIDER: moverAway = decider (2), opponentAway = doubler (5).
       // The advisor must be fed the DOUBLER's perspective, so the agent
-      // inverts the aways. probs (win 0.61, gammonless, doubler's view) is
-      // chosen so the correct orientation (doubler 5-away) says TAKE while the
-      // inverted-by-mistake orientation would say DROP — pinning the fix.
+      // inverts the aways. probs (win 0.75, gammonless, doubler's view) is
+      // chosen so the correct orientation (doubler 5-away, taker 2-away where the
+      // recube is worthless) says TAKE while the inverted-by-mistake orientation
+      // (taker 5-away) says DROP — pinning the fix. NB: 0.75 (was 0.61 under the
+      // dead-cube model) keeps the contrast alive at the new cubeLife 0.7
+      // default, where the livelier cube would otherwise make the 5-away taker
+      // in the swapped orientation take too.
       const advisor = MatchCubeAdvisor();
-      final probs = _probs(win: 0.61);
+      final probs = _probs(win: 0.75);
       final correct = advisor.advise(
           probs: probs, moverAway: 5, opponentAway: 2, cubeValue: 1);
       final swapped = advisor.advise(

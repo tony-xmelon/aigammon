@@ -271,9 +271,17 @@ void main() {
       final a = await tutor.assessCube(_awaitingRollState(), ctx,
           playerDoubled: false);
       expect(a.equityLoss, closeTo(expectedLoss, 1e-12));
-      // 0.5762685 - 0.534372 = 0.0418965 -> [0.02, 0.05) -> dubious.
-      expect(a.equityLoss, closeTo(0.0418965, 1e-6));
-      expect(a.mark, MoveMark.dubious);
+      // BY HAND at the cubeLife 0.7 default (5a/5a gammonful). The double/take
+      // equity gains the taker's recube credit, so it drops from the dead
+      // 0.5762685 to 0.5491309:
+      //   q = 1 - 0.6 = 0.4
+      //   recubeSwing = pre(5,3) - pre(5,1) = 0.35205 - 0.15821 = 0.19384
+      //   dt(0.7) = 0.5762685 - 0.7*0.5*0.4*0.19384          = 0.5491309
+      //   dd = pre(4,5) = 0.57732 ; bestDoubled = min = 0.5491309
+      //   loss = bestDoubled - nd = 0.5491309 - 0.534372     = 0.0147589
+      // 0.0147589 -> [0.001, 0.02) -> good (was 0.0418965 -> dubious when dead).
+      expect(a.equityLoss, closeTo(0.0147589, 1e-6));
+      expect(a.mark, MoveMark.good);
     });
 
     test('advisor says no-double & player doubled: positive loss', () async {
@@ -324,10 +332,12 @@ void main() {
       // cubeOffered: turn = black (decider), doubler = white. deciderCtx is
       // anchored to the DECIDER: moverAway = decider (2), opponentAway = doubler
       // (5). The advisor must be fed the DOUBLER's perspective, so the tutor
-      // inverts. probs (win 0.61, gammonless, doubler's view) is chosen so the
-      // correct orientation (doubler 5-away) says TAKE while the inverted-by-
-      // mistake orientation would say DROP — pinning the inversion.
-      final probs = _probs(0.61);
+      // inverts. probs (win 0.75, gammonless, doubler's view) is chosen so the
+      // correct orientation (doubler 5-away, taker 2-away where the recube is
+      // worthless) says TAKE while the inverted-by-mistake orientation (taker
+      // 5-away) says DROP — pinning the inversion. NB: 0.75 (was 0.61 under the
+      // dead-cube model) preserves the contrast at the cubeLife 0.7 default.
+      final probs = _probs(0.75);
       final correct = advisor.advise(
           probs: probs, moverAway: 5, opponentAway: 2, cubeValue: 1);
       final swapped = advisor.advise(
@@ -353,9 +363,12 @@ void main() {
     });
 
     test('a strong doubler position advises the decider to PASS', () async {
-      // Doubler with a big lead in win chance (gammonless 0.80): the decider
+      // Doubler with a big lead in win chance (gammonless 0.85): the decider
       // should pass. Symmetric aways so only the doubler-orientation matters.
-      final probs = _probs(0.80);
+      // NB: 0.85 (was 0.80 under the dead-cube model) stays a pass at the
+      // cubeLife 0.7 default, where the livelier 5-away recube pushes the take
+      // point up to ~0.81 — 0.80 would flip to a take.
+      final probs = _probs(0.85);
       final expected = advisor.advise(
           probs: probs, moverAway: 5, opponentAway: 5, cubeValue: 1);
       expect(expected.shouldTake, isFalse, reason: 'sanity: a pass position');

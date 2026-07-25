@@ -100,8 +100,13 @@ class TutorService {
   /// [ctx] is built from the on-turn player's (`state.turn`'s) perspective, as
   /// for [AiAgent.considerDouble]. [playerDoubled] is what the player did (or
   /// is considering): `true` = offered the cube, `false` = rolled on.
+  ///
+  /// [cubeLife] is Janowski's cube-efficiency passed straight to
+  /// [MatchCubeAdvisor.advise] (default 0.7). It is plumbed here so a future
+  /// settings screen (Plan 7+) can wire a user-tunable cube-life without
+  /// touching this API; today callers just take the default.
   Future<CubeAssessment> assessCube(GameState state, MatchContext ctx,
-      {required bool playerDoubled}) async {
+      {required bool playerDoubled, double cubeLife = 0.7}) async {
     final probs = await _engine.evaluate(state.board, state.turn);
     final advice = _advisor.advise(
       probs: probs,
@@ -109,6 +114,7 @@ class TutorService {
       opponentAway: ctx.opponentAway,
       cubeValue: state.cube.value,
       crawfordPlayed: ctx.crawfordPlayed,
+      cubeLife: cubeLife,
     );
     return CubeAssessment(actionWasDouble: playerDoubled, advice: advice);
   }
@@ -125,8 +131,13 @@ class TutorService {
   ///
   /// The returned assessment's `advice.shouldTake` is the DECIDER's correct
   /// response; `actionWasDouble` is `true` (the doubler did offer the cube).
+  ///
+  /// [cubeLife] is Janowski's cube-efficiency passed straight to
+  /// [MatchCubeAdvisor.advise] (default 0.7), plumbed for a future settings
+  /// hook exactly as in [assessCube].
   Future<CubeAssessment> assessCubeResponse(
-      GameState state, MatchContext deciderCtx) async {
+      GameState state, MatchContext deciderCtx,
+      {double cubeLife = 0.7}) async {
     final doubler = state.turn.opponent;
     final probs = await _engine.evaluate(state.board, doubler);
     final advice = _advisor.advise(
@@ -135,6 +146,7 @@ class TutorService {
       opponentAway: deciderCtx.moverAway,
       cubeValue: state.cube.value,
       crawfordPlayed: deciderCtx.crawfordPlayed,
+      cubeLife: cubeLife,
     );
     return CubeAssessment(actionWasDouble: true, advice: advice);
   }

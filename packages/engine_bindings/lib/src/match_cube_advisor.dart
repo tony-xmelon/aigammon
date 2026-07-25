@@ -18,9 +18,13 @@ class MatchCubeAdvice {
   /// played on at the current [MatchCubeAdvisor.advise] `cubeValue`).
   final double equityNoDouble;
 
-  /// Mover's match-winning probability after a double that is TAKEN. In this
-  /// dead-cube v1 model the cube is treated as dead after the take: the game
-  /// is simply played on at twice the stake with no recube value.
+  /// Mover's match-winning probability after a double that is TAKEN.
+  ///
+  /// This is a cube-life interpolation (see [MatchCubeAdvisor], `cubeLife`):
+  /// at `cubeLife == 0` it is the dead-cube value (the game played on at twice
+  /// the stake with no recube value, i.e. the old v1 number); as `cubeLife`
+  /// rises it is lowered toward the live-cube value that credits the TAKER with
+  /// their recube (redouble-to-4s) potential. Lower = better for the taker.
   final double equityDoubleTake;
 
   /// Mover's match-winning probability after a double that is DROPPED: the
@@ -46,20 +50,93 @@ class MatchCubeAdvice {
 /// double / take decision, using the Kazaross-XG2 match equity table
 /// ([MatchEquityTable]) as the value function over match scores.
 ///
-/// ## The model (dead-cube v1)
+/// ## The model (Janowski cube-life v1.5)
 ///
 /// wildbg's own `cube_info` is money-only (it takes no away scores), so the
 /// tutor and the match-playing AI need this adapter to reason at a match
-/// score. This is the simplest defensible match model — a "dead cube" model,
-/// closely related to the constant-value end of Janowski's cube formula:
+/// score. This advisor generalises the earlier dead-cube v1 model with a
+/// Janowski **cube-life** parameter `x = cubeLife` in `[0, 1]`, following the
+/// same cube-efficiency idea as wildbg's money `CubeInfo`
+/// (`native/wildbg/crates/logic/src/cube.rs`) and Janowski's cube formulae
+/// (<https://bkgm.com/articles/Janowski/cubeformulae.pdf>):
 ///
-///  * We assume the cube is DEAD after it is turned and taken (no recube
-///    value). At a match score this understates the taker's equity somewhat
-///    (they lose the option value of owning the cube), so it is slightly
-///    double-happy and slightly take-shy versus a full live-cube model. It is
-///    exact for last-roll / no-recube situations and is a documented v1
-///    stepping stone; a live-cube refinement can replace it later without
-///    changing this API.
+///  * `x = 0` — a DEAD cube: the cube is worthless after it is turned and
+///    taken. This reproduces the old v1 arithmetic BYTE-FOR-BYTE (it is the
+///    regression anchor; every `x = 0` test below keeps its hand-computed
+///    numbers). It is exact for last-roll / no-recube situations.
+///  * `x = 1` — a fully LIVE cube: the taker gets full credit for owning a
+///    recube after the take. In the money / long-match limit this shifts the
+///    gammonless take point from 25% (dead) to 20% (live), exactly as in
+///    Janowski's continuous model.
+///  * `0 < x < 1` — a linear blend of the two, `x = 0.7` by default (near
+///    Janowski's recommended 2/3 for money; a settings hook can override it).
+///
+/// ### What cube life changes, and what it does NOT (documented scope)
+///
+/// We model cube life on ONE branch only: the **doubled-and-taken** equity,
+/// where the taker owns a live recube. This is the dominant, well-understood
+/// cube-life effect (the 25% -> 20% take-point shift) and the one the AI/tutor
+/// take/pass decision hinges on. We deliberately do NOT add cube life to:
+///
+///  * `equityNoDouble` — Janowski's centered-cube formula also inflates the
+///    holder's no-double equity by `4 / (4 - x)` (the value of owning the
+///    doubling rights). We omit that second-order term in v1.5; it would raise
+///    the doubling bar further, and folding it in symmetrically is future work.
+///    Consequence: as `x` rises we are slightly biased toward "double later"
+///    (the live take is more generous, so a double gains the mover less), which
+///    is the correct DIRECTION even without the no-double term.
+///  * `equityDoubleDrop` — a terminal bank (mover cashes `cubeValue` points);
+///    no cube exists after a drop, so it is genuinely `x`-independent.
+///
+/// This is an honest pragmatic approximation (v1.5): faithful to Janowski at
+/// the endpoints and in the money limit, monotone in `x` for the take decision
+/// (proved below), and cheap. A fully-live match model (recursive recube
+/// valuation on both sides) can replace it later without changing this API.
+///
+/// ### The taker's recube credit (the live correction)
+///
+/// After the mover doubles to `2s` (s = `cubeValue`) and the taker takes, the
+/// taker OWNS a cube worth `2s` and may redouble to `4s`. Porting wildbg's
+/// money identity
+///
+/// ```
+/// equity_double_take(x) = 2 * E_cubeless - x * q          // cube.rs, gammonless-general
+///                       = E(2s)_dead   - x * q            // 2*E_cubeless == our dead E(2s)
+/// ```
+///
+/// (where `q = P(mover loses)`; derived from `equity_opponent_owns =
+/// E_cubeless - 0.5 * x * q`, doubled) into MATCH-equity space, we keep the
+/// dead value `E(2s)` and subtract a live correction sized by the recube's
+/// leverage measured through the MET:
+///
+/// ```
+/// recubeSwing = eqAfter(a, b - 2s) - eqAfter(a, b - 4s)   // >= 0 always
+/// E_live_take = E(2s) - 0.5 * q * recubeSwing
+/// equityDoubleTake(x) = (1 - x) * E(2s) + x * E_live_take
+///                     = E(2s) - x * 0.5 * q * recubeSwing
+/// ```
+///
+///  * `eqAfter(a, b - 2s)` is the mover's match equity when the TAKER wins the
+///    doubled game (banks `2s`); `eqAfter(a, b - 4s)` when the taker instead
+///    redoubles to `4s` and wins (banks `4s`). Their difference is the extra
+///    the mover loses if the cube turns again on the taker's win — i.e. the
+///    per-game value of the taker's recube leverage, measured in MET points.
+///  * The `0.5` is Janowski's efficient-cube coefficient (half a cube-jump of
+///    realized leverage). Multiplying by `q` (the taker's cubeless win
+///    probability) matches the money identity `- x * q` term exactly: with a
+///    flat (long-match, locally linear) MET, `recubeSwing` -> two stake points
+///    of slope and `0.5 * 2 = 1`, so `E_live_take -> 2*E_cubeless - q`,
+///    reproducing cube.rs. This is why `x = 0` is the dead model and the money
+///    limit is Janowski's.
+///  * `recubeSwing >= 0` because `eqAfter` is non-decreasing in the opponent's
+///    away score (opponent further away is better for the mover) and
+///    `b - 4s <= b - 2s`. Hence `E_live_take <= E(2s)`: cube ownership never
+///    HURTS the taker. This gives the monotonicity we need (see Decision).
+///  * When the taker already wins the MATCH by banking `2s` (`b - 2s <= 0`,
+///    e.g. 2-away/2-away with s = 1), both `eqAfter` terms are 0, so
+///    `recubeSwing == 0` and the live and dead values COINCIDE: the recube is
+///    worthless because the `2s` game already decides the match. The advisor is
+///    then fully `x`-independent there (asserted by a test).
 ///
 /// ### Value function over scores: [_matchEquityAfter]
 ///
@@ -115,20 +192,30 @@ class MatchCubeAdvice {
 ///
 /// ### Decision
 ///
-///  * `equityNoDouble = E(cubeValue)` — play on at the current stake.
-///  * `equityDoubleTake = E(2 * cubeValue)` — cube turned and taken (dead).
+///  * `equityNoDouble = E(cubeValue)` — play on at the current stake
+///    (`x`-independent; see scope note above).
+///  * `equityDoubleTake = E(2*cubeValue) - x*0.5*q*recubeSwing` — cube turned
+///    and taken, with the taker's cube-life recube credit (see above). At
+///    `x = 0` this is the dead `E(2*cubeValue)`.
 ///  * `equityDoubleDrop = eqAfter(a - cubeValue, b)` — opponent drops, mover
-///    banks `cubeValue` points.
+///    banks `cubeValue` points (`x`-independent).
 ///  * After a double the OPPONENT picks the option worse for the mover, so the
 ///    mover's post-double equity is `min(equityDoubleTake, equityDoubleDrop)`.
 ///  * `shouldDouble` iff that minimum STRICTLY exceeds `equityNoDouble`. Strict
 ///    `>` means a double that cannot gain (ties, e.g. an already-certain win)
-///    is not recommended; no epsilon is used, since in a dead-cube model any
-///    genuine positive gain is a correct double.
+///    is not recommended; no epsilon is used.
 ///  * `shouldTake` (opponent's view) iff `equityDoubleTake <= equityDoubleDrop`
 ///    — taking yields the mover no more than dropping does, i.e. taking is at
 ///    least as good for the opponent. Equality is the take point; we take
 ///    there by convention.
+///
+/// **Monotonicity of the take point in `x` (why cube life only widens takes).**
+/// `equityDoubleTake` is non-increasing in `x` (the correction `x*0.5*q*
+/// recubeSwing` is `>= 0` and grows with `x`), while `equityDoubleDrop` is
+/// `x`-independent. So raising `x` can only turn a drop into a take, never the
+/// reverse: the take threshold — the highest mover win probability at which the
+/// taker still takes — is NON-DECREASING in `x`, moving from the dead take
+/// point toward the (more generous) live one. A grid test pins this.
 ///
 /// We deliberately do NOT expose scalar take-point / double-point WIN
 /// probabilities: with gammons on the table those thresholds are not
@@ -170,15 +257,21 @@ class MatchCubeAdvisor {
   /// Doubling is illegal in the Crawford game itself; the advisor does not
   /// enforce that — callers must not ask for advice during the Crawford game.
   ///
+  /// [cubeLife] is Janowski's cube-efficiency `x` in `[0, 1]`: `0` is a dead
+  /// cube (the regression-anchor v1 arithmetic), `1` a fully live cube, `0.7`
+  /// the default. See the class doc for the model.
+  ///
   /// Throws [ArgumentError] if [moverAway], [opponentAway] or [cubeValue] is
-  /// below 1. [cubeValue] is not required to be a power of two; the caller is
-  /// responsible for passing the real cube value.
+  /// below 1, or if [cubeLife] is outside `[0, 1]`. [cubeValue] is not required
+  /// to be a power of two; the caller is responsible for passing the real cube
+  /// value.
   MatchCubeAdvice advise({
     required Probabilities probs,
     required int moverAway,
     required int opponentAway,
     required int cubeValue,
     bool crawfordPlayed = false,
+    double cubeLife = 0.7,
   }) {
     if (moverAway < 1) {
       throw ArgumentError.value(moverAway, 'moverAway', 'must be >= 1');
@@ -188,6 +281,9 @@ class MatchCubeAdvisor {
     }
     if (cubeValue < 1) {
       throw ArgumentError.value(cubeValue, 'cubeValue', 'must be >= 1');
+    }
+    if (cubeLife < 0 || cubeLife > 1 || cubeLife.isNaN) {
+      throw ArgumentError.value(cubeLife, 'cubeLife', 'must be in [0, 1]');
     }
 
     // Cumulative -> exclusive outcome buckets, mover's perspective.
@@ -221,7 +317,28 @@ class MatchCubeAdvisor {
                     moverAway, opponentAway - 3 * stake, crawfordPlayed);
 
     final equityNoDouble = equityAtStake(cubeValue);
-    final equityDoubleTake = equityAtStake(2 * cubeValue);
+
+    // Dead doubled-take equity: play on at twice the stake, cube dead. This is
+    // the regression-anchor value (v1), and Janowski's `2 * E_cubeless`.
+    final deadDoubleTake = equityAtStake(2 * cubeValue);
+
+    // Cube-life recube credit for the TAKER (see the class doc). The taker owns
+    // a cube worth 2*cubeValue and may redouble to 4*cubeValue. The leverage is
+    // the MET swing between the taker winning at 2s (banks 2s) and at 4s (banks
+    // 4s); `q` is the taker's cubeless win probability. Both terms use the
+    // loss-side score transition, so `recubeSwing >= 0` and the correction only
+    // lowers the mover's equity (never below the dead value).
+    final q = 1.0 - win; // P(mover loses) == taker's cubeless win probability
+    final recubeWinAt2 = _matchEquityAfter(
+        moverAway, opponentAway - 2 * cubeValue, crawfordPlayed);
+    final recubeWinAt4 = _matchEquityAfter(
+        moverAway, opponentAway - 4 * cubeValue, crawfordPlayed);
+    final recubeSwing = recubeWinAt2 - recubeWinAt4; // >= 0
+    // liveDoubleTake = deadDoubleTake - 0.5 * q * recubeSwing; blended by x:
+    //   equityDoubleTake = (1 - x)*dead + x*live = dead - x*0.5*q*recubeSwing.
+    final equityDoubleTake =
+        deadDoubleTake - cubeLife * 0.5 * q * recubeSwing;
+
     final equityDoubleDrop =
         _matchEquityAfter(moverAway - cubeValue, opponentAway, crawfordPlayed);
 
