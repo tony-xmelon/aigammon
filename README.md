@@ -12,11 +12,20 @@ engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
   randomness.
 - **Hot-seat** — two humans on the same device, with a pass-device prompt
   between turns.
-- **Match play** to N points with the **doubling cube** (Janowski cube advice
-  from the engine), gammon/backgammon scoring, and the **Crawford** rule.
+- **Match play** to N points with the **doubling cube**, gammon/backgammon
+  scoring, and the **Crawford** rule.
+- **Tutor mode** — a read-only coaching overlay during play: live **hints**
+  (ranked candidate moves), per-move **marks** (best / good / dubious / error /
+  blunder) with the **equity loss** versus the engine's best move, and
+  **match-aware cube advice** that respects the score via a match-equity table
+  (MET) and a Janowski cubeful-equity advisor rather than money-game odds.
+- **Match history + post-game analysis** — finished matches are saved and can be
+  replayed move by move; a background pass replays the event log through the
+  engine to flag **blunders** and summarise cube/checker errors.
+- **Local persistence** — matches and their event logs are stored on-device with
+  **drift/SQLite**; cached analysis lives alongside them.
 
-**Coming next:** tutor mode (per-move equity-loss analysis and hints) and online
-play over Firebase land in Plans 4 and 5 — see
+**Coming next:** online play over Firebase lands in Plan 5 — see
 [`docs/superpowers/plans/`](docs/superpowers/plans/) and the
 [architecture design](docs/superpowers/specs/2026-07-24-aigammon-architecture-design.md).
 
@@ -24,9 +33,9 @@ play over Firebase land in Plans 4 and 5 — see
 
 | Path | What it is |
 |---|---|
-| [`app/`](app/) | The Flutter app — UI (`CustomPaint` board), Riverpod state, `GameController`, screens (home, new match, game). |
-| [`packages/backgammon_core`](packages/backgammon_core) | Pure Dart rules engine — zero dependencies. `BoardState`, `GameState`, `MatchState`, move generation, event-sourced game log, gnubg Position IDs. **107 tests.** |
-| [`packages/engine_bindings`](packages/engine_bindings) | `dart:ffi` bindings + an isolate-hosted `EngineService` over the native library: move ranking, evaluation, difficulty sampling, Janowski cube advice. |
+| [`app/`](app/) | The Flutter app — UI (`CustomPaint` board), Riverpod state, `GameController`, screens (home, new match, game, history, post-game analysis), the tutor overlay (`app/lib/tutor/`), and drift persistence (`app/lib/data/`). |
+| [`packages/backgammon_core`](packages/backgammon_core) | Pure Dart rules engine — zero dependencies. `BoardState`, `GameState`, `MatchState`, move generation, event-sourced game log, gnubg Position IDs. |
+| [`packages/engine_bindings`](packages/engine_bindings) | `dart:ffi` bindings + an isolate-hosted `EngineService` over the native library: move ranking, evaluation, difficulty sampling, and match-aware cube advice (`MatchCubeAdvisor` — Janowski cubeful equities over a Kazaross-XG2 match-equity table). |
 | [`native/wildbg`](native/wildbg) | The vendored [wildbg](https://github.com/carsten-wenderdel/wildbg) engine — a **git submodule**, never edited directly. |
 | [`native/engine_shim`](native/engine_shim) | Thin C shim (`cdylib`, `aigammon_engine`) — a verbatim copy of wildbg's `wildbg-c` crate plus a `wildbg_new_with_path` constructor that loads nets from disk at runtime. Windows/Android/iOS build scripts live here. |
 | [`native/wildbg-nets`](native/wildbg-nets) | The **production** neural nets (`contact.onnx`, `race.onnx`) from wildbg's `nets` branch. The submodule itself ships only weak demo nets. |
@@ -72,7 +81,7 @@ This runs `cargo build --release` in the shim crate and stages
 ### 4. Run the tests
 
 ```powershell
-# Pure Dart rules (107 tests)
+# Pure Dart rules
 cd packages/backgammon_core; dart pub get; dart test
 
 # FFI bindings — unit suite (no native lib) then the engine profile (real DLL + nets)
