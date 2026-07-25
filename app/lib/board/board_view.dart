@@ -272,6 +272,9 @@ class BoardView extends StatefulWidget {
     this.whiteDice,
     this.blackDice,
     this.diceOverride,
+    this.highlightedSources = const {},
+    this.highlightedDestinations = const {},
+    this.highlightMovingPlayer,
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -346,6 +349,23 @@ class BoardView extends StatefulWidget {
   /// ONLY to the roller ([state]'s turn); the other pair stays static with its
   /// persisted roll. Never affects move entry or state.
   final Dice? diceOverride;
+
+  /// Static SOURCE highlights to paint (point index 0..23, or [CheckerMove.bar])
+  /// — a subtle ring on each location's top checker. Used by the NON-interactive
+  /// replay/analysis board to draw a recorded move's origins over the pre-move
+  /// position; ignored in the interactive moving phase, where the live builder
+  /// owns the highlight layer. See [BoardPainter.highlightedSources].
+  final Set<int> highlightedSources;
+
+  /// Static DESTINATION highlights to paint (point index 0..23, or
+  /// [CheckerMove.off]) — a triangle/tray fill on each target. The replay board's
+  /// recorded-move landings; ignored while interactive (see [highlightedSources]).
+  final Set<int> highlightedDestinations;
+
+  /// The side a static overlay's move belongs to, so a bar source or an `off`
+  /// destination resolves to the correct half. Required for those to render;
+  /// ignored while interactive (the builder supplies the moving player).
+  final Player? highlightMovingPlayer;
 
   @override
   State<BoardView> createState() => _BoardViewState();
@@ -1091,19 +1111,28 @@ class _BoardViewState extends State<BoardView>
               blackDice: blackDice,
               diceMover: turn,
               cube: widget.state.cube,
-              highlightedSources: (showHl && builder != null && selected == null)
-                  ? builder.selectableSources
-                  : const {},
-              highlightedDestinations:
-                  (showHl && builder != null && selected != null)
+              // When a builder owns the board (interactive moving phase) the
+              // live selection drives the highlights; otherwise the static
+              // overlay fields (the replay/analysis move highlights) apply.
+              highlightedSources: builder == null
+                  ? widget.highlightedSources
+                  : (showHl && selected == null)
+                      ? builder.selectableSources
+                      : const {},
+              highlightedDestinations: builder == null
+                  ? widget.highlightedDestinations
+                  : (showHl && selected != null)
                       ? builder.destinationsFor(selected)
                       : const {},
               combinedDestinations:
                   (showHl && builder != null && selected != null)
                       ? _chainedDestinations(builder, selected)
                       : const {},
-              selectedCheckerLocation: showHl ? selected : null,
-              movingPlayer: builder != null ? widget.state.turn : null,
+              selectedCheckerLocation:
+                  builder != null && showHl ? selected : null,
+              movingPlayer: builder != null
+                  ? widget.state.turn
+                  : widget.highlightMovingPlayer,
             );
           }
 

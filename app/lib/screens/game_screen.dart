@@ -442,31 +442,7 @@ class _GameScreenState extends State<GameScreen> {
   /// pair (they play the opening dice); each later [RollEvent] overwrites its
   /// roller's pair. Both are `null` before a player's first roll (a blank dimmed
   /// die), and reset automatically when a new game replaces the event log.
-  (Dice?, Dice?) _persistentDice() {
-    Dice? white;
-    Dice? black;
-    for (final event in _c.game.events) {
-      switch (event) {
-        case OpeningRollEvent():
-          final d = Dice(event.whiteDie, event.blackDie);
-          if (event.firstPlayer == Player.white) {
-            white = d;
-          } else {
-            black = d;
-          }
-        case RollEvent():
-          final d = Dice(event.die1, event.die2);
-          if (event.player == Player.white) {
-            white = d;
-          } else {
-            black = d;
-          }
-        default:
-          break;
-      }
-    }
-    return (white, black);
-  }
+  (Dice?, Dice?) _persistentDice() => persistentDice(_c.game.events);
 
   /// A deterministic dice pair for beat [frame], derived from the settled
   /// [realRoll]. Both faces are offset off the real roll (die1 always differs

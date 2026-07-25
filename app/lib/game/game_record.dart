@@ -91,6 +91,43 @@ List<RecordLine> buildGameRecord(List<GameEvent> events) {
   return lines;
 }
 
+/// Folds [events] up to (and including) index [through] and returns each
+/// player's most recent roll — White's and Black's persistent dice pairs as of
+/// that point — as `(white, black)`. A pair is `null` when that player has not
+/// rolled yet by [through].
+///
+/// Rolls come from the [OpeningRollEvent] (both opening dice belong to the first
+/// mover, who plays them as their opening move) and each [RollEvent]. Events
+/// past [through] are ignored; pass `events.length - 1` (the default) to fold
+/// the whole log. This is the same fold the live game screen shows on the board,
+/// shared so the replay screen reproduces the historical dice at any step.
+(Dice?, Dice?) persistentDice(List<GameEvent> events, {int? through}) {
+  Dice? white;
+  Dice? black;
+  final end = through ?? events.length - 1;
+  for (var i = 0; i <= end && i < events.length; i++) {
+    switch (events[i]) {
+      case OpeningRollEvent(:final whiteDie, :final blackDie, :final firstPlayer):
+        final d = Dice(whiteDie, blackDie);
+        if (firstPlayer == Player.white) {
+          white = d;
+        } else {
+          black = d;
+        }
+      case RollEvent(:final player, :final die1, :final die2):
+        final d = Dice(die1, die2);
+        if (player == Player.white) {
+          white = d;
+        } else {
+          black = d;
+        }
+      default:
+        break;
+    }
+  }
+  return (white, black);
+}
+
 String _p(Player p) => p == Player.white ? 'W' : 'B';
 
 String _resign(ResignValue v) => switch (v) {
