@@ -205,7 +205,7 @@ class BoardInteractionOptions {
 /// the board falls back to the clean base position. External application is a
 /// no-op unless [interactive] and a builder exists (the moving phase).
 ///
-/// ## Move animation ([lastMove] / [animationDuration])
+/// ## Move animation ([lastMove] / [hopDuration] / [interHopDuration])
 ///
 /// When [lastMove] fires a non-null [MoveEvent], the view plays a purely
 /// cosmetic animation: the moved checker travels hop-by-hop from source to
@@ -217,11 +217,24 @@ class BoardInteractionOptions {
 /// local player's own just-confirmed move and the opponent's/AI's moves are
 /// animated (simpler, and it reads fine).
 ///
-/// Timing: [animationDuration] per hop (default 150ms), total capped at 600ms,
-/// [Curves.easeInOut]. Animation is DISABLED — the post-move board snaps in
-/// immediately — when [animationDuration] is [Duration.zero] or the ambient
-/// [MediaQuery.disableAnimations] is set. Input is never blocked: taps flow to
-/// the current (post-move) state; the animation is decoration only.
+/// Timing: [hopDuration] per hop with an [interHopDuration] stationary pause
+/// BETWEEN hops, so the controller's total is `n·hop + (n-1)·interHop` with NO
+/// cap (a long multi-hop play travels fully rather than being squeezed into a
+/// fixed budget), [Curves.easeInOut] per hop. Animation is DISABLED — the
+/// post-move board snaps in immediately — when [hopDuration] is [Duration.zero]
+/// or the ambient [MediaQuery.disableAnimations] is set. Input is never blocked:
+/// taps flow to the current (post-move) state; the animation is decoration only.
+///
+/// ## Holding the move animation ([holdMoveAnimation])
+///
+/// When an opponent rolls, the game screen first plays a dice-roll beat (see
+/// [GameScreen]) and a settle pause; the moved checker must not start travelling
+/// until the dice are readable. The screen exposes that gate as a
+/// [ValueListenable<bool>] passed as [holdMoveAnimation]: while it is `true` a
+/// fired [lastMove] is QUEUED rather than started, and the queued move begins as
+/// soon as it flips `false`. Only the LATEST queued move is kept (in practice a
+/// turn produces one move). When [holdMoveAnimation] is null or already `false`
+/// (e.g. the local player's own move — no beat), the animation starts at once.
 class BoardView extends StatefulWidget {
   const BoardView({
     super.key,
@@ -232,8 +245,10 @@ class BoardView extends StatefulWidget {
     this.theme, // defaults by brightness
     this.externalMove,
     this.lastMove,
+    this.holdMoveAnimation,
     this.entryControl,
-    this.animationDuration = const Duration(milliseconds: 150),
+    this.hopDuration = const Duration(milliseconds: 150),
+    this.interHopDuration = Duration.zero,
     this.interactionOptions = const BoardInteractionOptions(),
     this.diceOverride,
   });
@@ -262,6 +277,13 @@ class BoardView extends StatefulWidget {
   /// the class doc for timing and the pre-move-state capture contract.
   final ValueListenable<MoveEvent?>? lastMove;
 
+  /// Gate that HOLDS the move animation while `true`: a [lastMove] fired during
+  /// the hold is queued (latest wins) and started when this flips `false`. Used
+  /// by the game screen to keep the opponent's checker from moving until the
+  /// dice-roll beat + settle pause finishes. Null (or already `false`) means the
+  /// animation starts immediately. See the class doc.
+  final ValueListenable<bool>? holdMoveAnimation;
+
   /// Optional external bridge for the move-entry controls. When provided, the
   /// board mirrors its live builder affordances onto it and honours its
   /// [BoardEntryController.undo] / [BoardEntryController.confirm] /
@@ -269,10 +291,15 @@ class BoardView extends StatefulWidget {
   /// buttons in its own layout instead of on the board.
   final BoardEntryController? entryControl;
 
-  /// Duration of each hop's travel (default 150ms; total capped at 600ms).
-  /// [Duration.zero] disables animation entirely (the post-move board snaps in),
-  /// as does an ambient [MediaQuery.disableAnimations].
-  final Duration animationDuration;
+  /// Duration of each hop's travel (default 150ms). [Duration.zero] disables
+  /// animation entirely (the post-move board snaps in), as does an ambient
+  /// [MediaQuery.disableAnimations].
+  final Duration hopDuration;
+
+  /// Stationary pause inserted BETWEEN consecutive hops of a move (default
+  /// zero). The controller's total duration is `n·hop + (n-1)·interHop`; there
+  /// is no cap. See the class doc.
+  final Duration interHopDuration;
 
   /// Palette override. Defaults to [BoardTheme.dark]/[BoardTheme.light] by the
   /// ambient [Theme] brightness.
@@ -330,6 +357,10 @@ class _BoardViewState extends State<BoardView>
   /// The move currently animating, or `null` when idle.
   _BoardAnimation? _animation;
 
+  /// A move captured while [BoardView.holdMoveAnimation] was `true`, waiting for
+  /// the hold to release before it starts. Only the LATEST is kept.
+  _BoardAnimation? _pendingAnimation;
+
   /// Monotonic guard so a superseded animation's completion callback (fired when
   /// a new move restarts the controller) does not clear a fresh animation.
   int _animSeq = 0;
@@ -350,6 +381,7 @@ class _BoardViewState extends State<BoardView>
     _resetBuilder();
     widget.externalMove?.addListener(_applyExternalMove);
     widget.lastMove?.addListener(_onLastMove);
+    widget.holdMoveAnimation?.addListener(_onHoldChanged);
     _bindEntryControl(widget.entryControl);
   }
 
@@ -372,6 +404,10 @@ class _BoardViewState extends State<BoardView>
       oldWidget.lastMove?.removeListener(_onLastMove);
       widget.lastMove?.addListener(_onLastMove);
     }
+    if (!identical(oldWidget.holdMoveAnimation, widget.holdMoveAnimation)) {
+      oldWidget.holdMoveAnimation?.removeListener(_onHoldChanged);
+      widget.holdMoveAnimation?.addListener(_onHoldChanged);
+    }
     if (!identical(oldWidget.entryControl, widget.entryControl)) {
       oldWidget.entryControl?._unbind();
       _bindEntryControl(widget.entryControl);
@@ -384,6 +420,7 @@ class _BoardViewState extends State<BoardView>
   void dispose() {
     widget.externalMove?.removeListener(_applyExternalMove);
     widget.lastMove?.removeListener(_onLastMove);
+    widget.holdMoveAnimation?.removeListener(_onHoldChanged);
     widget.entryControl?._unbind();
     _animController.dispose();
     super.dispose();
@@ -439,15 +476,16 @@ class _BoardViewState extends State<BoardView>
   /// Whether move animation is currently enabled: a positive per-hop duration
   /// and no ambient reduce-motion setting.
   bool get _animationsEnabled {
-    if (widget.animationDuration <= Duration.zero) return false;
+    if (widget.hopDuration <= Duration.zero) return false;
     final mq = MediaQuery.maybeOf(context);
     return mq == null || !mq.disableAnimations;
   }
 
   /// Reacts to a fired [BoardView.lastMove]: captures the (still) pre-move board
   /// and plays the hop-by-hop travel. Skipped when animations are disabled or
-  /// the move is an empty pass. A rapid follow-up move restarts the controller;
-  /// the old completion callback is fenced out by [_animSeq].
+  /// the move is an empty pass. When [BoardView.holdMoveAnimation] is `true` the
+  /// captured move is QUEUED (latest wins) and started only when the hold
+  /// releases (see [_onHoldChanged]); otherwise it starts immediately.
   void _onLastMove() {
     final event = widget.lastMove?.value;
     if (event == null || !_animationsEnabled) return;
@@ -456,11 +494,33 @@ class _BoardViewState extends State<BoardView>
     // The controller fires this BEFORE it notifies, so [widget.state] is still
     // the PRE-move state here — capture its board as the animation base.
     final anim = _BoardAnimation(widget.state.board, hops, event.player);
+    if (widget.holdMoveAnimation?.value ?? false) {
+      _pendingAnimation = anim; // held: queue it, latest wins
+      return;
+    }
+    _startAnimation(anim);
+  }
+
+  /// Reacts to [BoardView.holdMoveAnimation] flipping: when it releases
+  /// (`false`) and a move was queued during the hold, start it now.
+  void _onHoldChanged() {
+    final held = widget.holdMoveAnimation?.value ?? false;
+    if (held) return;
+    final pending = _pendingAnimation;
+    if (pending == null) return;
+    _pendingAnimation = null;
+    _startAnimation(pending);
+  }
+
+  /// Runs the controller for [anim]: repaints hop-by-hop, then clears the
+  /// animation on completion. A rapid follow-up restarts the controller; the old
+  /// completion callback is fenced out by [_animSeq].
+  void _startAnimation(_BoardAnimation anim) {
     final seq = ++_animSeq;
     setState(() => _animation = anim);
     _animController
       ..stop()
-      ..duration = _totalDuration(hops.length)
+      ..duration = _totalDuration(anim.hops.length)
       ..value = 0
       ..forward().whenComplete(() {
         if (!mounted || seq != _animSeq) return;
@@ -468,13 +528,12 @@ class _BoardViewState extends State<BoardView>
       });
   }
 
-  /// Total animation time: per-hop [BoardView.animationDuration] × hop count,
-  /// capped at 600ms so long multi-hop plays stay snappy.
-  Duration _totalDuration(int hopCount) {
-    const cap = Duration(milliseconds: 600);
-    final total = widget.animationDuration * hopCount;
-    return total > cap ? cap : total;
-  }
+  /// Total animation time: `n·hop + (n-1)·interHop` (per-hop travel plus the
+  /// stationary pauses between hops). No cap — a long multi-hop play travels in
+  /// full.
+  Duration _totalDuration(int hopCount) =>
+      widget.hopDuration * hopCount +
+      widget.interHopDuration * (hopCount - 1);
 
   /// Stages the current [BoardView.externalMove] value into the builder: resets
   /// entry and re-enters the move's hops in canonical order, leaving it complete
@@ -528,9 +587,26 @@ class _BoardViewState extends State<BoardView>
     final anim = _animation;
     if (anim == null) return null;
     final n = anim.hops.length;
-    final raw = _animController.value * n;
-    final hopIndex = raw.floor().clamp(0, n - 1);
-    final localT = (raw - hopIndex).clamp(0.0, 1.0);
+    // Map the controller's 0→1 progress onto a timeline of hop-travel segments
+    // separated by stationary inter-hop pauses: each hop occupies [hop] of
+    // travel, then [interHop] of rest (checker sitting at the landing) before
+    // the next hop. During a pause the local progress clamps to 1.0 so the
+    // overlay is stationary at the hop's destination.
+    final hopUs = widget.hopDuration.inMicroseconds;
+    final interUs = widget.interHopDuration.inMicroseconds;
+    final cycleUs = hopUs + interUs;
+    final totalUs = _totalDuration(n).inMicroseconds;
+    final elapsedUs = _animController.value * totalUs;
+    final int hopIndex;
+    final double localT;
+    if (cycleUs <= 0) {
+      hopIndex = n - 1;
+      localT = 1.0;
+    } else {
+      hopIndex = (elapsedUs / cycleUs).floor().clamp(0, n - 1);
+      final withinUs = elapsedUs - hopIndex * cycleUs;
+      localT = hopUs <= 0 ? 1.0 : (withinUs / hopUs).clamp(0.0, 1.0);
+    }
     final eased = Curves.easeInOut.transform(localT);
     final isWhite = anim.player == Player.white;
 
@@ -774,6 +850,7 @@ class _BoardViewState extends State<BoardView>
         _animController.stop();
         _animation = null;
       }
+      _pendingAnimation = null; // drop any queued (held) move too
       _dragSource = source;
       _dragPointer = localPosition;
       _selectedSource = null;
@@ -881,6 +958,12 @@ class _BoardViewState extends State<BoardView>
 
           // A live drag suspends animation, so the two are mutually exclusive.
           final frame = dragging ? null : _animFrame(geometry);
+          // A move queued while [BoardView.holdMoveAnimation] is `true` has not
+          // started travelling yet: freeze the board at the captured PRE-move
+          // position (no overlay) so the moved checker sits at its source until
+          // the hold releases. Only when no live/drag animation is in play.
+          final held =
+              (!dragging && _animation == null) ? _pendingAnimation : null;
           final BoardPainter painter;
           if (dragging) {
             // Drag: paint the preview board, hide the lifted source checker, and
@@ -919,7 +1002,7 @@ class _BoardViewState extends State<BoardView>
             );
           } else {
             painter = BoardPainter(
-              board: _previewBoard(),
+              board: held?.preBoard ?? _previewBoard(),
               geometry: geometry,
               theme: theme,
               dice: displayDice,

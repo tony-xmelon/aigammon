@@ -26,7 +26,8 @@ void main() {
     expect(settings.defaultMatchLength, 5);
     expect(settings.defaultDifficulty, Difficulty.medium);
     expect(settings.tutorOverride, isNull);
-    expect(settings.hopDuration, const Duration(milliseconds: 150));
+    expect(settings.timings, AnimationTimings.normal);
+    expect(settings.timings.hop, const Duration(milliseconds: 350));
   });
 
   test('save + load round-trips every field (incl. null tutor override)',

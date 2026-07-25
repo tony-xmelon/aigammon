@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../board/board_theme.dart';
 import '../board/board_view.dart';
+import '../data/app_settings.dart';
 import '../game/game_record.dart';
 import '../game/match_controller.dart';
 import '../game/player_agent.dart';
@@ -57,7 +58,7 @@ class GameScreen extends StatefulWidget {
     required this.controller,
     this.orientation = BoardOrientationMode.fixedWhite,
     this.tutor,
-    this.animationDuration = Duration.zero,
+    this.timings = AnimationTimings.off,
     this.interactionOptions = const BoardInteractionOptions(),
     this.showScoring = true,
     this.persistedMatchId,
@@ -74,11 +75,12 @@ class GameScreen extends StatefulWidget {
   /// to per-game [AnalysisScreen]).
   final Future<int>? persistedMatchId;
 
-  /// Per-hop checker-movement animation duration passed to the [BoardView].
-  /// Defaults to [Duration.zero] (animation off) so widget tests are unaffected;
-  /// production call sites pass the user's chosen speed (`AnimationSpeed`, via
-  /// the settings-backed `AppSettings.hopDuration`).
-  final Duration animationDuration;
+  /// The animation pacing (checker hop/inter-hop travel + the dice-roll beat's
+  /// tumble/settle timings) passed to the [BoardView] and used by this screen's
+  /// opponent dice-roll beat. Defaults to [AnimationTimings.off] (everything
+  /// disabled) so widget tests are unaffected; production call sites pass the
+  /// user's chosen speed via the settings-backed `AppSettings.timings`.
+  final AnimationTimings timings;
 
   /// Board interaction toggles (highlights / drag / combined taps) forwarded to
   /// the [BoardView]. Production call sites build this from the persisted
@@ -223,6 +225,13 @@ class _GameScreenState extends State<GameScreen> {
   /// advance a fresher one.
   int _rollBeatSeq = 0;
 
+  /// Whether the opponent's dice are currently being PRESENTED — true from the
+  /// moment a roll beat begins until its tumble frames AND the settle pause have
+  /// elapsed. Handed to the [BoardView] as `holdMoveAnimation` so the opponent's
+  /// move animation is deferred until the dice are readable. Never true for the
+  /// local player's own (instant) roll, since no beat runs.
+  final ValueNotifier<bool> _dicePresenting = ValueNotifier<bool>(false);
+
   @override
   void initState() {
     super.initState();
@@ -237,6 +246,7 @@ class _GameScreenState extends State<GameScreen> {
   void dispose() {
     _rollBeatTimer?.cancel();
     _observable.removeListener(_onChange);
+    _dicePresenting.dispose();
     _stagedMove.dispose();
     _recordScroll.dispose();
     _entryControl.dispose();
@@ -269,11 +279,10 @@ class _GameScreenState extends State<GameScreen> {
   /// skipped, as is every non-roll event. A shorter event list means a new game
   /// began: reset the cursor and cancel any live beat.
   ///
-  /// The beat is gated on [GameScreen.animationDuration]: with it at
-  /// [Duration.zero] (animation off — the widget-test default) no beat ever runs
-  /// and the board shows the real roll immediately. Called from [_onChange]
-  /// before its [setState], so the first override frame it sets is painted by
-  /// that rebuild.
+  /// The beat is gated on [GameScreen.timings]: with the [AnimationTimings.off]
+  /// preset (animation off — the widget-test default) no beat ever runs and the
+  /// board shows the real roll immediately. Called from [_onChange] before its
+  /// [setState], so the first override frame it sets is painted by that rebuild.
   void _syncRollBeat() {
     final events = _c.game.events;
     final len = events.length;
@@ -292,27 +301,40 @@ class _GameScreenState extends State<GameScreen> {
     _lastRollEventCount = len;
   }
 
-  /// Begins (or restarts) the roll beat toward [realRoll]: five cycling frames
-  /// ~80ms apart (~400ms total) of deterministic pseudo-random faces, after
-  /// which the override clears and the real roll shows through [GameState.dice].
-  /// The faces are seeded off [realRoll] so the sequence is stable under test,
-  /// and each cycling face differs from the real roll (the dice visibly tumble).
-  /// No-op when animation is off. The first frame is set synchronously; the
-  /// [_onChange] `setState` that follows paints it.
+  /// Begins (or restarts) the roll beat toward [realRoll]:
+  /// [AnimationTimings.diceFrames] cycling frames [AnimationTimings.diceFrame]
+  /// apart of deterministic pseudo-random faces, after which the override clears
+  /// and the real roll shows through [GameState.dice]. The faces are seeded off
+  /// [realRoll] so the sequence is stable under test, and each cycling face
+  /// differs from the real roll (the dice visibly tumble). No-op when animation
+  /// is off. The first frame is set synchronously; the [_onChange] `setState`
+  /// that follows paints it.
+  ///
+  /// While the beat runs — AND for [AnimationTimings.diceSettlePause] after the
+  /// dice settle — [_dicePresenting] is held `true` so the opponent's move
+  /// animation (queued in the [BoardView]) does not start until the dice are
+  /// readable.
   void _startRollBeat(Dice realRoll) {
-    if (widget.animationDuration <= Duration.zero) return;
+    if (!widget.timings.enabled) return;
     _cancelRollBeat();
     final seq = ++_rollBeatSeq;
-    const frameCount = 5;
-    const frameDuration = Duration(milliseconds: 80);
+    final frameCount = widget.timings.diceFrames;
+    final frameDuration = widget.timings.diceFrame;
+    _dicePresenting.value = true; // hold the move animation until dice settle
     _rollBeatDice = _beatFace(realRoll, 0);
     var frame = 0;
     void nextFrame() {
       if (!mounted || seq != _rollBeatSeq) return;
       frame++;
       if (frame >= frameCount) {
-        _rollBeatTimer = null;
-        setState(() => _rollBeatDice = null); // settle to the real roll
+        // Dice settle to the real roll now; hold the move animation for one more
+        // settle pause so the roll is legible before the checker travels.
+        setState(() => _rollBeatDice = null);
+        _rollBeatTimer = Timer(widget.timings.diceSettlePause, () {
+          if (!mounted || seq != _rollBeatSeq) return;
+          _rollBeatTimer = null;
+          _dicePresenting.value = false; // release: queued move animation begins
+        });
         return;
       }
       _rollBeatTimer = Timer(frameDuration, nextFrame);
@@ -323,13 +345,14 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   /// Cancels any live beat and clears the override (fencing pending callbacks by
-  /// bumping [_rollBeatSeq]). Does not call [setState]; callers are already in a
-  /// rebuild path (or disposing).
+  /// bumping [_rollBeatSeq]), and releases the dice-presenting hold. Does not
+  /// call [setState]; callers are already in a rebuild path (or disposing).
   void _cancelRollBeat() {
     _rollBeatTimer?.cancel();
     _rollBeatTimer = null;
     _rollBeatSeq++;
     _rollBeatDice = null;
+    _dicePresenting.value = false;
   }
 
   /// A deterministic dice pair for beat [frame], derived from the settled
@@ -580,8 +603,10 @@ class _GameScreenState extends State<GameScreen> {
                         whiteAtBottom: whiteAtBottom,
                         externalMove: _stagedMove,
                         lastMove: _c.lastMove,
+                        holdMoveAnimation: _dicePresenting,
                         entryControl: _entryControl,
-                        animationDuration: widget.animationDuration,
+                        hopDuration: widget.timings.hop,
+                        interHopDuration: widget.timings.interHop,
                         interactionOptions: widget.interactionOptions,
                         diceOverride: _rollBeatDice,
                       ),

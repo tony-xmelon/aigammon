@@ -225,7 +225,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           orientation: orientation,
           tutor: tutor,
           persistedMatchId: matchIdFuture,
-          animationDuration: settings.hopDuration,
+          timings: settings.timings,
           interactionOptions: BoardInteractionOptions(
             showHighlights: settings.showHighlights,
             enableDrag: settings.enableDrag,

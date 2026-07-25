@@ -249,18 +249,19 @@ Widget _harnessOriented(GameController c, BoardOrientationMode mode) =>
       home: GameScreen(key: ValueKey(c), controller: c, orientation: mode),
     );
 
-/// A [GameScreen] harness with animation ENABLED (a nonzero per-hop duration),
-/// so the opponent dice-roll beat runs. All other tests use the [Duration.zero]
-/// harnesses above (animation off), where the beat is skipped entirely.
+/// A [GameScreen] harness with animation ENABLED (a nonzero [AnimationTimings]
+/// preset), so the opponent dice-roll beat runs. All other tests use the
+/// [AnimationTimings.off] harnesses above (animation off), where the beat is
+/// skipped entirely.
 Widget _animHarness(
   GameController c, {
-  Duration animationDuration = const Duration(milliseconds: 150),
+  AnimationTimings timings = AnimationTimings.normal,
 }) =>
     MaterialApp(
       home: GameScreen(
         key: ValueKey(c),
         controller: c,
-        animationDuration: animationDuration,
+        timings: timings,
       ),
     );
 
@@ -998,11 +999,14 @@ void main() {
       expect(boardPainterOf(t).dice, isNot(Dice(realRoll.$1, realRoll.$2)),
           reason: 'the roll beat overrides the displayed dice');
 
-      // After the ~400ms beat the override clears and the real roll shows.
-      await t.pump(const Duration(milliseconds: 500));
+      // After the tumble frames (6 × 140ms) the override clears and the real
+      // roll shows. Pump comfortably past the cycling window.
+      await t.pump(const Duration(milliseconds: 1000));
       expect(boardPainterOf(t).dice, Dice(realRoll.$1, realRoll.$2),
           reason: 'the beat settled to the real roll');
 
+      // Let the settle-pause timer fire before teardown so no timer outlives it.
+      await t.pumpAndSettle();
       c.disposeController();
     });
 
@@ -1018,6 +1022,57 @@ void main() {
       expect(boardPainterOf(t).dice, Dice(6, 5));
       expect(boardPainterOf(t).dice, c.state.dice);
 
+      c.disposeController();
+    });
+
+    testWidgets('AI move is HELD through the dice presentation, then plays',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // White (human) wins the opening (6 > 1) and plays; Black (AI, instant)
+      // then rolls AND moves. Black's move event fires WHILE the dice beat is
+      // still presenting, so its travel must be queued (held) until the tumble
+      // frames + settle pause finish (~6×140 + 500ms).
+      final human = LocalHumanAgent();
+      final ai = FakeAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+
+      // Wait until Black has both rolled AND moved (its MoveEvent → lastMove
+      // fired, so the board queued the held travel).
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<MoveEvent>()
+              .any((e) => e.player == Player.black));
+
+      // White's own (immediate) opening-move animation may still be finishing
+      // (up to ~820ms for a 2-hop play at the normal preset); once it clears,
+      // Black's queued move must NOT show any travelling overlay — it is held
+      // for the whole dice presentation (~6×140 + 500ms ≈ 1340ms).
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker == null,
+          maxFrames: 1000);
+      await t.pump(const Duration(milliseconds: 150));
+      expect(boardPainterOf(t).overlayChecker, isNull,
+          reason: 'the opponent move stays held while the dice are presented');
+
+      // After the tumble frames + settle pause the hold releases and the queued
+      // move finally travels — the overlay appears.
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker != null,
+          maxFrames: 2000);
+      expect(boardPainterOf(t).overlayChecker, isNotNull,
+          reason: 'the held move plays once the dice presentation completes');
+
+      await t.pumpAndSettle();
       c.disposeController();
     });
 

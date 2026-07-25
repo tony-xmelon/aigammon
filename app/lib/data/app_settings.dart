@@ -1,23 +1,121 @@
 import 'package:engine_bindings/engine_bindings.dart' show Difficulty;
 import 'package:flutter/material.dart' show ThemeMode;
 
-/// Per-hop checker animation speed. Maps to a [Duration] via [hopDuration].
+/// Checker + dice animation speed. Maps to an [AnimationTimings] preset via
+/// [timings].
 enum AnimationSpeed {
-  /// Animations disabled — checkers snap instantly ([Duration.zero]).
+  /// Animations disabled — checkers snap instantly, dice show the settled roll
+  /// with no tumble ([AnimationTimings.off], all zero).
   off,
 
-  /// The production default: 150ms per hop.
+  /// The production default, tuned to be TRACKABLE: a leisurely per-hop travel
+  /// with a pause between hops, a slow dice tumble, and a settle pause before
+  /// the opponent's move plays ([AnimationTimings.normal]).
   normal,
 
-  /// Snappier: 75ms per hop.
+  /// Snappier across the board for players who find [normal] too slow
+  /// ([AnimationTimings.fast]).
   fast;
 
-  /// The per-hop [Duration] this speed maps to (fed to the board's animation).
-  Duration get hopDuration => switch (this) {
-        AnimationSpeed.off => Duration.zero,
-        AnimationSpeed.normal => const Duration(milliseconds: 150),
-        AnimationSpeed.fast => const Duration(milliseconds: 75),
+  /// The [AnimationTimings] preset this speed maps to (fed to the board + the
+  /// game screen's dice-roll beat).
+  AnimationTimings get timings => switch (this) {
+        AnimationSpeed.off => AnimationTimings.off,
+        AnimationSpeed.normal => AnimationTimings.normal,
+        AnimationSpeed.fast => AnimationTimings.fast,
       };
+}
+
+/// The full set of durations that pace the opponent-move + dice-roll
+/// animations, derived from [AnimationSpeed] via [AnimationSpeed.timings].
+///
+/// Threaded from the persisted settings through [AppSettings.timings] into the
+/// game screen (which owns the dice-roll beat) and the board (which owns the
+/// checker travel). The [normal] preset is deliberately leisurely so a human can
+/// TRACK both the tumbling dice and the travelling checker; there is no total
+/// cap on a multi-hop move (a four-hop double plays out fully rather than being
+/// squeezed into a fixed budget).
+///
+/// Fields:
+/// * [hop] — one checker's travel time for a single hop.
+/// * [interHop] — the stationary pause BETWEEN consecutive hops of a move (the
+///   checker rests at each intermediate landing before continuing).
+/// * [diceFrame] — how long each tumbling dice frame is shown during the beat.
+/// * [diceFrames] — how many tumbling frames the beat cycles through.
+/// * [diceSettlePause] — after the dice settle to the real roll, the pause held
+///   before the opponent's move animation is allowed to begin (so the dice are
+///   readable before the checker moves).
+class AnimationTimings {
+  const AnimationTimings({
+    required this.hop,
+    required this.interHop,
+    required this.diceFrame,
+    required this.diceFrames,
+    required this.diceSettlePause,
+  });
+
+  /// Everything off: checkers snap, dice show the settled roll instantly.
+  static const AnimationTimings off = AnimationTimings(
+    hop: Duration.zero,
+    interHop: Duration.zero,
+    diceFrame: Duration.zero,
+    diceFrames: 0,
+    diceSettlePause: Duration.zero,
+  );
+
+  /// The trackable production default.
+  static const AnimationTimings normal = AnimationTimings(
+    hop: Duration(milliseconds: 350),
+    interHop: Duration(milliseconds: 120),
+    diceFrame: Duration(milliseconds: 140),
+    diceFrames: 6,
+    diceSettlePause: Duration(milliseconds: 500),
+  );
+
+  /// Snappier across the board.
+  static const AnimationTimings fast = AnimationTimings(
+    hop: Duration(milliseconds: 120),
+    interHop: Duration(milliseconds: 40),
+    diceFrame: Duration(milliseconds: 60),
+    diceFrames: 5,
+    diceSettlePause: Duration(milliseconds: 200),
+  );
+
+  /// Per-hop checker travel time.
+  final Duration hop;
+
+  /// Stationary pause between consecutive hops of the same move.
+  final Duration interHop;
+
+  /// Duration each tumbling dice frame is shown during the roll beat.
+  final Duration diceFrame;
+
+  /// Number of tumbling frames cycled during the roll beat.
+  final int diceFrames;
+
+  /// Pause held (after the dice settle) before the opponent's move animates.
+  final Duration diceSettlePause;
+
+  /// Whether any animation runs at all (the [off] preset is fully disabled).
+  bool get enabled => hop > Duration.zero;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AnimationTimings &&
+      other.hop == hop &&
+      other.interHop == interHop &&
+      other.diceFrame == diceFrame &&
+      other.diceFrames == diceFrames &&
+      other.diceSettlePause == diceSettlePause;
+
+  @override
+  int get hashCode =>
+      Object.hash(hop, interHop, diceFrame, diceFrames, diceSettlePause);
+
+  @override
+  String toString() => 'AnimationTimings(hop: $hop, interHop: $interHop, '
+      'diceFrame: $diceFrame, diceFrames: $diceFrames, '
+      'diceSettlePause: $diceSettlePause)';
 }
 
 /// The user's persisted app-wide preferences (schema v2 `Settings` row).
@@ -79,8 +177,8 @@ class AppSettings {
   /// Whether the HUD shows the running match score.
   final bool showScoring;
 
-  /// The per-hop animation [Duration] for the current [animationSpeed].
-  Duration get hopDuration => animationSpeed.hopDuration;
+  /// The [AnimationTimings] preset for the current [animationSpeed].
+  AnimationTimings get timings => animationSpeed.timings;
 
   AppSettings copyWith({
     ThemeMode? themeMode,
