@@ -7,14 +7,22 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   const size = Size(800, 600);
 
+  /// A phone-portrait board: what [BoardView] hands the geometry on a 390pt
+  /// phone — the slot's full width at the tallest allowed aspect (0.62). Every
+  /// invariant below must hold on a board TALLER than it is wide.
+  const portrait = Size(374, 603);
+
   Matcher offsetCloseTo(Offset o, double eps) => predicate<Offset>(
         (a) => (a.dx - o.dx).abs() < eps && (a.dy - o.dy).abs() < eps,
         'within $eps of $o',
       );
 
-  for (final whiteAtBottom in [true, false]) {
-    group('orientation whiteAtBottom=$whiteAtBottom', () {
-      final g = BoardGeometry(size, whiteAtBottom: whiteAtBottom);
+  /// The invariants EVERY board must satisfy whatever its shape — registered
+  /// once per (size, orientation) pair below.
+  void boardInvariants(Size boardSize, bool whiteAtBottom) {
+    group('${boardSize.width.toInt()}x${boardSize.height.toInt()} '
+        'orientation whiteAtBottom=$whiteAtBottom', () {
+      final g = BoardGeometry(boardSize, whiteAtBottom: whiteAtBottom);
 
       test('round-trips every point centre back to its index', () {
         for (var i = 0; i < 24; i++) {
@@ -35,18 +43,18 @@ void main() {
       test('both tray strips (top and bottom) map to off', () {
         // Any x across a strip resolves to the (unambiguous) bear-off.
         for (final frac in [0.05, 0.5, 0.95]) {
-          expect(g.locationAt(Offset(size.width * frac, size.height * 0.01)),
+          expect(g.locationAt(Offset(boardSize.width * frac, boardSize.height * 0.01)),
               CheckerMove.off);
-          expect(g.locationAt(Offset(size.width * frac, size.height * 0.99)),
+          expect(g.locationAt(Offset(boardSize.width * frac, boardSize.height * 0.99)),
               CheckerMove.off);
         }
       });
 
       test('the middle gap and outside return null', () {
         // A point-column x at the vertical centre falls in the empty gap.
-        expect(g.locationAt(Offset(size.width * 0.1, size.height / 2)), isNull);
+        expect(g.locationAt(Offset(boardSize.width * 0.1, boardSize.height / 2)), isNull);
         expect(g.locationAt(const Offset(-1, -1)), isNull);
-        expect(g.locationAt(Offset(size.width + 1, size.height + 1)), isNull);
+        expect(g.locationAt(Offset(boardSize.width + 1, boardSize.height + 1)), isNull);
       });
 
       test('dice pairs sit clear of the bar and every point', () {
@@ -59,7 +67,7 @@ void main() {
           for (final r in [moverRect, waiterRect]) {
             // Inside the board bounds.
             expect(r.left, greaterThanOrEqualTo(-0.5));
-            expect(r.right, lessThanOrEqualTo(size.width + 0.5));
+            expect(r.right, lessThanOrEqualTo(boardSize.width + 0.5));
             // Clear of the central bar strip.
             expect(r.overlaps(barUnion), isFalse, reason: 'dice overlap bar');
             // Clear of every triangle — dice live in the empty middle gap.
@@ -141,7 +149,27 @@ void main() {
               reason: 'point $i six-stack should compress');
         }
       });
+
+      test('a checker fits its column and a five-stack fits its point', () {
+        final colWidth = boardSize.width * (1 - 0.08) / 12;
+        expect(g.checkerRadius * 2, lessThanOrEqualTo(colWidth),
+            reason: 'checkers must not spill into the neighbouring column');
+        // Ten radii of travel: five checkers at full spacing.
+        expect(g.pointRect(0).height,
+            greaterThanOrEqualTo(g.checkerRadius * 10 - 1e-6),
+            reason: 'a point must hold five checkers unsqueezed');
+        // The bar strip is wide enough for a beaten checker to rest on.
+        expect(g.checkerRadius * 2,
+            lessThanOrEqualTo(g.barRect(Player.white).width),
+            reason: 'a checker must fit the bar');
+      });
     });
+  }
+
+  for (final boardSize in [size, portrait]) {
+    for (final whiteAtBottom in [true, false]) {
+      boardInvariants(boardSize, whiteAtBottom);
+    }
   }
 
   test('flipping orientation is a 180° rotation about the centre', () {
@@ -213,5 +241,60 @@ void main() {
     final top = BoardGeometry(size, whiteAtBottom: false);
     expect(top.offRect(Player.white).bottom, lessThan(size.height / 2));
     expect(top.offRect(Player.black).top, greaterThan(size.height / 2));
+  });
+
+  // --- Portrait (tall board) adaptation ---------------------------------------
+
+  group('portrait board', () {
+    final tall = BoardGeometry(portrait, whiteAtBottom: true);
+    final wide = BoardGeometry(size, whiteAtBottom: true);
+
+    test('the checker is sized by the COLUMN, not the height', () {
+      // On a tall board a 12th of the width is the scarce dimension: the disc
+      // fills its column (92% of it) instead of a tenth of the point band.
+      final colWidth = portrait.width * (1 - 0.08) / 12;
+      expect(tall.checkerRadius, closeTo(colWidth * 0.46, 1e-6));
+      // The 800x600 board is the other regime: the point band binds there.
+      final wideCol = size.width * (1 - 0.08) / 12;
+      expect(wide.checkerRadius, lessThan(wideCol * 0.46));
+    });
+
+    test('triangles are capped, so the middle band grows instead of spikes',
+        () {
+      final band = portrait.height * 0.86;
+      final pointHeight = tall.pointRect(0).height;
+      // Capped well under the 44%-of-band a landscape board would take.
+      expect(pointHeight, lessThan(band * 0.44));
+      expect(pointHeight, closeTo(tall.checkerRadius * 16, 1e-6));
+      // The surplus lands in the empty middle band, which stays comfortably
+      // taller than a die.
+      final middle = band - 2 * pointHeight;
+      expect(middle, greaterThan(tall.diceSide));
+      // The landscape board is NOT capped: it keeps the full 44% band.
+      expect(wide.pointRect(0).height, closeTo(size.height * 0.86 * 0.44, 1e-6));
+    });
+
+    test('dice grow with the middle band and stay clear of it', () {
+      // Bigger than the historical 2.2 radii — the roomier band pays for it.
+      expect(tall.diceSide, greaterThan(tall.checkerRadius * 2.2));
+      expect(tall.diceSide, lessThanOrEqualTo(tall.checkerRadius * 3.2 + 1e-9));
+      // The whole PAIR clears the bar and the right edge.
+      final pair = tall.diceRect(Player.white, mover: Player.white);
+      expect(pair.left, greaterThan(tall.barRect(Player.white).right));
+      expect(pair.right, lessThan(portrait.width));
+      // The landscape board's narrow band still binds first (unchanged look).
+      expect(wide.diceSide, closeTo(wide.checkerRadius * 2.2, 1.0));
+    });
+
+    test('the board is taller than it is wide and still round-trips', () {
+      expect(portrait.height, greaterThan(portrait.width));
+      for (var i = 0; i < 24; i++) {
+        expect(tall.locationAt(tall.pointRect(i).center), i, reason: 'point $i');
+      }
+      expect(tall.locationAt(tall.barRect(Player.white).center),
+          CheckerMove.bar);
+      expect(tall.locationAt(tall.offRect(Player.white).center),
+          CheckerMove.off);
+    });
   });
 }

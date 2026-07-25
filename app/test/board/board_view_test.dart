@@ -11,7 +11,8 @@ const _size = Size(800, 600);
 /// Wraps [child] so it occupies exactly [_size] with its top-left at the global
 /// origin, so a board-local geometry offset equals a global tap offset. The
 /// surface is set to [_size] and a same-size SizedBox anchors the board at
-/// (0,0); AspectRatio 4:3 within an 800x600 box yields exactly 800x600.
+/// (0,0); 800x600 is an aspect of 1.33, inside the board's clamp, so the board
+/// fills the box exactly.
 Widget _harness(Widget child) => MaterialApp(
       home: Scaffold(
         body: Center(
@@ -102,6 +103,11 @@ Widget _interactiveAnimHarness(
 /// The same geometry the widget computes for an 800x600 board.
 final _geometry = BoardGeometry(_size, whiteAtBottom: true);
 
+/// The global rect of the board's paint surface (which, since the board is
+/// centred in its slot, is not necessarily the slot's own rect).
+Rect _boardRect(WidgetTester t) => t.getRect(find
+    .byWidgetPredicate((w) => w is CustomPaint && w.painter is BoardPainter));
+
 void main() {
   // The golden-point opening: White plays 3-1 as 8/5 6/5.
   // 8-point == index 7, 6-point == index 5, 5-point == index 4.
@@ -124,6 +130,100 @@ void main() {
       onMoveCommitted: (_) {},
     )));
     expect(_painterOf(t).geometry.size, _size);
+  });
+
+  group('responsive sizing', () {
+    /// Mounts the board in a slot of exactly [slot] and returns the size the
+    /// painter was actually given (the board's own paint surface).
+    Future<Size> boardIn(WidgetTester t, Size slot) async {
+      await t.binding.setSurfaceSize(slot);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: slot.width,
+            height: slot.height,
+            child: BoardView(
+              state: goldenState,
+              interactive: true,
+              onMoveCommitted: (_) {},
+            ),
+          ),
+        ),
+      ));
+      return _painterOf(t).geometry.size;
+    }
+
+    testWidgets('a tall (phone portrait) slot: the board hits the min aspect',
+        (t) async {
+      // A 390pt phone's board slot: far taller than the board may be.
+      const slot = Size(374, 666);
+      final board = await boardIn(t, slot);
+      expect(board.width, closeTo(slot.width, 0.01),
+          reason: 'the board takes the full width of a tall slot');
+      expect(board.width / board.height, closeTo(BoardView.minAspect, 1e-6),
+          reason: 'it elongates down to the clamp, not beyond');
+      expect(board.height, greaterThan(board.width),
+          reason: 'a phone board is TALLER than it is wide');
+      expect(board.height, lessThanOrEqualTo(slot.height));
+      // The CustomPaint really is that size on screen (not just the geometry).
+      final painted = t.getSize(find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is BoardPainter));
+      expect(painted.width, closeTo(board.width, 0.01));
+      expect(painted.height, closeTo(board.height, 0.01));
+    });
+
+    testWidgets('a very wide slot: the board stops at the max aspect',
+        (t) async {
+      const slot = Size(1600, 700);
+      final board = await boardIn(t, slot);
+      expect(board.height, closeTo(slot.height, 0.01),
+          reason: 'height binds in a wide slot');
+      expect(board.width / board.height, closeTo(BoardView.maxAspect, 1e-6));
+      expect(board.width, lessThan(slot.width));
+    });
+
+    testWidgets('a slot within the bounds is filled exactly', (t) async {
+      const slot = Size(900, 900); // aspect 1.0, comfortably inside the clamp
+      final board = await boardIn(t, slot);
+      expect(board.width, closeTo(slot.width, 0.01));
+      expect(board.height, closeTo(slot.height, 0.01));
+    });
+
+    test('boardSizeFor survives unbounded and degenerate constraints', () {
+      final unbounded = BoardView.boardSizeFor(const BoxConstraints());
+      expect(unbounded.width, greaterThan(0));
+      expect(unbounded.height, greaterThan(0));
+      final onlyWidth = BoardView.boardSizeFor(
+          const BoxConstraints(maxWidth: 360));
+      expect(onlyWidth.width, 360);
+      expect(onlyWidth.height,
+          closeTo(360 / BoardView.naturalAspect, 1e-6));
+      final zero = BoardView.boardSizeFor(BoxConstraints.tight(Size.zero));
+      expect(zero.width, greaterThan(0), reason: 'never a zero-sized board');
+      expect(zero.height, greaterThan(0));
+    });
+
+    testWidgets('the tap tolerance never falls below a 44pt target', (t) async {
+      // A narrow phone board: its checkers are ~21pt across, so the
+      // proportional tolerance (1.8 radii = 19pt) is BELOW the 22pt the 44pt
+      // minimum touch target needs — only the floor makes this tap land.
+      final board = await boardIn(t, const Size(300, 600));
+      final g = BoardGeometry(board, whiteAtBottom: true);
+      expect(g.checkerRadius * 2, lessThan(44),
+          reason: 'the premise: a phone checker is far smaller than 44pt');
+      expect(g.checkerRadius * 1.8, lessThan(21),
+          reason: 'the premise: the proportional tolerance alone would miss');
+      // White's 13-point (index 12) holds five checkers; the column beside it
+      // (index 13) is empty and not a legal origin, so only forgiveness can
+      // resolve a tap that lands there.
+      final n = BoardState.initial().points[12].abs();
+      final anchor = _boardRect(t).topLeft + g.checkerCenter(12, n - 1, n);
+      await t.tapAt(anchor + const Offset(21, 0));
+      await t.pump();
+      expect(_painterOf(t).selectedCheckerLocation, 12,
+          reason: 'a 21pt miss (a 42pt-wide target) still selects');
+    });
   });
 
   testWidgets('golden-point entry commits the canonical move', (t) async {

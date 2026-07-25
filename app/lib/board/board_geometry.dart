@@ -17,8 +17,27 @@ import 'package:backgammon_core/backgammon_core.dart';
 /// central bar strip (8% width, centred) with six point columns on each side
 /// that together fill the remaining 92% — there is NO right-edge tray column,
 /// so the leftmost column touches x=0 and the rightmost touches x=width. Within
-/// the board band the top ~44% and bottom ~44% hold the triangles; the middle
-/// gap is empty (dice / cube / resting bar).
+/// the board band the top and bottom triangle rows take up to 44% each; the
+/// middle gap is empty (dice / cube / resting bar).
+///
+/// ## Aspect independence (portrait phones)
+///
+/// Nothing here assumes width > height. [BoardView] sizes the board to FILL its
+/// slot within clamped aspect bounds, so on a phone the board is TALLER than it
+/// is wide. Two metrics adapt so a tall board still reads as a backgammon board
+/// rather than a bed of spikes:
+///
+/// * [checkerRadius] is the smaller of a column-width bound and a point-height
+///   bound. On a tall board the columns bind (there are always 12 of them), so
+///   the checkers are as wide as a column allows.
+/// * the triangle length is capped at `_maxPointRadii` checker radii (eight
+///   checker diameters — three more than the five-checker stack a point holds
+///   at full spacing). The vertical slack a tall board leaves over goes to the
+///   empty middle band, where [diceSide] grows to use it.
+///
+/// Only the tallest boards (aspect below ~0.67 width : height) reach the cap;
+/// on a landscape-ish board every metric is what it was before the board
+/// became responsive.
 ///
 /// ```
 ///        col: 0  1  2  3  4  5 |bar| 6  7  8  9 10 11
@@ -59,7 +78,31 @@ class BoardGeometry {
   // --- Layout fractions (of width / height). ---------------------------------
   static const double _trayFraction = 0.07; // top/bottom bear-off strip height
   static const double _barFraction = 0.08; // central bar strip width
-  static const double _pointHeightFraction = 0.44; // triangle band, of the band
+  static const double _pointHeightFraction = 0.44; // MAX triangle band, of band
+
+  /// Checker radius as a fraction of a point column's width: the disc spans 92%
+  /// of its column, leaving a hairline between neighbouring stacks. This is the
+  /// bound that decides the checker size on a portrait (tall) board, where the
+  /// 12 fixed columns — not the height — are the scarce dimension.
+  static const double _checkerColumnFill = 0.46;
+
+  /// Longest a triangle may be, in checker radii. A point holds five checkers
+  /// at full spacing over exactly 10 radii; 16 leaves three checkers of
+  /// headroom above a full stack and stops the tallest board from drawing
+  /// 18-radii spikes. Binds only below an aspect of ~0.67 (width : height);
+  /// the surplus goes to the middle band, where the dice grow into it.
+  static const double _maxPointRadii = 16.0;
+
+  /// Fraction of the empty middle band a die may span, and fraction of a
+  /// half-board's width the whole dice PAIR may span. Both cap [diceSide] so a
+  /// grown die never touches a triangle or the bar.
+  static const double _diceBandFill = 0.8;
+  static const double _diceHalfFill = 0.36;
+
+  /// Ceiling on [diceSide] in checker radii. Landscape boards are capped by the
+  /// (narrow) middle band long before this; a tall board's roomier band lets the
+  /// dice grow up to here, so they stay readable on a phone.
+  static const double _maxDiceRadii = 3.2;
 
   double get _w => size.width;
   double get _h => size.height;
@@ -76,11 +119,28 @@ class BoardGeometry {
   double get _halfWidth => _colWidth * 6;
   double get _barLeft => _halfWidth;
   double get _barRight => _halfWidth + _w * _barFraction;
-  double get _pointHeight => _bandHeight * _pointHeightFraction;
+
+  /// The triangle band a point could occupy at most: 44% of the board band, as
+  /// on every board before the layout became responsive.
+  double get _maxPointHeight => _bandHeight * _pointHeightFraction;
+
+  /// Length of a point triangle. Normally [_maxPointHeight]; on a TALL board
+  /// (where the checker size is set by the column width) it is capped at
+  /// [_maxPointRadii] radii so the triangles keep a board-like proportion and
+  /// the surplus falls to the middle band instead. Never below 10 radii, so a
+  /// five-stack always fits at full spacing.
+  double get _pointHeight =>
+      math.min(_maxPointHeight, checkerRadius * _maxPointRadii);
+
+  /// Height of the EMPTY middle band between the two triangle rows — where the
+  /// dice, the cube and the resting bar checkers live. Grows on a tall board.
+  double get _middleBand => _bandHeight - 2 * _pointHeight;
 
   /// Radius of a rendered checker. Bounded so five checkers stack (at full 2r
   /// spacing) within a point's height, and a checker fits within its column.
-  double get checkerRadius => math.min(_colWidth * 0.42, _pointHeight / 10);
+  /// The column bound is what binds on a portrait board.
+  double get checkerRadius =>
+      math.min(_colWidth * _checkerColumnFill, _maxPointHeight / 10);
 
   double get _diameter => checkerRadius * 2;
 
@@ -99,9 +159,17 @@ class BoardGeometry {
   /// local-bottom player's tray is the BOTTOM strip; the opponent's is the TOP.
   Rect offRect(Player player) => _orient(_canonicalOffRect(player));
 
-  /// Side length of a rendered die (a little larger than a checker so the pips
-  /// read). Both dice pairs and the cube derive their size from this.
-  double get diceSide => checkerRadius * 2.2;
+  /// Side length of a rendered die. It fills the empty middle band (with a
+  /// margin), so a tall board — whose band is roomier — gets visibly larger,
+  /// more readable dice, bounded by [_maxDiceRadii] so they never dwarf the
+  /// checkers. A landscape board's narrow band binds first, which reproduces
+  /// the historical `checkerRadius * 2.2` to within a percent.
+  double get diceSide => math.min(
+      checkerRadius * _maxDiceRadii,
+      math.min(
+        _middleBand * _diceBandFill,
+        (_w - _barRight) * _diceHalfFill,
+      ));
 
   /// Bounding rectangle of [player]'s dice PAIR (the two dice plus the gap
   /// between them), centred in the empty middle band. The [mover]'s pair sits in
