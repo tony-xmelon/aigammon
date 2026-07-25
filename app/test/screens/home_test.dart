@@ -1,6 +1,8 @@
 import 'package:aigammon_app/board/board_painter.dart';
+import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
 import 'package:aigammon_app/data/match_repository.dart';
+import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
@@ -69,6 +71,10 @@ Widget _app() => ProviderScope(
       overrides: [
         engineFacadeProvider.overrideWithValue(const FakeFacade()),
         databaseProvider.overrideWithValue(_db),
+        // NewMatchScreen reads its defaults from settingsProvider; serve them
+        // from a plain stream so the widget test stays off drift's watch-timer
+        // (which otherwise lingers past tree disposal), mirroring history_test.
+        settingsProvider.overrideWith((ref) => Stream.value(AppSettings.defaults)),
       ],
       child: const MaterialApp(home: HomeScreen()),
     );

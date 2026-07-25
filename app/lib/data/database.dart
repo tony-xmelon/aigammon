@@ -61,23 +61,72 @@ class Games extends Table {
   TextColumn get analysisJson => text().nullable()();
 }
 
-/// The app's local SQLite database (matches + event-sourced games).
-@DriftDatabase(tables: [Matches, Games])
+/// Single-row app preferences (schema v2). Exactly one row ever exists, pinned
+/// to `id = 1` by a table-level `CHECK (id = 1)`; the app upserts that row.
+///
+/// Enum-valued settings are stored as their `Enum.name` strings ([themeMode],
+/// [animationSpeed], [defaultDifficulty]); [tutorOverride] is a nullable
+/// tri-state ('on' | 'off' | null). Every column carries a default so the row
+/// can be seeded with just its id (see [AppDatabase.migration]).
+@DataClassName('SettingsRow')
+class Settings extends Table {
+  /// Always 1 (enforced by [customConstraints]). Defaulted so a bare
+  /// `INSERT (id) VALUES (1)` fills every other column from its default.
+  IntColumn get id => integer().withDefault(const Constant(1))();
+
+  TextColumn get themeMode => text().withDefault(const Constant('system'))();
+  TextColumn get animationSpeed =>
+      text().withDefault(const Constant('normal'))();
+  IntColumn get defaultMatchLength => integer().withDefault(const Constant(5))();
+  TextColumn get defaultDifficulty =>
+      text().withDefault(const Constant('medium'))();
+
+  /// 'on' | 'off' | null (null = per-mode tutor default).
+  TextColumn get tutorOverride => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => const ['CHECK (id = 1)'];
+}
+
+/// The app's local SQLite database (matches + event-sourced games + the
+/// single-row [Settings] preferences).
+@DriftDatabase(tables: [Matches, Games, Settings])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
   // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
   // on (it defaults off). `beforeOpen` runs on every connection open, so the
-  // pragma is applied for the app and for every test database. The schema is
-  // pre-release, so the FK was added to v1 directly — no migration bump.
+  // pragma is applied for the app and for every test database. The Matches/Games
+  // FK was added to v1 directly (pre-release, no bump); the Settings table is
+  // the project's first real migration, added in v2.
   @override
   MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+        },
+        onUpgrade: (m, from, to) async {
+          // v1 -> v2: add the single-row Settings table. Its default row is
+          // seeded by `beforeOpen` below (which runs right after this), so the
+          // same upsert-if-absent covers both fresh creates and upgrades.
+          if (from < 2) {
+            await m.createTable(settings);
+          }
+        },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
+          // Ensure the single settings row exists. Idempotent (INSERT OR
+          // IGNORE keyed on the id=1 primary key), so it is a no-op once seeded
+          // and covers fresh onCreate databases and upgraded ones alike.
+          await customStatement(
+            'INSERT OR IGNORE INTO settings (id) VALUES (1)',
+          );
         },
       );
 }

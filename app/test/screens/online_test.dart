@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:aigammon_app/data/app_settings.dart';
+import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/online/online_providers.dart';
@@ -150,6 +152,9 @@ Widget _app(FakeMatchApi api, {bool configured = true}) {
           .overrideWithValue(configured ? OnlineConfig.emulator() : null),
       matchApiProvider.overrideWith((ref) async => api),
       engineFacadeProvider.overrideWithValue(const FakeFacade()),
+      // Launching a game reads settingsProvider (for animation speed); serve a
+      // static value so the test avoids the real drift store and its watch-timer.
+      settingsProvider.overrideWith((ref) => Stream.value(AppSettings.defaults)),
     ],
     child: const MaterialApp(home: OnlineScreen()),
   );

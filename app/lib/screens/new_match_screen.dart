@@ -4,8 +4,10 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/app_settings.dart';
 import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
+import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
 import '../game/game_controller.dart';
 import '../game/player_agent.dart';
@@ -30,18 +32,37 @@ class NewMatchScreen extends ConsumerStatefulWidget {
 }
 
 class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
-  int _matchLength = 5;
-  Difficulty _difficulty = Difficulty.medium;
+  /// Initial selector values come from the persisted [settingsProvider] (read
+  /// once in [initState]); the user's edits here are per-match and do not write
+  /// back to settings.
+  late int _matchLength;
+  late Difficulty _difficulty;
   _SideChoice _side = _SideChoice.white;
 
   /// Hot-seat only: rotate the board so the active player is at the bottom.
   bool _rotateForBlack = true;
 
-  /// Whether live tutor mode is enabled. Defaults per [_defaultTutor] and
-  /// tracks difficulty changes until the user touches the toggle
-  /// ([_tutorTouched]), after which the toggle is authoritative.
-  late bool _tutorEnabled = _defaultTutor(_difficulty);
+  /// Whether live tutor mode is enabled. When the settings tutor override is
+  /// unset it defaults per [_defaultTutor] and tracks difficulty changes until
+  /// the user touches the toggle ([_tutorTouched]); when the override is set it
+  /// starts forced on/off and no longer auto-tracks difficulty.
+  late bool _tutorEnabled;
   bool _tutorTouched = false;
+
+  /// The settings tutor override (null = use the per-mode default). Captured in
+  /// [initState] so difficulty changes only re-derive the default when unset.
+  bool? _settingsTutorOverride;
+
+  @override
+  void initState() {
+    super.initState();
+    final settings =
+        ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
+    _matchLength = settings.defaultMatchLength;
+    _difficulty = settings.defaultDifficulty;
+    _settingsTutorOverride = settings.tutorOverride;
+    _tutorEnabled = _settingsTutorOverride ?? _defaultTutor(_difficulty);
+  }
 
   /// The default tutor state: ON for a vs-computer easy/medium match, OFF for
   /// hard/expert and for hot-seat.
@@ -97,8 +118,11 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                           selected: {_difficulty},
                           onSelectionChanged: (s) => setState(() {
                             _difficulty = s.first;
-                            // Live-update the default until the user overrides.
-                            if (!_tutorTouched) {
+                            // Live-update the default until the user overrides
+                            // the toggle — but only when settings don't force a
+                            // fixed tutor default.
+                            if (!_tutorTouched &&
+                                _settingsTutorOverride == null) {
                               _tutorEnabled = _defaultTutor(_difficulty);
                             }
                           }),
@@ -171,6 +195,9 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
     final tutor = _tutorEnabled
         ? TutorService(ref.read(engineFacadeProvider))
         : null;
+    // Checker animation speed comes from the persisted settings.
+    final settings =
+        ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
     Navigator.of(context).push(
       MaterialPageRoute(
         // Key by the controller so a fresh GameScreen State is mounted per
@@ -180,7 +207,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
-          animationDuration: kDefaultMoveAnimationDuration,
+          animationDuration: settings.hopDuration,
         ),
       ),
     );

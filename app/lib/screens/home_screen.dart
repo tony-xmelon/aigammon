@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'history_screen.dart';
 import 'new_match_screen.dart';
 import 'online_screen.dart';
+import 'settings_screen.dart';
 
 /// The app's landing screen: a title and the two match-mode entry points.
 /// Each button pushes a [NewMatchScreen] (as a route) configured for its mode.
@@ -14,7 +15,24 @@ class HomeScreen extends StatelessWidget {
     final theme = Theme.of(context);
     return Scaffold(
       body: SafeArea(
-        child: Center(
+        child: Stack(
+          children: [
+            Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: IconButton(
+                  tooltip: 'Settings',
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const SettingsScreen(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
             child: Padding(
@@ -72,6 +90,8 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
           ),
+        ),
+          ],
         ),
       ),
     );

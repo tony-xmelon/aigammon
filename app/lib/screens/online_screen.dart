@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:online_client/online_client.dart';
 
+import '../data/app_settings.dart';
+import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
 import '../online/online_match_controller.dart';
 import '../online/online_providers.dart';
@@ -252,6 +254,8 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     }
     // Tutor stays available online; it keys post-move chips on the local side.
     final tutor = TutorService(ref.read(engineFacadeProvider));
+    final settings =
+        ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => GameScreen(
@@ -259,7 +263,7 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
-          animationDuration: kDefaultMoveAnimationDuration,
+          animationDuration: settings.hopDuration,
         ),
       ),
     );

@@ -1209,16 +1209,445 @@ class GamesCompanion extends UpdateCompanion<GameRow> {
   }
 }
 
+class $SettingsTable extends Settings
+    with TableInfo<$SettingsTable, SettingsRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SettingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  static const VerificationMeta _themeModeMeta = const VerificationMeta(
+    'themeMode',
+  );
+  @override
+  late final GeneratedColumn<String> themeMode = GeneratedColumn<String>(
+    'theme_mode',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('system'),
+  );
+  static const VerificationMeta _animationSpeedMeta = const VerificationMeta(
+    'animationSpeed',
+  );
+  @override
+  late final GeneratedColumn<String> animationSpeed = GeneratedColumn<String>(
+    'animation_speed',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('normal'),
+  );
+  static const VerificationMeta _defaultMatchLengthMeta =
+      const VerificationMeta('defaultMatchLength');
+  @override
+  late final GeneratedColumn<int> defaultMatchLength = GeneratedColumn<int>(
+    'default_match_length',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(5),
+  );
+  static const VerificationMeta _defaultDifficultyMeta = const VerificationMeta(
+    'defaultDifficulty',
+  );
+  @override
+  late final GeneratedColumn<String> defaultDifficulty =
+      GeneratedColumn<String>(
+        'default_difficulty',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+        defaultValue: const Constant('medium'),
+      );
+  static const VerificationMeta _tutorOverrideMeta = const VerificationMeta(
+    'tutorOverride',
+  );
+  @override
+  late final GeneratedColumn<String> tutorOverride = GeneratedColumn<String>(
+    'tutor_override',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    themeMode,
+    animationSpeed,
+    defaultMatchLength,
+    defaultDifficulty,
+    tutorOverride,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'settings';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SettingsRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('theme_mode')) {
+      context.handle(
+        _themeModeMeta,
+        themeMode.isAcceptableOrUnknown(data['theme_mode']!, _themeModeMeta),
+      );
+    }
+    if (data.containsKey('animation_speed')) {
+      context.handle(
+        _animationSpeedMeta,
+        animationSpeed.isAcceptableOrUnknown(
+          data['animation_speed']!,
+          _animationSpeedMeta,
+        ),
+      );
+    }
+    if (data.containsKey('default_match_length')) {
+      context.handle(
+        _defaultMatchLengthMeta,
+        defaultMatchLength.isAcceptableOrUnknown(
+          data['default_match_length']!,
+          _defaultMatchLengthMeta,
+        ),
+      );
+    }
+    if (data.containsKey('default_difficulty')) {
+      context.handle(
+        _defaultDifficultyMeta,
+        defaultDifficulty.isAcceptableOrUnknown(
+          data['default_difficulty']!,
+          _defaultDifficultyMeta,
+        ),
+      );
+    }
+    if (data.containsKey('tutor_override')) {
+      context.handle(
+        _tutorOverrideMeta,
+        tutorOverride.isAcceptableOrUnknown(
+          data['tutor_override']!,
+          _tutorOverrideMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  SettingsRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SettingsRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      themeMode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}theme_mode'],
+      )!,
+      animationSpeed: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}animation_speed'],
+      )!,
+      defaultMatchLength: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}default_match_length'],
+      )!,
+      defaultDifficulty: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}default_difficulty'],
+      )!,
+      tutorOverride: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tutor_override'],
+      ),
+    );
+  }
+
+  @override
+  $SettingsTable createAlias(String alias) {
+    return $SettingsTable(attachedDatabase, alias);
+  }
+}
+
+class SettingsRow extends DataClass implements Insertable<SettingsRow> {
+  /// Always 1 (enforced by [customConstraints]). Defaulted so a bare
+  /// `INSERT (id) VALUES (1)` fills every other column from its default.
+  final int id;
+  final String themeMode;
+  final String animationSpeed;
+  final int defaultMatchLength;
+  final String defaultDifficulty;
+
+  /// 'on' | 'off' | null (null = per-mode tutor default).
+  final String? tutorOverride;
+  const SettingsRow({
+    required this.id,
+    required this.themeMode,
+    required this.animationSpeed,
+    required this.defaultMatchLength,
+    required this.defaultDifficulty,
+    this.tutorOverride,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['theme_mode'] = Variable<String>(themeMode);
+    map['animation_speed'] = Variable<String>(animationSpeed);
+    map['default_match_length'] = Variable<int>(defaultMatchLength);
+    map['default_difficulty'] = Variable<String>(defaultDifficulty);
+    if (!nullToAbsent || tutorOverride != null) {
+      map['tutor_override'] = Variable<String>(tutorOverride);
+    }
+    return map;
+  }
+
+  SettingsCompanion toCompanion(bool nullToAbsent) {
+    return SettingsCompanion(
+      id: Value(id),
+      themeMode: Value(themeMode),
+      animationSpeed: Value(animationSpeed),
+      defaultMatchLength: Value(defaultMatchLength),
+      defaultDifficulty: Value(defaultDifficulty),
+      tutorOverride: tutorOverride == null && nullToAbsent
+          ? const Value.absent()
+          : Value(tutorOverride),
+    );
+  }
+
+  factory SettingsRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SettingsRow(
+      id: serializer.fromJson<int>(json['id']),
+      themeMode: serializer.fromJson<String>(json['themeMode']),
+      animationSpeed: serializer.fromJson<String>(json['animationSpeed']),
+      defaultMatchLength: serializer.fromJson<int>(json['defaultMatchLength']),
+      defaultDifficulty: serializer.fromJson<String>(json['defaultDifficulty']),
+      tutorOverride: serializer.fromJson<String?>(json['tutorOverride']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'themeMode': serializer.toJson<String>(themeMode),
+      'animationSpeed': serializer.toJson<String>(animationSpeed),
+      'defaultMatchLength': serializer.toJson<int>(defaultMatchLength),
+      'defaultDifficulty': serializer.toJson<String>(defaultDifficulty),
+      'tutorOverride': serializer.toJson<String?>(tutorOverride),
+    };
+  }
+
+  SettingsRow copyWith({
+    int? id,
+    String? themeMode,
+    String? animationSpeed,
+    int? defaultMatchLength,
+    String? defaultDifficulty,
+    Value<String?> tutorOverride = const Value.absent(),
+  }) => SettingsRow(
+    id: id ?? this.id,
+    themeMode: themeMode ?? this.themeMode,
+    animationSpeed: animationSpeed ?? this.animationSpeed,
+    defaultMatchLength: defaultMatchLength ?? this.defaultMatchLength,
+    defaultDifficulty: defaultDifficulty ?? this.defaultDifficulty,
+    tutorOverride: tutorOverride.present
+        ? tutorOverride.value
+        : this.tutorOverride,
+  );
+  SettingsRow copyWithCompanion(SettingsCompanion data) {
+    return SettingsRow(
+      id: data.id.present ? data.id.value : this.id,
+      themeMode: data.themeMode.present ? data.themeMode.value : this.themeMode,
+      animationSpeed: data.animationSpeed.present
+          ? data.animationSpeed.value
+          : this.animationSpeed,
+      defaultMatchLength: data.defaultMatchLength.present
+          ? data.defaultMatchLength.value
+          : this.defaultMatchLength,
+      defaultDifficulty: data.defaultDifficulty.present
+          ? data.defaultDifficulty.value
+          : this.defaultDifficulty,
+      tutorOverride: data.tutorOverride.present
+          ? data.tutorOverride.value
+          : this.tutorOverride,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SettingsRow(')
+          ..write('id: $id, ')
+          ..write('themeMode: $themeMode, ')
+          ..write('animationSpeed: $animationSpeed, ')
+          ..write('defaultMatchLength: $defaultMatchLength, ')
+          ..write('defaultDifficulty: $defaultDifficulty, ')
+          ..write('tutorOverride: $tutorOverride')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    themeMode,
+    animationSpeed,
+    defaultMatchLength,
+    defaultDifficulty,
+    tutorOverride,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SettingsRow &&
+          other.id == this.id &&
+          other.themeMode == this.themeMode &&
+          other.animationSpeed == this.animationSpeed &&
+          other.defaultMatchLength == this.defaultMatchLength &&
+          other.defaultDifficulty == this.defaultDifficulty &&
+          other.tutorOverride == this.tutorOverride);
+}
+
+class SettingsCompanion extends UpdateCompanion<SettingsRow> {
+  final Value<int> id;
+  final Value<String> themeMode;
+  final Value<String> animationSpeed;
+  final Value<int> defaultMatchLength;
+  final Value<String> defaultDifficulty;
+  final Value<String?> tutorOverride;
+  const SettingsCompanion({
+    this.id = const Value.absent(),
+    this.themeMode = const Value.absent(),
+    this.animationSpeed = const Value.absent(),
+    this.defaultMatchLength = const Value.absent(),
+    this.defaultDifficulty = const Value.absent(),
+    this.tutorOverride = const Value.absent(),
+  });
+  SettingsCompanion.insert({
+    this.id = const Value.absent(),
+    this.themeMode = const Value.absent(),
+    this.animationSpeed = const Value.absent(),
+    this.defaultMatchLength = const Value.absent(),
+    this.defaultDifficulty = const Value.absent(),
+    this.tutorOverride = const Value.absent(),
+  });
+  static Insertable<SettingsRow> custom({
+    Expression<int>? id,
+    Expression<String>? themeMode,
+    Expression<String>? animationSpeed,
+    Expression<int>? defaultMatchLength,
+    Expression<String>? defaultDifficulty,
+    Expression<String>? tutorOverride,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (themeMode != null) 'theme_mode': themeMode,
+      if (animationSpeed != null) 'animation_speed': animationSpeed,
+      if (defaultMatchLength != null)
+        'default_match_length': defaultMatchLength,
+      if (defaultDifficulty != null) 'default_difficulty': defaultDifficulty,
+      if (tutorOverride != null) 'tutor_override': tutorOverride,
+    });
+  }
+
+  SettingsCompanion copyWith({
+    Value<int>? id,
+    Value<String>? themeMode,
+    Value<String>? animationSpeed,
+    Value<int>? defaultMatchLength,
+    Value<String>? defaultDifficulty,
+    Value<String?>? tutorOverride,
+  }) {
+    return SettingsCompanion(
+      id: id ?? this.id,
+      themeMode: themeMode ?? this.themeMode,
+      animationSpeed: animationSpeed ?? this.animationSpeed,
+      defaultMatchLength: defaultMatchLength ?? this.defaultMatchLength,
+      defaultDifficulty: defaultDifficulty ?? this.defaultDifficulty,
+      tutorOverride: tutorOverride ?? this.tutorOverride,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (themeMode.present) {
+      map['theme_mode'] = Variable<String>(themeMode.value);
+    }
+    if (animationSpeed.present) {
+      map['animation_speed'] = Variable<String>(animationSpeed.value);
+    }
+    if (defaultMatchLength.present) {
+      map['default_match_length'] = Variable<int>(defaultMatchLength.value);
+    }
+    if (defaultDifficulty.present) {
+      map['default_difficulty'] = Variable<String>(defaultDifficulty.value);
+    }
+    if (tutorOverride.present) {
+      map['tutor_override'] = Variable<String>(tutorOverride.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SettingsCompanion(')
+          ..write('id: $id, ')
+          ..write('themeMode: $themeMode, ')
+          ..write('animationSpeed: $animationSpeed, ')
+          ..write('defaultMatchLength: $defaultMatchLength, ')
+          ..write('defaultDifficulty: $defaultDifficulty, ')
+          ..write('tutorOverride: $tutorOverride')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $MatchesTable matches = $MatchesTable(this);
   late final $GamesTable games = $GamesTable(this);
+  late final $SettingsTable settings = $SettingsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities => [matches, games];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [
+    matches,
+    games,
+    settings,
+  ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
     WritePropagation(
@@ -2019,6 +2448,224 @@ typedef $$GamesTableProcessedTableManager =
       GameRow,
       PrefetchHooks Function({bool matchId})
     >;
+typedef $$SettingsTableCreateCompanionBuilder =
+    SettingsCompanion Function({
+      Value<int> id,
+      Value<String> themeMode,
+      Value<String> animationSpeed,
+      Value<int> defaultMatchLength,
+      Value<String> defaultDifficulty,
+      Value<String?> tutorOverride,
+    });
+typedef $$SettingsTableUpdateCompanionBuilder =
+    SettingsCompanion Function({
+      Value<int> id,
+      Value<String> themeMode,
+      Value<String> animationSpeed,
+      Value<int> defaultMatchLength,
+      Value<String> defaultDifficulty,
+      Value<String?> tutorOverride,
+    });
+
+class $$SettingsTableFilterComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get themeMode => $composableBuilder(
+    column: $table.themeMode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get animationSpeed => $composableBuilder(
+    column: $table.animationSpeed,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get defaultMatchLength => $composableBuilder(
+    column: $table.defaultMatchLength,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get defaultDifficulty => $composableBuilder(
+    column: $table.defaultDifficulty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tutorOverride => $composableBuilder(
+    column: $table.tutorOverride,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$SettingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get themeMode => $composableBuilder(
+    column: $table.themeMode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get animationSpeed => $composableBuilder(
+    column: $table.animationSpeed,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get defaultMatchLength => $composableBuilder(
+    column: $table.defaultMatchLength,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get defaultDifficulty => $composableBuilder(
+    column: $table.defaultDifficulty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get tutorOverride => $composableBuilder(
+    column: $table.tutorOverride,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$SettingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get themeMode =>
+      $composableBuilder(column: $table.themeMode, builder: (column) => column);
+
+  GeneratedColumn<String> get animationSpeed => $composableBuilder(
+    column: $table.animationSpeed,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get defaultMatchLength => $composableBuilder(
+    column: $table.defaultMatchLength,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get defaultDifficulty => $composableBuilder(
+    column: $table.defaultDifficulty,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get tutorOverride => $composableBuilder(
+    column: $table.tutorOverride,
+    builder: (column) => column,
+  );
+}
+
+class $$SettingsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SettingsTable,
+          SettingsRow,
+          $$SettingsTableFilterComposer,
+          $$SettingsTableOrderingComposer,
+          $$SettingsTableAnnotationComposer,
+          $$SettingsTableCreateCompanionBuilder,
+          $$SettingsTableUpdateCompanionBuilder,
+          (
+            SettingsRow,
+            BaseReferences<_$AppDatabase, $SettingsTable, SettingsRow>,
+          ),
+          SettingsRow,
+          PrefetchHooks Function()
+        > {
+  $$SettingsTableTableManager(_$AppDatabase db, $SettingsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SettingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SettingsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SettingsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String> themeMode = const Value.absent(),
+                Value<String> animationSpeed = const Value.absent(),
+                Value<int> defaultMatchLength = const Value.absent(),
+                Value<String> defaultDifficulty = const Value.absent(),
+                Value<String?> tutorOverride = const Value.absent(),
+              }) => SettingsCompanion(
+                id: id,
+                themeMode: themeMode,
+                animationSpeed: animationSpeed,
+                defaultMatchLength: defaultMatchLength,
+                defaultDifficulty: defaultDifficulty,
+                tutorOverride: tutorOverride,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String> themeMode = const Value.absent(),
+                Value<String> animationSpeed = const Value.absent(),
+                Value<int> defaultMatchLength = const Value.absent(),
+                Value<String> defaultDifficulty = const Value.absent(),
+                Value<String?> tutorOverride = const Value.absent(),
+              }) => SettingsCompanion.insert(
+                id: id,
+                themeMode: themeMode,
+                animationSpeed: animationSpeed,
+                defaultMatchLength: defaultMatchLength,
+                defaultDifficulty: defaultDifficulty,
+                tutorOverride: tutorOverride,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$SettingsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SettingsTable,
+      SettingsRow,
+      $$SettingsTableFilterComposer,
+      $$SettingsTableOrderingComposer,
+      $$SettingsTableAnnotationComposer,
+      $$SettingsTableCreateCompanionBuilder,
+      $$SettingsTableUpdateCompanionBuilder,
+      (SettingsRow, BaseReferences<_$AppDatabase, $SettingsTable, SettingsRow>),
+      SettingsRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2027,4 +2674,6 @@ class $AppDatabaseManager {
       $$MatchesTableTableManager(_db, _db.matches);
   $$GamesTableTableManager get games =>
       $$GamesTableTableManager(_db, _db.games);
+  $$SettingsTableTableManager get settings =>
+      $$SettingsTableTableManager(_db, _db.settings);
 }
