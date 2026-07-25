@@ -1,3 +1,9 @@
+// Golden comparisons are platform-locked: the PNGs were generated on the
+// Windows dev machine, and Linux CI antialiasing drifts by <0.1%. CI
+// excludes this tag (flutter test -x golden); run locally without flags.
+@Tags(['golden'])
+library;
+
 import 'package:aigammon_app/board/board_geometry.dart';
 import 'package:aigammon_app/board/board_painter.dart';
 import 'package:aigammon_app/board/board_theme.dart';

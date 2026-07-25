@@ -63,5 +63,7 @@ jobs:
         working-directory: app
       - run: flutter analyze
         working-directory: app
-      - run: flutter test
+      # -x golden: golden PNGs are generated on the Windows dev machine and
+      # differ by <0.1% antialiasing on Linux; they run locally instead.
+      - run: flutter test -x golden
         working-directory: app
