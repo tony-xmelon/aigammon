@@ -202,6 +202,60 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Roll'), findsOneWidget);
   });
 
+  bool tutorSwitchValue(WidgetTester t) => t
+      .widget<SwitchListTile>(find.widgetWithText(SwitchListTile, 'Tutor mode'))
+      .value;
+
+  group('tutor toggle', () {
+    testWidgets('vs-computer easy defaults ON, expert defaults OFF', (t) async {
+      await t.pumpWidget(_app());
+      await t.tap(find.text('Play vs Computer'));
+      await t.pumpAndSettle();
+
+      // Default difficulty is medium -> ON.
+      expect(tutorSwitchValue(t), isTrue);
+
+      await t.tap(find.text('Easy'));
+      await t.pumpAndSettle();
+      expect(tutorSwitchValue(t), isTrue, reason: 'easy -> ON');
+
+      await t.tap(find.text('Expert'));
+      await t.pumpAndSettle();
+      expect(tutorSwitchValue(t), isFalse, reason: 'expert -> OFF');
+
+      await t.tap(find.text('Hard'));
+      await t.pumpAndSettle();
+      expect(tutorSwitchValue(t), isFalse, reason: 'hard -> OFF');
+    });
+
+    testWidgets('hot-seat defaults OFF', (t) async {
+      await t.pumpWidget(_app());
+      await t.tap(find.text('Two Players'));
+      await t.pumpAndSettle();
+      expect(tutorSwitchValue(t), isFalse);
+    });
+
+    testWidgets('user override is sticky across difficulty changes', (t) async {
+      await t.pumpWidget(_app());
+      await t.tap(find.text('Play vs Computer'));
+      await t.pumpAndSettle();
+
+      // At expert the default is OFF; the user turns it ON.
+      await t.tap(find.text('Expert'));
+      await t.pumpAndSettle();
+      expect(tutorSwitchValue(t), isFalse);
+      await t.tap(find.widgetWithText(SwitchListTile, 'Tutor mode'));
+      await t.pumpAndSettle();
+      expect(tutorSwitchValue(t), isTrue);
+
+      // Switching to another OFF-default difficulty must NOT reset it.
+      await t.tap(find.text('Hard'));
+      await t.pumpAndSettle();
+      expect(tutorSwitchValue(t), isTrue,
+          reason: 'a touched toggle stays authoritative');
+    });
+  });
+
   testWidgets('back from setup returns to home', (t) async {
     await t.pumpWidget(_app());
     await t.tap(find.text('Play vs Computer'));

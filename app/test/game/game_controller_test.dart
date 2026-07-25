@@ -470,6 +470,25 @@ void main() {
   });
 
   group('match context', () {
+    test('contextFor anchors moverAway to the actor at the start of a match',
+        () async {
+      final c = GameController(
+        white: FakeAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+      );
+      final white = c.contextFor(Player.white);
+      expect(white.moverAway, 5, reason: 'white 0-0, 5-away');
+      expect(white.opponentAway, 5);
+      expect(white.crawfordPlayed, isFalse);
+
+      final black = c.contextFor(Player.black);
+      expect(black.moverAway, 5);
+      expect(black.opponentAway, 5);
+
+      c.disposeController();
+    });
+
     test('passes each actor its own aways (white 2-away after leading 1-0)',
         () async {
       // 3-point match. White opens every game (6 > 1) and doubles at once;

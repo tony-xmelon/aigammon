@@ -15,6 +15,7 @@ class FakeEngine implements EngineFacade {
   Probabilities evalProbs;
   int rankMovesCalls = 0;
   int evaluateCalls = 0;
+  Player? lastEvalMover;
 
   static const _defaultProbs = Probabilities(
     win: 0.5,
@@ -27,6 +28,7 @@ class FakeEngine implements EngineFacade {
   @override
   Future<Probabilities> evaluate(BoardState board, Player mover) async {
     evaluateCalls++;
+    lastEvalMover = mover;
     return evalProbs;
   }
 
@@ -104,6 +106,23 @@ GameState _awaitingRollState({CubeState? cube}) => GameState.testState(
       turn: Player.white,
       phase: GamePhase.awaitingRoll,
       cube: cube ?? const CubeState.initial(),
+    );
+
+/// White has doubled; Black is now the DECIDER being asked to take or pass.
+GameState _cubeOfferedState({CubeState? cube}) => GameState.testState(
+      board: BoardState.initial(),
+      turn: Player.black,
+      phase: GamePhase.cubeOffered,
+      cube: cube ?? const CubeState.initial(),
+    );
+
+/// A gammonless probabilities fixture with the given [win] chance.
+Probabilities _probs(double win) => Probabilities(
+      win: win,
+      winGammon: 0,
+      winBackgammon: 0,
+      loseGammon: 0,
+      loseBackgammon: 0,
     );
 
 /// The Task-2 gammonful fixture (5-away/5-away): shouldDouble & shouldTake.
@@ -295,6 +314,70 @@ void main() {
       final a =
           await tutor.assessCube(state, ctx, playerDoubled: true);
       expect(a.advice.equityNoDouble, closeTo(expected.equityNoDouble, 1e-12));
+    });
+  });
+
+  group('TutorService.assessCubeResponse', () {
+    const advisor = MatchCubeAdvisor();
+
+    test('evaluates the DOUBLER and inverts the aways', () async {
+      // cubeOffered: turn = black (decider), doubler = white. deciderCtx is
+      // anchored to the DECIDER: moverAway = decider (2), opponentAway = doubler
+      // (5). The advisor must be fed the DOUBLER's perspective, so the tutor
+      // inverts. probs (win 0.61, gammonless, doubler's view) is chosen so the
+      // correct orientation (doubler 5-away) says TAKE while the inverted-by-
+      // mistake orientation would say DROP — pinning the inversion.
+      final probs = _probs(0.61);
+      final correct = advisor.advise(
+          probs: probs, moverAway: 5, opponentAway: 2, cubeValue: 1);
+      final swapped = advisor.advise(
+          probs: probs, moverAway: 2, opponentAway: 5, cubeValue: 1);
+      expect(correct.shouldTake, isTrue);
+      expect(swapped.shouldTake, isFalse,
+          reason: 'sanity: the orientation genuinely changes the decision');
+
+      final engine = FakeEngine(evalProbs: probs);
+      final tutor = TutorService(engine);
+      final state = _cubeOfferedState();
+      expect(state.turn, Player.black);
+
+      // deciderCtx: decider (black) 2-away, doubler (white) 5-away.
+      final a = await tutor.assessCubeResponse(state, _ctx(2, 5));
+
+      expect(engine.lastEvalMover, Player.white,
+          reason: 'must query the doubler (white), not the decider (black)');
+      expect(a.advice.shouldTake, isTrue,
+          reason: 'doubler is 5-away: taking is correct here');
+      expect(a.actionWasDouble, isTrue,
+          reason: 'the doubler did offer the cube');
+    });
+
+    test('a strong doubler position advises the decider to PASS', () async {
+      // Doubler with a big lead in win chance (gammonless 0.80): the decider
+      // should pass. Symmetric aways so only the doubler-orientation matters.
+      final probs = _probs(0.80);
+      final expected = advisor.advise(
+          probs: probs, moverAway: 5, opponentAway: 5, cubeValue: 1);
+      expect(expected.shouldTake, isFalse, reason: 'sanity: a pass position');
+
+      final engine = FakeEngine(evalProbs: probs);
+      final tutor = TutorService(engine);
+      final a = await tutor.assessCubeResponse(_cubeOfferedState(), _ctx(5, 5));
+      expect(a.advice.shouldTake, isFalse);
+    });
+
+    test('uses the cube value from the state', () async {
+      final probs = _probs(0.61);
+      final engine = FakeEngine(evalProbs: probs);
+      final tutor = TutorService(engine);
+      final state = _cubeOfferedState(
+          cube: const CubeState(value: 2, owner: Player.black));
+      // Doubler 5-away, decider 2-away, cube 2.
+      final expected = advisor.advise(
+          probs: probs, moverAway: 5, opponentAway: 2, cubeValue: 2);
+      final a = await tutor.assessCubeResponse(state, _ctx(2, 5));
+      expect(a.advice.equityDoubleTake,
+          closeTo(expected.equityDoubleTake, 1e-12));
     });
   });
 

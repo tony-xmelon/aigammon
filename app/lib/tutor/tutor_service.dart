@@ -112,4 +112,30 @@ class TutorService {
     );
     return CubeAssessment(actionWasDouble: playerDoubled, advice: advice);
   }
+
+  /// Advises the DECIDER facing a double at [state] (a [GamePhase.cubeOffered]
+  /// state whose `state.turn` is the decider being asked to take or pass).
+  ///
+  /// [deciderCtx] is anchored to the decider (`state.turn`), exactly as
+  /// [GameController.contextFor] produces for `state.turn`. The advisor reasons
+  /// from the DOUBLER's perspective, so — mirroring [AiAgent.chooseCubeResponse]
+  /// — the position is evaluated for the doubler (`state.turn.opponent`) and the
+  /// aways are inverted (the doubler's away is [MatchContext.opponentAway], the
+  /// decider's is [MatchContext.moverAway]).
+  ///
+  /// The returned assessment's `advice.shouldTake` is the DECIDER's correct
+  /// response; `actionWasDouble` is `true` (the doubler did offer the cube).
+  Future<CubeAssessment> assessCubeResponse(
+      GameState state, MatchContext deciderCtx) async {
+    final doubler = state.turn.opponent;
+    final probs = await _engine.evaluate(state.board, doubler);
+    final advice = _advisor.advise(
+      probs: probs,
+      moverAway: deciderCtx.opponentAway,
+      opponentAway: deciderCtx.moverAway,
+      cubeValue: state.cube.value,
+      crawfordPlayed: deciderCtx.crawfordPlayed,
+    );
+    return CubeAssessment(actionWasDouble: true, advice: advice);
+  }
 }

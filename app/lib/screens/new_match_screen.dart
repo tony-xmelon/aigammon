@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../engine/engine_provider.dart';
 import '../game/game_controller.dart';
 import '../game/player_agent.dart';
+import '../tutor/tutor_service.dart';
 import 'game_screen.dart';
 
 /// The human's chosen side when playing vs the computer. [random] is resolved
@@ -33,6 +34,17 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
 
   /// Hot-seat only: rotate the board so the active player is at the bottom.
   bool _rotateForBlack = true;
+
+  /// Whether live tutor mode is enabled. Defaults per [_defaultTutor] and
+  /// tracks difficulty changes until the user touches the toggle
+  /// ([_tutorTouched]), after which the toggle is authoritative.
+  late bool _tutorEnabled = _defaultTutor(_difficulty);
+  bool _tutorTouched = false;
+
+  /// The default tutor state: ON for a vs-computer easy/medium match, OFF for
+  /// hard/expert and for hot-seat.
+  bool _defaultTutor(Difficulty d) =>
+      widget.vsComputer && (d == Difficulty.easy || d == Difficulty.medium);
 
   @override
   Widget build(BuildContext context) {
@@ -81,8 +93,13 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                                 value: Difficulty.expert, label: Text('Expert')),
                           ],
                           selected: {_difficulty},
-                          onSelectionChanged: (s) =>
-                              setState(() => _difficulty = s.first),
+                          onSelectionChanged: (s) => setState(() {
+                            _difficulty = s.first;
+                            // Live-update the default until the user overrides.
+                            if (!_tutorTouched) {
+                              _tutorEnabled = _defaultTutor(_difficulty);
+                            }
+                          }),
                         ),
                       ),
                       const SizedBox(height: 24),
@@ -113,6 +130,18 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                         onChanged: (v) => setState(() => _rotateForBlack = v),
                       ),
                     ],
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Tutor mode'),
+                      subtitle: const Text(
+                          'Live hints, move marks, and cube advice'),
+                      value: _tutorEnabled,
+                      onChanged: (v) => setState(() {
+                        _tutorEnabled = v;
+                        _tutorTouched = true;
+                      }),
+                    ),
                     const SizedBox(height: 40),
                     SizedBox(
                       width: double.infinity,
@@ -136,6 +165,10 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
 
   void _startMatch() {
     final (controller, orientation) = _buildController();
+    // Build a tutor over the same engine facade when enabled; null = off.
+    final tutor = _tutorEnabled
+        ? TutorService(ref.read(engineFacadeProvider))
+        : null;
     Navigator.of(context).push(
       MaterialPageRoute(
         // Key by the controller so a fresh GameScreen State is mounted per
@@ -144,6 +177,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           key: ValueKey(controller),
           controller: controller,
           orientation: orientation,
+          tutor: tutor,
         ),
       ),
     );

@@ -213,14 +213,14 @@ class GameController extends ChangeNotifier {
         _append(MoveEvent(s.turn, move as Move));
       case GamePhase.cubeOffered:
         final action =
-            await _guard(agent.chooseCubeResponse(s, _contextFor(s.turn)));
+            await _guard(agent.chooseCubeResponse(s, contextFor(s.turn)));
         if (_cancelled) return;
         _append((action as CubeAction) == CubeAction.take
             ? TakeEvent(s.turn)
             : DropEvent(s.turn));
       case GamePhase.resignOffered:
         final accept = await _guard(agent.chooseResignResponse(
-            s, s.resignOffer!.value, _contextFor(s.turn)));
+            s, s.resignOffer!.value, contextFor(s.turn)));
         if (_cancelled) return;
         _append((accept as bool)
             ? ResignAcceptEvent(s.turn)
@@ -233,7 +233,7 @@ class GameController extends ChangeNotifier {
   Future<void> _stepPreRoll(GameState s, PlayerAgent agent) async {
     if (agent.wantsDoublePrompts) {
       if (_doublingLegal(s)) {
-        final wants = await _guard(agent.considerDouble(s, _contextFor(s.turn)));
+        final wants = await _guard(agent.considerDouble(s, contextFor(s.turn)));
         if (_cancelled) return;
         if (wants == true) {
           _append(DoubleEvent(s.turn));
@@ -290,7 +290,11 @@ class GameController extends ChangeNotifier {
   /// Builds the [MatchContext] for [actor] from the running [MatchState],
   /// anchored to [actor]'s own perspective (`moverAway` is [actor]'s away
   /// score). Call sites pass `state.turn` — the actor being asked to decide.
-  MatchContext _contextFor(Player actor) {
+  ///
+  /// Public so the tutor UI (Plan 4 Task 6) can build the same context for its
+  /// cube advice at a human's decision point, rather than duplicating the three
+  /// lines below.
+  MatchContext contextFor(Player actor) {
     final actorScore =
         actor == Player.white ? _match.whiteScore : _match.blackScore;
     final opponentScore =

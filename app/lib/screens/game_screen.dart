@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:backgammon_core/backgammon_core.dart';
+import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 
 import '../board/board_view.dart';
 import '../game/game_controller.dart';
 import '../game/player_agent.dart';
+import '../tutor/move_assessment.dart';
+import '../tutor/tutor_service.dart';
 
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
 /// bar, the in-game dialogs (cube/resign responses, game-end, match-end), the
@@ -48,12 +51,19 @@ class GameScreen extends StatefulWidget {
     super.key,
     required this.controller,
     this.orientation = BoardOrientationMode.fixedWhite,
+    this.tutor,
   });
 
   final GameController controller;
 
   /// Which side sits at the bottom of the board. See [BoardOrientationMode].
   final BoardOrientationMode orientation;
+
+  /// The live tutor, or `null` when tutor mode is off. When non-null the screen
+  /// surfaces a hint button (top-5 plays), a post-move assessment chip for
+  /// HUMAN moves, and cube advice at the human's pre-roll gate / cube-offer
+  /// dialog. Display-only: hints never auto-apply.
+  final TutorService? tutor;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -97,6 +107,43 @@ class _GameScreenState extends State<GameScreen> {
   bool get _hotSeat =>
       _c.white is LocalHumanAgent && _c.black is LocalHumanAgent;
 
+  TutorService? get _tutor => widget.tutor;
+
+  // --- Tutor state -----------------------------------------------------------
+
+  /// Count of game events observed at the last change, so a fresh MoveEvent can
+  /// be detected (and a new game — a shorter event list — resets the tutor).
+  late int _lastEventCount = _c.game.events.length;
+
+  /// The current post-move assessment chip (HUMAN moves only), or `null`. Each
+  /// new human move replaces it; it is dismissible and cleared on game end.
+  MoveAssessment? _chip;
+
+  /// Whether the chip is expanded to reveal the best play.
+  bool _chipExpanded = false;
+
+  /// Monotonic token guarding the async [TutorService.assess]: a resolved future
+  /// is applied only if it is still the latest request (and the screen mounted).
+  int _assessSeq = 0;
+
+  /// Cube advice for the human's currently-open pre-roll gate, or `null`. Keyed
+  /// by [_cubeAdviceKey] so it is computed once per gate, not per rebuild.
+  CubeAssessment? _cubeAdvice;
+  int? _cubeAdviceKey;
+  int _cubeAdviceSeq = 0;
+
+  /// Take/pass advice for a human facing an opponent's double, or `null`. Keyed
+  /// by [_cubeResponseKey] so it is computed once per offer.
+  CubeAssessment? _cubeResponseAdvice;
+  int? _cubeResponseKey;
+  int _cubeResponseSeq = 0;
+
+  /// Whether the hint bottom panel is open, plus its loading/result state.
+  bool _hintOpen = false;
+  bool _hintLoading = false;
+  List<ScoredMove>? _hintMoves;
+  int _hintSeq = 0;
+
   @override
   void initState() {
     super.initState();
@@ -126,7 +173,151 @@ class _GameScreenState extends State<GameScreen> {
   void _onChange() {
     if (!mounted) return;
     _updatePassDevice();
+    _syncTutor();
     setState(() {});
+  }
+
+  // --- Tutor synchronisation -------------------------------------------------
+
+  /// Reacts to controller changes when tutor mode is on: fires a post-move
+  /// assessment for a newly-landed HUMAN move, keeps the pre-roll cube advice in
+  /// sync with the open gate, and clears everything on game end / a new game.
+  void _syncTutor() {
+    if (_tutor == null) return;
+    _syncAssessment();
+    _syncCubeAdvice();
+    _syncCubeResponse();
+  }
+
+  /// Detects a new [MoveEvent] in the current game's event log and, when the
+  /// mover is a human, kicks off an async assessment whose result becomes the
+  /// chip. A shorter event list means a new game began: reset and clear.
+  void _syncAssessment() {
+    final events = _c.game.events;
+    final len = events.length;
+
+    if (len < _lastEventCount) {
+      // A new game started (the event log reset). Clear the previous chip.
+      _lastEventCount = len;
+      _chip = null;
+      _chipExpanded = false;
+      _assessSeq++; // abandon any in-flight assessment from the old game
+      return;
+    }
+    if (_c.state.phase == GamePhase.gameOver) {
+      _chip = null;
+      _chipExpanded = false;
+    }
+    if (len == _lastEventCount) return;
+
+    // One or more events appended since last time: assess any that are human
+    // moves. In practice the loop notifies per-append, so this is usually one.
+    for (var i = _lastEventCount; i < len; i++) {
+      final event = events[i];
+      if (event is! MoveEvent) continue;
+      if (_agentForSide(event.player) is! LocalHumanAgent) continue;
+      final before = Game.replay(
+        events.sublist(0, i),
+        isCrawfordGame: _c.state.isCrawfordGame,
+      ).state;
+      _fireAssessment(before, event.move);
+    }
+    _lastEventCount = len;
+  }
+
+  void _fireAssessment(GameState before, Move played) {
+    final seq = ++_assessSeq;
+    _chip = null; // show a fresh (empty) slot until the future resolves
+    _chipExpanded = false;
+    unawaited(_tutor!.assess(before, played).then((assessment) {
+      if (!mounted || seq != _assessSeq) return;
+      setState(() {
+        _chip = assessment;
+        _chipExpanded = false;
+      });
+    }));
+  }
+
+  /// Recomputes the pre-roll cube advice exactly when a human's turn gate is
+  /// open and doubling is legal; clears it otherwise. Keyed by the event count
+  /// so it is computed once per gate.
+  void _syncCubeAdvice() {
+    final s = _c.state;
+    final showAdvice = _c.awaitingHumanTurn && _doublingLegal(s);
+    if (!showAdvice) {
+      _cubeAdvice = null;
+      _cubeAdviceKey = null;
+      return;
+    }
+    final key = _c.game.events.length;
+    if (_cubeAdviceKey == key) return; // already computed for this gate
+    _cubeAdviceKey = key;
+    final seq = ++_cubeAdviceSeq;
+    _cubeAdvice = null;
+    unawaited(_tutor!
+        .assessCube(s, _c.contextFor(s.turn), playerDoubled: false)
+        .then((advice) {
+      if (!mounted || seq != _cubeAdviceSeq) return;
+      setState(() => _cubeAdvice = advice);
+    }));
+  }
+
+  /// Recomputes the take/pass advice while a human faces an opponent's double
+  /// (a pending cube request); clears it otherwise. Keyed by the event count.
+  void _syncCubeResponse() {
+    final cubeHuman = _humanWith((a) => a.pendingCubeRequest.value != null);
+    if (cubeHuman == null) {
+      _cubeResponseAdvice = null;
+      _cubeResponseKey = null;
+      return;
+    }
+    final key = _c.game.events.length;
+    if (_cubeResponseKey == key) return;
+    _cubeResponseKey = key;
+    final seq = ++_cubeResponseSeq;
+    _cubeResponseAdvice = null;
+    final state = cubeHuman.pendingCubeRequest.value!;
+    unawaited(_tutor!
+        .assessCubeResponse(state, _c.contextFor(state.turn))
+        .then((advice) {
+      if (!mounted || seq != _cubeResponseSeq) return;
+      setState(() => _cubeResponseAdvice = advice);
+    }));
+  }
+
+  bool _doublingLegal(GameState s) =>
+      !s.isCrawfordGame && (s.cube.owner == null || s.cube.owner == s.turn);
+
+  PlayerAgent _agentForSide(Player p) =>
+      p == Player.white ? _c.white : _c.black;
+
+  // --- Hint panel ------------------------------------------------------------
+
+  void _openHint() {
+    setState(() {
+      _hintOpen = true;
+      _hintLoading = true;
+      _hintMoves = null;
+    });
+    final seq = ++_hintSeq;
+    final moveHuman = _humanWith((a) => a.pendingMoveRequest.value != null);
+    final state = moveHuman?.pendingMoveRequest.value ?? _c.state;
+    unawaited(_tutor!.hint(state).then((moves) {
+      if (!mounted || seq != _hintSeq) return;
+      setState(() {
+        _hintLoading = false;
+        _hintMoves = moves;
+      });
+    }));
+  }
+
+  void _closeHint() {
+    setState(() {
+      _hintOpen = false;
+      _hintLoading = false;
+      _hintMoves = null;
+      _hintSeq++;
+    });
   }
 
   /// Tracks the acting side and raises the pass-device overlay when, in a
@@ -191,6 +382,7 @@ class _GameScreenState extends State<GameScreen> {
               children: [
                 if (_c.error != null) _ErrorBanner(error: _c.error!),
                 _Hud(controller: _c),
+                if (_chip != null) _tutorChip(_chip!),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(8),
@@ -204,10 +396,11 @@ class _GameScreenState extends State<GameScreen> {
                     ),
                   ),
                 ),
-                _ActionBar(controller: _c),
+                _bottomRegion(moveHuman),
               ],
             ),
             ..._buildModals(cubeHuman, resignHuman),
+            if (_hintOpen) _hintPanel(),
           ],
         ),
       ),
@@ -258,9 +451,13 @@ class _GameScreenState extends State<GameScreen> {
     // The decider is `state.turn`; the doubler is the opponent.
     final doubler = _playerName(state.turn.opponent);
     final newValue = state.cube.value * 2;
+    final advice = _cubeResponseAdvice;
+    final tutorLine = _tutor == null || advice == null
+        ? ''
+        : '\nTutor: ${advice.advice.shouldTake ? 'Take' : 'Pass'}';
     return _ModalCard(
       title: 'Double offered',
-      message: '$doubler offers a double to $newValue. Take or pass?',
+      message: '$doubler offers a double to $newValue. Take or pass?$tutorLine',
       actions: [
         _CardAction(
           label: 'Pass',
@@ -327,6 +524,206 @@ class _GameScreenState extends State<GameScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
       ],
+    );
+  }
+
+  // --- Tutor UI --------------------------------------------------------------
+
+  /// The bottom controls: the tutor hint button (during a human move), the
+  /// pre-roll action bar, and the pre-roll cube advice line.
+  Widget _bottomRegion(LocalHumanAgent? moveHuman) {
+    final showHint = _tutor != null && moveHuman != null;
+    final showCube =
+        _tutor != null && _cubeAdvice != null && _c.awaitingHumanTurn;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showHint)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: OutlinedButton.icon(
+              onPressed: _openHint,
+              icon: const Icon(Icons.lightbulb_outline, size: 18),
+              label: const Text('Hint'),
+            ),
+          ),
+        _ActionBar(controller: _c),
+        if (showCube) _cubeAdviceLine(_cubeAdvice!),
+      ],
+    );
+  }
+
+  /// The dismissible post-move assessment chip: a coloured mark, the equity
+  /// loss, and (tap to expand) the best play. HUMAN moves only.
+  Widget _tutorChip(MoveAssessment a) {
+    final (color, label) = _markStyle(a.mark);
+    final loss = a.equityLoss;
+    final lossText = loss >= 0.001 ? ' −${loss.toStringAsFixed(3)}' : '';
+    final showBest = _chipExpanded && a.best.checkerMoves.isNotEmpty;
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: () => setState(() => _chipExpanded = !_chipExpanded),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    children: [
+                      Icon(Icons.circle, size: 12, color: color),
+                      const SizedBox(width: 8),
+                      Text('$label$lossText',
+                          style: TextStyle(
+                              color: color, fontWeight: FontWeight.w600)),
+                      if (showBest) ...[
+                        const SizedBox(width: 12),
+                        Flexible(
+                          child: Text('Best: ${a.best}',
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Dismiss',
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: () => setState(() {
+                _chip = null;
+                _chipExpanded = false;
+              }),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Mark → (colour, label): best/good green, dubious amber, error orange,
+  /// blunder red.
+  (Color, String) _markStyle(MoveMark mark) => switch (mark) {
+        MoveMark.best => (Colors.green.shade700, 'Best'),
+        MoveMark.good => (Colors.green.shade600, 'Good'),
+        MoveMark.dubious => (Colors.amber.shade800, 'Dubious'),
+        MoveMark.error => (Colors.orange.shade800, 'Error'),
+        MoveMark.blunder => (Colors.red.shade700, 'Blunder'),
+      };
+
+  /// The pre-roll cube advice: "Tutor: Double — opponent should take/pass" or
+  /// "Tutor: Roll".
+  Widget _cubeAdviceLine(CubeAssessment a) {
+    final advice = a.advice;
+    final text = advice.shouldDouble
+        ? 'Tutor: Double — opponent should '
+            '${advice.shouldTake ? 'take' : 'pass'}'
+        : 'Tutor: Roll';
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.school, size: 16, color: scheme.primary),
+          const SizedBox(width: 6),
+          Text(text, style: TextStyle(color: scheme.primary, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  /// The in-tree hint bottom panel: top-5 plays with equity and delta, or a
+  /// loading spinner while the ranking resolves.
+  Widget _hintPanel() {
+    final moves = _hintMoves ?? const <ScoredMove>[];
+    final bestEq = moves.isEmpty ? 0.0 : moves.first.equity;
+    final top = moves.take(5).toList();
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _closeHint,
+            child: const ColoredBox(color: Colors.black54),
+          ),
+        ),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: Material(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text('Top plays',
+                              style:
+                                  Theme.of(context).textTheme.titleMedium),
+                        ),
+                        IconButton(
+                          tooltip: 'Close',
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: _closeHint,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (_hintLoading)
+                      const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (top.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Text('No hints available.'),
+                      )
+                    else
+                      for (var i = 0; i < top.length; i++)
+                        _hintRow(i, top[i], bestEq),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _hintRow(int i, ScoredMove sm, double bestEq) {
+    final delta = i == 0 ? '—' : (sm.equity - bestEq).toStringAsFixed(3);
+    final mono = Theme.of(context)
+        .textTheme
+        .bodyMedium
+        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 20,
+            child: Text('${i + 1}.', style: mono),
+          ),
+          Expanded(child: Text('${sm.move}', style: mono)),
+          const SizedBox(width: 8),
+          Text(sm.equity.toStringAsFixed(3), style: mono),
+          SizedBox(
+            width: 64,
+            child: Text(delta, style: mono, textAlign: TextAlign.right),
+          ),
+        ],
+      ),
     );
   }
 

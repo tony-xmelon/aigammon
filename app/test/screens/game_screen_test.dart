@@ -4,7 +4,9 @@ import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
+import 'package:aigammon_app/tutor/tutor_service.dart';
 import 'package:backgammon_core/backgammon_core.dart';
+import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -89,9 +91,75 @@ class ThrowingAgent implements PlayerAgent {
   void dispose() {}
 }
 
+/// A canned [EngineFacade] for the tutor: it ranks a synthetic BEST play above
+/// every real legal move (all at a fixed lower equity), so whatever the human
+/// commits resolves to a second-best entry — a known `error`-band loss of
+/// `0.10 - 0.04 = 0.06`. [evalProbs] drives the cube advice (default gammonful:
+/// 5a/5a doubles & takes).
+class TutorEngine implements EngineFacade {
+  TutorEngine({this.evalProbs = _gammonful});
+
+  final Probabilities evalProbs;
+
+  static const _gammonful = Probabilities(
+    win: 0.6,
+    winGammon: 0.3,
+    winBackgammon: 0.05,
+    loseGammon: 0.1,
+    loseBackgammon: 0.0,
+  );
+
+  static const _flat = Probabilities(
+    win: 0.5,
+    winGammon: 0,
+    winBackgammon: 0,
+    loseGammon: 0,
+    loseBackgammon: 0,
+  );
+
+  // Equity e <-> gammonless win via win = (e + 1) / 2.
+  static Probabilities _probsForEquity(double e) => Probabilities(
+        win: (e + 1) / 2,
+        winGammon: 0,
+        winBackgammon: 0,
+        loseGammon: 0,
+        loseBackgammon: 0,
+      );
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) async =>
+      evalProbs;
+
+  @override
+  Future<List<ScoredMove>> rankMoves(
+      BoardState board, Player mover, Dice dice) async {
+    final legal = MoveGenerator.legalMoves(board, mover, dice);
+    return [
+      // A synthetic best (single arbitrary hop; never sameAs a full 2-hop play)
+      // ranked above every real move at 0.04.
+      ScoredMove(
+        move: Move(const [CheckerMove(23, 20)]),
+        probabilities: _probsForEquity(0.10),
+      ),
+      for (final move in legal)
+        ScoredMove(move: move, probabilities: _probsForEquity(0.04)),
+    ];
+  }
+
+  @override
+  Future<CubeAdvice> cubeInfo(BoardState board, Player mover) async =>
+      throw UnimplementedError();
+
+  static Probabilities get flat => _flat;
+}
+
 // --- Widget-test helpers -----------------------------------------------------
 
 const _surface = Size(900, 1300);
+
+Widget _tutorHarness(GameController c, TutorService tutor) => MaterialApp(
+      home: GameScreen(key: ValueKey(c), controller: c, tutor: tutor),
+    );
 
 // Keyed by the controller so pumping a different controller into the same test
 // remounts a fresh GameScreen State (re-running initState / playMatch).
@@ -506,6 +574,132 @@ void main() {
     expect(find.textContaining('boom from agent'), findsOneWidget);
 
     c.disposeController();
+  });
+
+  group('tutor UI', () {
+    testWidgets('hint panel opens with the ranked top plays', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      // The Hint button is available during the human's move.
+      final hint = find.widgetWithText(OutlinedButton, 'Hint');
+      expect(hint, findsOneWidget);
+      await t.tap(hint);
+      await pumpUntil(t, () => find.text('Top plays').evaluate().isNotEmpty);
+
+      // The panel lists the synthetic best (0.100) above the real plays (0.040).
+      expect(find.text('Top plays'), findsOneWidget);
+      expect(find.textContaining('0.100'), findsWidgets);
+      expect(find.textContaining('0.040'), findsWidgets);
+
+      c.disposeController();
+    });
+
+    testWidgets('assessment chip appears after a human move, not an AI move',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // Black (AI) wins the opening (6 > 1) and moves first; White then plays.
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      // After the AI's opening move, the human reaches its gate — no chip for
+      // the AI move.
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      expect(find.textContaining('Error'), findsNothing,
+          reason: 'AI moves are not assessed');
+
+      // White rolls and commits a (second-best) move: the chip lands.
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await commitFirstMove(t);
+      await pumpUntil(t, () => find.textContaining('Error').evaluate().isNotEmpty);
+      expect(find.textContaining('Error'), findsOneWidget);
+      // 0.10 - 0.04 = 0.06 give-up.
+      expect(find.textContaining('0.060'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('cube advice line shows at the gate when tutor on, absent off',
+        (t) async {
+      // Tutor ON: the "Tutor: Double" line appears at the human pre-roll gate.
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      final tutor = TutorService(TutorEngine());
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      await pumpUntil(
+          t, () => find.textContaining('Tutor:').evaluate().isNotEmpty);
+      expect(find.textContaining('Tutor: Double'), findsOneWidget);
+      c.disposeController();
+
+      // Tutor OFF: no advice line at the same gate.
+      final human2 = LocalHumanAgent();
+      final c2 = GameController(
+        white: human2,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c2));
+      await pumpUntil(t, () => c2.awaitingHumanTurn);
+      expect(find.textContaining('Tutor:'), findsNothing);
+      c2.disposeController();
+    });
+
+    testWidgets('cube-offer dialog shows the tutor take/pass line', (t) async {
+      final human = LocalHumanAgent();
+      final ai = FakeAgent(doubles: true);
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        // White wins the opening (6 > 1) and moves; Black then doubles pre-roll.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      final tutor = TutorService(TutorEngine());
+
+      await t.pumpWidget(_tutorHarness(c, tutor));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+
+      await pumpUntil(t, () => human.pendingCubeRequest.value != null);
+      expect(find.textContaining('offers a double'), findsOneWidget);
+      await pumpUntil(
+          t, () => find.textContaining('Tutor:').evaluate().isNotEmpty);
+      // The advice is either Take or Pass; assert the line is present.
+      expect(find.textContaining('Tutor:'), findsOneWidget);
+
+      c.disposeController();
+    });
   });
 
   testWidgets('identical-state rebuild preserves in-progress move entry',
