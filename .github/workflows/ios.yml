@@ -4,10 +4,6 @@ on:
   push:
     branches:
       - master
-      # TODO(ship): remove this dev trigger at ship time (P9 Task 5). It exists
-      # only so the iOS workflow can be iterated to green on the feature branch
-      # before it merges to master.
-      - feature/ux-round3-ios
 
 jobs:
   ios:
