@@ -3,10 +3,7 @@
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `ci.yml` | push to `master`, all PRs | `backgammon_core` + `engine_bindings` + Flutter app tests (Linux) |
-| Android | `android.yml` | `workflow_dispatch`, push to `master` / `feature/flutter-app` | Cross-compile the Rust engine for Android ABIs, build a release APK, and (when configured) push it to Firebase App Distribution |
-
-> The `feature/flutter-app` push trigger on `android.yml` exists only to verify
-> the workflow before merge; it is removed when the branch lands on `master`.
+| Android | `android.yml` | `workflow_dispatch`, push to `master` | Cross-compile the Rust engine for Android ABIs, build a release APK, and (when configured) push it to Firebase App Distribution |
 
 ## `android.yml` — how it builds
 

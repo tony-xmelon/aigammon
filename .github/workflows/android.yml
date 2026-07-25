@@ -2,7 +2,7 @@ name: Android
 on:
   workflow_dispatch:
   push:
-    branches: [master, feature/flutter-app] # feature trigger removed at merge (Task 12)
+    branches: [master]
 
 jobs:
   apk:
