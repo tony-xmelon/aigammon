@@ -1747,6 +1747,50 @@ void main() {
       c.disposeController();
     });
 
+    testWidgets('latches: does not re-fire on a later move-entry of the same '
+        'game screen', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = firstMove(human);
+      var shownCount = 0;
+      await t.pumpWidget(hintHarness(c,
+          enableDrag: true,
+          dragHintShown: false,
+          onDragHintShown: () => shownCount++));
+
+      // First move-entry: the hint shows exactly once.
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text(hintText), findsOneWidget);
+      expect(shownCount, 1);
+
+      // Dismiss it, then commit White's move; the AI replies and play returns to
+      // White for a SECOND human move-entry on the very same GameScreen State.
+      await t.tap(find.text('Got it'));
+      await t.pumpAndSettle();
+      expect(find.text(hintText), findsNothing);
+
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white,
+          maxFrames: 1200);
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+
+      // The latch held across the intervening _onChange notifications: no second
+      // SnackBar, and the persistence callback fired only once.
+      expect(find.text(hintText), findsNothing,
+          reason: 'the one-time hint never re-fires within a session');
+      expect(shownCount, 1);
+
+      c.disposeController();
+    });
+
     testWidgets('does not reappear once dragHintShown is persisted (true)',
         (t) async {
       await t.binding.setSurfaceSize(_surface);

@@ -198,8 +198,15 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Whether the one-time drag/tap hint has been surfaced this session. Seeded
   /// from the persisted [GameScreen.dragHintShown]; set true the instant the
-  /// hint shows so it can never appear twice within a match.
+  /// hint actually shows (after the mounted check) so it can never appear twice
+  /// within a match.
   late bool _dragHintShown = widget.dragHintShown;
+
+  /// Whether a hint SnackBar has already been SCHEDULED (its post-frame callback
+  /// queued) but not yet run. Prevents a burst of [_onChange] notifications
+  /// between the schedule and the frame from queuing several SnackBars, without
+  /// prematurely committing the persisted [_dragHintShown] latch.
+  bool _dragHintScheduled = false;
 
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
@@ -303,23 +310,31 @@ class _GameScreenState extends State<GameScreen> {
   /// only fires when drag is enabled ([BoardInteractionOptions.enableDrag]) — no
   /// point advertising a disabled gesture; only fires at a human move (the
   /// affordances are up); fires at most once (the [_dragHintShown] latch, seeded
-  /// from the persisted flag). On firing it flips the latch, notifies
-  /// [GameScreen.onDragHintShown] so the caller persists it, and shows a
-  /// dismissible [SnackBar] AFTER the current frame (a SnackBar cannot be shown
-  /// during a build/rebuild). The SnackBar is non-blocking — input continues
-  /// underneath it.
+  /// from the persisted flag, plus [_dragHintScheduled] to coalesce a burst of
+  /// notifications before the frame). The persisted latch flip and the
+  /// [GameScreen.onDragHintShown] persistence callback run INSIDE the post-frame
+  /// callback, AFTER the mounted check — so a hint that never actually displays
+  /// (screen torn down before the frame) is never recorded as shown. A SnackBar
+  /// cannot be shown during a build/rebuild, hence the post-frame deferral.
+  ///
+  /// The SnackBar floats [SnackBarBehavior.floating] with a bottom margin that
+  /// clears the fixed 64px bottom action bar, so Confirm / Roll stay tappable —
+  /// the hint is genuinely non-blocking, not just logically so.
   void _maybeShowDragHint() {
-    if (_dragHintShown) return;
+    if (_dragHintShown || _dragHintScheduled) return;
     if (!widget.interactionOptions.enableDrag) return;
     final humanMoving =
         _humanSideWith((s) => _c.pendingMoveOf(s).value != null) != null;
     if (!humanMoving) return;
-    _dragHintShown = true;
-    widget.onDragHintShown?.call();
+    _dragHintScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _dragHintShown = true;
+      widget.onDragHintShown?.call();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.only(bottom: 72, left: 12, right: 12),
           content:
               const Text('Tip: drag checkers or tap them — change in Settings'),
           duration: const Duration(seconds: 6),
