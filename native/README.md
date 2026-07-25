@@ -124,6 +124,12 @@ linked **statically** into the app binary and its symbols are resolved at runtim
 via `DynamicLibrary.process()` (see `libraryLoadStrategyFor` in
 `packages/engine_bindings/lib/src/ffi/library_loader.dart`).
 
+**Bundle id.** The iOS `PRODUCT_BUNDLE_IDENTIFIER` is **`com.xmelon.aigammon`**,
+which deliberately diverges from the Android `applicationId`
+(`com.xmelon.aigammon_app`): Apple's `CFBundleIdentifier` charset excludes
+underscores, so the Android id would break signing / App Store submission. iOS and
+Android are registered as separate apps in Firebase, so the ids need not match.
+
 **Staticlib target.** The shim's `Cargo.toml` already declares
 `crate-type = ["cdylib", "staticlib"]`, so the staticlib is a first-class build
 target. CI builds it for the device ABI:
