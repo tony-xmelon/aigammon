@@ -71,10 +71,13 @@ class GameScreen extends StatefulWidget {
   /// The persisted match row's id (resolving asynchronously — the setup screen
   /// inserts it fire-and-forget), or `null` when this match is not persisted.
   ///
-  /// When non-null AND a [tutor] is configured (analysis needs the engine), the
-  /// game-end and match-end dialogs offer a "Match summary" button that awaits
-  /// this id and pushes the [MatchDetailScreen] (its games list drills through
-  /// to per-game [AnalysisScreen]).
+  /// When non-null the game-end dialog offers an "Analyze game" button and the
+  /// match-end dialog a "Match summary" button; both await this id and push the
+  /// [MatchDetailScreen] (its games list drills through to per-game
+  /// [AnalysisScreen]). Post-game analysis needs only the ENGINE — the
+  /// [AnalysisScreen] builds its own [TutorService] from the engine provider on
+  /// demand — so this is gated purely on persistence, NOT on the live [tutor]
+  /// (which defaults off for hard/expert and hot-seat matches).
   final Future<int>? persistedMatchId;
 
   /// The animation pacing (checker hop/inter-hop travel + the dice-roll beat's
@@ -790,7 +793,7 @@ class _GameScreenState extends State<GameScreen> {
           '(${_outcomeName(result.outcome)}).\n'
           '${_scoreLine(_c)}',
       actions: [
-        if (_canShowSummary) _summaryAction(),
+        if (_canShowSummary) _summaryAction('Analyze game'),
         _CardAction(
           label: 'Next game',
           filled: true,
@@ -806,8 +809,11 @@ class _GameScreenState extends State<GameScreen> {
       title: 'Match over',
       message: '${winner == null ? 'Nobody' : _playerName(winner)} wins the '
           'match.\n${_scoreLine(_c)}',
+      // A subtle reassurance that a finished match can be revisited later from
+      // the home screen's History, even after this dialog is dismissed.
+      footnote: _canShowSummary ? 'Saved to History' : null,
       actions: [
-        if (_canShowSummary) _summaryAction(),
+        if (_canShowSummary) _summaryAction('Match summary'),
         _CardAction(
           label: 'Done',
           filled: true,
@@ -817,14 +823,15 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  /// The post-match "Match summary" link is offered only when the match is
-  /// persisted ([GameScreen.persistedMatchId] set) AND analysis is available
-  /// (a [GameScreen.tutor] — it needs the engine). Same in both end dialogs.
-  bool get _canShowSummary =>
-      widget.persistedMatchId != null && widget.tutor != null;
+  /// The post-game analysis link is offered whenever the match is PERSISTED
+  /// ([GameScreen.persistedMatchId] set) — regardless of the live [GameScreen.tutor]
+  /// setting. Analysis runs off the engine (the [AnalysisScreen] builds its own
+  /// [TutorService] on demand), not the live tutor, so the tutor being off must
+  /// not hide the entry point. Same gate for both end dialogs.
+  bool get _canShowSummary => widget.persistedMatchId != null;
 
-  _CardAction _summaryAction() => _CardAction(
-        label: 'Match summary',
+  _CardAction _summaryAction(String label) => _CardAction(
+        label: label,
         busy: _summaryLoading,
         onPressed: _summaryLoading ? null : _openMatchSummary,
       );
@@ -1676,11 +1683,16 @@ class _ModalCard extends StatelessWidget {
     required this.title,
     required this.message,
     required this.actions,
+    this.footnote,
   });
 
   final String title;
   final String message;
   final List<_CardAction> actions;
+
+  /// An optional subtle line (bodySmall) shown between the message and the
+  /// action row — e.g. the match-end "Saved to History" reassurance.
+  final String? footnote;
 
   /// Renders one action as a filled or text button, showing a small spinner in
   /// place of the label while [_CardAction.busy].
@@ -1719,6 +1731,16 @@ class _ModalCard extends StatelessWidget {
                         style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 12),
                     Text(message),
+                    if (footnote != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        footnote!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color:
+                                  Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ],
                     const SizedBox(height: 24),
                     // Wrap (not Row) so a second action — e.g. the post-match
                     // "Match summary" link alongside "Next game" / "Done" — flows

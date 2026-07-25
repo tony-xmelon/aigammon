@@ -707,7 +707,7 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('game-end: shows the "Match summary" button (tutor+id present)',
+    testWidgets('game-end: shows the "Analyze game" button (tutor+id present)',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -720,14 +720,33 @@ void main() {
       await t.pumpAndSettle();
 
       expect(find.text('Game over'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Match summary'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Analyze game'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Next game'), findsOneWidget);
 
       c.disposeController();
     });
 
-    testWidgets('absent when tutor is null (even with a persisted id)',
+    testWidgets('game-end: "Analyze game" shows with tutor OFF (id present)',
         (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final c = gameOver();
+      // Tutor OFF: post-game analysis needs only the engine, so the entry point
+      // must still appear when the match is persisted.
+      await t.pumpWidget(harness(c, matchId: 42, tutor: null, db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Game over'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Analyze game'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('match-end: "Match summary" + "Saved to History" show with '
+        'tutor OFF (id present)', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -738,7 +757,58 @@ void main() {
       await t.pumpAndSettle();
 
       expect(find.text('Match over'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Match summary'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Match summary'), findsOneWidget);
+      expect(find.text('Saved to History'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('tutor OFF: tapping "Match summary" pushes MatchDetailScreen',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final repo = MatchRepository(db);
+      late int matchId;
+      final game = _finishedGame();
+      await t.runAsync(() async {
+        matchId = await repo.startMatch(
+            matchLength: 1,
+            mode: 'vsComputer',
+            whiteType: 'human',
+            blackType: 'ai:expert');
+        await repo.recordGame(
+          matchId: matchId,
+          gameNumber: 1,
+          isCrawford: game.state.isCrawfordGame,
+          events: game.events,
+          result: game.state.result!,
+        );
+      });
+
+      final c = matchOver();
+      // No live tutor — the analysis route must still be reachable and build its
+      // own analyzer from the engine provider.
+      await t.pumpWidget(harness(c, matchId: matchId, tutor: null, db: db));
+      await t.pumpAndSettle();
+      expect(find.text('Match over'), findsOneWidget);
+
+      final summary = find.widgetWithText(TextButton, 'Match summary');
+      expect(summary, findsOneWidget);
+      await t.runAsync(() async {
+        await t.tap(summary);
+      });
+      for (var i = 0; i < 20; i++) {
+        await t.runAsync(() async =>
+            Future<void>.delayed(const Duration(milliseconds: 10)));
+        await t.pump();
+      }
+      await t.pumpAndSettle();
+
+      expect(find.byType(MatchDetailScreen), findsOneWidget);
+      expect(find.text('Game 1'), findsOneWidget);
 
       c.disposeController();
     });
@@ -756,7 +826,27 @@ void main() {
       await t.pumpAndSettle();
 
       expect(find.text('Match over'), findsOneWidget);
+      // No persisted record → no analysis entry point and no History hint.
       expect(find.widgetWithText(TextButton, 'Match summary'), findsNothing);
+      expect(find.text('Saved to History'), findsNothing);
+
+      c.disposeController();
+    });
+
+    testWidgets('game-end "Analyze game" absent when there is no persisted id',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final db = newTestDatabase();
+      addTearDown(db.close);
+      final c = gameOver();
+      await t.pumpWidget(harness(c,
+          matchId: null, tutor: TutorService(RealRankEngine()), db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Game over'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Analyze game'), findsNothing);
 
       c.disposeController();
     });
