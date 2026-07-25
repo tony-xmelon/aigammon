@@ -276,4 +276,146 @@ void main() {
       }
     });
   });
+
+  group('MoveBuilder.chainedDestinationsFor / chainFor (combined moves)', () {
+    test('opening 3-1: one back checker chains 24/20, landing 19 via 22 or 20',
+        () {
+      // Index 23 is White's 24-point (two back checkers). With 3-1 a single
+      // checker may run both dice: 24/23/20 or 24/21/20 — both land on the
+      // 20-point (index 19). The chained landing is deduped to 19.
+      final legal = MoveGenerator.legalMoves(
+          BoardState.initial(), Player.white, Dice(3, 1));
+      final b = MoveBuilder(legal);
+
+      final chained = b.chainedDestinationsFor(23);
+      expect(chained, contains(19),
+          reason: '24/20 is a same-checker two-hop chain landing on 19');
+      // 19 is NOT a single-hop (direct) destination of 23.
+      expect(b.destinationsFor(23), isNot(contains(19)));
+
+      final chain = b.chainFor(23, 19);
+      expect(chain, hasLength(2), reason: 'a 3-1 chain is exactly two hops');
+      expect(chain.first.from, 23);
+      expect(chain.last.to, 19);
+      // The two hops connect (checker travels through the intermediate point).
+      expect(chain.first.to, chain.last.from);
+      // The intermediate is one of the two single-die landings.
+      expect(chain.first.to, anyOf(22, 20));
+    });
+
+    test('chainFor yields a sequence the builder can enter hop-by-hop', () {
+      final legal = MoveGenerator.legalMoves(
+          BoardState.initial(), Player.white, Dice(3, 1));
+      final b = MoveBuilder(legal);
+      final chain = b.chainFor(23, 19);
+      expect(chain, isNotEmpty);
+      // Entering the chain hop-by-hop never throws and leaves a legal prefix.
+      for (final h in chain) {
+        b.addHop(h.from, h.to);
+      }
+      expect(b.chosenHops, hasLength(2));
+      // The chain plus its continuation completes to a legal move.
+      while (!b.isComplete) {
+        final s = b.selectableSources.first;
+        b.addHop(s, b.destinationsFor(s).first);
+      }
+      expect(legal.any((m) => m.sameAs(b.build())), isTrue);
+    });
+
+    test('no chains when the roll only affords single hops', () {
+      // Bear-off position: two White checkers on the 6-point (index 5), all
+      // else home/off. Dice 6-5: the 6 bears one off, the 5 moves 6/1. The two
+      // dice act on different checkers with no same-checker continuation.
+      final board = BoardState(
+        points: [
+          0, 0, 0, 0, 0, 2, // 1-6
+          0, 0, 0, 0, 0, 0, // 7-12
+          0, 0, 0, 0, 0, 0, // 13-18
+          0, 0, 0, 0, 0, -2, // 19-24
+        ],
+        whiteOff: 13,
+        blackOff: 13,
+      );
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
+      final b = MoveBuilder(legal);
+      // The 6-point (index 5) can bear off (6) or move to 1 (5) — both single
+      // hops. There is no chain (a chain would need the same checker to play
+      // both dice, but a 6-5 from index 5 overshoots).
+      expect(b.chainedDestinationsFor(5), isEmpty);
+      expect(b.chainFor(5, 0), isEmpty);
+    });
+
+    test('bar entry can start a chain', () {
+      // White on the bar; entry board (indices 18..23) open enough to enter and
+      // continue with the same checker.
+      final board = BoardState(
+        points: [
+          4, 0, 0, 0, 0, 5, // 1-6
+          0, 0, 0, 0, 0, 0, // 7-12
+          0, -3, 0, -3, 0, 0, // 13-18 (black on 14,16)
+          0, 0, 0, -3, -3, -3, // 19-24 (black on 22,23,24)
+        ],
+        whiteBar: 1,
+        whiteOff: 5,
+      );
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
+      final b = MoveBuilder(legal);
+      // bar/19 (index 18, the 6) then 19/14... is blocked; bar/18 (index 19,
+      // the 5) then 18/12 (index 17->11? no). Compute what the builder actually
+      // offers: any chain must start from the bar and be enterable.
+      final chained = b.chainedDestinationsFor(CheckerMove.bar);
+      // If a bar chain exists, its chainFor is enterable end to end.
+      for (final landing in chained) {
+        final chain = b.chainFor(CheckerMove.bar, landing);
+        expect(chain.length, greaterThanOrEqualTo(2));
+        expect(chain.first.from, CheckerMove.bar);
+        expect(chain.last.to, landing);
+        final probe = MoveBuilder(legal);
+        for (final h in chain) {
+          probe.addHop(h.from, h.to);
+        }
+        expect(probe.chosenHops.length, chain.length);
+      }
+    });
+
+    test('doubles 1-1: a single checker chains up to four hops', () {
+      // Contrived: a lone White back checker with a clear runway on 1-1 can
+      // chain 24/23/22/21/20 (indices 23->22->21->20->19). Landings appear at
+      // depths 2..4, capped at the full move length (4).
+      final board = BoardState(
+        points: [
+          -2, 0, 0, 0, 0, 0, // 1-6 (black filler out of the way)
+          13, 0, 0, 0, 0, 0, // 7-12 (White's other 13 checkers parked on 7)
+          0, 0, 0, 0, 0, 0, // 13-18
+          0, 0, 0, 0, 0, 1, // 19-24 (lone White on 24)
+        ],
+        whiteOff: 0,
+        blackOff: 13,
+      );
+      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(1, 1));
+      expect(legal, isNotEmpty);
+      final b = MoveBuilder(legal);
+      final chained = b.chainedDestinationsFor(23);
+      // The back checker can walk 23->22->21->20->19; the deepest chain lands
+      // on 19 (four hops = the whole move).
+      expect(chained, contains(19));
+      final full = b.chainFor(23, 19);
+      expect(full, hasLength(4));
+      expect(full.first.from, 23);
+      expect(full.last.to, 19);
+      // No chain exceeds the move length.
+      for (final landing in chained) {
+        expect(b.chainFor(23, landing).length, lessThanOrEqualTo(4));
+      }
+    });
+
+    test('chainedDestinationsFor is empty for a non-source', () {
+      final legal = MoveGenerator.legalMoves(
+          BoardState.initial(), Player.white, Dice(3, 1));
+      final b = MoveBuilder(legal);
+      // Index 0 has no White checker in the opening / is not a first hop source.
+      expect(b.chainedDestinationsFor(0), isEmpty);
+      expect(b.chainFor(0, 5), isEmpty);
+    });
+  });
 }

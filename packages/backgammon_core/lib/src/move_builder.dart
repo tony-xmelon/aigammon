@@ -55,6 +55,67 @@ class MoveBuilder {
   Set<int> destinationsFor(int source) =>
       {for (final h in _nextHops) if (h.from == source) h.to};
 
+  /// Final landing points of *combined* (multi-hop) moves in which the SAME
+  /// checker, starting at [source], plays two or more consecutive dice.
+  ///
+  /// A chain is a sequence of offered hops h1=(source, x), h2=(x, y), … where
+  /// each hop continues from the previous hop's landing (same checker) and the
+  /// whole sequence is enterable hop-by-hop from the current prefix (each hop is
+  /// offered by the builder at the point it would be played). The returned set
+  /// is the DEDUPED landing spots of chains of length ≥ 2 — e.g. for an opening
+  /// 3-1 the back checker's two routes 24/23/20 and 24/21/20 both collapse to
+  /// the single landing 20 (index 19).
+  ///
+  /// Chains are naturally capped at the turn's move length (once the prefix is
+  /// full no hops are offered), so a doubles roll yields landings at depths 2..4
+  /// but never deeper. Landings that would also be a single-hop [destinationsFor]
+  /// value cannot occur (one die vs. two dice never coincide for one source),
+  /// but callers that paint both sets may subtract [destinationsFor] defensively.
+  Set<int> chainedDestinationsFor(int source) {
+    final out = <int>{};
+    _collectChains(List.of(_chosen), source, const [], out);
+    return out;
+  }
+
+  /// One enterable hop sequence (length ≥ 2) that runs the same checker from
+  /// [source] to [landing], or an empty list when no such chain exists.
+  ///
+  /// The returned hops are guaranteed enterable in order via [addHop] from the
+  /// current prefix. When several routes reach [landing] (e.g. 24/23/20 vs.
+  /// 24/21/20) an arbitrary but valid one is returned.
+  List<CheckerMove> chainFor(int source, int landing) =>
+      _findChain(List.of(_chosen), source, landing, const []) ?? const [];
+
+  /// DFS from [currentPos] (the same checker's current location) collecting the
+  /// landings of every enterable chain of length ≥ 2 into [out]. [prefix] is the
+  /// hypothetical chosen sequence (real prefix + chain so far); [chain] is the
+  /// same-checker hops accumulated from [source].
+  void _collectChains(List<CheckerMove> prefix, int currentPos,
+      List<CheckerMove> chain, Set<int> out) {
+    for (final h in _computeNextHops(prefix)) {
+      if (h.from != currentPos) continue; // must continue the SAME checker
+      final next = [...chain, h];
+      if (next.length >= 2) out.add(h.to);
+      if (h.to == CheckerMove.off) continue; // a borne-off checker cannot go on
+      _collectChains([...prefix, h], h.to, next, out);
+    }
+  }
+
+  /// DFS variant returning the first enterable chain (length ≥ 2) whose final
+  /// hop lands on [landing], or `null`.
+  List<CheckerMove>? _findChain(List<CheckerMove> prefix, int currentPos,
+      int landing, List<CheckerMove> chain) {
+    for (final h in _computeNextHops(prefix)) {
+      if (h.from != currentPos) continue;
+      final next = [...chain, h];
+      if (next.length >= 2 && h.to == landing) return next;
+      if (h.to == CheckerMove.off) continue;
+      final found = _findChain([...prefix, h], h.to, landing, next);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
   /// Records a hop. Throws [ArgumentError] unless (from, to) is currently
   /// offered by [selectableSources]/[destinationsFor].
   void addHop(int from, int to) {
@@ -103,31 +164,41 @@ class MoveBuilder {
     return _legal.firstWhere((m) => m.sameAs(entered));
   }
 
-  /// Recomputes the next-hop options for the current prefix: for every legal
-  /// move and every permutation of its hops whose first `k` hops equal the
-  /// chosen prefix (by from/to), the (k)-th hop is offered.
+  /// Recomputes the next-hop options for the current chosen prefix.
   void _recompute() {
-    final k = _chosen.length;
+    _nextHops = _computeNextHops(_chosen);
+  }
+
+  /// The next-hop options for an arbitrary [prefix]: for every legal move and
+  /// every permutation of its hops whose first `prefix.length` hops equal
+  /// [prefix] (by from/to), the next hop is offered (deduped by from/to).
+  ///
+  /// Used both for the live prefix (via [_recompute]) and for the hypothetical
+  /// prefixes explored while enumerating combined-move chains, so chain hops are
+  /// exactly the hops the builder would offer when they are played.
+  List<CheckerMove> _computeNextHops(List<CheckerMove> prefix) {
+    final k = prefix.length;
     final result = <CheckerMove>[];
     final seen = <int>{};
     for (final move in _legal) {
       final hops = move.checkerMoves;
       if (k >= hops.length) continue;
       for (final perm in _permutations(hops)) {
-        if (!_prefixMatches(perm, k)) continue;
+        if (!_prefixMatches(perm, prefix)) continue;
         final hop = perm[k];
         // Sentinels: bar == 24, off == -1; both fit in a single stable key.
         final key = (hop.from + 1) * 100 + (hop.to + 1);
         if (seen.add(key)) result.add(hop);
       }
     }
-    _nextHops = result;
+    return result;
   }
 
-  /// Whether the first [k] hops of [perm] equal the chosen prefix by from/to.
-  bool _prefixMatches(List<CheckerMove> perm, int k) {
-    for (var i = 0; i < k; i++) {
-      if (perm[i].from != _chosen[i].from || perm[i].to != _chosen[i].to) {
+  /// Whether the first `prefix.length` hops of [perm] equal [prefix] by from/to.
+  bool _prefixMatches(List<CheckerMove> perm, List<CheckerMove> prefix) {
+    if (perm.length < prefix.length) return false;
+    for (var i = 0; i < prefix.length; i++) {
+      if (perm[i].from != prefix[i].from || perm[i].to != prefix[i].to) {
         return false;
       }
     }
