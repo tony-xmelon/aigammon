@@ -31,8 +31,30 @@ dev_dependencies:
   drift_dev: ^2.18.0
   build_runner: ^2.4.11
   sqlite3: ^2.4.6
+  flutter_launcher_icons: ^0.14.1
 
 flutter:
   uses-material-design: true
   assets:
     - assets/nets/
+
+# Launcher icons. The source PNGs are generated from the app's own brand mark
+# (lib/branding/app_mark.dart) — see tool/generate_app_icon.dart. Regenerate the
+# platform icons after changing the artwork:
+#
+#   flutter test tool/generate_app_icon.dart
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: assets/icon/app_icon.png
+  android: true
+  # Android adaptive icon: felt-tan plate from the launcher, motif on top.
+  adaptive_icon_background: "#B8814D"
+  adaptive_icon_foreground: assets/icon/app_icon_adaptive.png
+  ios: true
+  # iOS rejects an alpha channel; the source is already opaque, but flatten
+  # defensively so a future edit cannot ship a rejected build.
+  remove_alpha_ios: true
+  windows:
+    generate: true
+    image_path: assets/icon/app_icon.png
+    icon_size: 256
