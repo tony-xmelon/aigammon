@@ -99,6 +99,29 @@ class BoardGeometry {
   /// local-bottom player's tray is the BOTTOM strip; the opponent's is the TOP.
   Rect offRect(Player player) => _orient(_canonicalOffRect(player));
 
+  /// Side length of a rendered die (a little larger than a checker so the pips
+  /// read). Both dice pairs and the cube derive their size from this.
+  double get diceSide => checkerRadius * 2.2;
+
+  /// Bounding rectangle of [player]'s dice PAIR (the two dice plus the gap
+  /// between them), centred in the empty middle band. The [mover]'s pair sits in
+  /// the RIGHT half of the board (between the bar and the right edge, where dice
+  /// have always sat); the waiting player's pair sits in the mirrored LEFT-half
+  /// position. Orientation-aware: like the checkers, the canonical layout is
+  /// rotated with the board on a hot-seat flip.
+  Rect diceRect(Player player, {required Player mover}) {
+    final side = diceSide;
+    final gap = side * 0.5;
+    final pairWidth = side * 2 + gap;
+    // Canonical: mover to the right of the bar, waiter mirrored to the left.
+    final rightCx = (_barRight + _w) / 2;
+    final cx = player == mover ? rightCx : _w - rightCx;
+    final cy = (_bandTop + _bandBottom) / 2;
+    final canonical = Rect.fromCenter(
+        center: Offset(cx, cy), width: pairWidth, height: side);
+    return _orient(canonical);
+  }
+
   /// Centre of the [stackPosition]-th checker (0-based, from the point's base)
   /// on point [pointIndex], in a stack of [stackCount] checkers. The first five
   /// sit at full 2r spacing (no overlap); larger stacks compress the whole

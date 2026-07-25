@@ -194,6 +194,11 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                 state: shownState,
                 interactive: false,
                 onMoveCommitted: (_) {},
+                // Show the shown position's roll on the mover's own dice pair.
+                whiteDice:
+                    shownState.turn == Player.white ? shownState.dice : null,
+                blackDice:
+                    shownState.turn == Player.black ? shownState.dice : null,
               ),
             ),
           ),

@@ -1088,14 +1088,15 @@ void main() {
       expect(c.state.dice, Dice(realRoll.$1, realRoll.$2),
           reason: 'Black settled on its real roll internally');
 
-      // The beat is live: the board paints override faces, NOT the real roll.
-      expect(boardPainterOf(t).dice, isNot(Dice(realRoll.$1, realRoll.$2)),
-          reason: 'the roll beat overrides the displayed dice');
+      // The beat is live: Black (the roller) paints override faces on ITS pair,
+      // NOT the real roll.
+      expect(boardPainterOf(t).blackDice, isNot(Dice(realRoll.$1, realRoll.$2)),
+          reason: 'the roll beat overrides the roller pair');
 
       // After the tumble frames (6 × 140ms) the override clears and the real
       // roll shows. Pump comfortably past the cycling window.
       await t.pump(const Duration(milliseconds: 1000));
-      expect(boardPainterOf(t).dice, Dice(realRoll.$1, realRoll.$2),
+      expect(boardPainterOf(t).blackDice, Dice(realRoll.$1, realRoll.$2),
           reason: 'the beat settled to the real roll');
 
       // Let the settle-pause timer fire before teardown so no timer outlives it.
@@ -1111,9 +1112,9 @@ void main() {
       await t.pumpWidget(_harness(c)); // Duration.zero: animation off
       await driveToAiRoll(t, c, human);
 
-      // No override ever: the board shows Black's real roll immediately.
-      expect(boardPainterOf(t).dice, Dice(6, 5));
-      expect(boardPainterOf(t).dice, c.state.dice);
+      // No override ever: Black's pair shows its real roll immediately.
+      expect(boardPainterOf(t).blackDice, Dice(6, 5));
+      expect(boardPainterOf(t).blackDice, c.state.dice);
 
       c.disposeController();
     });
@@ -1190,13 +1191,129 @@ void main() {
 
       final realRoll = c.state.dice;
       expect(realRoll, isNotNull);
-      // The human's own roll shows immediately: the painter's dice equal the
-      // real state dice with no override in between.
-      expect(boardPainterOf(t).dice, realRoll,
+      // The human's own roll shows immediately: White's (the mover's) pair
+      // equals the real state dice with no override in between.
+      expect(boardPainterOf(t).whiteDice, realRoll,
           reason: 'a local roll is instant — no beat override');
 
       // Let any move animation from the AI opening finish before teardown.
       await t.pumpAndSettle();
+      c.disposeController();
+    });
+  });
+
+  group('persistent dice pairs', () {
+    // The fold the screen applies: each player's most recent roll of the CURRENT
+    // game (opening seeds the first mover), so a test can compute the expected
+    // pairs directly from the live event log.
+    (Dice?, Dice?) expectedDice(GameController c) {
+      Dice? w;
+      Dice? b;
+      for (final e in c.game.events) {
+        if (e is OpeningRollEvent) {
+          final d = Dice(e.whiteDie, e.blackDie);
+          if (e.firstPlayer == Player.white) {
+            w = d;
+          } else {
+            b = d;
+          }
+        } else if (e is RollEvent) {
+          final d = Dice(e.die1, e.die2);
+          if (e.player == Player.white) {
+            w = d;
+          } else {
+            b = d;
+          }
+        }
+      }
+      return (w, b);
+    }
+
+    testWidgets("opponent's roll stays visible on its pair while the human "
+        'moves', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final ai = FakeAgent();
+      final c = GameController(
+        white: human,
+        black: ai,
+        matchLength: 5,
+        // White wins the opening (6 > 1) and plays; Black (AI) then rolls
+        // Dice(6, 5) and moves; play returns to White's gate.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      // White's opening roll shows on White's pair; Black has no roll yet.
+      expect(boardPainterOf(t).whiteDice, Dice(6, 1));
+      expect(boardPainterOf(t).blackDice, isNull,
+          reason: 'Black has not rolled yet: blank pair');
+
+      // White plays; the AI rolls + moves; White returns to its pre-roll gate.
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white);
+
+      final (ew, eb) = expectedDice(c);
+      expect(eb, isNotNull, reason: 'the AI rolled on its turn');
+      // The opponent's roll persists on the black pair even though it is now
+      // White's turn (the mover is White).
+      expect(boardPainterOf(t).blackDice, eb);
+      expect(boardPainterOf(t).whiteDice, ew);
+      expect(boardPainterOf(t).diceMover, Player.white);
+
+      // White rolls and enters its move: its own pair updates to the new roll,
+      // while the AI's roll REMAINS on the black pair (the core fix).
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      final (ew2, eb2) = expectedDice(c);
+      expect(boardPainterOf(t).whiteDice, ew2);
+      expect(boardPainterOf(t).blackDice, eb2,
+          reason: "the opponent's roll is still visible while the human moves");
+      expect(eb2, eb, reason: 'the AI has not rolled again');
+
+      c.disposeController();
+    });
+
+    testWidgets('a new game clears both pairs (scoped to the current game)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: FakeAgent(),
+        black: FakeAgent(),
+        matchLength: 7, // long enough that one game never ends the match
+        diceRoller: DiceRoller(Random(7)),
+      );
+
+      await t.pumpWidget(_harness(c));
+      await t.pumpAndSettle();
+      expect(c.awaitingNextGame, isTrue);
+
+      // Game 1 is over: both players have rolled, so both pairs are populated.
+      final (w1, b1) = expectedDice(c);
+      expect(w1, isNotNull);
+      expect(b1, isNotNull);
+      expect(boardPainterOf(t).whiteDice, w1);
+      expect(boardPainterOf(t).blackDice, b1);
+
+      final g1 = c.game;
+      await t.tap(find.widgetWithText(FilledButton, 'Next game'));
+      await pumpUntil(t, () => !identical(c.game, g1));
+      await t.pumpAndSettle();
+
+      // Game 2's log is fresh: the painted pairs are folded ONLY from the new
+      // game's events (game 1's rolls are gone), proving the reset.
+      expect(c.game.events.contains(g1.events.first), isFalse,
+          reason: 'a new game has its own opening roll');
+      final (w2, b2) = expectedDice(c);
+      expect(boardPainterOf(t).whiteDice, w2);
+      expect(boardPainterOf(t).blackDice, b2);
+
       c.disposeController();
     });
   });

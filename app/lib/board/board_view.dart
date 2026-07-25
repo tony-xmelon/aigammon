@@ -250,6 +250,8 @@ class BoardView extends StatefulWidget {
     this.hopDuration = const Duration(milliseconds: 150),
     this.interHopDuration = Duration.zero,
     this.interactionOptions = const BoardInteractionOptions(),
+    this.whiteDice,
+    this.blackDice,
     this.diceOverride,
   });
 
@@ -309,11 +311,21 @@ class BoardView extends StatefulWidget {
   /// [BoardInteractionOptions].
   final BoardInteractionOptions interactionOptions;
 
-  /// When non-null, these faces REPLACE [state]'s dice on the painted board —
-  /// purely cosmetic. Used by the opponent dice-roll animation beat (see
-  /// [GameScreen]), which cycles pseudo-random faces for ~400ms before the real
-  /// roll settles (the override then clears back to `null`). Never affects move
-  /// entry or state; it only changes what the dice show.
+  /// WHITE's persistent dice pair — the most recent roll to show on White's
+  /// dice, or `null` when White has not rolled yet this game (a blank dimmed
+  /// outline). Each player keeps their OWN pair so the opponent's roll stays
+  /// visible after the turn passes. See [BoardPainter.whiteDice].
+  final Dice? whiteDice;
+
+  /// BLACK's persistent dice pair (see [whiteDice]).
+  final Dice? blackDice;
+
+  /// When non-null, these cycling faces REPLACE the CURRENT ROLLER's pair on the
+  /// painted board — purely cosmetic. Used by the opponent dice-roll animation
+  /// beat (see [GameScreen]), which cycles pseudo-random faces for ~400ms before
+  /// the real roll settles (the override then clears back to `null`). Applies
+  /// ONLY to the roller ([state]'s turn); the other pair stays static with its
+  /// persisted roll. Never affects move entry or state.
   final Dice? diceOverride;
 
   @override
@@ -947,9 +959,18 @@ class _BoardViewState extends State<BoardView>
           final dragPointer = _dragPointer;
           final dragging = dragSource != null && dragPointer != null;
 
-          // The dice faces to paint: the roll-beat override when one is active,
-          // otherwise the state's real dice. Cosmetic only.
-          final displayDice = widget.diceOverride ?? widget.state.dice;
+          // The two persistent dice pairs to paint. The roll-beat override, when
+          // active, REPLACES the current roller's ([state]'s turn) pair with the
+          // cycling faces; the other pair keeps its persisted roll. Cosmetic
+          // only — never touches state or move entry.
+          final turn = widget.state.turn;
+          final override = widget.diceOverride;
+          final whiteDice = (override != null && turn == Player.white)
+              ? override
+              : widget.whiteDice;
+          final blackDice = (override != null && turn == Player.black)
+              ? override
+              : widget.blackDice;
 
           // Highlights are a pure visual layer: when off, taps/drag still drive
           // entry but no rings or destination fills are painted (see
@@ -973,7 +994,9 @@ class _BoardViewState extends State<BoardView>
               board: preview,
               geometry: geometry,
               theme: theme,
-              dice: displayDice,
+              whiteDice: whiteDice,
+              blackDice: blackDice,
+              diceMover: turn,
               cube: widget.state.cube,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
@@ -995,7 +1018,9 @@ class _BoardViewState extends State<BoardView>
               board: frame.board,
               geometry: geometry,
               theme: theme,
-              dice: displayDice,
+              whiteDice: whiteDice,
+              blackDice: blackDice,
+              diceMover: turn,
               cube: widget.state.cube,
               hiddenChecker: frame.hidden,
               overlayChecker: frame.overlay,
@@ -1005,7 +1030,9 @@ class _BoardViewState extends State<BoardView>
               board: held?.preBoard ?? _previewBoard(),
               geometry: geometry,
               theme: theme,
-              dice: displayDice,
+              whiteDice: whiteDice,
+              blackDice: blackDice,
+              diceMover: turn,
               cube: widget.state.cube,
               highlightedSources: (showHl && builder != null && selected == null)
                   ? builder.selectableSources

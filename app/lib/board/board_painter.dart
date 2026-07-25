@@ -16,7 +16,9 @@ class BoardPainter extends CustomPainter {
     required this.board,
     required this.geometry,
     required this.theme,
-    this.dice,
+    this.whiteDice,
+    this.blackDice,
+    this.diceMover,
     this.cube,
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
@@ -30,7 +32,22 @@ class BoardPainter extends CustomPainter {
   final BoardState board;
   final BoardGeometry geometry;
   final BoardTheme theme;
-  final Dice? dice;
+
+  /// The most recent roll to persist on WHITE's dice pair (white bodies, dark
+  /// pips), or `null` when White has not rolled yet this game (a blank dimmed
+  /// outline is drawn). Persists across turns so the opponent's roll stays
+  /// visible after the turn passes.
+  final Dice? whiteDice;
+
+  /// The most recent roll to persist on BLACK's dice pair (dark bodies, light
+  /// pips), or `null` when Black has not rolled yet this game.
+  final Dice? blackDice;
+
+  /// The side currently to move: its pair renders in the right half at full
+  /// opacity; the waiting side's pair renders in the mirrored left half, dimmed.
+  /// Defaults to [Player.white] when `null` (a bare display board).
+  final Player? diceMover;
+
   final CubeState? cube;
 
   /// Selectable (but not-yet-picked-up) sources: each renders as a subtle ring
@@ -83,7 +100,7 @@ class BoardPainter extends CustomPainter {
     // Selection rings ride ABOVE the checkers so they read as haloes, never
     // hidden behind the discs.
     _paintSelectionRings(canvas);
-    if (dice != null) _paintDice(canvas, size);
+    _paintDice(canvas);
     if (cube != null) _paintCube(canvas);
     // The travelling checker rides above every static checker/tray.
     final overlay = overlayChecker;
@@ -397,32 +414,58 @@ class BoardPainter extends CustomPainter {
 
   // --- Dice ------------------------------------------------------------------
 
-  void _paintDice(Canvas canvas, Size size) {
-    final d = dice!;
-    final side = geometry.checkerRadius * 2.2;
-    final gap = side * 0.5;
-    // Centre the pair in the right half's middle band.
-    final cx = size.width * 0.71;
-    final cy = size.height / 2;
-    final firstCentre = Offset(cx - (side + gap) / 2, cy);
-    final secondCentre = Offset(cx + (side + gap) / 2, cy);
-    _drawDie(canvas, firstCentre, side, d.die1);
-    _drawDie(canvas, secondCentre, side, d.die2);
+  /// Paints BOTH players' persistent dice pairs: the WHITE pair (white bodies,
+  /// dark pips) and the BLACK pair (dark bodies, light pips). Each pair carries a
+  /// per-player rim (the same inverted-rim rule as the checkers) so it reads on
+  /// the felt. The [diceMover]'s pair is full-opacity in the right half; the
+  /// waiting pair is dimmed in the mirrored left half. A pair with no roll yet
+  /// this game renders as blank dimmed outlines (no pips).
+  void _paintDice(Canvas canvas) {
+    final mover = diceMover ?? Player.white;
+    _paintPlayerDice(canvas, Player.white, whiteDice, mover);
+    _paintPlayerDice(canvas, Player.black, blackDice, mover);
   }
 
-  void _drawDie(Canvas canvas, Offset center, double side, int value) {
+  /// Alpha applied to the WAITING player's dice so the mover's pair reads as the
+  /// live roll while the opponent's persisted roll stays legible beneath it.
+  static const double _waitingDiceOpacity = 0.6;
+
+  void _paintPlayerDice(
+      Canvas canvas, Player player, Dice? dice, Player mover) {
+    final rect = geometry.diceRect(player, mover: mover);
+    final side = geometry.diceSide;
+    final gap = side * 0.5;
+    final c = rect.center;
+    final first = Offset(c.dx - (side + gap) / 2, c.dy);
+    final second = Offset(c.dx + (side + gap) / 2, c.dy);
+    final isWhite = player == Player.white;
+    // WHITE pair: white checker body + dark pips; BLACK pair: dark body + light
+    // pips. The rim is the checker's inverted per-player border, so a die's
+    // silhouette clears the felt exactly as its checker does.
+    final body = isWhite ? theme.whiteChecker : theme.blackChecker;
+    final pip = isWhite ? theme.blackChecker : theme.whiteChecker;
+    final rim = isWhite ? theme.whiteCheckerBorder : theme.blackCheckerBorder;
+    final dim = player == mover ? 1.0 : _waitingDiceOpacity;
+    _drawDie(canvas, first, side, dice?.die1, body, pip, rim, dim);
+    _drawDie(canvas, second, side, dice?.die2, body, pip, rim, dim);
+  }
+
+  void _drawDie(Canvas canvas, Offset center, double side, int? value,
+      Color body, Color pip, Color rim, double dim) {
+    Color d(Color c) => dim >= 1.0 ? c : c.withValues(alpha: c.a * dim);
     final rect = Rect.fromCenter(center: center, width: side, height: side);
     final rr = RRect.fromRectXY(rect, side * 0.18, side * 0.18);
-    canvas.drawRRect(rr, Paint()..color = theme.diceColor);
+    canvas.drawRRect(rr, Paint()..color = d(body));
     canvas.drawRRect(
       rr,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = side * 0.05
-        ..color = theme.dicePipColor.withValues(alpha: 0.6),
+        ..strokeWidth = side * 0.08
+        ..color = d(rim),
     );
+    if (value == null) return; // no roll yet: a blank outlined die
     final pipR = side * 0.09;
-    final pipPaint = Paint()..color = theme.dicePipColor;
+    final pipPaint = Paint()..color = d(pip);
     // 3x3 grid coordinates.
     final l = center.dx - side * 0.26;
     final m = center.dx;
@@ -538,7 +581,9 @@ class BoardPainter extends CustomPainter {
         old.geometry.size != geometry.size ||
         old.geometry.whiteAtBottom != geometry.whiteAtBottom ||
         !identical(old.theme, theme) ||
-        old.dice != dice ||
+        old.whiteDice != whiteDice ||
+        old.blackDice != blackDice ||
+        old.diceMover != diceMover ||
         old.cube != cube ||
         old.selectedCheckerLocation != selectedCheckerLocation ||
         old.movingPlayer != movingPlayer ||
