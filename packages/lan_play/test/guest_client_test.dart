@@ -202,6 +202,40 @@ void main() {
       f.authority.close();
     });
 
+    test('snapshot stays current while lastWelcome goes stale', () async {
+      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      addTearDown(f.dispose);
+      final g = connectGuest(f);
+      addTearDown(g.client.dispose);
+
+      // The welcome is answered BEFORE the host opens game 1, so the frame
+      // itself carries an empty log — the stale-by-one-tick case a late folder
+      // would otherwise adopt.
+      final welcome = await g.client.welcome;
+      expect(welcome.log, isEmpty);
+      await waitFor(() => (g.client.snapshot?.log.length ?? 0) == 1,
+          what: 'the opening roll to reach the snapshot');
+      expect(g.client.lastWelcome!.log, isEmpty, reason: 'the FRAME is stale');
+      expect(g.client.snapshot!.side, welcome.side);
+      expect(g.client.snapshot!.config, welcome.config);
+      expect(g.client.snapshot!.resume, welcome.resume);
+
+      await advance(f, guest: g.client);
+      await advance(f, guest: g.client);
+      await waitFor(
+          () => g.client.snapshot!.log.length == f.authority.lastSeq,
+          what: 'the snapshot to track the log');
+      expect(g.client.snapshot!.log.map((e) => e.seq),
+          [for (var i = 1; i <= f.authority.lastSeq; i++) i]);
+
+      // A resync welcome REPLACES it rather than appending to it.
+      await settle(250);
+      g.client.resync();
+      await waitFor(() => g.inbound.whereType<WelcomeMessage>().length == 2,
+          what: 'the resync welcome');
+      expect(g.client.snapshot!.log.length, f.authority.lastSeq);
+    });
+
     test('resync asks for the whole log again without touching the match',
         () async {
       final f = await ServerFixture.start(dice: [Dice(6, 1)]);

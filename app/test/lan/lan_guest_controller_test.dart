@@ -111,15 +111,43 @@ class LanPair {
     if (guest.awaitingNextGame) guest.continueToNextGame();
   }
 
+  /// True when [c] may act right now — its turn, and no intent in flight.
+  static bool canAct(LanMatchController c) {
+    if (!c.isReady || c.matchOver || c.awaitingNextGame) return false;
+    if (c.state.turn != c.localSide) return false;
+    return c.state.phase == GamePhase.awaitingRoll
+        ? c.awaitingHumanTurn
+        : !c.submitting.value;
+  }
+
   /// Play one authoritative event, acting through whichever CONTROLLER owns the
   /// side on turn — the host in process, the guest over the socket.
+  ///
+  /// RE-ACTS if the log does not move. A frame really can vanish (the host
+  /// silently drops anything over its rate limit, and a blip discards whatever
+  /// was queued), the protocol never replays a submission, and the controller's
+  /// answer to that is to re-open the gate — so a player, and therefore this
+  /// driver, simply acts again. Without the retry a lost frame would show up as
+  /// a mystery timeout rather than the recoverable event it is.
   Future<void> step() async {
     await sync();
     final actor = host.state.turn == host.localSide ? host : guest;
     final before = authority.lastSeq;
-    actInController(actor);
-    await waitFor(() => authority.lastSeq > before,
-        what: 'seq to pass $before (${actor.localSide.name})');
+    for (var attempt = 1; attempt <= 5; attempt++) {
+      actInController(actor);
+      try {
+        await waitFor(() => authority.lastSeq > before,
+            timeout: const Duration(seconds: 1),
+            what: 'seq to pass $before (${actor.localSide.name})');
+        return;
+      } on StateError {
+        // The gate re-opens on its own deadline; wait for it, then act again.
+        await waitFor(() => canAct(actor),
+            what: 'the gate to re-open for a retry '
+                '(attempt $attempt, seq $before)');
+      }
+    }
+    fail('five attempts did not move the log past $before');
   }
 
   /// Step until [done] holds with both folds settled. Deliberately re-syncs
@@ -273,6 +301,12 @@ void main() {
     await pair.playOut();
     expect(pair.guest.matchOver, isTrue);
     expect(pair.guest.match.winner, pair.authority.match.winner);
+    // The resync re-derived every game WITHOUT recording any of them twice.
+    await waitFor(
+        () => pair.guestPersistence.matchFinishedCalls == 1,
+        what: 'the guest to record the finished match');
+    expect(pair.guestPersistence.games.length, pair.authority.gameNumber);
+    expect(pair.hostPersistence.games.length, pair.authority.gameNumber);
   });
 
   test('an out-of-turn guest submission is refused without moving the log',

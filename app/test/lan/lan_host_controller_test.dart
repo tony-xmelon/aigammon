@@ -117,6 +117,45 @@ void main() {
     await f.controller.ready; // already complete
   });
 
+  test('a guest that joined BEFORE the controller existed is not lost',
+      () async {
+    // The screen's real order: bind the server, then build the controller. A
+    // guest can hello in between — and on a broadcast, non-buffering stream
+    // those events are simply gone, so the link SEEDS itself from the log.
+    // Scripted 6-3: white (the host) opens and is on move, so the very first
+    // thing the controller must show is its own board.
+    final authority = newAuthority(length: 5, dice: [Dice(6, 3)]);
+    guestHello(authority);
+    await pumpEventQueue();
+    // Play a few events with nobody folding them at all.
+    actInAuthority(authority, authority.state!.turn);
+    actInAuthority(authority, authority.state!.turn);
+    await pumpEventQueue();
+    expect(authority.lastSeq, 3);
+
+    final controller = LanMatchController.host(authority: authority);
+    addTearDown(() {
+      controller.disposeController();
+      authority.close();
+    });
+    await controller.playMatch();
+    await pumpEventQueue();
+
+    expect(controller.isReady, isTrue);
+    expect(controller.gameNumber, 1);
+    expect(controller.lastSeq, authority.lastSeq);
+    expect(controller.state.turn, authority.state!.turn);
+    expect(controller.state.phase, authority.state!.phase);
+    expect(controller.error, isNull);
+    // Without a presence signal the fold itself reports the link.
+    expect(controller.linkStatus.value, GuestConnectionStatus.connected);
+
+    // And it plays on from there.
+    await playOut(controller, authority);
+    expect(controller.matchOver, isTrue);
+    expect(controller.match.winner, authority.match.winner);
+  });
+
   test('folds a full 1-point game to completion through the local verbs',
       () async {
     final f = await hostFixture(length: 1);

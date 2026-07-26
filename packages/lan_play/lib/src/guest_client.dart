@@ -168,6 +168,10 @@ class GuestClient {
   final _welcome = Completer<WelcomeMessage>();
   final List<String> _queue = [];
 
+  /// The running authoritative log behind [snapshot]: replaced wholesale by
+  /// every welcome, extended by every contiguous event.
+  final List<LogEntry> _log = [];
+
   WebSocket? _socket;
   StreamSubscription<dynamic>? _sub;
   Timer? _retry;
@@ -206,8 +210,37 @@ class GuestClient {
   /// of those: the future simply stays pending while the client waits it out.
   Future<WelcomeMessage> get welcome => _welcome.future;
 
-  /// The most recent welcome — the current authoritative log snapshot.
+  /// The most recent welcome, exactly as it ARRIVED.
+  ///
+  /// It goes stale the instant the next event lands — use [snapshot] to attach
+  /// a folder to the log as it stands now.
   WelcomeMessage? get lastWelcome => _lastWelcome;
+
+  /// The authoritative log as of NOW — the last welcome's log plus every event
+  /// entry received since — shaped as a [WelcomeMessage] so a late-attaching
+  /// folder can adopt it with the ordinary "replace your fold" semantics.
+  ///
+  /// This exists because [inbound] is broadcast and NON-BUFFERING, while the
+  /// natural way to build a folder is `await welcome` and then subscribe: the
+  /// host appends the opening roll of the joined game in the same tick it sends
+  /// the welcome, so that first event is routinely published in the gap between
+  /// the future completing and the subscription attaching. Folding
+  /// [lastWelcome] alone then leaves the folder one seq behind with nothing
+  /// further on the way — a deadlock, not a hiccup, when the missing entry is
+  /// the one that starts the game.
+  ///
+  /// The running log only extends on CONTIGUOUS entries; a gap leaves it short,
+  /// which the folder detects from the live stream and cures with a resync.
+  WelcomeMessage? get snapshot {
+    final w = _lastWelcome;
+    if (w == null) return null;
+    return WelcomeMessage(
+      config: w.config,
+      side: w.side,
+      resume: w.resume,
+      log: List.of(_log),
+    );
+  }
 
   /// The side this guest plays, once welcomed.
   Player? get side => _lastWelcome?.side;
@@ -441,6 +474,11 @@ class GuestClient {
         _onBusy(gen);
       case WelcomeMessage():
         _onWelcome(message);
+      case EventMessage(:final entry):
+        // Kept BEFORE publishing, so a folder attaching from [snapshot] in the
+        // very next statement cannot miss what it is about to be told.
+        if (entry.seq == (_log.isEmpty ? 0 : _log.last.seq) + 1) _log.add(entry);
+        _publish(message);
       case RejectMessage(:final reason):
         if (!_welcomedThisConnection) {
           // Before the welcome, a reject IS the handshake's answer.
@@ -456,6 +494,9 @@ class GuestClient {
   void _onWelcome(WelcomeMessage message) {
     _welcomedThisConnection = true;
     _lastWelcome = message;
+    _log
+      ..clear()
+      ..addAll(message.log);
     _resume = message.resume;
     _backoff = timings.reconnectMinDelay;
     _emit(const GuestConnectionState.connected());

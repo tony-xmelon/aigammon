@@ -65,10 +65,13 @@ abstract interface class LanLink {
 /// The host's in-process link to its own [HostAuthority].
 class _HostLink implements LanLink {
   _HostLink(this.authority) {
-    // Subscribed in the CONSTRUCTOR: `outbound` is a broadcast, non-buffering
-    // stream, and the guest's `hello` (which starts game 1) can arrive before
-    // anyone calls playMatch. The controller-facing [_out] is
-    // single-subscription and therefore buffers until the fold attaches.
+    // SEEDED, not merely subscribed. `outbound` is a broadcast, non-buffering
+    // stream, so everything the authority emitted before this constructor ran
+    // is already gone — and the guest's `hello` (which starts game 1) routinely
+    // lands first, because the screen builds the server before the controller.
+    // Opening with the same synthetic welcome [resync] uses replays whatever
+    // the log already holds, so there is no ordering contract to get wrong.
+    if (authority.log.isNotEmpty) _out.add(_welcome());
     _sub = authority.outbound.listen((out) {
       if (!out.toLocal) return; // welcomes and guest-bound rejects are not ours
       if (!_out.isClosed) _out.add(out.message);
@@ -97,19 +100,24 @@ class _HostLink implements LanLink {
   /// The host's resync needs no round trip: the authoritative log is right
   /// here, so synthesise the very `welcome` a guest would be sent and let the
   /// ordinary full-replace path rebuild from it.
-  ///
-  /// `side` names the GUEST's side by protocol convention; the fold ignores it
-  /// (the local side is fixed at construction) and reads only the log.
   @override
   bool resync() {
     if (_out.isClosed) return false;
-    _out.add(WelcomeMessage(
-      config: authority.config,
-      side: authority.guestSide,
-      log: authority.log,
-    ));
+    _out.add(_welcome());
     return true;
   }
+
+  /// The authority's current state as the guest would be told it.
+  ///
+  /// `side` names the GUEST's side by protocol convention; the fold ignores it
+  /// (the local side is fixed at construction) and reads the log and the resume
+  /// token, the latter being what identifies THIS match to the fold.
+  WelcomeMessage _welcome() => WelcomeMessage(
+        config: authority.config,
+        side: authority.guestSide,
+        resume: authority.resumeToken,
+        log: authority.log,
+      );
 
   @override
   Future<void> dispose() async {
@@ -121,12 +129,15 @@ class _HostLink implements LanLink {
 /// The guest's link over a live [GuestClient].
 class _GuestLink implements LanLink {
   _GuestLink(this.client) {
-    // The welcome that made this controller constructible was published on the
-    // client's broadcast `inbound` before we could subscribe, so replay it —
-    // a welcome is idempotent (it REPLACES the fold), and any newer one simply
-    // supersedes it.
-    final first = client.lastWelcome;
-    if (first != null) _out.add(first);
+    // SEEDED from the client's running snapshot, not from the welcome frame.
+    // `inbound` is broadcast and non-buffering, and the host appends the joined
+    // game's opening roll in the same tick it sends the welcome — so between
+    // `await client.welcome` and this constructor, that first entry has usually
+    // already been published to nobody. [GuestClient.snapshot] carries it; the
+    // welcome frame alone would leave the fold one seq behind forever, because
+    // nothing further arrives until someone plays.
+    final now = client.snapshot;
+    if (now != null) _out.add(now);
     _sub = client.inbound.listen((message) {
       if (!_out.isClosed) _out.add(message);
     });
@@ -193,11 +204,22 @@ class _GuestLink implements LanLink {
 ///  * guest — re-send `hello`, and fold the welcome that comes back;
 ///  * host — synthesise the welcome from the authority's log in place.
 ///
+/// A resync REQUEST can itself be lost: `hello` is the one frame that replays
+/// the log, so the host spaces it by [LanTimings.helloMinInterval] and silently
+/// drops the excess, and a link that is down cannot carry it at all. Waiting for
+/// the next entry to ask again is not enough — a peer that is behind AND on turn
+/// will never receive another entry — so [_resync] arms a bounded retry chain,
+/// cancelled the moment a welcome lands.
+///
 /// A full replace re-derives EVERYTHING from the log, but must not re-fire
 /// history the user has already lived through, so three watermarks survive it:
 /// [_persistedThrough] (the last game written to storage), [_matchPersisted]
 /// (whether the decided match was written) and [_acknowledgedThrough] (the last
-/// game whose game-over dialog was dismissed).
+/// game whose game-over dialog was dismissed). They survive a resync of the SAME
+/// match only: a welcome bearing a different resume token is a different
+/// authority (the host restarted, or a room-code collision put us on someone
+/// else's match), and everything remembered about the old one is void — see
+/// [_adoptIdentity].
 ///
 /// ## Sending is not delivering
 ///
@@ -206,15 +228,31 @@ class _GuestLink implements LanLink {
 /// submission must never land after a resync. So an intent that could not be
 /// sent leaves the gate OPEN and surfaces a transient [error]: the player
 /// simply acts again once the banner clears. An intent that WAS sent latches
-/// the gate ([_submitting]) until the resulting event folds, a reject answers
-/// it, a welcome replaces the fold, or the link drops — never indefinitely.
+/// the gate ([submitting]) until the resulting event folds, a reject answers
+/// it, a welcome replaces the fold, or the link drops.
+///
+/// None of those is guaranteed to happen, though — the host drops frames over
+/// its rate limit SILENTLY and the protocol never replays a submission — so the
+/// latch also carries a deadline ([_onGateTimeout]). A lost frame costs one
+/// timeout and a banner, never the rest of the match.
+///
+/// ## Known caveat
+///
+/// The gate is unlatched by the NEXT answer of any kind, not by an answer
+/// matched to the intent that latched it — the protocol carries no submission
+/// id. So a `reject` still in flight for an earlier action can unlatch a gate
+/// latched by a later one, briefly re-enabling controls the log is about to move
+/// past. The window is one round trip and the fold stays correct (the authority
+/// refuses anything stale), so this is cosmetic; closing it properly means
+/// putting a client-side id on `submit`/`roll_request` and echoing it back.
 class LanMatchController extends ChangeNotifier implements MatchController {
   /// The HOST's controller: plays through [authority] in-process.
   ///
   /// [guestConnected] is the socket-level presence signal, which the authority
   /// (transport-agnostic by design) cannot know; the screen feeds it from
-  /// [HostServer.guestPresence]. Omitted, the link is reported as
-  /// [GuestConnectionStatus.connecting] until the first event folds.
+  /// [HostServer.guestPresence]. Without it [linkStatus] can only report
+  /// [GuestConnectionStatus.connecting] until something folds (which proves a
+  /// guest is there) and never notices one leaving — so pass it.
   LanMatchController.host({
     required HostAuthority authority,
     this.persistence = const NoopPersistence(),
@@ -222,8 +260,10 @@ class LanMatchController extends ChangeNotifier implements MatchController {
   })  : _transport = _HostLink(authority),
         localSide = authority.hostSide,
         _config = authority.config,
+        _clocks = LanTimings.defaults,
         _match = MatchState(matchLength: authority.config.length),
-        _guestPresence = guestConnected {
+        _guestPresence = guestConnected,
+        _linkStatusIsDriven = guestConnected != null {
     _listen();
     final presence = _guestPresence;
     if (presence != null) {
@@ -236,17 +276,19 @@ class LanMatchController extends ChangeNotifier implements MatchController {
   ///
   /// The client must already be welcomed (`await client.welcome`) — the
   /// welcome carries the match config and this device's side, and the
-  /// controller adopts both. Build the controller as soon as that future
-  /// resolves: the link replays the welcome it already holds, so the initial
-  /// log is never lost to the broadcast stream.
+  /// controller adopts both. The link then seeds itself from
+  /// [GuestClient.snapshot], so however long the caller took to get here, the
+  /// log it starts from is the current one.
   LanMatchController.guest({
     required GuestClient client,
     this.persistence = const NoopPersistence(),
   })  : _transport = _GuestLink(client),
         localSide = _welcomeOf(client).side,
         _config = _welcomeOf(client).config,
+        _clocks = client.timings,
         _match = MatchState(matchLength: _welcomeOf(client).config.length),
-        _guestPresence = null {
+        _guestPresence = null,
+        _linkStatusIsDriven = true {
     _listen();
     _linkStatus.value = client.state.status;
     _statusSub = client.states.listen((s) {
@@ -270,10 +312,13 @@ class LanMatchController extends ChangeNotifier implements MatchController {
     required MatchConfig config,
     required this.localSide,
     this.persistence = const NoopPersistence(),
+    LanTimings timings = LanTimings.defaults,
   })  : _transport = link,
         _config = config,
+        _clocks = timings,
         _match = MatchState(matchLength: config.length),
-        _guestPresence = null {
+        _guestPresence = null,
+        _linkStatusIsDriven = false {
     _listen();
   }
 
@@ -294,11 +339,20 @@ class LanMatchController extends ChangeNotifier implements MatchController {
 
   final MatchConfig _config;
 
+  /// The transport's clocks — read only for [_resyncRetryDelay], which has to
+  /// clear the host's `hello` limiter.
+  final LanTimings _clocks;
+
   /// Persistence seam invoked as the match progresses. Defaults to a no-op; a
   /// failing hook is non-fatal (see [_persist]).
   final MatchPersistence persistence;
 
   final ValueListenable<bool>? _guestPresence;
+
+  /// True when something else owns [_linkStatus] (the guest client's own state
+  /// stream). False means the fold may nudge it — see [_afterFold].
+  final bool _linkStatusIsDriven;
+
   StreamSubscription<GuestConnectionState>? _statusSub;
   StreamSubscription<Envelope>? _sub;
 
@@ -325,8 +379,22 @@ class LanMatchController extends ChangeNotifier implements MatchController {
   /// match twice).
   bool _matchPersisted = false;
 
+  /// Which match the watermarks above are ABOUT: the resume token of the
+  /// welcome that last replaced the fold. See [_adoptIdentity].
+  String? _matchIdentity;
+
+  /// The pending retry of a resync request that may have been dropped, and how
+  /// many have been sent for the current divergence. See [_requestResync].
+  Timer? _resyncRetry;
+  int _resyncAttempts = 0;
+  String _resyncReason = '';
+
+  /// How many times one divergence will ask for the log before giving up and
+  /// leaving the banner for the user. Five covers a burst of same-second
+  /// requests against the host's one-per-second limiter with room to spare.
+  static const int _maxResyncAttempts = 5;
+
   bool _awaitingNextGame = false;
-  bool _submitting = false;
   bool _replacing = false;
 
   /// Set when a full replace could not fold the host's own log — the one
@@ -365,6 +433,46 @@ class LanMatchController extends ChangeNotifier implements MatchController {
 
   final ValueNotifier<GuestConnectionStatus> _linkStatus =
       ValueNotifier<GuestConnectionStatus>(GuestConnectionStatus.connecting);
+
+  /// The gate latch, as a notifier so the UI can watch it directly. Backed by
+  /// [_submitting], which is what the rest of this class reads and writes.
+  final ValueNotifier<bool> _submittingGate = ValueNotifier<bool>(false);
+
+  /// Bounds how long the latch below may last. See [_onGateTimeout].
+  Timer? _gateTimer;
+
+  bool get _submitting => _submittingGate.value;
+
+  /// Latching ALWAYS arms the deadline; unlatching always disarms it, however
+  /// the answer arrived.
+  set _submitting(bool latched) {
+    _gateTimer?.cancel();
+    _gateTimer = null;
+    _submittingGate.value = latched;
+    if (latched) _gateTimer = Timer(_clocks.connectTimeout, _onGateTimeout);
+  }
+
+  /// Nothing answered an intent that DID leave the device.
+  ///
+  /// The host drops frames it will not process — over its rate limit, or
+  /// arriving on a socket it is about to reap — SILENTLY, by design, and the
+  /// protocol never replays a submission. So "wait for the log to answer" is
+  /// not on its own a terminating condition, and without this the player's
+  /// controls would stay dead for the rest of the match. One connect timeout is
+  /// hundreds of times a LAN round trip, so reaching this really does mean the
+  /// intent is gone: re-open the gate and say so.
+  void _onGateTimeout() {
+    if (_disposed || !_submitting) return;
+    _submitting = false;
+    _error = const LanMatchException(
+        'offline', 'the other device did not answer — try again');
+    _refreshPending();
+    _notify();
+  }
+
+  /// How long to wait before asking for the log again. Comfortably past the
+  /// host's [LanTimings.helloMinInterval], which is what drops the excess.
+  Duration get _resyncRetryDelay => _clocks.helloMinInterval * 1.5;
 
   void _listen() {
     _sub = _transport.inbound.listen(_onMessage);
@@ -419,6 +527,13 @@ class LanMatchController extends ChangeNotifier implements MatchController {
   /// [GuestConnectionStatus.reconnecting] after one has dropped (its client is,
   /// in fact, reconnecting).
   ValueListenable<GuestConnectionStatus> get linkStatus => _linkStatus;
+
+  /// True while a local intent has left the device and the log has not answered
+  /// it yet — the "sending…" window, which on a half-open socket can last until
+  /// the transport's silence timeout. Exposed as a listenable so the UI can show
+  /// progress without polling; [awaitingHumanTurn] and the pending notifiers
+  /// already account for it.
+  ValueListenable<bool> get submitting => _submittingGate;
 
   /// The most recently folded move (for the animation layer), or `null`.
   @override
@@ -482,6 +597,9 @@ class LanMatchController extends ChangeNotifier implements MatchController {
     _disposed = true;
     // Unblock anyone awaiting readiness; [isReady] stays false so they can bail.
     _completeReady();
+    _cancelResyncRetry();
+    _gateTimer?.cancel();
+    _gateTimer = null;
     _guestPresence?.removeListener(_onPresence);
     unawaited(_statusSub?.cancel());
     _statusSub = null;
@@ -495,6 +613,7 @@ class LanMatchController extends ChangeNotifier implements MatchController {
     _nullResign.dispose();
     _lastMove.dispose();
     _linkStatus.dispose();
+    _submittingGate.dispose();
     super.dispose();
   }
 
@@ -597,8 +716,8 @@ class LanMatchController extends ChangeNotifier implements MatchController {
   void _onMessage(Envelope message) {
     if (_disposed) return;
     switch (message) {
-      case WelcomeMessage(:final log):
-        _replaceWith(log);
+      case WelcomeMessage():
+        _replaceWith(message);
       case EventMessage(:final entry):
         _ingest(entry);
       case RejectMessage():
@@ -691,13 +810,19 @@ class LanMatchController extends ChangeNotifier implements MatchController {
     }
   }
 
-  /// Replace the whole fold with [log] — the meaning of EVERY `welcome`.
+  /// Replace the whole fold with [welcome]'s log — the meaning of EVERY
+  /// `welcome`.
   ///
   /// Replays through the ordinary [_ingest] path from a clean slate, so the
   /// game-end pause and the buffering behave exactly as they do live: a game
   /// that ended while we were away still gets its dialog, and one already
   /// dismissed does not get a second (see [_acknowledgedThrough]).
-  void _replaceWith(List<LogEntry> log) {
+  void _replaceWith(WelcomeMessage welcome) {
+    // The welcome ANSWERED whatever we asked for (or arrived unprompted from a
+    // reconnect); either way the retry chain has done its job.
+    _cancelResyncRetry();
+    _adoptIdentity(welcome.resume);
+    final log = welcome.log;
     _replacing = true;
     _replaceFailed = null;
     _match = MatchState(matchLength: _config.length);
@@ -737,28 +862,78 @@ class LanMatchController extends ChangeNotifier implements MatchController {
     _notify();
   }
 
+  /// The identity of the match the watermarks describe.
+  ///
+  /// A welcome's resume token names the authority that issued it. A DIFFERENT
+  /// token on the same controller means we are looking at a different match —
+  /// the host restarted and minted a fresh one, or a four-digit room code
+  /// collided and we landed on someone else's. Its games have not been
+  /// persisted, its dialogs have not been shown, and its game numbers restart at
+  /// 1, so every watermark from the old match is void. Carrying them over is how
+  /// a second match would silently never be recorded.
+  void _adoptIdentity(String? identity) {
+    if (identity == null || identity == _matchIdentity) return;
+    final hadOne = _matchIdentity != null;
+    _matchIdentity = identity;
+    if (!hadOne) return; // the first welcome simply names the match
+    _persistedThrough = 0;
+    _acknowledgedThrough = 0;
+    _matchPersisted = false;
+  }
+
   /// Ask for the whole log back. On the host that is synchronous (the log is
   /// in-process); on the guest it is a `hello` whose `welcome` arrives later —
   /// and if the link is down, the reconnect's own welcome does the same job.
-  ///
-  /// The request may simply be DROPPED: `hello` is the one frame that replays
-  /// the log, so the host spaces it by [LanTimings.helloMinInterval] and
-  /// silently discards the excess. That is fine and deliberately not retried on
-  /// a timer here — while we are behind, `_lastSeq` never advances, so the very
-  /// next entry is another gap and asks again. Turn-based traffic is seconds
-  /// apart, so at most a burst is spent before one lands.
   void _resync(String why) {
     if (_disposed) return;
-    _error = LanMatchException('diverged', '$why; resyncing');
+    _resyncReason = why;
+    _resyncAttempts = 0;
     _submitting = false;
-    _transport.resync();
+    _requestResync();
+  }
+
+  /// Send one resync request and arm the next.
+  ///
+  /// The request can be lost two ways, indistinguishable from here: the link is
+  /// down (`resync` returns false), or the host's `hello` limiter silently drops
+  /// it (`resync` returns true and nothing comes back). Waiting for the next
+  /// entry to notice the gap again is NOT a sufficient fallback — a peer that is
+  /// behind and on turn receives nothing further, ever — so the chain retries on
+  /// its own, spaced past the limiter and bounded by [_maxResyncAttempts].
+  /// [_replaceWith] cancels it the moment a welcome lands.
+  void _requestResync() {
+    _resyncRetry?.cancel();
+    _resyncRetry = null;
+    if (_disposed) return;
+    final sent = _transport.resync();
+    _resyncAttempts++;
+    _error = sent
+        ? LanMatchException('diverged', '$_resyncReason; resyncing')
+        : const LanMatchException('offline',
+            'not connected to the other device — resyncing when it returns');
+    if (_resyncAttempts < _maxResyncAttempts) {
+      _resyncRetry = Timer(_resyncRetryDelay, _requestResync);
+    }
     _notify();
+  }
+
+  void _cancelResyncRetry() {
+    _resyncRetry?.cancel();
+    _resyncRetry = null;
+    _resyncAttempts = 0;
   }
 
   void _afterFold() {
     // A successful fold proves the stream is healthy again.
     _error = null;
     if (_game != null) _completeReady();
+    // Nothing else is reporting the link, and something just folded — which on
+    // the host means a guest is there to have caused it. A coarse signal, and
+    // the reason [LanMatchController.host] asks for `guestConnected`: without
+    // it, nobody ever reports the guest LEAVING.
+    if (!_linkStatusIsDriven && _game != null) {
+      _linkStatus.value = GuestConnectionStatus.connected;
+    }
     _refreshPending();
     _notify();
   }
