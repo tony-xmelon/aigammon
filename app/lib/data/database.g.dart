@@ -1627,7 +1627,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
   final bool diceRollAnimation;
 
   /// Whether the hot-seat "Pass the device" cover screen is shown between turns
-  /// (schema v5). OFF by default, per the reported "when playing with two
+  /// (schema v6). OFF by default, per the reported "when playing with two
   /// persons, do not show the pass the device screen, or at least make it a
   /// setting, disabled by default". With it off the board simply flips to the
   /// new actor — that rotation IS the hand-over cue — and nothing has to be

@@ -4205,7 +4205,55 @@ void main() {
       c.disposeController();
     });
 
-/*__TEXTSCALE_TEST__*/
+    testWidgets('the header holds 64px, and row 2 is unscaled at text scale 1',
+        (t) async {
+      await t.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      for (final scale in [1.0, 1.3, 2.0]) {
+        // A fresh controller per scale: a GameScreen is keyed to its controller
+        // precisely so a remount starts a new match loop, and re-pumping the
+        // same one would park on a gate that has already been consumed.
+        final c = GameController(
+          white: LocalHumanAgent(),
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+        await t.pumpWidget(MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+            child: GameScreen(
+                key: ValueKey(c), controller: c, opponentDetail: 'Easy'),
+          ),
+        ));
+        await pumpUntil(t, () => c.awaitingHumanTurn);
+
+        expect(t.getSize(find.byKey(const ValueKey('hud'))).height, 64,
+            reason: 'the header budget is fixed at every text scale ($scale)');
+        expect(t.takeException(), isNull,
+            reason: 'no overflow at text scale $scale');
+
+        // Row 2's line must FIT its 18px slot rather than being clipped: the
+        // FittedBox shrinks it when the user has asked for larger text, but it
+        // is always fully painted.
+        final line = find.descendant(
+          of: find.byKey(const ValueKey('hudDetailRow')),
+          matching: find.byType(Text),
+        );
+        expect(line, findsOneWidget);
+        final box = t.renderObject<RenderBox>(line);
+        if (scale == 1.0) {
+          // The whole point of the 16 -> 18 change: at the default scale the
+          // line is laid out at its natural height, so the FittedBox is not
+          // silently shrinking every render.
+          expect(box.size.height, lessThanOrEqualTo(18),
+              reason: 'the natural line fits its slot unscaled');
+        }
+        expect(t.getSize(find.byKey(const ValueKey('hudDetailRow'))).height, 18);
+        c.disposeController();
+      }
+    });
     testWidgets('the header is a FIXED height, both rows always present',
         (t) async {
       await t.binding.setSurfaceSize(_surface);

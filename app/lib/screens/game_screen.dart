@@ -1618,7 +1618,7 @@ class _GameScreenState extends State<GameScreen> {
   /// Everything outside the board's slot is a constant for a given screen, so
   /// the board can never reflow mid-match:
   ///
-  ///     header ([_Hud._hudHeight])       64  (40 + 16 + 2*4)
+  ///     header ([_Hud._hudHeight])       64  (40 + 18 + 2*3)
   ///     score sheet (this)              112
   ///     action bar                       64
   ///     tutor advice slot (tutor only)   28
@@ -2249,8 +2249,11 @@ enum _MenuAction { surrender }
 /// worth saying — for the same reason the action bar is pinned to 64px: the
 /// board fills the slot beneath this, so a header that grew or shrank mid-match
 /// (a Crawford badge appearing, a name getting longer) would resize the board
-/// (F6). Each row scales to fit as ONE unit (the [FittedBox] idiom), so no width
-/// or system text scale can overflow or clip it.
+/// (F6). What scales to fit is the TEXT: row 1's left group (context line +
+/// badge + chip) and row 2's line each sit in their own [FittedBox], so they
+/// shrink rather than overflow at any width or system text scale. Row 1's
+/// right-hand controls — the thinking dot, Double, ⋮ — are outside that box and
+/// keep their natural size, which is what leaves the left group its width.
 ///
 /// Keeping Double/Surrender up here (rather than in the bottom bar) puts the
 /// risky actions away from where thumbs rest.
@@ -2263,15 +2266,28 @@ class _Hud extends StatelessWidget {
     this.onSurrender,
   });
 
-  /// Height of row 1 (the match context plus the action controls). Sized for the
-  /// ⋮ button, the tallest thing in it.
+  /// Height of row 1 (the match context plus the action controls).
+  ///
+  /// NOT the natural height of its tallest child: a [PopupMenuButton]'s
+  /// [IconButton] asks for the 48px minimum touch target, and Double (compact
+  /// density) for 32. 40 is a deliberate squeeze — the row's [BoxConstraints]
+  /// clamp the icon button's 48 down, so it renders at 40 with its hit box
+  /// filling the row rather than overflowing it. Anything less would start
+  /// clipping Double.
   static const double _row1Height = 40;
 
   /// Height of row 2 (the muted opponent/pips line).
-  static const double _row2Height = 16;
+  ///
+  /// 18, not the 16 it started as: the line's natural height at fontSize 12 is
+  /// ~17, so 16 put every render through the [FittedBox] at ~94% — a permanent
+  /// silent shrink, and one that got worse rather than better as the system text
+  /// scale went up. At 18 the line renders unscaled at scale 1.0 and only starts
+  /// scaling when the user has actually asked for larger text.
+  static const double _row2Height = 18;
 
-  /// Padding above row 1 and below row 2.
-  static const double _verticalPadding = 4;
+  /// Padding above row 1 and below row 2. The 2px row 2 gained came from here,
+  /// so the header's total is unchanged (see [_hudHeight]).
+  static const double _verticalPadding = 3;
 
   /// The header's FIXED total height — the top half of the screen's layout
   /// budget (see [_GameScreenState._scoreSheetHeight] for the whole table).
