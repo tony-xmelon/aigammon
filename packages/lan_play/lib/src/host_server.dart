@@ -9,6 +9,15 @@ import 'protocol.dart';
 /// The path the match WebSocket lives at.
 const String matchPath = '/match';
 
+/// The TCP port a host asks for first.
+///
+/// [HostServer.start] will happily take an OS-chosen port, and discovery
+/// carries whichever one it got — but a guest typing an address BY HAND (the
+/// always-available fallback when UDP discovery is blocked) has to be told the
+/// port too, and a stable default means that field is usually already right.
+/// A host that finds it taken falls back to 0 and shows what it actually got.
+const int defaultMatchPort = 47780;
+
 /// How many remote addresses the brute-force/amplification throttle will track
 /// at once. A flood of DISTINCT source addresses degrades the throttle to
 /// nothing rather than growing its bookkeeping without bound — the

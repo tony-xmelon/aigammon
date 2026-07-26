@@ -164,6 +164,7 @@ void main() {
       await _leaveMatch(tester);
       await _historyAndAnalysis(tester);
       await _settings(tester);
+      await _playNearby(tester);
       await _cubelessOpening(tester);
 
       final elapsed = DateTime.now().difference(started);
@@ -691,6 +692,26 @@ Future<void> _settings(WidgetTester tester) async {
   await tester.tap(gear);
   await _beat(tester, const Duration(milliseconds: 800));
   await _shot(tester, 'settings');
+}
+
+/// Home → Play Nearby (the HOST tab's setup form).
+///
+/// Deliberately the HOST tab ONLY, and deliberately without tapping "Start
+/// hosting": the setup form touches no socket, while the JOIN tab starts
+/// broadcasting discovery probes the moment it is shown — which on the tour's
+/// Windows host raises a firewall prompt and puts real datagrams on whatever
+/// network the machine is on. A screenshot harness must not do that.
+Future<void> _playNearby(WidgetTester tester) async {
+  await _backToHome(tester);
+  final entry = find.text('Play Nearby');
+  if (entry.evaluate().isEmpty) {
+    _skipped.add('play nearby screen (no Play Nearby entry on home)');
+    return;
+  }
+  await tester.tap(entry);
+  await _beat(tester, const Duration(milliseconds: 800));
+  await _shot(tester, 'lan_host_setup');
+  await _backToHome(tester);
 }
 
 /// Pops routes until the home screen is the visible one.

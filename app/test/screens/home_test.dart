@@ -164,6 +164,11 @@ void main() {
     expect(find.text('AIGammon'), findsOneWidget);
     expect(find.text('Play vs Computer'), findsOneWidget);
     expect(find.text('Two Players'), findsOneWidget);
+    // The two remote modes sit below the local ones, nearby before online.
+    expect(find.text('Play Nearby'), findsOneWidget);
+    expect(find.text('Play Online'), findsOneWidget);
+    expect(t.getTopLeft(find.text('Play Nearby')).dy,
+        lessThan(t.getTopLeft(find.text('Play Online')).dy));
 
     // Play vs Computer → difficulty + side selectors appear.
     await t.tap(find.text('Play vs Computer'));

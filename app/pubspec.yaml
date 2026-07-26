@@ -23,6 +23,7 @@ dependencies:
     path: ../packages/online_client
   lan_play:
     path: ../packages/lan_play
+  network_info_plus: ^8.2.1
 
 dev_dependencies:
   flutter_test:
