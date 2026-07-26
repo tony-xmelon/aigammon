@@ -741,30 +741,36 @@ class _GameScreenState extends State<GameScreen> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Center(
-                          child: BoardView(
-                            state: state,
-                            interactive: moveSide != null,
-                            onMoveCommitted: (move) {
-                              if (moveSide != null) {
-                                _c.submitMove(moveSide, move);
-                              }
-                            },
-                            whiteAtBottom: whiteAtBottom,
-                            externalMove: _stagedMove,
-                            lastMove: _c.lastMove,
-                            holdMoveAnimation: _dicePresenting,
-                            entryControl: _entryControl,
-                            hopDuration: widget.timings.hop,
-                            interHopDuration: widget.timings.interHop,
-                            interactionOptions: widget.interactionOptions,
-                            whiteDice: whiteDice,
-                            blackDice: blackDice,
-                            diceOverride: _rollBeatDice,
-                          ),
-                        ),
+                      // NO padding: the board gets every pixel of this slot (a
+                      // reported complaint — an 8pt inset on a 390pt phone cost
+                      // 4% of the board's width, and the aspect clamp then left
+                      // ~24pt of dead space above and below it). With
+                      // [BoardView.minAspect] relaxed below a phone slot's
+                      // shape, the board now fills the slot outright.
+                      BoardView(
+                        state: state,
+                        interactive: moveSide != null,
+                        onMoveCommitted: (move) {
+                          if (moveSide != null) {
+                            _c.submitMove(moveSide, move);
+                          }
+                        },
+                        whiteAtBottom: whiteAtBottom,
+                        externalMove: _stagedMove,
+                        lastMove: _c.lastMove,
+                        holdMoveAnimation: _dicePresenting,
+                        entryControl: _entryControl,
+                        hopDuration: widget.timings.hop,
+                        interHopDuration: widget.timings.interHop,
+                        interactionOptions: widget.interactionOptions,
+                        whiteDice: whiteDice,
+                        blackDice: blackDice,
+                        diceOverride: _rollBeatDice,
+                        // Tapping the dice is a second, on-board route to the
+                        // Roll button — wired under exactly the condition that
+                        // enables that button, and null otherwise so dice-area
+                        // taps fall through to normal move entry.
+                        onDiceTap: _canRoll(moveSide) ? _c.rollDice : null,
                       ),
                       if (_c.error != null)
                         Positioned(
@@ -1022,7 +1028,7 @@ class _GameScreenState extends State<GameScreen> {
           ),
         ],
       );
-    } else if (_c.awaitingHumanTurn) {
+    } else if (_canRoll(moveSide)) {
       content = Row(
         children: [
           const Spacer(),
@@ -1049,6 +1055,12 @@ class _GameScreenState extends State<GameScreen> {
       ),
     );
   }
+
+  /// Whether the local player is at the pre-roll gate, i.e. whether a Roll is
+  /// the action on offer. The single source of truth for BOTH routes to it: the
+  /// action bar's Roll button and the board's tap-the-dice affordance, so the
+  /// two can never disagree about when rolling is allowed.
+  bool _canRoll(Player? moveSide) => moveSide == null && _c.awaitingHumanTurn;
 
   Widget _hintButton() => OutlinedButton.icon(
         onPressed: _openHint,

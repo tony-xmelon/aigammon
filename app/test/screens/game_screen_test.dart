@@ -383,6 +383,105 @@ Future<void> _dismissPassDevice(WidgetTester t) async {
 void main() {
   setUp(() => TestWidgetsFlutterBinding.ensureInitialized());
 
+  group('pre-roll: tapping the dice rolls', () {
+    /// A match parked at White's (the human's) pre-roll gate.
+    GameController atGate() => GameController(
+          white: LocalHumanAgent(),
+          black: FakeAgent(),
+          matchLength: 5,
+          // Black wins the opening (6 > 1) and moves; White then reaches its
+          // pre-roll gate as its first action.
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+
+    /// Taps the centre of [player]'s dice pair on the board.
+    Future<void> tapDice(WidgetTester t, Player player, Player mover) async {
+      final painter = boardPainterOf(t);
+      final target = painter.geometry.diceRect(player, mover: mover).center;
+      await t.tapAt(boardRect(t).topLeft + target);
+      await t.pump();
+    }
+
+    testWidgets("tapping the mover's dice rolls, like the Roll button",
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // The Roll button STAYS: the dice tap is a second route, not a swap.
+      expect(find.widgetWithText(FilledButton, 'Roll'), findsOneWidget);
+      expect(boardPainterOf(t).diceTapHint, isTrue,
+          reason: 'the tappable pair is ringed while the gate is open');
+
+      await tapDice(t, c.state.turn, c.state.turn);
+      await pumpUntil(t, () => !c.awaitingHumanTurn);
+      expect(c.awaitingHumanTurn, isFalse, reason: 'the tap rolled the dice');
+      c.disposeController();
+    });
+
+    testWidgets("tapping the WAITING player's pair rolls too", (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final mover = c.state.turn;
+      await tapDice(t, mover.opponent, mover);
+      await pumpUntil(t, () => !c.awaitingHumanTurn);
+      expect(c.awaitingHumanTurn, isFalse);
+      c.disposeController();
+    });
+
+    testWidgets('the hint clears once the gate closes (a move is being entered)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(boardPainterOf(t).diceTapHint, isFalse,
+          reason: 'no dice affordance while a move is being entered');
+      // And the board is interactive again: the dice area must not swallow taps.
+      expect(boardPainterOf(t).highlightedSources, isNotEmpty);
+      c.disposeController();
+    });
+  });
+
+  testWidgets('the board spans the FULL width of its slot (no side padding)',
+      (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final c = GameController(
+      white: LocalHumanAgent(),
+      black: FakeAgent(),
+      matchLength: 5,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+
+    // On a phone-shaped surface the slot is taller than the board's aspect
+    // clamp allows, so the WIDTH binds: the board must start at x=0 and end at
+    // the screen's right edge — every pixel, no inset.
+    final board = boardRect(t);
+    final screen = t.getRect(find.byType(GameScreen));
+    expect(board.left, closeTo(screen.left, 0.5));
+    expect(board.right, closeTo(screen.right, 0.5));
+    c.disposeController();
+  });
+
   testWidgets('human vs AI: Roll → interactive board → commit advances',
       (t) async {
     await t.binding.setSurfaceSize(_surface);

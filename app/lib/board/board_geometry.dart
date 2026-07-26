@@ -9,16 +9,31 @@ import 'package:backgammon_core/backgammon_core.dart';
 /// the core. All coordinates are in the local space of the board widget with
 /// origin (0,0) at the top-left corner and extent [size].
 ///
+/// ## The frame rail and the playing FIELD
+///
+/// The board is painted with a wooden frame rail around its outer edge
+/// ([frameThickness], 1.2% of the shorter side). Everything the geometry lays
+/// out lives in the [fieldRect] — the board rect deflated by the rail PLUS one
+/// rail width of felt margin — so the outermost triangles, checkers, highlight
+/// overlays and tray strips all sit visibly INSIDE the rail rather than
+/// underneath it. (Before this inset the 12 columns were spread over the full
+/// widget width while the rail was painted on top, so the outermost triangles
+/// and their checker rims were clipped by the frame.)
+///
+/// [locationAt] still accepts a tap anywhere on the widget: a tap that lands on
+/// the rail (or the felt margin) is clamped into the field, so the inset costs
+/// no touch target at the edges.
+///
 /// ## Layout (canonical `whiteAtBottom == true`)
 ///
-/// Vertically the widget splits into three horizontal bands: a TOP bear-off
-/// tray strip (7% height), the BOARD band (86% height), and a BOTTOM bear-off
-/// tray strip (7% height). The board band is full-width and symmetric: a
-/// central bar strip (8% width, centred) with six point columns on each side
+/// Vertically the FIELD splits into three horizontal bands: a TOP bear-off
+/// tray strip (7% of the field height), the BOARD band (86%), and a BOTTOM
+/// bear-off tray strip (7%). The board band is full-field-width and symmetric:
+/// a central bar strip (8% width, centred) with six point columns on each side
 /// that together fill the remaining 92% — there is NO right-edge tray column,
-/// so the leftmost column touches x=0 and the rightmost touches x=width. Within
-/// the board band the top and bottom triangle rows take up to 44% each; the
-/// middle gap is empty (dice / cube / resting bar).
+/// so the leftmost column touches the field's left edge and the rightmost its
+/// right edge. Within the board band the top and bottom triangle rows take up
+/// to 44% each; the middle gap is empty (dice / cube / resting bar).
 ///
 /// ## Aspect independence (portrait phones)
 ///
@@ -30,16 +45,17 @@ import 'package:backgammon_core/backgammon_core.dart';
 /// * [checkerRadius] is the smaller of a column-width bound and a point-height
 ///   bound. On a tall board the columns bind (there are always 12 of them), so
 ///   the checkers are as wide as a column allows.
-/// * the triangle length is capped at `_maxPointRadii` checker radii (eight
-///   checker diameters — three more than the five-checker stack a point holds
+/// * the triangle length is capped at `_maxPointRadii` checker radii (nine
+///   checker diameters — four more than the five-checker stack a point holds
 ///   at full spacing). The vertical slack a tall board leaves over goes to the
 ///   empty middle band, where [diceSide] grows to use it.
 ///
-/// Only the tallest boards (aspect below ~0.67 width : height) reach the cap;
-/// on a landscape-ish board every metric is what it was before the board
-/// became responsive.
+/// Only tall boards (aspect below ~0.75 width : height) reach the cap; on a
+/// landscape-ish board every metric is what it was before the board became
+/// responsive.
 ///
 /// ```
+///  (everything below is inside fieldRect — the rail is outside it)
 ///        col: 0  1  2  3  4  5 |bar| 6  7  8  9 10 11
 ///     +-------------------------------------------------+
 /// tray|  black's borne-off checkers  ·····   count [N]  |  <- TOP strip (7%)
@@ -75,10 +91,21 @@ class BoardGeometry {
   final Size size;
   final bool whiteAtBottom;
 
-  // --- Layout fractions (of width / height). ---------------------------------
+  // --- Layout fractions (of the FIELD's width / height). ---------------------
   static const double _trayFraction = 0.07; // top/bottom bear-off strip height
   static const double _barFraction = 0.08; // central bar strip width
   static const double _pointHeightFraction = 0.44; // MAX triangle band, of band
+
+  /// Thickness of the painted frame rail, as a fraction of the SHORTER side of
+  /// the board. The painter strokes the rail with exactly this width, so the
+  /// rail band covers `[0, frameThickness]` inward from each edge.
+  static const double _frameFraction = 0.012;
+
+  /// Felt margin left between the rail's inner edge and the playing field, in
+  /// rail widths. One rail width reads as a deliberate breathing line: the
+  /// outermost triangles clearly stop short of the frame instead of running
+  /// under it.
+  static const double _fieldMarginRails = 1.0;
 
   /// Checker radius as a fraction of a point column's width: the disc spans 92%
   /// of its column, leaving a hairline between neighbouring stacks. This is the
@@ -87,11 +114,17 @@ class BoardGeometry {
   static const double _checkerColumnFill = 0.46;
 
   /// Longest a triangle may be, in checker radii. A point holds five checkers
-  /// at full spacing over exactly 10 radii; 16 leaves three checkers of
-  /// headroom above a full stack and stops the tallest board from drawing
-  /// 18-radii spikes. Binds only below an aspect of ~0.67 (width : height);
-  /// the surplus goes to the middle band, where the dice grow into it.
-  static const double _maxPointRadii = 16.0;
+  /// at full spacing over exactly 10 radii; 18 leaves four checkers of headroom
+  /// above a full stack and stops the tallest board from drawing endless
+  /// spikes. Binds only below an aspect of ~0.75 (width : height); the surplus
+  /// goes to the middle band, where the dice grow into it.
+  ///
+  /// Sized against [BoardView.minAspect]: at the tallest board that clamp
+  /// allows, 18-radii triangles leave the empty middle band around a sixth of
+  /// the playing height — close to a real board's proportions. A smaller cap
+  /// would push that surplus into the middle instead, which is the "bed of
+  /// spikes over a wide empty gap" look this metric exists to avoid.
+  static const double _maxPointRadii = 18.0;
 
   /// Fraction of the empty middle band a die may span, and fraction of a
   /// half-board's width the whole dice PAIR may span. Both cap [diceSide] so a
@@ -107,18 +140,43 @@ class BoardGeometry {
   double get _w => size.width;
   double get _h => size.height;
 
-  // The board band (between the two tray strips).
-  double get _trayHeight => _h * _trayFraction;
-  double get _bandTop => _trayHeight;
-  double get _bandBottom => _h - _trayHeight;
+  /// Thickness of the frame rail painted around the board's outer edge. The
+  /// painter reads this so the rail and the field inset can never drift apart.
+  double get frameThickness => math.min(_w, _h) * _frameFraction;
+
+  /// How far the playing field is inset from the widget's edge: the rail plus
+  /// [_fieldMarginRails] rail widths of visible felt.
+  double get _fieldInset => frameThickness * (1 + _fieldMarginRails);
+
+  /// The PLAYING FIELD: the board rect minus the frame rail and its felt
+  /// margin. Every point column, the bar, both tray strips and the dice are
+  /// laid out inside this rect, so nothing is drawn under the rail.
+  Rect get fieldRect => Rect.fromLTRB(
+        _fieldInset,
+        _fieldInset,
+        _w - _fieldInset,
+        _h - _fieldInset,
+      );
+
+  double get _fLeft => _fieldInset;
+  double get _fTop => _fieldInset;
+  double get _fRight => _w - _fieldInset;
+  double get _fBottom => _h - _fieldInset;
+  double get _fw => _fRight - _fLeft;
+  double get _fh => _fBottom - _fTop;
+
+  // The board band (between the two tray strips), inside the field.
+  double get _trayHeight => _fh * _trayFraction;
+  double get _bandTop => _fTop + _trayHeight;
+  double get _bandBottom => _fBottom - _trayHeight;
   double get _bandHeight => _bandBottom - _bandTop;
 
-  // Full-width, symmetric horizontal layout: 12 columns + a centred bar fill
-  // the whole width (no side tray).
-  double get _colWidth => (_w * (1 - _barFraction)) / 12;
+  // Full-FIELD-width, symmetric horizontal layout: 12 columns + a centred bar
+  // fill the whole field width (no side tray).
+  double get _colWidth => (_fw * (1 - _barFraction)) / 12;
   double get _halfWidth => _colWidth * 6;
-  double get _barLeft => _halfWidth;
-  double get _barRight => _halfWidth + _w * _barFraction;
+  double get _barLeft => _fLeft + _halfWidth;
+  double get _barRight => _barLeft + _fw * _barFraction;
 
   /// The triangle band a point could occupy at most: 44% of the board band, as
   /// on every board before the layout became responsive.
@@ -168,7 +226,7 @@ class BoardGeometry {
       checkerRadius * _maxDiceRadii,
       math.min(
         _middleBand * _diceBandFill,
-        (_w - _barRight) * _diceHalfFill,
+        (_fRight - _barRight) * _diceHalfFill,
       ));
 
   /// Bounding rectangle of [player]'s dice PAIR (the two dice plus the gap
@@ -181,13 +239,31 @@ class BoardGeometry {
     final side = diceSide;
     final gap = side * 0.5;
     final pairWidth = side * 2 + gap;
-    // Canonical: mover to the right of the bar, waiter mirrored to the left.
-    final rightCx = (_barRight + _w) / 2;
-    final cx = player == mover ? rightCx : _w - rightCx;
+    // Canonical: mover to the right of the bar, waiter mirrored to the left
+    // (mirrored about the FIELD's centre line, which is also the board's).
+    final rightCx = (_barRight + _fRight) / 2;
+    final cx = player == mover ? rightCx : _fLeft + _fRight - rightCx;
     final cy = (_bandTop + _bandBottom) / 2;
     final canonical = Rect.fromCenter(
         center: Offset(cx, cy), width: pairWidth, height: side);
     return _orient(canonical);
+  }
+
+  /// Minimum side of a dice TOUCH target, in logical pixels — the platform
+  /// accessibility floor. A phone's dice pair is smaller than this, so
+  /// [diceTapRect] pads it out.
+  static const double minDiceTapTarget = 44;
+
+  /// The generous TAP region for [player]'s dice pair: [diceRect] padded by a
+  /// quarter of a die on every side, and at least [minDiceTapTarget] across in
+  /// both axes. Used by the pre-roll "tap the dice to roll" affordance, where a
+  /// near miss must still roll.
+  Rect diceTapRect(Player player, {required Player mover}) {
+    final r = diceRect(player, mover: mover);
+    final pad = diceSide * 0.25;
+    final dx = math.max(pad, (minDiceTapTarget - r.width) / 2);
+    final dy = math.max(pad, (minDiceTapTarget - r.height) / 2);
+    return Rect.fromLTRB(r.left - dx, r.top - dy, r.right + dx, r.bottom + dy);
   }
 
   /// Centre of the [stackPosition]-th checker (0-based, from the point's base)
@@ -220,8 +296,14 @@ class BoardGeometry {
   /// middle gap / outside the board.
   int? locationAt(Offset p) {
     // Rotate the query back into canonical space when the board is flipped.
-    final q = whiteAtBottom ? p : Offset(_w - p.dx, _h - p.dy);
-    if (q.dx < 0 || q.dx > _w || q.dy < 0 || q.dy > _h) return null;
+    final raw = whiteAtBottom ? p : Offset(_w - p.dx, _h - p.dy);
+    if (raw.dx < 0 || raw.dx > _w || raw.dy < 0 || raw.dy > _h) return null;
+    // A tap on the frame rail (or its felt margin) is forgiven to the nearest
+    // field cell, so insetting the playing field costs no touch target.
+    final q = Offset(
+      raw.dx.clamp(_fLeft, _fRight),
+      raw.dy.clamp(_fTop, _fBottom),
+    );
 
     // The tray strips (top and bottom) are the bear-off destinations. Bear-off
     // is unambiguous, so either strip maps to `off` regardless of player.
@@ -240,7 +322,7 @@ class BoardGeometry {
 
     final int col;
     if (q.dx < _barLeft) {
-      col = (q.dx / _colWidth).floor().clamp(0, 5);
+      col = ((q.dx - _fLeft) / _colWidth).floor().clamp(0, 5);
     } else {
       // q.dx >= _barRight (the bar case returned above).
       col = 6 + ((q.dx - _barRight) / _colWidth).floor().clamp(0, 5);
@@ -276,13 +358,14 @@ class BoardGeometry {
     // White (the canonical bottom player) bears off toward the BOTTOM strip;
     // Black toward the TOP strip.
     final isBottomStrip = player == Player.white;
-    final top = isBottomStrip ? _bandBottom : 0.0;
-    return Rect.fromLTWH(0, top, _w, _trayHeight);
+    final top = isBottomStrip ? _bandBottom : _fTop;
+    return Rect.fromLTWH(_fLeft, top, _fw, _trayHeight);
   }
 
   /// Left edge x of visual column [col] (0..11).
-  double _colLeft(int col) =>
-      col < 6 ? col * _colWidth : _barRight + (col - 6) * _colWidth;
+  double _colLeft(int col) => col < 6
+      ? _fLeft + col * _colWidth
+      : _barRight + (col - 6) * _colWidth;
 
   /// Centre distance from the stack base for checker [s] (0-based) in a stack of
   /// [count], within a usable [range] of travel. Checkers sit at full diameter

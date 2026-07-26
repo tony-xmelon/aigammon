@@ -13,12 +13,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 const _size = Size(800, 600);
 
-/// A PORTRAIT board: 450 wide at [BoardView.minAspect] (0.62), i.e. the exact
-/// shape [BoardView] hands the geometry on a phone in portrait, scaled up so
-/// the golden is readable. Guards the tall-board metrics — checkers sized by
-/// the column width, triangle length capped, dice grown into the roomier
-/// middle band — which the landscape goldens above can never exercise.
-const _portrait = Size(450, 726);
+/// A PORTRAIT board: the shape [BoardView] hands the geometry on a phone in
+/// portrait (aspect ~0.58 — the game screen's slot, filled edge to edge),
+/// scaled up so the golden is readable. Guards the tall-board metrics —
+/// checkers sized by the column width, triangle length capped, dice grown into
+/// the roomier middle band — which the landscape goldens above can never
+/// exercise.
+const _portrait = Size(450, 781);
 
 Widget _harness(BoardPainter painter, [Size size = _size]) {
   return Directionality(
@@ -133,6 +134,7 @@ void main() {
       int? sel,
       Player? mover,
       bool whiteAtBottom = true,
+      bool diceTapHint = false,
     }) =>
         BoardPainter(
           board: board ?? BoardState.initial(),
@@ -147,6 +149,7 @@ void main() {
           combinedDestinations: combined,
           selectedCheckerLocation: sel,
           movingPlayer: mover,
+          diceTapHint: diceTapHint,
         );
 
     final base = make();
@@ -163,6 +166,7 @@ void main() {
     expect(base.shouldRepaint(make(sel: 3)), isTrue);
     expect(base.shouldRepaint(make(mover: Player.white)), isTrue);
     expect(base.shouldRepaint(make(whiteAtBottom: false)), isTrue);
+    expect(base.shouldRepaint(make(diceTapHint: true)), isTrue);
     expect(
         base.shouldRepaint(make(
             board: BoardState(points: List.filled(24, 0)))),

@@ -257,6 +257,16 @@ class BoardInteractionOptions {
 /// turn produces one move). When [holdMoveAnimation] is null or already `false`
 /// (e.g. the local player's own move — no beat), the animation starts at once.
 ///
+/// ## Tapping the dice to roll ([onDiceTap])
+///
+/// At the local player's pre-roll gate the board is NOT interactive (no move is
+/// pending), but the dice are the obvious thing to reach for — so the screen
+/// hands in an [onDiceTap] and a tap on either pair rolls. Gestures are
+/// therefore attached whenever [interactive] OR [onDiceTap] is live, and the tap
+/// router checks the dice hit boxes FIRST. Because the callback is null at every
+/// other moment, move entry is untouched: during the moving phase a tap on the
+/// dice area is exactly the "nothing actionable" tap it has always been.
+///
 /// ## Responsive sizing ([minAspect] / [maxAspect])
 ///
 /// The board FILLS the slot its parent gives it, clamped to an aspect range —
@@ -293,6 +303,7 @@ class BoardView extends StatefulWidget {
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
     this.highlightMovingPlayer,
+    this.onDiceTap,
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -385,12 +396,29 @@ class BoardView extends StatefulWidget {
   /// ignored while interactive (the builder supplies the moving player).
   final Player? highlightMovingPlayer;
 
-  /// Narrowest (tallest) shape the board may take, as width : height. A phone
-  /// in portrait hits this bound: the board comes out ~1.6x taller than it is
-  /// wide, filling the slot between the header and the bottom strip. Going any
-  /// taller would stretch the triangles past what the capped point length can
-  /// absorb, leaving an unreadably wide empty middle band.
-  static const double minAspect = 0.62;
+  /// Rolls the dice — wired ONLY while the local player is at the pre-roll gate
+  /// (the same condition that enables the screen's Roll button); `null` at every
+  /// other moment.
+  ///
+  /// When non-null a tap inside EITHER dice pair's generous hit box
+  /// ([BoardGeometry.diceTapRect]) fires this instead of running move entry, and
+  /// the mover's pair wears a quiet ring so the affordance is discoverable (the
+  /// Roll button stays put regardless). When null the dice areas behave exactly
+  /// as before — a tap there falls through to normal move-entry handling — so
+  /// this can never interfere with entering a move.
+  final VoidCallback? onDiceTap;
+
+  /// Narrowest (tallest) shape the board may take, as width : height.
+  ///
+  /// A phone in portrait leaves a slot around 0.58 wide : tall, so this bound
+  /// deliberately sits BELOW that: the board fills its slot outright instead of
+  /// letterboxing ~24pt of dead space above and below it (the "we need every
+  /// pixel of screen space" complaint — the horizontal padding was only half of
+  /// it). The extra height is absorbed by the triangles, whose length cap
+  /// (`BoardGeometry._maxPointRadii`) grew with this bound; past ~0.55 the
+  /// triangles stop growing and the surplus would go to the empty middle band,
+  /// so the clamp holds there.
+  static const double minAspect = 0.55;
 
   /// Widest shape the board may take, as width : height. Past this the checkers
   /// (height-bound on a wide board) stop growing and only the gaps between the
@@ -826,6 +854,30 @@ class _BoardViewState extends State<BoardView>
     return board;
   }
 
+  /// Whether [localPosition] lands on either player's dice pair (the padded
+  /// [BoardGeometry.diceTapRect]). Both pairs are live so the user can tap
+  /// whichever dice they were looking at.
+  bool _isDiceTap(BoardGeometry geometry, Offset localPosition) {
+    final mover = widget.state.turn;
+    for (final player in Player.values) {
+      if (geometry.diceTapRect(player, mover: mover).contains(localPosition)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Routes a tap: at the pre-roll gate ([BoardView.onDiceTap] wired) a tap on
+  /// either dice pair rolls; everything else goes to move entry.
+  void _onTapUp(BoardGeometry geometry, Offset localPosition) {
+    final roll = widget.onDiceTap;
+    if (roll != null && _isDiceTap(geometry, localPosition)) {
+      roll();
+      return;
+    }
+    _handleTap(geometry, localPosition);
+  }
+
   /// Handles a tap. Selection semantics live on the CHECKERS; move targets on
   /// the destination TRIANGLES. The exact hit-tested [BoardGeometry.locationAt]
   /// is tried first; when it is not a directly-actionable target the tap is
@@ -1138,6 +1190,8 @@ class _BoardViewState extends State<BoardView>
           // entry but no rings or destination fills are painted (see
           // [BoardInteractionOptions.showHighlights]).
           final showHl = widget.interactionOptions.showHighlights;
+          // The "tap the dice to roll" ring shows exactly while the tap is live.
+          final diceTapHint = widget.onDiceTap != null;
 
           // A live drag suspends animation, so the two are mutually exclusive.
           final frame = dragging ? null : _animFrame(geometry);
@@ -1160,6 +1214,7 @@ class _BoardViewState extends State<BoardView>
               blackDice: blackDice,
               diceMover: turn,
               cube: widget.state.cube,
+              diceTapHint: diceTapHint,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
                 center: dragPointer,
@@ -1184,6 +1239,7 @@ class _BoardViewState extends State<BoardView>
               blackDice: blackDice,
               diceMover: turn,
               cube: widget.state.cube,
+              diceTapHint: diceTapHint,
               hiddenChecker: frame.hidden,
               overlayChecker: frame.overlay,
             );
@@ -1196,6 +1252,7 @@ class _BoardViewState extends State<BoardView>
               blackDice: blackDice,
               diceMover: turn,
               cube: widget.state.cube,
+              diceTapHint: diceTapHint,
               // When a builder owns the board (interactive moving phase) the
               // live selection drives the highlights; otherwise the static
               // overlay fields (the replay/analysis move highlights) apply.
@@ -1221,13 +1278,17 @@ class _BoardViewState extends State<BoardView>
             );
           }
 
-          if (!widget.interactive) {
+          // Gestures are attached while move entry is live OR while the board
+          // accepts a dice tap (the pre-roll gate, where the board is otherwise
+          // non-interactive).
+          if (!widget.interactive && widget.onDiceTap == null) {
             return CustomPaint(size: size, painter: painter);
           }
-          final dragEnabled = widget.interactionOptions.enableDrag;
+          final dragEnabled =
+              widget.interactive && widget.interactionOptions.enableDrag;
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapUp: (details) => _handleTap(geometry, details.localPosition),
+            onTapUp: (details) => _onTapUp(geometry, details.localPosition),
             // Pan recognisers are attached only when drag is enabled, so with
             // drag off a pan simply falls through (does nothing) while taps keep
             // working. With both attached, Flutter's gesture arena routes a

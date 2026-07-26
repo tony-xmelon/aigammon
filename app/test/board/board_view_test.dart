@@ -154,10 +154,11 @@ void main() {
       return _painterOf(t).geometry.size;
     }
 
-    testWidgets('a tall (phone portrait) slot: the board hits the min aspect',
+    testWidgets('an EXTREMELY tall slot: the board hits the min aspect',
         (t) async {
-      // A 390pt phone's board slot: far taller than the board may be.
-      const slot = Size(374, 666);
+      // Taller than even the relaxed 0.55 clamp allows, so the clamp binds and
+      // the board letterboxes rather than stretching further.
+      const slot = Size(374, 800);
       final board = await boardIn(t, slot);
       expect(board.width, closeTo(slot.width, 0.01),
           reason: 'the board takes the full width of a tall slot');
@@ -165,12 +166,24 @@ void main() {
           reason: 'it elongates down to the clamp, not beyond');
       expect(board.height, greaterThan(board.width),
           reason: 'a phone board is TALLER than it is wide');
-      expect(board.height, lessThanOrEqualTo(slot.height));
+      expect(board.height, lessThan(slot.height),
+          reason: 'the clamp letterboxes what it will not stretch into');
       // The CustomPaint really is that size on screen (not just the geometry).
       final painted = t.getSize(find.byWidgetPredicate(
           (w) => w is CustomPaint && w.painter is BoardPainter));
       expect(painted.width, closeTo(board.width, 0.01));
       expect(painted.height, closeTo(board.height, 0.01));
+    });
+
+    testWidgets("a real phone's board slot is filled EXACTLY (no letterbox)",
+        (t) async {
+      // The game screen's slot on a 390pt phone: aspect ~0.58, inside the 0.55
+      // clamp, so the board takes every pixel of it — no dead margin above or
+      // below (the "we need every pixel of screen space" fix).
+      const slot = Size(390, 677);
+      final board = await boardIn(t, slot);
+      expect(board.width, closeTo(slot.width, 0.01));
+      expect(board.height, closeTo(slot.height, 0.01));
     });
 
     testWidgets('a very wide slot: the board stops at the max aspect',
@@ -1246,6 +1259,121 @@ void main() {
       await t.pump();
       expect(committed, isNotNull);
       expect(committed!.checkerMoves.any((c) => c.to == CheckerMove.off), isTrue);
+    });
+  });
+
+  // --- Tap the dice to roll ---------------------------------------------------
+
+  group('tap the dice to roll', () {
+    /// A pre-roll gate board: NOT interactive (no move is pending) but wired
+    /// with an [onDiceTap], exactly as the game screen wires it at the gate.
+    Widget preRoll(GameState state, VoidCallback? onDiceTap) => _harness(
+          BoardView(
+            state: state,
+            interactive: false,
+            onMoveCommitted: (_) {},
+            onDiceTap: onDiceTap,
+          ),
+        );
+
+    testWidgets('a tap on EITHER pair rolls while the gate is open', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      var rolls = 0;
+      await t.pumpWidget(preRoll(goldenState, () => rolls++));
+
+      final mover = goldenState.turn;
+      await t.tapAt(_geometry.diceRect(mover, mover: mover).center);
+      await t.pump();
+      expect(rolls, 1, reason: "the mover's own pair rolls");
+
+      await t.tapAt(_geometry.diceRect(mover.opponent, mover: mover).center);
+      await t.pump();
+      expect(rolls, 2, reason: 'the waiting pair rolls too');
+    });
+
+    testWidgets('a near miss inside the padded target still rolls', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      var rolls = 0;
+      await t.pumpWidget(preRoll(goldenState, () => rolls++));
+
+      final mover = goldenState.turn;
+      final target = _geometry.diceTapRect(mover, mover: mover);
+      // Just inside the padded box's corner — outside the dice themselves.
+      await t.tapAt(target.bottomRight - const Offset(1, 1));
+      await t.pump();
+      expect(rolls, 1);
+    });
+
+    testWidgets('a tap elsewhere on the board does NOT roll', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      var rolls = 0;
+      await t.pumpWidget(preRoll(goldenState, () => rolls++));
+
+      await t.tapAt(_geometry.pointRect(0).center);
+      await t.pump();
+      await t.tapAt(_geometry.barRect(Player.white).center);
+      await t.pump();
+      expect(rolls, 0);
+    });
+
+    testWidgets('the mover pair wears the tap hint only while the tap is live',
+        (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(preRoll(goldenState, () {}));
+      expect(_painterOf(t).diceTapHint, isTrue);
+
+      await t.pumpWidget(preRoll(goldenState, null));
+      expect(_painterOf(t).diceTapHint, isFalse);
+    });
+
+    testWidgets('with no callback the dice area falls through to move entry',
+        (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final control = BoardEntryController();
+      addTearDown(control.dispose);
+      await t.pumpWidget(_harness(BoardView(
+        state: goldenState,
+        interactive: true,
+        onMoveCommitted: (_) {},
+        entryControl: control,
+      )));
+
+      // Pick up a source, then tap the (empty) dice area: with no dice-tap
+      // callback that is just a tap on nothing actionable, which clears the
+      // selection — the pre-existing behaviour, unchanged.
+      await tapPoint(t, 7);
+      expect(_painterOf(t).selectedCheckerLocation, 7);
+      final mover = goldenState.turn;
+      await t.tapAt(_geometry.diceRect(mover, mover: mover).center);
+      await t.pump();
+      expect(_painterOf(t).selectedCheckerLocation, isNull);
+    });
+
+    testWidgets('move entry keeps working while a dice tap is wired',
+        (t) async {
+      // Defensive: even if both were ever live at once, a tap on a checker
+      // still enters the move rather than rolling.
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final control = BoardEntryController();
+      addTearDown(control.dispose);
+      var rolls = 0;
+      await t.pumpWidget(_harness(BoardView(
+        state: goldenState,
+        interactive: true,
+        onMoveCommitted: (_) {},
+        entryControl: control,
+        onDiceTap: () => rolls++,
+      )));
+
+      await tapPoint(t, 7);
+      expect(_painterOf(t).selectedCheckerLocation, 7);
+      expect(rolls, 0);
     });
   });
 }
