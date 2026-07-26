@@ -9,6 +9,7 @@
 library;
 
 export 'src/dice_roller.dart';
+export 'src/discovery.dart';
 export 'src/guest_client.dart';
 export 'src/host_authority.dart';
 export 'src/host_server.dart';
