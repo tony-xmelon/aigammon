@@ -2,6 +2,7 @@
 library;
 
 export 'src/auth_client.dart';
+export 'src/fair_dice.dart';
 export 'src/firestore_client.dart';
 export 'src/firestore_value.dart';
 export 'src/functions_client.dart';
