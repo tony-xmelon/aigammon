@@ -282,6 +282,10 @@ class LanPair {
       authority: authority,
       persistence: hostPersistence,
       guestConnected: presence,
+      // The same shortened clocks the server and the guest run on — otherwise
+      // the host's own resync beats stay at production speed while everything
+      // around it races, which is exactly the mismatch the parameter exists for.
+      timings: LanTimings.test,
     );
     await host.playMatch();
 

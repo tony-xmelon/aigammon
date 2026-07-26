@@ -5,7 +5,6 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lan_play/lan_play.dart';
-import 'package:network_info_plus/network_info_plus.dart';
 
 import '../data/persistence_hooks.dart';
 import 'lan_match_controller.dart';
@@ -115,9 +114,8 @@ class LiveNearbyTransport implements NearbyTransport {
   String get deviceName {
     try {
       final host = Platform.localHostname.trim();
-      if (host.isNotEmpty) {
-        return host.length > 32 ? host.substring(0, 32) : host;
-      }
+      // Rune-safe (a hostname can carry non-ASCII): see [truncateForDisplay].
+      if (host.isNotEmpty) return truncateForDisplay(host, 32);
     } catch (_) {
       // Some platforms refuse the hostname; a generic label still identifies
       // the device well enough for a room with two phones in it.
@@ -158,7 +156,7 @@ class LiveNearbyTransport implements NearbyTransport {
       // address in — so this is a degraded mode, not a failure.
       beacon = null;
     }
-    return _LiveHostSession(authority, server, beacon);
+    return _LiveHostSession(authority, server, beacon, timings);
   }
 
   @override
@@ -189,15 +187,22 @@ class LiveNearbyTransport implements NearbyTransport {
         timings: timings,
       ));
 
+  /// The address to SHOW the host so they can read it out to their guest.
+  ///
+  /// Enumerating the interfaces is the whole implementation. This used to try
+  /// `network_info_plus`'s `getWifiIP()` first and fall back to here, but the
+  /// fallback answered every case the plugin did: `NetworkInterface.list` needs
+  /// no permission, works on every platform the app targets (including the
+  /// desktops and simulators where the plugin returned nothing), and returns the
+  /// same Wi-Fi address because that is the non-loopback IPv4 interface a phone
+  /// on a LAN has. The plugin was five transitive dependencies and a location
+  /// permission on some Android versions, bought nothing the fallback did not
+  /// already provide, and is gone.
+  ///
+  /// Null when enumeration is refused outright; the caller then shows its "ask
+  /// them to search for you" copy instead of an address.
   @override
   Future<String?> localAddress() async {
-    try {
-      final wifi = await NetworkInfo().getWifiIP();
-      if (wifi != null && wifi.isNotEmpty && wifi != '0.0.0.0') return wifi;
-    } catch (_) {
-      // No Wi-Fi plugin answer (desktop, a simulator, a denied permission) —
-      // fall through to the interface list, which needs no permission at all.
-    }
     try {
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
@@ -217,7 +222,7 @@ class LiveNearbyTransport implements NearbyTransport {
 }
 
 class _LiveHostSession implements HostSession {
-  _LiveHostSession(this._authority, this._server, this._beacon) {
+  _LiveHostSession(this._authority, this._server, this._beacon, this._timings) {
     _presence = _server.guestPresence.listen((connected) {
       guestConnected.value = connected;
     });
@@ -226,6 +231,11 @@ class _LiveHostSession implements HostSession {
   final HostAuthority _authority;
   final HostServer _server;
   final HostBeacon? _beacon;
+
+  /// The clocks this transport was built with, handed to the host's controller
+  /// so both ends of the link run on the same beats (the guest gets them from
+  /// its client, which negotiated them with this host).
+  final LanTimings _timings;
   late final StreamSubscription<bool> _presence;
   bool _stopped = false;
 
@@ -259,6 +269,7 @@ class _LiveHostSession implements HostSession {
         authority: _authority,
         guestConnected: guestConnected,
         persistence: persistence,
+        timings: _timings,
       );
 
   @override

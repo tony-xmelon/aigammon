@@ -287,7 +287,7 @@ void main() {
     expect(cols, isNot(contains('enable_drag')));
     expect(cols, isNot(contains('drag_hint_shown')), reason: 'nor the v4 col');
     expect(cols, isNot(contains('dice_roll_animation')),
-        reason: 'nor either v5 col');
+        reason: 'nor the v5 col');
     expect(cols, isNot(contains('show_pass_device')));
     expect(cols, isNot(contains('rotate_board_hot_seat')),
         reason: 'nor the v7 col');
@@ -298,8 +298,9 @@ void main() {
     //    flipping drag.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
-    // 3a. The new columns exist at their v6 defaults on the migrated row —
-    //     including drag flipped ON, the dice beat ON, the hint not yet shown.
+    // 3a. The new columns exist at their v7 defaults on the migrated row —
+    //     including drag flipped ON, the dice beat ON, the hint not yet shown
+    //     and the hot-seat board left unrotated.
     final settings = await db.select(db.settings).getSingle();
     expect(settings.showHighlights, isTrue);
     expect(settings.enableDrag, isTrue, reason: 'the v4 flip turns drag ON');
@@ -309,7 +310,7 @@ void main() {
     expect(settings.diceRollAnimation, isTrue,
         reason: 'the v5 column defaults ON for an upgraded row too');
     expect(settings.showPassDevice, isFalse,
-        reason: 'the other v5 column defaults OFF for an upgraded row too');
+        reason: 'the v6 column defaults OFF for an upgraded row too');
     expect(settings.rotateBoardHotSeat, isFalse,
         reason: 'and the v7 column lands on the tabletop default');
 
@@ -451,7 +452,7 @@ void main() {
     // 3b. Every v4 value survived — crucially the user's OFF drag is NOT flipped
     //     again (the one-time v4 flip is gated on `from < 4`).
     expect(settings.enableDrag, isFalse,
-        reason: 'the v4 drag flip must never re-run on a v4 -> v5 upgrade');
+        reason: 'the v4 drag flip must never re-run on a v4 -> v7 upgrade');
     expect(settings.themeMode, 'dark');
     expect(settings.animationSpeed, 'fast');
     expect(settings.defaultMatchLength, 7);
@@ -521,7 +522,7 @@ void main() {
     expect(settings.showHighlights, isFalse);
     expect(settings.enableDrag, isTrue);
     expect(settings.diceRollAnimation, isFalse,
-        reason: 'a user-disabled beat is NOT re-enabled by the v6 upgrade');
+        reason: 'a user-disabled beat is NOT re-enabled by the v7 upgrade');
     expect(settings.dragHintShown, isTrue);
 
     // 3c. Version bumped, still one row, and writes go through.

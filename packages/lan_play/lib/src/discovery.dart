@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'display_name.dart' show truncateForDisplay;
 import 'protocol.dart' show maxNameLength;
 
 /// The UDP port the host's beacon listens on.
@@ -293,10 +294,11 @@ DiscoveredHost? _readAnswer(Datagram datagram) {
 /// Bound and clean a display name from either end of the wire, falling back to
 /// [fallback] (or a generic label) when there is nothing usable left.
 String _trimName(String name, {String fallback = ''}) {
-  final trimmed = name.trim();
-  final bounded = trimmed.length > maxNameLength
-      ? trimmed.substring(0, maxNameLength)
-      : trimmed;
+  // Rune-safe: a name arriving from the wire is arbitrary user text, and a
+  // substring cut at [maxNameLength] could land inside a surrogate pair — see
+  // [truncateForDisplay]. The ellipsis is inside the budget, so the result still
+  // satisfies the protocol's own maxNameLength check.
+  final bounded = truncateForDisplay(name.trim(), maxNameLength);
   if (bounded.isNotEmpty) return bounded;
   return fallback.isNotEmpty ? fallback : 'Nearby device';
 }

@@ -953,7 +953,9 @@ Future<void> _openGame({
 String _shortName(String? name) {
   final trimmed = name?.trim() ?? '';
   if (trimmed.isEmpty) return 'Opp';
-  return trimmed.length > 10 ? trimmed.substring(0, 10) : trimmed;
+  // Rune-safe, and ellipsised so a trimmed name reads as trimmed rather than as
+  // a differently-spelled one — see [truncateForDisplay].
+  return truncateForDisplay(trimmed, 10);
 }
 
 /// The common scroll/width frame both tabs sit in.

@@ -178,12 +178,19 @@ void main() {
       await waitFor(
           () => g.inbound.whereType<EventMessage>().length > eventsBefore,
           what: 'events over the new socket');
-      expect(g.states.map((s) => s.status).toList(), [
+      // The status story IN ORDER, but not necessarily contiguous: reconnecting
+      // is a backoff retry loop, so a run that needs two attempts legitimately
+      // emits an extra reconnecting/connecting pair in the middle. Asserting the
+      // exact list pins the test to "the first retry always succeeds", which is
+      // a property of the host machine's timing rather than of the client.
+      // containsAllInOrder keeps the part that is the contract: it connected,
+      // noticed the drop, and came back.
+      expect(g.states.map((s) => s.status).toList(), containsAllInOrder([
         GuestConnectionStatus.connecting,
         GuestConnectionStatus.connected,
         GuestConnectionStatus.reconnecting,
         GuestConnectionStatus.connected,
-      ]);
+      ]));
     });
 
     test('a host that stops is retried until it comes back', () async {

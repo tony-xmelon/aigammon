@@ -253,14 +253,20 @@ class LanMatchController extends ChangeNotifier implements MatchController {
   /// [HostServer.guestPresence]. Without it [linkStatus] can only report
   /// [GuestConnectionStatus.connecting] until something folds (which proves a
   /// guest is there) and never notices one leaving — so pass it.
+  /// [timings] paces the controller's own clocks (the resync/retry beats). The
+  /// guest takes them from its client, which negotiated them with this host, so
+  /// the host has to be told the same set explicitly or a test that shortens the
+  /// clocks gets a host still running at production speed while its guest races
+  /// ahead. Defaults to [LanTimings.defaults], which is what production passes.
   LanMatchController.host({
     required HostAuthority authority,
     this.persistence = const NoopPersistence(),
     ValueListenable<bool>? guestConnected,
+    LanTimings timings = LanTimings.defaults,
   })  : _transport = _HostLink(authority),
         localSide = authority.hostSide,
         _config = authority.config,
-        _clocks = LanTimings.defaults,
+        _clocks = timings,
         _match = MatchState(matchLength: authority.config.length),
         _guestPresence = guestConnected,
         _linkStatusIsDriven = guestConnected != null {
