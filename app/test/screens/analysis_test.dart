@@ -233,12 +233,15 @@ void main() {
         reason: 'Black has not rolled by this step');
     expect(onPlayed.movingPlayer, Player.white);
 
-    // The played move is drawn: its origins as source rings, its landings as
-    // destination highlights. Source index 0 is never in a legal White opening
-    // move, so it stays out of the played overlay.
-    expect(onPlayed.highlightedSources, playedSrcs);
+    // The played move is drawn: its origins wear the STRONG selection ring (not
+    // the thin "could be picked up" source ring, which is left empty here), its
+    // landings the destination highlights. Source index 0 is never in a legal
+    // White opening move, so it stays out of the played overlay.
+    expect(onPlayed.strongHighlightLocations, playedSrcs);
+    expect(onPlayed.highlightedSources, isEmpty,
+        reason: 'the replay overlay must not use the weak source ring');
     expect(onPlayed.highlightedDestinations, playedDests);
-    expect(onPlayed.highlightedSources.contains(0), isFalse);
+    expect(onPlayed.strongHighlightLocations.contains(0), isFalse);
 
     // The toggle is offered (best differs from played). Switch to Best: the
     // overlay swaps to the best move's hops, whose source set includes 0.
@@ -248,9 +251,53 @@ void main() {
     await t.pumpAndSettle();
 
     final onBest = _painterOf(t);
-    expect(onBest.highlightedSources.contains(0), isTrue,
+    expect(onBest.strongHighlightLocations.contains(0), isTrue,
         reason: 'the best-move overlay differs from the played one');
-    expect(onBest.highlightedSources, isNot(onPlayed.highlightedSources));
+    expect(onBest.strongHighlightLocations,
+        isNot(onPlayed.strongHighlightLocations));
+  });
+
+  testWidgets('the board NEVER resizes as the rows below it come and go',
+      (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final gameId = await _seedCachedBlunder(t);
+    await _pumpLoaded(t, _app(gameId));
+
+    Rect boardRect() => t.getRect(find.byWidgetPredicate(
+        (w) => w is CustomPaint && w.painter is BoardPainter));
+
+    final rects = <int, Rect>{0: boardRect()};
+    // The six steps cover every combination: a bare opening / roll / resign
+    // step (no caption, no toggle, no verdict), White's blunder (all three),
+    // and Black's best move (caption + verdict but NO Played/Best toggle,
+    // since its best play IS what was played).
+    final seen = <int, ({bool caption, bool toggle})>{};
+    for (var step = 1; step < 6; step++) {
+      await t.tap(find.byTooltip('Next'));
+      await t.pumpAndSettle();
+      rects[step] = boardRect();
+      seen[step] = (
+        caption: find.textContaining('position before the move')
+            .evaluate()
+            .isNotEmpty,
+        toggle: find.byType(SegmentedButton<bool>).evaluate().isNotEmpty,
+      );
+    }
+
+    expect(seen[1], (caption: true, toggle: true),
+        reason: "White's blunder shows caption + Played/Best");
+    expect(seen[2], (caption: false, toggle: false),
+        reason: 'the bare roll step shows neither');
+    expect(seen[3], (caption: true, toggle: false),
+        reason: "Black's best move shows the caption but no toggle");
+
+    for (var step = 1; step < 6; step++) {
+      expect(rects[step], rects[0],
+          reason: 'the board must not change size stepping to $step '
+              '(caption/toggle/verdict rows are reserved space)');
+    }
   });
 
   testWidgets('move list: all moves listed, current highlighted, tap jumps',

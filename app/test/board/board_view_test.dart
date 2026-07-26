@@ -317,6 +317,11 @@ void main() {
       state: goldenState,
       interactive: true,
       onMoveCommitted: (_) {},
+      // Deselect-on-re-tap is what a SLOW second tap does; with the detector
+      // live a fast one would play a hop instead (see the double-tap group).
+      // Wall-clock timing is not controllable from a widget test, so the
+      // detector is switched off here to isolate the deselect semantics.
+      doubleTapWindow: Duration.zero,
     )));
 
     await tapPoint(t, 7);

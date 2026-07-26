@@ -234,6 +234,18 @@ class _GameScreenState extends State<GameScreen> {
   /// screen never tears down a SnackBar that belongs to somebody else.
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _dragHintBar;
 
+  /// The transient "that checker cannot move" hint currently shown over the
+  /// bottom edge of the board, or `null` when nothing is shown. Raised by the
+  /// [BoardView]'s [BoardView.onNoLegalSourceTap] and cleared by [_tapHintTimer].
+  String? _tapHint;
+
+  /// Auto-clear timer for [_tapHint]. A repeat tap RESTARTS it rather than
+  /// stacking a second hint (the rate limit).
+  Timer? _tapHintTimer;
+
+  /// How long a [_tapHint] stays up.
+  static const Duration _tapHintDuration = Duration(milliseconds: 1200);
+
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
 
@@ -326,6 +338,7 @@ class _GameScreenState extends State<GameScreen> {
       });
     }
     _rollBeatTimer?.cancel();
+    _tapHintTimer?.cancel();
     _observable.removeListener(_onChange);
     _dicePresenting.dispose();
     _stagedMove.dispose();
@@ -351,6 +364,30 @@ class _GameScreenState extends State<GameScreen> {
     _syncTutor();
     _maybeShowDragHint();
     setState(() {});
+  }
+
+  // --- "That checker cannot move" hint ---------------------------------------
+
+  /// Surfaces the brief hint behind the reported "why am I not able to move the
+  /// 7?" confusion: tapping one of your own checkers that no remaining die can
+  /// play used to be a completely silent no-op, leaving the user to guess
+  /// whether the tap registered at all.
+  ///
+  /// Deliberately NOT a floating [SnackBar]: one would cover the action bar (and
+  /// outlive the route). This is an in-tree layer pinned to the BOTTOM EDGE of
+  /// the board's slot — right above the history strip, next to where the eye
+  /// already is — so it can never reflow the board or block Undo/Confirm. A
+  /// repeat tap restarts the timer instead of queueing a second hint.
+  void _showNoLegalSourceHint(bool hasStagedHops) {
+    final message = hasStagedHops
+        ? 'No legal move for that checker with the remaining dice — try Undo'
+        : 'No legal move for that checker with the remaining dice';
+    _tapHintTimer?.cancel();
+    setState(() => _tapHint = message);
+    _tapHintTimer = Timer(_tapHintDuration, () {
+      if (!mounted) return;
+      setState(() => _tapHint = null);
+    });
   }
 
   // --- One-time drag/tap hint ------------------------------------------------
@@ -771,6 +808,7 @@ class _GameScreenState extends State<GameScreen> {
                         // enables that button, and null otherwise so dice-area
                         // taps fall through to normal move entry.
                         onDiceTap: _canRoll(moveSide) ? _c.rollDice : null,
+                        onNoLegalSourceTap: _showNoLegalSourceHint,
                       ),
                       if (_c.error != null)
                         Positioned(
@@ -779,10 +817,20 @@ class _GameScreenState extends State<GameScreen> {
                           right: 0,
                           child: _ErrorBanner(error: _c.error!),
                         ),
+                      // Floats over the board's bottom edge, so it never takes
+                      // layout height (F6) and never covers the action bar.
+                      if (_tapHint != null)
+                        Positioned(
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                          child: _TapHintBanner(message: _tapHint!),
+                        ),
                     ],
                   ),
                 ),
                 _historyStrip(),
+                _pipLine(),
                 _bottomRegion(moveSide),
               ],
             ),
@@ -1123,6 +1171,58 @@ class _GameScreenState extends State<GameScreen> {
                 Icon(Icons.expand_less,
                     size: 18, color: scheme.onSurfaceVariant),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Height of the always-present pip-count line. Like the action bar and the
+  /// advice slot it is FIXED and unconditional: the board fills the slot above
+  /// it, so a line that came and went would resize the board (F6).
+  static const double _pipLineHeight = 20;
+
+  /// The live pip counts for both sides, sitting with the tutor metrics just
+  /// under the history strip ("missing pip count along the tutor metrics").
+  ///
+  /// Named from the local player's point of view where there is one — "Pips:
+  /// You 132 · AI 145", reusing [GameScreen.opponentLabel] so an online match
+  /// reads "Opp" — and neutrally ("W … · B …") in hot-seat, where both sides are
+  /// local and neither of them is "you". Same rule as the header score.
+  ///
+  /// Counts come from the COMMITTED board, so they step once per move rather
+  /// than flickering through a half-entered turn.
+  Widget _pipLine() {
+    final scheme = Theme.of(context).colorScheme;
+    final board = _c.state.board;
+    final white = board.pipCount(Player.white);
+    final black = board.pipCount(Player.black);
+    final localWhite = _c.isLocalHuman(Player.white);
+    final localBlack = _c.isLocalHuman(Player.black);
+    final soleLocal = localWhite != localBlack;
+    final String text;
+    if (!soleLocal) {
+      text = 'Pips: W $white · B $black';
+    } else {
+      final (mine, theirs) =
+          localWhite ? (white, black) : (black, white);
+      text = 'Pips: You $mine · ${widget.opponentLabel} $theirs';
+    }
+    return SizedBox(
+      key: const ValueKey('pipLine'),
+      height: _pipLineHeight,
+      child: Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            text,
+            maxLines: 1,
+            softWrap: false,
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontSize: 12,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ),
@@ -1914,6 +2014,42 @@ class _ErrorBanner extends StatelessWidget {
               child: Text(
                 '$error',
                 style: TextStyle(color: scheme.onErrorContainer),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// --- Transient board hint ----------------------------------------------------
+
+/// The brief "that checker cannot move" strip pinned to the bottom edge of the
+/// board slot. A plain [Material] row — not a [SnackBar] — so it neither covers
+/// the action bar nor survives a route change, and no animation is left pending
+/// for `pumpAndSettle`.
+class _TapHintBanner extends StatelessWidget {
+  const _TapHintBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.inverseSurface,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline, size: 16, color: scheme.onInverseSurface),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                maxLines: 2,
+                style: TextStyle(color: scheme.onInverseSurface, fontSize: 12),
               ),
             ),
           ],

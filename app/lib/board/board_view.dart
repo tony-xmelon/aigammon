@@ -9,6 +9,7 @@ import '../game/applied_move.dart';
 import 'board_geometry.dart';
 import 'board_painter.dart';
 import 'board_theme.dart';
+import 'dice_usage.dart';
 
 /// Bridges the [BoardView]'s private move-entry [MoveBuilder] to an EXTERNAL
 /// action bar (the game screen's fixed-height bottom bar).
@@ -275,6 +276,25 @@ class BoardInteractionOptions {
 /// other moment, move entry is untouched: during the moving phase a tap on the
 /// dice area is exactly the "nothing actionable" tap it has always been.
 ///
+/// ## Double-tap to play a hop ([doubleTapWindow])
+///
+/// Tapping a checker picks it up; tapping it AGAIN within [doubleTapWindow]
+/// plays a hop from it outright — the higher remaining die when that is legal
+/// from this checker, else the lower. Detection is manual (a timestamp plus a
+/// same-target check inside the existing tap handler) rather than
+/// [GestureDetector.onDoubleTap], because that recogniser delays EVERY single
+/// tap by its timeout; selection must stay instant. The second tap must land on
+/// the checker the first one picked up, so completing a hop and then starting
+/// the next one from the same point is never mistaken for a double-tap.
+///
+/// ## Played dice read as spent ([BoardPainter.usedDiceSlots])
+///
+/// While a move is being entered, the dice the staged hops have consumed render
+/// heavily dimmed on the mover's own pair (see `dice_usage.dart` for the hop →
+/// die mapping; doubles dim progressively, since four hops share two painted
+/// dice). Undo restores the brightness, because the set is recomputed from the
+/// builder on every paint rather than latched.
+///
 /// ## Responsive sizing ([minAspect] / [maxAspect])
 ///
 /// The board FILLS the slot its parent gives it, clamped to an aspect range —
@@ -310,8 +330,11 @@ class BoardView extends StatefulWidget {
     this.diceOverride,
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
+    this.strongHighlightSources = const {},
     this.highlightMovingPlayer,
     this.onDiceTap,
+    this.onNoLegalSourceTap,
+    this.doubleTapWindow = const Duration(milliseconds: 300),
   });
 
   /// The game state to render. Its board is the base of the preview.
@@ -399,6 +422,13 @@ class BoardView extends StatefulWidget {
   /// recorded-move landings; ignored while interactive (see [highlightedSources]).
   final Set<int> highlightedDestinations;
 
+  /// Static STRONG source highlights (point index 0..23, or [CheckerMove.bar]):
+  /// each location's top checker wears the same bright yellow ring the live
+  /// selection uses, rather than the thin "could be picked up" ring. Used by the
+  /// analysis screen so the checker(s) a recorded play MOVES are unmistakable.
+  /// Ignored while interactive. See [BoardPainter.strongHighlightLocations].
+  final Set<int> strongHighlightSources;
+
   /// The side a static overlay's move belongs to, so a bar source or an `off`
   /// destination resolves to the correct half. Required for those to render;
   /// ignored while interactive (the builder supplies the moving player).
@@ -415,6 +445,25 @@ class BoardView extends StatefulWidget {
   /// as before — a tap there falls through to normal move-entry handling — so
   /// this can never interfere with entering a move.
   final VoidCallback? onDiceTap;
+
+  /// Called when the user taps one of their OWN checkers that is not a legal
+  /// source with the dice still in hand — the silent no-op behind the reported
+  /// "why am I not able to move the 7?" confusion. The argument is whether a
+  /// PARTIAL move is already staged, so the caller can add a "try Undo" nudge.
+  ///
+  /// Fires only for a genuine own-checker miss: taps on empty felt, on the
+  /// opponent's checkers, or that resolve to a legal source / destination are
+  /// silent as before.
+  final ValueChanged<bool>? onNoLegalSourceTap;
+
+  /// How close together two taps on the SAME checker must be to count as a
+  /// double-tap (which plays a hop immediately — see [_applyQuickHop]).
+  ///
+  /// Detection is manual, on the existing tap handler, rather than through
+  /// [GestureDetector.onDoubleTap]: that recogniser delays every single tap by
+  /// the double-tap timeout, which would have made ordinary selection feel
+  /// sluggish. [Duration.zero] disables double-tap entirely.
+  final Duration doubleTapWindow;
 
   /// Narrowest (tallest) shape the board may take, as width : height.
   ///
@@ -549,6 +598,13 @@ class _BoardViewState extends State<BoardView>
   /// Current pointer position of the in-progress drag (board-local), where the
   /// lifted checker's ghost is painted. `null` when not dragging.
   Offset? _dragPointer;
+
+  /// Wall-clock time of the previous tap that resolved to [_lastTapTarget], for
+  /// the manual double-tap detector. `null` before the first tap.
+  DateTime? _lastTapAt;
+
+  /// The location the previous tap resolved to, for the double-tap detector.
+  int? _lastTapTarget;
 
   @override
   void initState() {
@@ -762,6 +818,8 @@ class _BoardViewState extends State<BoardView>
     _selectedSource = null;
     _dragSource = null;
     _dragPointer = null;
+    _lastTapAt = null; // a new position never inherits a half-finished double-tap
+    _lastTapTarget = null;
     _stagedFromExternal = false; // a fresh phase defaults to hand entry
     if (widget.interactive && widget.state.phase == GamePhase.moving) {
       final legal = widget.state.legalMoves;
@@ -877,14 +935,75 @@ class _BoardViewState extends State<BoardView>
   }
 
   /// Routes a tap: at the pre-roll gate ([BoardView.onDiceTap] wired) a tap on
-  /// either dice pair rolls; everything else goes to move entry.
+  /// either dice pair rolls; a DOUBLE-tap on the checker already picked up plays
+  /// a hop outright; everything else goes to move entry.
   void _onTapUp(BoardGeometry geometry, Offset localPosition) {
     final roll = widget.onDiceTap;
     if (roll != null && _isDiceTap(geometry, localPosition)) {
       roll();
       return;
     }
+    if (_consumeDoubleTap(geometry, localPosition)) return;
     _handleTap(geometry, localPosition);
+  }
+
+  /// Manual double-tap detection: returns true when this tap completed a
+  /// double-tap that PLAYED a hop (so the caller must not also run normal tap
+  /// handling).
+  ///
+  /// The second tap counts only when it lands on the same target within
+  /// [BoardView.doubleTapWindow] AND that target is the source the first tap
+  /// picked up ([_selectedSource]). Requiring the pickup is what keeps this from
+  /// hijacking an ordinary "complete a hop here, then start the next hop from
+  /// the same point" sequence: a completed hop clears the selection, so the
+  /// follow-up tap is a plain pickup however fast it arrives.
+  bool _consumeDoubleTap(BoardGeometry geometry, Offset localPosition) {
+    final builder = _builder;
+    if (builder == null) return false;
+    final window = widget.doubleTapWindow;
+    final target = _tapTarget(geometry, localPosition, builder);
+    final previousAt = _lastTapAt;
+    final previousTarget = _lastTapTarget;
+    final now = DateTime.now();
+    _lastTapAt = now;
+    _lastTapTarget = target;
+    if (window <= Duration.zero) return false;
+    if (target == null || previousAt == null || previousTarget != target) {
+      return false;
+    }
+    if (now.difference(previousAt) > window) return false;
+    if (_selectedSource != target) return false;
+    if (!builder.selectableSources.contains(target)) return false;
+    // Consumed: a third quick tap starts a fresh pair rather than chaining.
+    _lastTapAt = null;
+    _lastTapTarget = null;
+    _applyQuickHop(builder, target);
+    return true;
+  }
+
+  /// The location a tap at [pos] addresses for double-tap purposes: the exact
+  /// hit when it is a selectable source, else the nearest forgiven source, else
+  /// the raw hit-tested location (so two taps on the same dead point still pair
+  /// up and can be answered with the "no legal move" hint).
+  int? _tapTarget(BoardGeometry geometry, Offset pos, MoveBuilder builder) {
+    final loc = geometry.locationAt(pos);
+    if (loc != null && builder.selectableSources.contains(loc)) return loc;
+    return _nearestSource(geometry, pos, builder) ?? loc;
+  }
+
+  /// Plays ONE hop from [source] immediately: the destination consuming the
+  /// HIGHER remaining die when that is legal from this checker, else the lower
+  /// (see [highestDieDestination]). No-op when the source offers no hop.
+  void _applyQuickHop(MoveBuilder builder, int source) {
+    final destination =
+        highestDieDestination(builder, source, widget.state.turn);
+    if (destination == null) return;
+    setState(() {
+      _stagedFromExternal = false; // a manual gesture makes this hand entry
+      builder.addHop(source, destination);
+      _selectedSource = null;
+    });
+    _syncEntry();
   }
 
   /// Handles a tap. Selection semantics live on the CHECKERS; move targets on
@@ -898,6 +1017,10 @@ class _BoardViewState extends State<BoardView>
     final builder = _builder;
     if (builder == null) return;
     final loc = geometry.locationAt(localPosition);
+    // Set by the branches that end with nothing picked up and no hop played, so
+    // a tap on one of the mover's OWN checkers that simply cannot move is
+    // answered with a hint instead of the old silent no-op.
+    var missed = false;
     setState(() {
       // Any manual tap interaction marks the entry as hand-driven; a later hint
       // re-stage would flip it back via [_applyExternalMove].
@@ -910,6 +1033,7 @@ class _BoardViewState extends State<BoardView>
           _selectedSource = loc;
         } else {
           _selectedSource = _nearestSource(geometry, localPosition, builder);
+          missed = _selectedSource == null && _isOwnChecker(loc);
         }
         return;
       }
@@ -954,8 +1078,24 @@ class _BoardViewState extends State<BoardView>
         return;
       }
       _selectedSource = _nearestSource(geometry, localPosition, builder);
+      missed = _selectedSource == null && _isOwnChecker(loc);
     });
     _syncEntry();
+    if (missed) {
+      widget.onNoLegalSourceTap?.call(builder.chosenHops.isNotEmpty);
+    }
+  }
+
+  /// Whether [loc] holds at least one of the MOVER's own checkers on the preview
+  /// board — i.e. whether the user plausibly meant "move this checker of mine".
+  bool _isOwnChecker(int? loc) {
+    if (loc == null) return false;
+    final turn = widget.state.turn;
+    final board = _previewBoard();
+    if (loc == CheckerMove.bar) return board.barFor(turn) > 0;
+    if (loc < 0 || loc >= 24) return false;
+    final count = board.points[loc];
+    return turn == Player.white ? count > 0 : count < 0;
   }
 
   /// The combined-move landing points for [source] when combined taps are
@@ -1202,6 +1342,15 @@ class _BoardViewState extends State<BoardView>
           // The "tap the dice to roll" ring shows exactly while the tap is live.
           final diceTapHint = widget.onDiceTap != null;
 
+          // Dice the staged hops have already spent, so they render disabled.
+          // Purely derived from the live builder: an Undo drops a hop and the
+          // die brightens again on the very next paint. Never dims the waiting
+          // player's memento pair (the painter gates on the mover).
+          final rolled = widget.state.dice;
+          final playedSlots = (builder != null && rolled != null)
+              ? usedDiceSlots(builder.chosenHops, rolled, turn)
+              : const <int>{};
+
           // A live drag suspends animation, so the two are mutually exclusive.
           final frame = dragging ? null : _animFrame(geometry);
           // A move queued while [BoardView.holdMoveAnimation] is `true` has not
@@ -1224,6 +1373,7 @@ class _BoardViewState extends State<BoardView>
               diceMover: turn,
               cube: widget.state.cube,
               diceTapHint: diceTapHint,
+              usedDiceSlots: playedSlots,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
                 center: dragPointer,
@@ -1262,6 +1412,11 @@ class _BoardViewState extends State<BoardView>
               diceMover: turn,
               cube: widget.state.cube,
               diceTapHint: diceTapHint,
+              usedDiceSlots: playedSlots,
+              // A static overlay's origins wear the STRONG ring; the live
+              // builder never uses it (its pickup is [selectedCheckerLocation]).
+              strongHighlightLocations:
+                  builder == null ? widget.strongHighlightSources : const {},
               // When a builder owns the board (interactive moving phase) the
               // live selection drives the highlights; otherwise the static
               // overlay fields (the replay/analysis move highlights) apply.

@@ -2952,4 +2952,181 @@ void main() {
       c.disposeController();
     });
   });
+
+  group('pip counts', () {
+    testWidgets('the line is always present and names the local side', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      expect(find.byKey(const ValueKey('pipLine')), findsOneWidget);
+      // The local (White) side is "You" and the computer takes the opponent
+      // label; Black has already played its opening 6-1 by this gate.
+      final white = c.state.board.pipCount(Player.white);
+      final black = c.state.board.pipCount(Player.black);
+      expect(white, 167, reason: 'White has not moved yet');
+      expect(black, lessThan(167), reason: 'Black opened');
+      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('the counts follow the position and match BoardState.pipCount',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // White wins the opening 6-1 and moves first.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(find.text('Pips: You 167 · AI 167'), findsOneWidget);
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+
+      final white = c.state.board.pipCount(Player.white);
+      final black = c.state.board.pipCount(Player.black);
+      expect(white, lessThan(167), reason: 'White has played a move');
+      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat keeps the neutral W / B naming', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: LocalHumanAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => find.byKey(const ValueKey('pipLine')).evaluate().isNotEmpty);
+      await _dismissPassDevice(t);
+
+      expect(find.text('Pips: W 167 · B 167'), findsOneWidget);
+
+      c.disposeController();
+    });
+  });
+
+  group('no-legal-move hint', () {
+    /// A match parked at White's move with 5-5 from the opening position.
+    ///
+    /// Black opens 6-1 and replies; White then rolls 5-5, and the two checkers
+    /// on the 24-point (index 23) are STRANDED — their only hop, 24/19, lands on
+    /// Black's five-strong 19-point (index 18). That is the reported "why am I
+    /// not able to move this checker?" shape, reachable from a real game.
+    (GameController, LocalHumanAgent) strandedFives() {
+      final human = LocalHumanAgent();
+      return (
+        GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          // Black wins the opening roll (6 > 1) and moves; White then rolls 5-5.
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(5, 5), Dice(4, 3)]),
+        ),
+        human,
+      );
+    }
+
+    /// Rolls White in and waits for its move request.
+    Future<void> reachWhitesMove(
+        WidgetTester t, GameController c, LocalHumanAgent human) async {
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      expect(c.state.dice, Dice(5, 5), reason: 'precondition: White rolled 5-5');
+      expect(c.state.board.points[18], lessThanOrEqualTo(-2),
+          reason: 'precondition: Black still owns the 19-point');
+    }
+
+    testWidgets('a dead checker tap surfaces a hint that auto-clears, and the '
+        'board never reflows', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = strandedFives();
+      await t.pumpWidget(_harness(c));
+      await reachWhitesMove(t, c, human);
+
+      final before = t.getRect(find.byType(BoardView));
+      expect(find.textContaining('No legal move for that checker'), findsNothing);
+
+      await tapBoardPoint(t, 23);
+      expect(
+          find.text('No legal move for that checker with the remaining dice'),
+          findsOneWidget);
+      expect(t.getRect(find.byType(BoardView)), before,
+          reason: 'the hint floats over the board — no reflow (F6)');
+
+      // Rate-limited: a second tap replaces the hint rather than stacking one.
+      await tapBoardPoint(t, 23);
+      expect(find.textContaining('No legal move for that checker'),
+          findsOneWidget);
+
+      // It clears itself.
+      await t.pump(const Duration(milliseconds: 1300));
+      expect(find.textContaining('No legal move for that checker'), findsNothing);
+      expect(t.getRect(find.byType(BoardView)), before);
+
+      c.disposeController();
+    });
+
+    testWidgets('a staged partial move adds the Undo nudge', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = strandedFives();
+      await t.pumpWidget(_harness(c));
+      await reachWhitesMove(t, c, human);
+
+      await tapBoardPoint(t, 12); // 13/8 — one of four hops
+      await tapBoardPoint(t, 7);
+      expect(isButtonEnabled(t, find.widgetWithText(TextButton, 'Undo')), isTrue,
+          reason: 'precondition: a partial move is staged');
+
+      await tapBoardPoint(t, 23);
+      expect(
+          find.text('No legal move for that checker with the remaining dice '
+              '— try Undo'),
+          findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('tapping a checker that CAN move stays silent', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = strandedFives();
+      await t.pumpWidget(_harness(c));
+      await reachWhitesMove(t, c, human);
+
+      await tapBoardPoint(t, 12);
+      expect(boardPainterOf(t).selectedCheckerLocation, 12);
+      expect(find.textContaining('No legal move for that checker'), findsNothing);
+
+      c.disposeController();
+    });
+  });
 }

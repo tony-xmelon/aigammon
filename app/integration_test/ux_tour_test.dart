@@ -301,6 +301,9 @@ Future<void> _playMatch(
   }
   if (!done.contains('hint')) _skipped.add('hint panel');
   if (!done.contains('selection')) _skipped.add('move entry with a selection');
+  if (!done.contains('dice_dim')) {
+    _skipped.add('a played die rendered dim mid-entry');
+  }
   if (!done.contains('drag_hint')) _skipped.add('drag-hint SnackBar');
   if (!done.contains('record')) _skipped.add('expanded history sheet');
 }
@@ -381,6 +384,18 @@ Future<void> _humanMove(
       await _beat(tester, const Duration(milliseconds: 350));
       if (boardPainterOf(tester).highlightedDestinations.isNotEmpty) {
         if (await _shot(tester, 'move_entry_selected')) done.add('selection');
+        // Play that one hop so the die it SPENT renders dimmed on the mover's
+        // pair — and the always-present pip line under the strip is legible in
+        // the same frame. `_finishMove` picks the turn up from here.
+        if (!done.contains('dice_dim')) {
+          final dest = boardPainterOf(tester).highlightedDestinations.first;
+          await tapBoardPoint(tester, dest);
+          await _beat(tester, const Duration(milliseconds: 400));
+          if (boardPainterOf(tester).usedDiceSlots.isNotEmpty &&
+              await _shot(tester, 'played_die_dimmed')) {
+            done.add('dice_dim');
+          }
+        }
       }
     }
   }

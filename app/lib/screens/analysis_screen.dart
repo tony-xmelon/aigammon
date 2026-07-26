@@ -22,10 +22,10 @@ import 'metric_explainer.dart';
 ///
 ///  * BOTH players' persistent dice pairs as of that step (the historical roll,
 ///    folded from the event log via [persistentDice]);
-///  * for a [MoveEvent] step, the recorded move drawn ON the board — origins as
-///    source rings, destinations as triangle highlights, over the PRE-move
-///    position — with a Played/Best toggle that swaps the overlay to the engine's
-///    best play when it differs;
+///  * for a [MoveEvent] step, the recorded move drawn ON the board — origins
+///    ringed with the STRONG yellow selection highlight, destinations as
+///    triangle highlights, over the PRE-move position — with a Played/Best
+///    toggle that swaps the overlay to the engine's best play when it differs;
 ///  * a scrollable list of EVERY move with its mark + equity loss, the current
 ///    step highlighted and tappable to jump; and
 ///  * an ⓘ explainer for the metrics (equity, equity loss, error rate, marks).
@@ -297,7 +297,11 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                 onMoveCommitted: (_) {},
                 whiteDice: whiteDice,
                 blackDice: blackDice,
-                highlightedSources: srcs,
+                // The checker(s) the shown play MOVES wear the strong yellow
+                // ring — the same one live selection uses — not the thin
+                // "could be picked up" ring, which read as a weak suggestion
+                // on a board where nothing is actually pickable.
+                strongHighlightSources: srcs,
                 highlightedDestinations: dests,
                 highlightMovingPlayer:
                     overlayMove == null ? null : current!.player,
@@ -305,14 +309,38 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
             ),
           ),
         ),
-        if (preMove) _preMoveCaption(showingBest: _showBest && hasBest),
-        if (hasBest) _playedBestToggle(),
-        if (current != null) _moveInfo(current),
+        // Every row below the board occupies a RESERVED, unconditional height,
+        // so stepping between an assessed move (caption + toggle + verdict) and
+        // a bare roll (none of them) cannot resize the board. The board and the
+        // move list share what is left through their two [Expanded]s, so ANY
+        // conditional height here would have moved both.
+        _reserved(
+          _captionSlotHeight,
+          preMove ? _preMoveCaption(showingBest: _showBest && hasBest) : null,
+        ),
+        _reserved(_toggleSlotHeight, hasBest ? _playedBestToggle() : null),
+        _reserved(
+            _moveInfoSlotHeight, current == null ? null : _moveInfo(current)),
         _cursorBar(states.length),
         Expanded(child: _moveList()),
       ],
     );
   }
+
+  /// Height of the "showing position before the move" caption slot.
+  static const double _captionSlotHeight = 24;
+
+  /// Height of the Played/Best toggle slot (a Material 3 [SegmentedButton] is
+  /// 48pt with its padded tap target, plus a little breathing room).
+  static const double _toggleSlotHeight = 56;
+
+  /// Height of the move-verdict slot (mark + loss + best play).
+  static const double _moveInfoSlotHeight = 40;
+
+  /// A fixed-height slot holding [child], or empty space of the same height when
+  /// [child] is `null`. The whole point is that the two cases measure alike.
+  Widget _reserved(double height, Widget? child) =>
+      SizedBox(height: height, child: child == null ? null : Center(child: child));
 
   Widget _preMoveCaption({required bool showingBest}) {
     return Padding(
@@ -336,10 +364,12 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
 
   /// The Played / Best segmented toggle: swaps the board overlay between the
   /// move that was played and the engine's best play. Shown only when the two
-  /// differ (see [_loaded]).
+  /// differ — but its SPACE is reserved either way (see [_loaded]), so the board
+  /// keeps its size when the toggle comes and goes. Vertical padding is left to
+  /// the reserved slot so the button can never overflow it.
   Widget _playedBestToggle() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: SegmentedButton<bool>(
         showSelectedIcon: false,
         segments: const [
