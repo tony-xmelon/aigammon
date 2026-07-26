@@ -535,4 +535,76 @@ void main() {
           2);
     });
   });
+
+  // The position-aware builder must not offer a bear-off the rules do not allow
+  // YET. Both cases arise from permutation matching: a legal move's off-hop is
+  // offered as a FIRST hop, at a position where bearing off is illegal — the
+  // outcome would still be legal (build() emits the canonical order), but the
+  // offer itself is a lie, and bear-off is exactly where users already struggle.
+  group('MoveBuilder.forState never offers a premature bear-off', () {
+    GameState state(Map<int, int> pts, Dice dice,
+            {int whiteOff = 0, int blackOff = 0}) =>
+        GameState.testState(
+          board: BoardState(
+            points: [for (var i = 0; i < 24; i++) pts[i] ?? 0],
+            whiteOff: whiteOff,
+            blackOff: blackOff,
+          ),
+          turn: Player.white,
+          phase: GamePhase.moving,
+          dice: dice,
+        );
+
+    Set<int> offSources(MoveBuilder b) => {
+          for (final s in b.selectableSources)
+            if (b.destinationsFor(s).contains(CheckerMove.off)) s,
+        };
+
+    test('a checker still outside the home board blocks every off-hop', () {
+      // White has one checker on the 7-point (index 6) and everything else home,
+      // playing 4-1. `7/6 4/off` is legal — the 1 brings the straggler home, THEN
+      // the 4 bears off. Reordered as `4/off 7/6` it is not: no bear-off is legal
+      // while index 6 is occupied.
+      final s = state({6: 1, 3: 4, 2: 5, 1: 5, 23: -15}, Dice(4, 1));
+      expect(
+          s.legalMoves.any((m) =>
+              m.checkerMoves.any((h) => h.to == CheckerMove.off)),
+          isTrue,
+          reason: 'precondition: some legal move does bear off (after the 1)');
+
+      final b = MoveBuilder.forState(s);
+      expect(offSources(b), isEmpty,
+          reason: 'not all checkers are home yet, so nothing can come off');
+
+      b.addHop(6, 5); // 7/6 — the straggler comes home
+      expect(offSources(b), contains(3),
+          reason: 'now the 4 bears the 4-point checker off');
+    });
+
+    test('an overshoot is offered only from the furthest-back checker', () {
+      // All home, 6-4: one checker on the 4-point (index 3) and the rest on the
+      // 2-point (index 1). `4/off 2/off` is legal — the 4 takes the 4-point
+      // exactly, then the 6 overshoots from what is by then the furthest-back
+      // point. Reordered as `2/off 4/off` the first hop is an illegal overshoot,
+      // because index 3 is still occupied.
+      final s = state({3: 1, 1: 14, 23: -15}, Dice(6, 4));
+      final b = MoveBuilder.forState(s);
+      expect(offSources(b), {3},
+          reason: 'only the furthest-back checker may overshoot');
+
+      b.addHop(3, CheckerMove.off);
+      expect(offSources(b), contains(1),
+          reason: 'the 2-point is now the furthest back: the 6 overshoots it');
+    });
+
+    test('an EXACT bear-off is offered from any point, back checker or not', () {
+      // All home, 6-1: the 1 takes the 1-point (index 0) exactly even though the
+      // 6-point (index 5) is further back, so the filter must not demand the
+      // furthest-back checker when the die matches exactly.
+      final s = state({5: 1, 0: 1, 23: -15}, Dice(6, 1), whiteOff: 13);
+      final b = MoveBuilder.forState(s);
+      expect(offSources(b), containsAll(<int>{5, 0}),
+          reason: '6/off by exact 6, and 1/off by exact 1');
+    });
+  });
 }

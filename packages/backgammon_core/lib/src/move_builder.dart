@@ -1,4 +1,5 @@
 import 'board_state.dart';
+import 'dice.dart';
 import 'game_state.dart';
 import 'move.dart';
 import 'move_generator.dart';
@@ -47,7 +48,29 @@ import 'player.dart';
 /// complete turn. Each offered hop is the k-th hop of some permutation of a
 /// full-length legal move whose earlier hops equal the chosen prefix; choosing
 /// it keeps that permutation alive, so more hops remain until completion.
-/// `move_entry_property_test.dart` proves this over hundreds of real positions.
+///
+/// The playability filter cannot break that, because for any surviving candidate
+/// SOME playable ordering of its remaining hops always exists:
+///
+/// * hops move strictly toward the mover's home (index strictly decreasing for
+///   White, increasing for Black, with the bar above every point and `off` below
+///   every point), so "hop A feeds hop B" — A's landing is B's source — is a
+///   strict order and the remaining hops form a DAG;
+/// * take the remaining hop whose SOURCE is furthest back. No remaining hop can
+///   feed it (that would need a source further back still), so every hop that
+///   delivers a checker to that source has already been played, and the
+///   candidate's own canonical ordering therefore leaves a checker standing
+///   there: the hop is playable now;
+/// * bar-first falls out of the same ordering — the bar is the furthest-back
+///   location of all, so while a checker sits on it the furthest-back remaining
+///   hop is a bar hop, which is exactly the one the rules demand;
+/// * a bear-off hop is likewise last among the hops of its own checker, and its
+///   preconditions (all home, overshoot only from the back checker) are those the
+///   generator already satisfied at that point of the canonical ordering.
+///
+/// `move_entry_property_test.dart` proves all of this empirically over hundreds
+/// of real positions, in both modes, including that no offered hop is illegal at
+/// the moment it is offered.
 class MoveBuilder {
   final List<Move> _legal;
 
@@ -60,6 +83,10 @@ class MoveBuilder {
   /// filter in [_computeNextHops]. `null` for the position-free constructor.
   final BoardState? _board;
   final Player? _player;
+
+  /// The roll, known exactly when [_board] is (both come from the same state).
+  /// Only the bear-off filter needs it — see [_canBearOff].
+  final Dice? _dice;
 
   final List<CheckerMove> _chosen = [];
 
@@ -80,7 +107,8 @@ class MoveBuilder {
           for (final m in legalMoves) _Candidate(m.checkerMoves, m),
         ],
         _board = null,
-        _player = null {
+        _player = null,
+        _dice = null {
     _recompute();
   }
 
@@ -94,10 +122,11 @@ class MoveBuilder {
               : const [],
           state.board,
           state.turn,
+          state.dice,
         );
 
-  MoveBuilder._variants(
-      List<MoveVariants> variants, BoardState board, Player player)
+  MoveBuilder._variants(List<MoveVariants> variants, BoardState board,
+      Player player, Dice? dice)
       : _legal = [for (final v in variants) v.canonical],
         _candidates = [
           for (final v in variants)
@@ -105,7 +134,8 @@ class MoveBuilder {
               _Candidate(d.checkerMoves, v.canonical),
         ],
         _board = board,
-        _player = player {
+        _player = player,
+        _dice = dice {
     _recompute();
   }
 
@@ -280,7 +310,7 @@ class MoveBuilder {
         if (!seen.add(key)) continue; // already decided about this hop
         // Playability does not depend on WHICH candidate offered the hop, so a
         // rejected hop stays rejected for this prefix (hence the seen key above).
-        if (position != null && !_isPlayableFrom(hop, position)) continue;
+        if (position != null && !_isPlayable(hop, position, prefix)) continue;
         result.add(hop);
       }
     }
@@ -291,17 +321,101 @@ class MoveBuilder {
   BoardState? _advance(BoardState? position, CheckerMove hop) =>
       position?.applyMove(_player!, Move([hop]));
 
-  /// Whether the mover actually has a checker to move for [hop] on [position]
-  /// (bar first, as the rules demand). Landing legality needs no check: the
-  /// opponent never adds checkers during the turn, so a landing that is legal in
-  /// the candidate's own order is legal in any order.
-  bool _isPlayableFrom(CheckerMove hop, BoardState position) {
+  /// Whether [hop] is legal to play RIGHT NOW — at [position], the board the
+  /// already-chosen [prefix] has reached.
+  ///
+  /// Two things can make a hop of a legal move unplayable in a reordering:
+  ///
+  /// * its source may be empty (the mover's checker has not arrived there yet, or
+  ///   it must come off the bar first);
+  /// * it may be a BEAR-OFF whose preconditions are not met yet — see
+  ///   [_canBearOff].
+  ///
+  /// A point-to-point LANDING needs no check: the opponent never adds checkers
+  /// during the turn, so a landing that is legal in the candidate's own order is
+  /// legal in any order.
+  bool _isPlayable(
+      CheckerMove hop, BoardState position, List<CheckerMove> prefix) {
     final player = _player!;
     final onBar = position.barFor(player);
-    if (hop.from == CheckerMove.bar) return onBar > 0;
-    if (onBar > 0) return false;
-    final n = position.points[hop.from];
-    return player == Player.white ? n > 0 : n < 0;
+    if (hop.from == CheckerMove.bar) {
+      if (onBar == 0) return false;
+    } else {
+      if (onBar > 0) return false; // the bar is served first
+      final n = position.points[hop.from];
+      if (player == Player.white ? n <= 0 : n >= 0) return false;
+    }
+    if (hop.to == CheckerMove.off) return _canBearOff(hop.from, position, prefix);
+    return true;
+  }
+
+  /// Whether a checker may be borne off [from] at [position] with the dice still
+  /// in hand after [prefix].
+  ///
+  /// Bearing off needs every checker home, and a die LARGER than the point's
+  /// distance (an overshoot) may only lift the furthest-back checker. Both
+  /// conditions depend on the position mid-turn, so a legal move's off-hop can be
+  /// illegal as a FIRST hop: `7/6 4/off` reordered puts the bear-off before the
+  /// straggler comes home, and `4/off 2/off` on a 6-4 reordered overshoots the
+  /// 2-point while the 4-point is still occupied. Neither is offered.
+  bool _canBearOff(int from, BoardState position, List<CheckerMove> prefix) {
+    final player = _player!;
+    if (position.barFor(player) > 0) return false;
+    final white = player == Player.white;
+    // Every checker inside the mover's home board (White 0-5, Black 18-23).
+    for (var i = 0; i < 24; i++) {
+      final n = position.points[i];
+      final mine = white ? n > 0 : n < 0;
+      if (!mine) continue;
+      if (white ? i > 5 : i < 18) return false;
+    }
+    final distance = white ? from + 1 : 24 - from;
+    // The furthest-back checker: the highest index for White, lowest for Black.
+    var furthest = from;
+    for (var i = 0; i < 24; i++) {
+      final n = position.points[i];
+      final mine = white ? n > 0 : n < 0;
+      if (!mine) continue;
+      if (white ? i > furthest : i < furthest) furthest = i;
+    }
+    for (final die in _remainingDice(prefix)) {
+      if (die == distance) return true; // exact: from any point
+      if (die > distance && from == furthest) return true; // overshoot: back only
+    }
+    return false;
+  }
+
+  /// The dice values not yet spent by [prefix]. Each hop consumes the die its pip
+  /// distance names, except a bear-off overshoot, which consumes the smallest
+  /// remaining die that covers the distance (the same attribution the board uses
+  /// to dim spent dice).
+  List<int> _remainingDice(List<CheckerMove> prefix) {
+    final dice = _dice;
+    if (dice == null) return const [];
+    final remaining = dice.isDouble
+        ? <int>[dice.die1, dice.die1, dice.die1, dice.die1]
+        : <int>[dice.die1, dice.die2];
+    for (final hop in prefix) {
+      final distance = _pipsOf(hop);
+      var pick = remaining.indexOf(distance);
+      if (pick < 0) {
+        for (var i = 0; i < remaining.length; i++) {
+          if (remaining[i] < distance) continue;
+          if (pick < 0 || remaining[i] < remaining[pick]) pick = i;
+        }
+      }
+      if (pick >= 0) remaining.removeAt(pick);
+    }
+    return remaining;
+  }
+
+  /// The pip distance [hop] covers for the mover — the die it consumed, except a
+  /// bear-off overshoot, where the die may be larger.
+  int _pipsOf(CheckerMove hop) {
+    final white = _player == Player.white;
+    final from = hop.from == CheckerMove.bar ? (white ? 24 : -1) : hop.from;
+    if (hop.to == CheckerMove.off) return white ? from + 1 : 24 - from;
+    return white ? from - hop.to : hop.to - from;
   }
 
   /// Whether the first `prefix.length` hops of [perm] equal [prefix] by from/to.

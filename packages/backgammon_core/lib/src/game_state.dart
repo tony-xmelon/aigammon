@@ -168,7 +168,11 @@ class GameState {
 
   /// [legalMoves] with every distinct way of ENTERING each move (see
   /// [MoveVariants]) — what hop-by-hop entry needs so the checker a user has just
-  /// moved can still play the other die. Used by `MoveBuilder.forState`.
+  /// moved can still play the other die.
+  ///
+  /// [MoveBuilder.forState] gets the same list straight from
+  /// [MoveGenerator.legalVariants]; this getter is the convenient way to inspect
+  /// it (tests, debugging) without repeating the phase check.
   List<MoveVariants> get legalVariants => phase == GamePhase.moving
       ? MoveGenerator.legalVariants(board, turn, dice!)
       : const [];

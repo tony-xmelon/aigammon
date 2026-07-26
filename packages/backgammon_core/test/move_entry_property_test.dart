@@ -372,18 +372,46 @@ void _checkEntry(_Case c, Random rng, {required bool positionAware}) {
     final sources = builder.selectableSources.toList()..sort();
     expect(sources, isNotEmpty,
         reason: 'offered prefix ${Move(prefix)} dead-ended — $reason');
-    // (f) Every offered source really holds a checker of the mover's.
+    // (f) Every offered hop is one the rules allow AT THIS MOMENT: its source
+    // holds a checker of the mover's, and a bear-off really is available (all
+    // home, and an overshoot only from the furthest-back checker).
     if (positionAware) {
       var position = c.board;
       for (final hop in prefix) {
         position = position.applyMove(c.player, Move([hop]));
       }
+      final white = c.player == Player.white;
+      final sign = white ? 1 : -1;
       for (final s in sources) {
         final held = s == CheckerMove.bar
             ? position.barFor(c.player)
-            : position.points[s] * (c.player == Player.white ? 1 : -1);
+            : position.points[s] * sign;
         expect(held, greaterThan(0),
             reason: 'source $s holds no checker of the mover\'s — $reason');
+        if (!builder.destinationsFor(s).contains(CheckerMove.off)) continue;
+        // A bear-off is offered: the rules must allow it from THIS position —
+        // every checker home, and a die that either matches the distance exactly
+        // or overshoots from the furthest-back checker.
+        expect(position.barFor(c.player), 0, reason: reason);
+        for (var i = 0; i < 24; i++) {
+          if (position.points[i] * sign <= 0) continue;
+          expect(white ? i <= 5 : i >= 18, isTrue,
+              reason: 'off offered from $s with a checker still on $i at '
+                  '${Move(prefix)} — $reason');
+        }
+        var furthest = s;
+        for (var i = 0; i < 24; i++) {
+          if (position.points[i] * sign <= 0) continue;
+          if (white ? i > furthest : i < furthest) furthest = i;
+        }
+        final distance = white ? s + 1 : 24 - s;
+        final inHand = _diceInHand(c.dice, prefix, white);
+        expect(
+            inHand.any((d) =>
+                d == distance || (d > distance && s == furthest)),
+            isTrue,
+            reason: 'off offered from $s (needs $distance) with $inHand in hand '
+                'and $furthest furthest back, at ${Move(prefix)} — $reason');
       }
     }
     for (final s in sources) {
@@ -474,6 +502,29 @@ void _checkEntry(_Case c, Random rng, {required bool positionAware}) {
       }
     }
   }
+}
+
+/// The dice values [prefix] has NOT spent. Each hop consumes the die its pip
+/// distance names; a bear-off overshoot consumes the smallest die that covers it.
+List<int> _diceInHand(Dice dice, List<CheckerMove> prefix, bool white) {
+  final remaining = dice.isDouble
+      ? <int>[dice.die1, dice.die1, dice.die1, dice.die1]
+      : <int>[dice.die1, dice.die2];
+  for (final hop in prefix) {
+    final from = hop.from == CheckerMove.bar ? (white ? 24 : -1) : hop.from;
+    final distance = hop.to == CheckerMove.off
+        ? (white ? from + 1 : 24 - from)
+        : (white ? from - hop.to : hop.to - from);
+    var pick = remaining.indexOf(distance);
+    if (pick < 0) {
+      for (var i = 0; i < remaining.length; i++) {
+        if (remaining[i] < distance) continue;
+        if (pick < 0 || remaining[i] < remaining[pick]) pick = i;
+      }
+    }
+    if (pick >= 0) remaining.removeAt(pick);
+  }
+  return remaining;
 }
 
 /// Enters [hops] into [builder], asserting each was offered when its turn came.
