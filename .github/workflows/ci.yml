@@ -21,6 +21,21 @@ jobs:
       - run: dart test
         working-directory: packages/backgammon_core
 
+  lan:
+    name: lan_play tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+        working-directory: packages/lan_play
+      - run: dart analyze --fatal-infos
+        working-directory: packages/lan_play
+      - run: dart test
+        working-directory: packages/lan_play
+
   engine:
     name: engine build + integration tests (linux)
     runs-on: ubuntu-latest
