@@ -361,6 +361,7 @@ class BoardView extends StatefulWidget {
     this.blackDice,
     this.diceOverride,
     this.activeDiceSide,
+    this.showCube = true,
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
     this.strongHighlightSources = const {},
@@ -435,6 +436,17 @@ class BoardView extends StatefulWidget {
 
   /// BLACK's persistent dice pair (see [whiteDice]).
   final Dice? blackDice;
+
+  /// Whether the doubling cube is PAINTED on the bar. False in a cubeless match,
+  /// where the painter is handed no [CubeState] at all so no cube glyph is drawn
+  /// — the reported "I selected game without a cube but cube is still showing".
+  ///
+  /// A display flag, not a rule: [GameState.cube] still exists (it is part of the
+  /// core state and stays at ×1, centred, for the whole match), and the cube is
+  /// suppressed at its three surfaces together — this marker, the header chip and
+  /// the Double button. Defaults to true so every other call site (analysis,
+  /// replay, the board's own tests) is unaffected.
+  final bool showCube;
 
   /// When non-null, `faces` REPLACES `roller`'s dice pair on the painted board —
   /// purely cosmetic. Used by the opponent dice-roll animation beat (see
@@ -1523,7 +1535,7 @@ class _BoardViewState extends State<BoardView>
               whiteDice: whiteDice,
               blackDice: blackDice,
               activeDiceSide: widget.activeDiceSide,
-              cube: widget.state.cube,
+              cube: widget.showCube ? widget.state.cube : null,
               usedDiceSlots: playedSlots,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
@@ -1548,7 +1560,7 @@ class _BoardViewState extends State<BoardView>
               whiteDice: whiteDice,
               blackDice: blackDice,
               activeDiceSide: widget.activeDiceSide,
-              cube: widget.state.cube,
+              cube: widget.showCube ? widget.state.cube : null,
               hiddenChecker: frame.hidden,
               overlayChecker: frame.overlay,
             );
@@ -1560,7 +1572,7 @@ class _BoardViewState extends State<BoardView>
               whiteDice: whiteDice,
               blackDice: blackDice,
               activeDiceSide: widget.activeDiceSide,
-              cube: widget.state.cube,
+              cube: widget.showCube ? widget.state.cube : null,
               usedDiceSlots: playedSlots,
               // A static overlay's origins wear the STRONG ring; the live
               // builder never uses it (its pickup is [selectedCheckerLocation]).

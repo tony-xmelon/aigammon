@@ -952,6 +952,10 @@ class _GameScreenState extends State<GameScreen> {
                         interactionOptions: widget.interactionOptions,
                         whiteDice: whiteDice,
                         blackDice: blackDice,
+                        // A cubeless match paints NO cube on the bar, exactly as
+                        // it shows no header chip and no Double button — the
+                        // three cube surfaces are suppressed together.
+                        showCube: !_c.cubeless,
                         diceOverride: _rollBeat,
                         // Emphasis follows the PRESENTATION, never `state.turn`:
                         // the roller while a roll is live, the mover while a move

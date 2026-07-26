@@ -2873,7 +2873,8 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('cubeless match: cube chip and Double button are hidden',
+    testWidgets(
+        'cubeless match: cube chip, Double button AND the board cube are hidden',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -2891,11 +2892,14 @@ void main() {
           reason: 'no Double button in a cubeless match');
       expect(find.textContaining('×'), findsNothing,
           reason: 'the cube chip is hidden in a cubeless match');
+      expect(boardPainterOf(t).cube, isNull,
+          reason: 'the painter is handed no cube, so no cube glyph is drawn');
 
       c.disposeController();
     });
 
-    testWidgets('non-cubeless match (default): cube chip and Double present',
+    testWidgets(
+        'non-cubeless match (default): cube chip, Double and board cube present',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -2905,6 +2909,8 @@ void main() {
       expect(find.widgetWithText(OutlinedButton, 'Double'), findsOneWidget);
       expect(find.textContaining('×'), findsOneWidget,
           reason: 'the cube chip shows ×1');
+      expect(boardPainterOf(t).cube, isNotNull,
+          reason: 'a cubed match still paints the cube on the bar');
       c.disposeController();
     });
 
