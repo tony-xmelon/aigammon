@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
 import 'package:test/test.dart';
@@ -65,25 +67,29 @@ void main() {
       expect(f.authority.started, isFalse);
     });
 
-    test('a busy host fails terminally', () async {
+    test('a busy host is waited out, not failed', () async {
       final f = await ServerFixture.start(dice: [Dice(6, 1)]);
       addTearDown(f.dispose);
       final first = connectGuest(f, name: 'Bo');
-      addTearDown(first.client.dispose);
       await first.client.welcome;
 
       final second = connectGuest(f, name: 'Cy');
       addTearDown(second.client.dispose);
-      await expectLater(
-          second.client.welcome, throwsA(isA<GuestHandshakeException>()));
-      expect(second.client.state.status, GuestConnectionStatus.failed);
+      await waitFor(() => second.client.state.isBusy, what: 'the busy state');
       expect(second.client.state.reason, contains('already playing'));
       expect(first.client.isConnected, isTrue);
+
+      // The room frees up — and the waiting guest walks in without any help.
+      await first.client.dispose();
+      final welcome =
+          await second.client.welcome.timeout(const Duration(seconds: 5));
+      expect(welcome.side, Player.black);
+      expect(f.server.guestName, 'Cy');
+      expect(second.states.map((s) => s.status),
+          isNot(contains(GuestConnectionStatus.failed)));
     });
 
-    test('a host that is not there is retried, then found', () async {
-      // Bind, note the port, stop — then start a fresh server on that port
-      // while the guest is already backing off.
+    test('a host that is not there is retried indefinitely', () async {
       final dead = await ServerFixture.start();
       final port = dead.port;
       await dead.dispose();
@@ -94,11 +100,42 @@ void main() {
       await waitFor(
           () => client.state.status == GuestConnectionStatus.reconnecting,
           what: 'the first failure');
+      await settle(200);
+      expect(client.state.status, GuestConnectionStatus.reconnecting,
+          reason: 'a refused connection is never terminal');
+    });
 
-      final f = await ServerFixture.start(port: port, dice: [Dice(6, 1)]);
+    test('a stalled connect is abandoned and cannot squat the host slot',
+        () async {
+      // Bound but never listened: the OS completes the TCP handshake into the
+      // backlog and nothing answers the upgrade. That is the manual-IP /
+      // host-still-booting case — and the one `Future.timeout` cannot cancel,
+      // so the abandoned attempt is still on its way to the host when the
+      // retry starts.
+      final stalled = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final client = GuestClient.connect('127.0.0.1', stalled.port,
+          roomCode: testCode, name: 'Bo', timings: LanTimings.test);
+      final states = <GuestConnectionState>[];
+      client.states.listen(states.add);
+      addTearDown(client.dispose);
+
+      await waitFor(
+          () => client.state.status == GuestConnectionStatus.reconnecting,
+          what: 'the connect deadline');
+
+      // Start hosting on that very socket, with the orphan still queued on it.
+      final f = ServerFixture.serve(stalled, dice: [Dice(6, 1)]);
       addTearDown(f.dispose);
+
       final welcome = await client.welcome.timeout(const Duration(seconds: 5));
       expect(welcome.side, Player.black);
+      expect(f.server.hasGuest, isTrue);
+      expect(states.map((s) => s.status), isNot(contains(GuestConnectionStatus.busy)),
+          reason: 'the orphan must never have held the slot');
+      expect(states.map((s) => s.status),
+          isNot(contains(GuestConnectionStatus.failed)));
+      await waitFor(() => f.server.pendingConnections == 0,
+          what: 'the orphan to be closed');
     });
   });
 

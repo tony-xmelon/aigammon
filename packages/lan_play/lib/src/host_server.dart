@@ -9,17 +9,26 @@ import 'protocol.dart';
 /// The path the match WebSocket lives at.
 const String matchPath = '/match';
 
+/// How many remote addresses the brute-force/amplification throttle will track
+/// at once. A flood of DISTINCT source addresses degrades the throttle to
+/// nothing rather than growing its bookkeeping without bound — the
+/// per-connection limits still hold, and on a home LAN this is unreachable.
+const int maxThrottledAddresses = 256;
+
 /// The host device's socket transport: an [HttpServer] on the local network
 /// that upgrades `GET /match` to a WebSocket and wires exactly ONE guest to a
 /// [HostAuthority].
 ///
 /// ## Policy (all of it deliberate, none of it in the authority)
 ///
-///  * **One guest.** The connection slot is reserved SYNCHRONOUSLY, before the
-///    WebSocket upgrade is awaited, so two simultaneous joiners cannot both win
-///    it. The loser is told [BusyMessage] and closed. A pending (not yet
-///    authenticated) connection holds the slot too — bounded by
-///    [LanTimings.handshakeTimeout], so an idle socket cannot lock the room out.
+///  * **One guest, claimed by AUTHENTICATION.** The playing slot is taken by a
+///    valid `hello`, never by a mere connection — otherwise anyone able to open
+///    a socket could lock the room out for a whole handshake window without
+///    knowing the code. The claim itself is synchronous (inside the frame
+///    handler, no await), so two valid hellos racing cannot both win: the loser
+///    is told [BusyMessage] and closed. Sockets still mid-handshake are capped
+///    at [LanTimings.maxPendingConnections] and each carries its own
+///    [LanTimings.handshakeTimeout].
 ///  * **Room code.** The first frame must be a valid `hello` carrying the room
 ///    code. Anything else — a wrong code, a missing code, a `submit`, a garbage
 ///    frame — gets a constant-size `reject` (with `lastSeq: 0`, so nothing about
@@ -46,7 +55,18 @@ const String matchPath = '/match';
 /// the score all survive. The next connection presenting the right code becomes
 /// the active guest and resyncs through the ordinary `hello`/`welcome` path.
 class HostServer {
-  HostServer._(this._server, this._authority, this.roomCode, this.timings) {
+  /// Serve on an already-bound [server] that has NOT been listened to yet,
+  /// taking ownership of it ([stop] closes it).
+  ///
+  /// [HostServer.start] is the usual entry point; this one exists for a caller
+  /// that must hold the port before the match machinery exists.
+  HostServer.attach(
+    this._server, {
+    required HostAuthority authority,
+    required this.roomCode,
+    this.timings = LanTimings.defaults,
+  }) : _authority = authority {
+    validateRoomCode(roomCode);
     // Subscribed BEFORE any request can arrive: `outbound` is a non-buffering
     // broadcast stream, so a late subscription would silently swallow the first
     // welcome.
@@ -63,12 +83,14 @@ class HostServer {
     LanTimings timings = LanTimings.defaults,
     InternetAddress? bindAddress,
   }) async {
+    // Validated BEFORE binding: a bad code must not leave a socket behind.
+    validateRoomCode(roomCode);
     final server = await HttpServer.bind(
       bindAddress ?? InternetAddress.anyIPv4,
       port,
-      shared: false,
     );
-    return HostServer._(server, authority, roomCode, timings);
+    return HostServer.attach(server,
+        authority: authority, roomCode: roomCode, timings: timings);
   }
 
   /// Mint a room code: four digits, drawn from [Random.secure] unless a
@@ -76,6 +98,18 @@ class HostServer {
   static String generateRoomCode([Random? rng]) {
     final r = rng ?? Random.secure();
     return r.nextInt(10000).toString().padLeft(4, '0');
+  }
+
+  /// A code nobody could ever present is a silently unjoinable room, so refuse
+  /// it at the source rather than at the handshake.
+  static void validateRoomCode(String code) {
+    if (code.isEmpty) {
+      throw ArgumentError.value(code, 'roomCode', 'must not be empty');
+    }
+    if (code.length > maxCodeLength) {
+      throw ArgumentError.value(
+          code, 'roomCode', 'must be at most $maxCodeLength characters');
+    }
   }
 
   final HttpServer _server;
@@ -90,8 +124,16 @@ class HostServer {
   final _presence = StreamController<bool>.broadcast();
   final _Throttle _throttle = _Throttle();
 
-  _GuestConnection? _conn;
-  bool _slotTaken = false;
+  /// Sockets that have connected but not yet authenticated.
+  final Set<_GuestConnection> _pending = {};
+
+  /// Pre-auth sockets INCLUDING those whose upgrade is still in flight, so the
+  /// cap can be applied synchronously, before that await.
+  int _pendingCount = 0;
+
+  /// The authenticated guest: the playing slot.
+  _GuestConnection? _guest;
+
   bool _stopped = false;
 
   /// The bound port.
@@ -101,10 +143,17 @@ class HostServer {
   InternetAddress get address => _server.address;
 
   /// True while an authenticated guest is connected.
-  bool get hasGuest => _conn?.authenticated ?? false;
+  bool get hasGuest => _guest != null;
 
   /// The connected guest's display name, if any.
-  String? get guestName => hasGuest ? _conn?.name : null;
+  String? get guestName => _guest?.name;
+
+  /// How many sockets are mid-handshake. Diagnostics (and a test hook).
+  int get pendingConnections => _pendingCount;
+
+  /// How many remote addresses the throttle is currently tracking.
+  /// Diagnostics — see [maxThrottledAddresses].
+  int get throttledAddresses => _throttle.trackedAddresses;
 
   /// `true` when a guest completes the handshake, `false` when it goes away.
   /// Broadcast and non-buffering — subscribe before starting to wait.
@@ -113,19 +162,24 @@ class HostServer {
   /// Close the current guest's connection, keeping the server (and the match)
   /// running. The guest's client will reconnect and resync.
   Future<void> disconnectGuest([String reason = 'disconnected']) async {
-    final c = _conn;
+    final c = _guest;
     if (c == null) return;
     await _close(c, WebSocketStatus.normalClosure, reason);
   }
 
-  /// Stop serving and close the guest connection. Does NOT close the
+  /// Stop serving and close every connection. Does NOT close the
   /// [HostAuthority] — its owner does that. Idempotent.
   Future<void> stop() async {
     if (_stopped) return;
     _stopped = true;
     await _outSub.cancel();
-    final c = _conn;
-    if (c != null) await _close(c, WebSocketStatus.goingAway, 'host stopped');
+    final open = <_GuestConnection>[
+      if (_guest != null) _guest!,
+      ..._pending,
+    ];
+    for (final c in open) {
+      await _close(c, WebSocketStatus.goingAway, 'host stopped');
+    }
     await _server.close(force: true);
     await _presence.close();
   }
@@ -150,21 +204,24 @@ class HostServer {
       await _refuse(request, HttpStatus.tooManyRequests);
       return;
     }
-
-    // Reserve the single guest slot BEFORE the upgrade's async gap.
-    final busy = _slotTaken;
-    if (!busy) _slotTaken = true;
+    if (_pendingCount >= timings.maxPendingConnections) {
+      await _refuse(request, HttpStatus.serviceUnavailable);
+      return;
+    }
+    // Reserved SYNCHRONOUSLY, before the upgrade's async gap, and released on
+    // every path out of here that does not end in an attached connection.
+    _pendingCount++;
 
     final WebSocket socket;
     try {
       socket = await WebSocketTransformer.upgrade(request);
     } catch (_) {
-      if (!busy) _slotTaken = false;
+      _pendingCount--;
       return;
     }
-    if (busy || _stopped) {
-      await _sendAndClose(socket, const BusyMessage(),
-          WebSocketStatus.policyViolation, 'busy');
+    if (_stopped) {
+      _pendingCount--;
+      await _closeSocket(socket, WebSocketStatus.goingAway, 'host stopped');
       return;
     }
     _attach(socket, remote);
@@ -181,10 +238,10 @@ class HostServer {
 
   void _attach(WebSocket socket, String remote) {
     final conn = _GuestConnection(socket, remote);
-    _conn = conn;
+    _pending.add(conn);
     conn.handshakeTimer = Timer(timings.handshakeTimeout, () {
-      unawaited(_close(
-          conn, WebSocketStatus.policyViolation, 'handshake timeout'));
+      unawaited(
+          _close(conn, WebSocketStatus.policyViolation, 'handshake timeout'));
     });
     socket.listen(
       (Object? data) => _onData(conn, data),
@@ -197,7 +254,7 @@ class HostServer {
   // --- inbound ---------------------------------------------------------------
 
   void _onData(_GuestConnection c, Object? data) {
-    if (!identical(_conn, c) || _stopped) return;
+    if (c.detached || _stopped) return;
     // Any traffic at all proves the peer is alive — even traffic we then drop.
     c.lastActivity = DateTime.now();
     if (data is! String) return; // binary is not part of the protocol
@@ -241,6 +298,15 @@ class HostServer {
       _fail(c, 'bad code', countFailure: true);
       return;
     }
+    // THE CLAIM. Synchronous from this check to the assignment, so a second
+    // valid hello arriving in the same tick loses rather than ties.
+    if (_guest != null) {
+      _send(c, const BusyMessage());
+      unawaited(_close(c, WebSocketStatus.policyViolation, 'busy'));
+      return;
+    }
+    if (_pending.remove(c)) _pendingCount--;
+    _guest = c;
     c.authenticated = true;
     c.name = hello.name;
     c.handshakeTimer?.cancel();
@@ -272,7 +338,7 @@ class HostServer {
   }
 
   void _beat(_GuestConnection c) {
-    if (!identical(_conn, c)) return;
+    if (!identical(_guest, c)) return;
     if (DateTime.now().difference(c.lastActivity) > timings.silenceTimeout) {
       unawaited(_close(c, WebSocketStatus.goingAway, 'silent peer'));
       return;
@@ -284,8 +350,8 @@ class HostServer {
 
   void _onOutbound(HostOutbound out) {
     if (!out.toGuest) return; // host-local messages ride the authority stream
-    final c = _conn;
-    if (c == null || !c.authenticated) return;
+    final c = _guest;
+    if (c == null) return;
     _send(c, out.message);
   }
 
@@ -298,24 +364,14 @@ class HostServer {
     }
   }
 
-  Future<void> _sendAndClose(
-      WebSocket socket, Envelope message, int status, String reason) async {
-    try {
-      socket.add(message.encode());
-    } catch (_) {
-      // fall through to the close
-    }
-    try {
-      await socket.close(status, reason);
-    } catch (_) {
-      // already gone
-    }
-  }
-
   Future<void> _close(_GuestConnection c, int status, String reason) async {
     c.closing = true;
     final socket = c.socket;
     _detach(c);
+    await _closeSocket(socket, status, reason);
+  }
+
+  Future<void> _closeSocket(WebSocket socket, int status, String reason) async {
     try {
       await socket.close(status, reason);
     } catch (_) {
@@ -324,13 +380,15 @@ class HostServer {
   }
 
   void _detach(_GuestConnection c) {
-    if (!identical(_conn, c)) return;
-    final wasAuthenticated = c.authenticated;
+    if (c.detached) return;
+    c.detached = true;
     c.handshakeTimer?.cancel();
     c.heartbeat?.cancel();
-    _conn = null;
-    _slotTaken = false;
-    if (wasAuthenticated && !_presence.isClosed) _presence.add(false);
+    if (_pending.remove(c)) _pendingCount--;
+    if (identical(_guest, c)) {
+      _guest = null;
+      if (!_presence.isClosed) _presence.add(false);
+    }
   }
 }
 
@@ -343,6 +401,7 @@ class _GuestConnection {
 
   bool authenticated = false;
   bool closing = false;
+  bool detached = false;
   String? name;
   DateTime lastActivity;
   DateTime? _lastHello;
@@ -369,33 +428,44 @@ class _GuestConnection {
 
 /// Per-remote-address sliding-window quotas: connections (the reconnect-based
 /// log-pull lever) and wrong codes (the brute-force lever).
+///
+/// Bookkeeping is bounded: expired hits are swept on every check, addresses
+/// with nothing left are forgotten, and past [maxThrottledAddresses] the tables
+/// are dropped wholesale (see that constant).
 class _Throttle {
   final Map<String, List<DateTime>> _connections = {};
   final Map<String, List<DateTime>> _failures = {};
 
+  int get trackedAddresses => {..._connections.keys, ..._failures.keys}.length;
+
   bool allowConnection(String remote, LanTimings timings) {
     final now = DateTime.now();
-    if (_count(_failures, remote, now, timings.throttleWindow) >=
-        timings.maxAuthFailuresPerWindow) {
+    _sweep(now, timings.throttleWindow);
+    if ((_failures[remote]?.length ?? 0) >= timings.maxAuthFailuresPerWindow) {
       return false;
     }
-    final hits = _prune(_connections, remote, now, timings.throttleWindow);
+    final hits = _connections[remote] ?? [];
     if (hits.length >= timings.maxConnectionsPerWindow) return false;
     hits.add(now);
+    _connections[remote] = hits;
     return true;
   }
 
   void recordFailure(String remote) =>
-      _failures.putIfAbsent(remote, () => []).add(DateTime.now());
+      (_failures[remote] ??= []).add(DateTime.now());
 
-  int _count(Map<String, List<DateTime>> m, String key, DateTime now,
-          Duration window) =>
-      _prune(m, key, now, window).length;
-
-  List<DateTime> _prune(Map<String, List<DateTime>> m, String key, DateTime now,
-      Duration window) {
-    final hits = m.putIfAbsent(key, () => []);
-    hits.removeWhere((t) => now.difference(t) > window);
-    return hits;
+  /// Drop expired hits, forget addresses that have none left, and refuse to
+  /// grow without bound if a flood of distinct addresses ever arrives.
+  void _sweep(DateTime now, Duration window) {
+    for (final table in [_connections, _failures]) {
+      table.removeWhere((_, hits) {
+        hits.removeWhere((t) => now.difference(t) > window);
+        return hits.isEmpty;
+      });
+    }
+    if (trackedAddresses > maxThrottledAddresses) {
+      _connections.clear();
+      _failures.clear();
+    }
   }
 }

@@ -59,6 +59,31 @@ class ServerFixture {
     return ServerFixture(authority, server);
   }
 
+  /// Serve on an already-bound [http] server — the deterministic way to make a
+  /// port go from "connects but never answers" to "hosting a match" without a
+  /// close/rebind race.
+  static ServerFixture serve(
+    HttpServer http, {
+    int length = 3,
+    bool cubeless = false,
+    Player hostSide = Player.white,
+    List<Dice> dice = const [],
+    String roomCode = testCode,
+    LanTimings timings = LanTimings.test,
+  }) {
+    final authority = HostAuthority(
+      config: MatchConfig(length: length, cubeless: cubeless),
+      hostSide: hostSide,
+      dice: ScriptedDiceRoller(dice),
+      resumeToken: 'TESTTOKEN',
+    );
+    return ServerFixture(
+      authority,
+      HostServer.attach(http,
+          authority: authority, roomCode: roomCode, timings: timings),
+    );
+  }
+
   final HostAuthority authority;
   final HostServer server;
 

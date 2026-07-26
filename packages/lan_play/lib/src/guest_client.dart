@@ -18,8 +18,15 @@ enum GuestConnectionStatus {
   /// The link dropped; a retry is scheduled (see [LanTimings.reconnectMinDelay]).
   reconnecting,
 
-  /// Terminally failed. Retrying would be pointless (wrong room code, the room
-  /// is busy, protocol mismatch), so the client has stopped.
+  /// The host is playing someone else. Distinct from [reconnecting] because the
+  /// link is FINE — the room is occupied — and distinct from [failed] because
+  /// it very often clears on its own: a host whose previous guest dropped
+  /// without a FIN answers busy until it reaps the half-open socket. Retried on
+  /// [LanTimings.busyRetryDelay].
+  busy,
+
+  /// Terminally failed. Retrying cannot help (wrong room code, protocol
+  /// mismatch), so the client has stopped.
   failed,
 }
 
@@ -35,6 +42,8 @@ class GuestConnectionState {
         reason = null;
   const GuestConnectionState.reconnecting(String this.reason)
       : status = GuestConnectionStatus.reconnecting;
+  const GuestConnectionState.busy(String this.reason)
+      : status = GuestConnectionStatus.busy;
   const GuestConnectionState.failed(String this.reason)
       : status = GuestConnectionStatus.failed;
 
@@ -45,6 +54,7 @@ class GuestConnectionState {
 
   bool get isConnected => status == GuestConnectionStatus.connected;
   bool get isFailed => status == GuestConnectionStatus.failed;
+  bool get isBusy => status == GuestConnectionStatus.busy;
 
   @override
   bool operator ==(Object other) =>
@@ -99,10 +109,19 @@ class GuestHandshakeException implements Exception {
 /// one), so the controller re-folds the authoritative log and any submission
 /// lost in the drop is simply gone rather than half-applied.
 ///
-/// Terminal failures — a `reject` before the handshake completes (wrong code,
-/// version mismatch) or `busy` — stop the retry loop and land on
-/// [GuestConnectionStatus.failed]: retrying a wrong code only burns the host's
-/// brute-force quota.
+/// Each attempt carries a GENERATION number, checked after every await. A
+/// connect cannot be cancelled — `Future.timeout` abandons the wait but the
+/// socket underneath still completes — so an attempt that has been superseded
+/// discards and CLOSES whatever it eventually produces. An orphan left open
+/// would connect to the host, and (before the host gated its slot on
+/// authentication) squat it until the handshake timeout, so the retry that
+/// replaced it would be answered with `busy`.
+///
+/// `busy` is NOT terminal: it is retried on [LanTimings.busyRetryDelay] and
+/// surfaced as [GuestConnectionStatus.busy], because the commonest cause is a
+/// host still holding a half-open socket from this very guest. Only a `reject`
+/// before the handshake completes — wrong code, protocol mismatch — is
+/// terminal, since retrying that just burns the host's brute-force quota.
 ///
 /// ## Sending
 ///
@@ -165,6 +184,11 @@ class GuestClient {
   bool _stopped = false;
   bool _disposed = false;
 
+  /// Names the current connection attempt. Every callback and every resumption
+  /// after an await checks it, so a superseded attempt can never install a
+  /// socket, start a timer, or report a state.
+  int _generation = 0;
+
   /// Every post-handshake frame from the host: `event`s, `reject`s, and each
   /// `welcome` (including the first, and every resync welcome after a
   /// reconnect). `ping`/`pong` are handled internally and never surface.
@@ -178,7 +202,8 @@ class GuestClient {
   GuestConnectionState get state => _state;
 
   /// Completes with the FIRST welcome, or with a [GuestHandshakeException] on a
-  /// terminal failure (wrong code, busy room, version mismatch).
+  /// terminal failure (wrong code, protocol mismatch). A busy room is NOT one
+  /// of those: the future simply stays pending while the client waits it out.
   Future<WelcomeMessage> get welcome => _welcome.future;
 
   /// The most recent welcome — the current authoritative log snapshot.
@@ -211,6 +236,7 @@ class GuestClient {
     if (_disposed) return;
     _disposed = true;
     _stopped = true;
+    _generation++; // retires any connect still in flight
     _retry?.cancel();
     _pacer?.cancel();
     _liveness?.cancel();
@@ -226,72 +252,136 @@ class GuestClient {
 
   Future<void> _attempt() async {
     if (_disposed || _stopped) return;
+    final gen = ++_generation;
     if (!_announced) {
       _announced = true;
       _emit(const GuestConnectionState.connecting());
     }
+    // Never install a socket over a live one: the old one must be torn down
+    // (timers cancelled, queue dropped) first, or its callbacks outlive it.
+    await _teardownSocket();
+    if (_stale(gen)) return;
+
     final uri = 'ws://${_hostForUri()}:$port$matchPath';
+    final WebSocket socket;
     try {
-      final socket =
-          await WebSocket.connect(uri).timeout(timings.connectTimeout);
-      if (_disposed || _stopped) {
-        try {
-          await socket.close(WebSocketStatus.normalClosure);
-        } catch (_) {
-          // already gone
-        }
-        return;
-      }
-      _socket = socket;
-      _welcomedThisConnection = false;
-      _lastRx = DateTime.now();
-      _lastSendAt = null;
-      _queue.clear();
-      _sub = socket.listen(
-        _onData,
-        onDone: () => _onDropped('connection closed'),
-        onError: (Object e) => _onDropped('socket error: $e'),
-        cancelOnError: true,
-      );
-      // The handshake: the only frame that carries the room code.
-      _sendNow(
-        HelloMessage(name: name, code: roomCode, resume: _resume).encode(),
-      );
-      _liveness =
-          Timer.periodic(timings.heartbeatInterval, (_) => _checkLiveness());
+      socket = await _openSocket(uri, gen);
     } on Object catch (e) {
-      _onDropped('connect failed: $e');
+      _onDropped('connect failed: $e', gen);
+      return;
     }
+    // The await above is an eternity in socket terms: dispose, a liveness drop
+    // or a newer attempt may all have happened meanwhile.
+    if (_stale(gen)) {
+      _discard(socket);
+      return;
+    }
+    _socket = socket;
+    _welcomedThisConnection = false;
+    _lastRx = DateTime.now();
+    _lastSendAt = null;
+    _queue.clear();
+    _sub = socket.listen(
+      (Object? data) => _onData(data, gen),
+      onDone: () => _onDropped('connection closed', gen),
+      onError: (Object e) => _onDropped('socket error: $e', gen),
+      cancelOnError: true,
+    );
+    // The handshake: the only frame that carries the room code.
+    _sendNow(HelloMessage(name: name, code: roomCode, resume: _resume).encode());
+    _liveness =
+        Timer.periodic(timings.heartbeatInterval, (_) => _checkLiveness(gen));
+  }
+
+  /// Connect with a REAL deadline.
+  ///
+  /// `Future.timeout` only abandons the wait — the connect underneath keeps
+  /// going and eventually hands over a live socket that nobody owns. On a
+  /// stalled SYN (a host that is booting, or a manually typed IP that is only
+  /// half-listening) that orphan reaches the host after the retry has already
+  /// been scheduled, and the two race. So the late socket is caught here and
+  /// closed.
+  Future<WebSocket> _openSocket(String uri, int gen) {
+    final result = Completer<WebSocket>();
+    final deadline = Timer(timings.connectTimeout, () {
+      if (!result.isCompleted) {
+        result.completeError(
+            TimeoutException('connect timed out', timings.connectTimeout));
+      }
+    });
+    WebSocket.connect(uri).then((socket) {
+      deadline.cancel();
+      if (result.isCompleted || _stale(gen)) {
+        _discard(socket); // too late to be useful, too dangerous to leave open
+      } else {
+        result.complete(socket);
+      }
+    }, onError: (Object e) {
+      deadline.cancel();
+      if (!result.isCompleted) result.completeError(e);
+    });
+    return result.future;
+  }
+
+  /// True once [gen] no longer names the attempt this client is pursuing.
+  bool _stale(int gen) => _disposed || _stopped || gen != _generation;
+
+  /// Close a socket we are not going to use, without waiting on it.
+  void _discard(WebSocket socket) {
+    unawaited(() async {
+      try {
+        await socket.close(WebSocketStatus.normalClosure);
+      } catch (_) {
+        // already gone
+      }
+    }());
   }
 
   /// Bracket a bare IPv6 literal so the URI parses.
   String _hostForUri() =>
       host.contains(':') && !host.startsWith('[') ? '[$host]' : host;
 
-  void _checkLiveness() {
-    if (_socket == null) return;
+  void _checkLiveness(int gen) {
+    if (_stale(gen) || _socket == null) return;
     if (DateTime.now().difference(_lastRx) > timings.silenceTimeout) {
-      _onDropped('host silent');
+      _onDropped('host silent', gen);
     }
   }
 
-  void _onDropped(String reason) {
-    if (_disposed || _stopped) return;
+  void _onDropped(String reason, int gen) {
+    if (_stale(gen)) return;
+    // Bumping the generation here retires this attempt for good: a second
+    // callback from the same dying socket, or a connect still in flight for it,
+    // is now stale and cannot resurrect anything.
+    _generation++;
     unawaited(_teardownSocket());
     _emit(GuestConnectionState.reconnecting(reason));
+    _schedule(_backoff);
+    _backoff = _backoff * 2 > timings.reconnectMaxDelay
+        ? timings.reconnectMaxDelay
+        : _backoff * 2;
+  }
+
+  /// The room is taken. Not a failure and not a broken link — wait longer, and
+  /// say so distinctly, then try again.
+  void _onBusy(int gen) {
+    if (_stale(gen)) return;
+    _generation++;
+    unawaited(_teardownSocket());
+    _emit(const GuestConnectionState.busy('the host is already playing'));
+    _schedule(timings.busyRetryDelay);
+  }
+
+  void _schedule(Duration delay) {
     _retry?.cancel();
-    _retry = Timer(_backoff, () {
-      _backoff = _backoff * 2 > timings.reconnectMaxDelay
-          ? timings.reconnectMaxDelay
-          : _backoff * 2;
-      unawaited(_attempt());
-    });
+    _retry = Timer(delay, () => unawaited(_attempt()));
   }
 
   /// A failure retrying cannot fix.
   void _fail(String reason) {
     if (_disposed) return;
     _stopped = true;
+    _generation++;
     _retry?.cancel();
     unawaited(_teardownSocket());
     _emit(GuestConnectionState.failed(reason));
@@ -323,8 +413,8 @@ class GuestClient {
 
   // --- inbound ---------------------------------------------------------------
 
-  void _onData(Object? data) {
-    if (_disposed) return;
+  void _onData(Object? data, int gen) {
+    if (_stale(gen)) return;
     _lastRx = DateTime.now();
     if (data is! String || data.length > maxMessageLength) return;
     final result = Envelope.decode(data);
@@ -336,7 +426,7 @@ class GuestClient {
       case PongMessage():
         break; // liveness only, already recorded
       case BusyMessage():
-        _fail('the host is already playing another guest');
+        _onBusy(gen);
       case WelcomeMessage():
         _onWelcome(message);
       case RejectMessage(:final reason):

@@ -14,9 +14,11 @@ class LanTimings {
     this.connectTimeout = const Duration(seconds: 5),
     this.reconnectMinDelay = const Duration(milliseconds: 500),
     this.reconnectMaxDelay = const Duration(seconds: 8),
+    this.busyRetryDelay = const Duration(seconds: 5),
     this.throttleWindow = const Duration(seconds: 30),
     this.maxConnectionsPerWindow = 10,
     this.maxAuthFailuresPerWindow = 5,
+    this.maxPendingConnections = 3,
   });
 
   /// Production values.
@@ -30,9 +32,10 @@ class LanTimings {
     silenceTimeout: Duration(milliseconds: 200),
     helloMinInterval: Duration(milliseconds: 200),
     frameMinInterval: Duration(milliseconds: 5),
-    connectTimeout: Duration(seconds: 2),
+    connectTimeout: Duration(milliseconds: 250),
     reconnectMinDelay: Duration(milliseconds: 20),
     reconnectMaxDelay: Duration(milliseconds: 80),
+    busyRetryDelay: Duration(milliseconds: 60),
     throttleWindow: Duration(seconds: 5),
   );
 
@@ -69,6 +72,14 @@ class LanTimings {
   /// Ceiling on the reconnect backoff.
   final Duration reconnectMaxDelay;
 
+  /// How long to wait before trying again after the host answered `busy`.
+  ///
+  /// Deliberately its own, longer, CONSTANT delay rather than the reconnect
+  /// backoff: a busy room is someone else's live match, so polling it hard buys
+  /// nothing — and the wait must stay comfortably inside
+  /// [maxConnectionsPerWindow] so a patient guest never throttles itself out.
+  final Duration busyRetryDelay;
+
   /// The sliding window the per-address quotas below are counted over.
   final Duration throttleWindow;
 
@@ -82,6 +93,12 @@ class LanTimings {
   /// defence that makes a four-digit code adequate.
   final int maxAuthFailuresPerWindow;
 
+  /// How many sockets may be mid-handshake at once. Connections that have not
+  /// authenticated do NOT hold the playing slot (see `HostServer`), so this is
+  /// the only resource they occupy; beyond it, new connections are refused
+  /// before the WebSocket upgrade.
+  final int maxPendingConnections;
+
   LanTimings copyWith({
     Duration? handshakeTimeout,
     Duration? heartbeatInterval,
@@ -91,9 +108,11 @@ class LanTimings {
     Duration? connectTimeout,
     Duration? reconnectMinDelay,
     Duration? reconnectMaxDelay,
+    Duration? busyRetryDelay,
     Duration? throttleWindow,
     int? maxConnectionsPerWindow,
     int? maxAuthFailuresPerWindow,
+    int? maxPendingConnections,
   }) =>
       LanTimings(
         handshakeTimeout: handshakeTimeout ?? this.handshakeTimeout,
@@ -104,10 +123,13 @@ class LanTimings {
         connectTimeout: connectTimeout ?? this.connectTimeout,
         reconnectMinDelay: reconnectMinDelay ?? this.reconnectMinDelay,
         reconnectMaxDelay: reconnectMaxDelay ?? this.reconnectMaxDelay,
+        busyRetryDelay: busyRetryDelay ?? this.busyRetryDelay,
         throttleWindow: throttleWindow ?? this.throttleWindow,
         maxConnectionsPerWindow:
             maxConnectionsPerWindow ?? this.maxConnectionsPerWindow,
         maxAuthFailuresPerWindow:
             maxAuthFailuresPerWindow ?? this.maxAuthFailuresPerWindow,
+        maxPendingConnections:
+            maxPendingConnections ?? this.maxPendingConnections,
       );
 }

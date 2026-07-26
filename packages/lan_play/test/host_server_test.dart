@@ -104,7 +104,7 @@ void main() {
       expect(f.authority.started, isFalse);
     });
 
-    test('a silent connection is dropped and frees the slot', () async {
+    test('a silent connection is dropped by the handshake timeout', () async {
       final f = await ServerFixture.start(dice: [Dice(6, 1)]);
       addTearDown(f.dispose);
       final idler = await RawGuest.connect(f.server);
@@ -112,11 +112,66 @@ void main() {
 
       await waitFor(() => idler.closed, what: 'the handshake timeout');
       expect(f.authority.started, isFalse);
+      await waitFor(() => f.server.pendingConnections == 0,
+          what: 'the pending slot to be released');
 
       final real = await RawGuest.connect(f.server);
       addTearDown(real.close);
       real.hello();
-      await waitFor(() => real.gotWelcome, what: 'the slot to be reusable');
+      await waitFor(() => real.gotWelcome, what: 'a later guest to be welcomed');
+    });
+
+    test('an unauthenticated socket does NOT hold the playing slot', () async {
+      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      addTearDown(f.dispose);
+
+      // Someone who does not know the code just holds a socket open.
+      final squatter = await RawGuest.connect(f.server);
+      addTearDown(squatter.close);
+      await waitFor(() => f.server.pendingConnections == 1,
+          what: 'the squatter to be pending');
+      expect(f.server.hasGuest, isFalse);
+
+      // The real guest walks straight in — no waiting for the squatter's
+      // handshake timeout.
+      final real = await RawGuest.connect(f.server);
+      addTearDown(real.close);
+      real.hello();
+      await waitFor(() => real.gotWelcome, what: 'the real guest');
+      expect(f.server.hasGuest, isTrue);
+      expect(squatter.gotWelcome, isFalse);
+      expect(squatter.of<EventMessage>(), isEmpty);
+    });
+
+    test('concurrent unauthenticated sockets are capped', () async {
+      final f = await ServerFixture.start();
+      addTearDown(f.dispose);
+
+      final held = <RawGuest>[];
+      for (var i = 0; i < LanTimings.test.maxPendingConnections; i++) {
+        held.add(await RawGuest.connect(f.server));
+      }
+      addTearDown(() async {
+        for (final g in held) {
+          await g.close();
+        }
+      });
+      expect(f.server.pendingConnections, LanTimings.test.maxPendingConnections);
+
+      await expectLater(
+          RawGuest.connect(f.server), throwsA(isA<WebSocketException>()));
+
+      // Freeing one lets the next in.
+      await held.first.close();
+      await waitFor(
+          () =>
+              f.server.pendingConnections <
+              LanTimings.test.maxPendingConnections,
+          what: 'the freed pending slot');
+      final admitted = await RawGuest.connect(f.server);
+      addTearDown(admitted.close);
+      admitted.hello();
+      await waitFor(() => admitted.gotWelcome, what: 'the admitted guest');
     });
   });
 
@@ -168,6 +223,32 @@ void main() {
       expect(welcome.log.last.event, MoveEvent(Player.white, opening61));
       expect(f.authority.lastSeq, 2, reason: 'a resync appends nothing');
       expect(f.server.hasGuest, isTrue);
+    });
+
+    test('two valid hellos racing: one wins the slot, the other is busy',
+        () async {
+      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      addTearDown(f.dispose);
+      final a = await RawGuest.connect(f.server);
+      final b = await RawGuest.connect(f.server);
+      addTearDown(a.close);
+      addTearDown(b.close);
+      await waitFor(() => f.server.pendingConnections == 2,
+          what: 'both to be pending');
+
+      // Both claim in the same turn of the event loop.
+      a.hello(name: 'Ana');
+      b.hello(name: 'Bo');
+      await waitFor(() => a.gotWelcome || b.gotWelcome, what: 'a winner');
+      await waitFor(() => a.of<BusyMessage>().isNotEmpty || b.of<BusyMessage>().isNotEmpty,
+          what: 'a loser');
+
+      final welcomes = a.of<WelcomeMessage>().length + b.of<WelcomeMessage>().length;
+      final busies = a.of<BusyMessage>().length + b.of<BusyMessage>().length;
+      expect(welcomes, 1, reason: 'exactly one guest is admitted');
+      expect(busies, 1, reason: 'and the other is told so');
+      expect(f.server.hasGuest, isTrue);
+      expect(f.authority.lastSeq, 1, reason: 'one match, started once');
     });
 
     test('the host can drop the guest without disturbing the match', () async {
@@ -387,11 +468,53 @@ void main() {
     });
   });
 
-  test('generateRoomCode makes four digits', () {
-    for (var seed = 0; seed < 50; seed++) {
-      final code = HostServer.generateRoomCode(Random(seed));
-      expect(code, hasLength(4));
-      expect(int.tryParse(code), isNotNull);
-    }
+  group('room code', () {
+    test('generateRoomCode makes four digits', () {
+      for (var seed = 0; seed < 50; seed++) {
+        final code = HostServer.generateRoomCode(Random(seed));
+        expect(code, hasLength(4));
+        expect(int.tryParse(code), isNotNull);
+      }
+    });
+
+    test('an unusable room code is refused at start, not at the handshake',
+        () async {
+      final authority = HostAuthority(
+          config: const MatchConfig(length: 3), dice: ScriptedDiceRoller([]));
+      addTearDown(authority.close);
+
+      await expectLater(
+        HostServer.start(
+            authority: authority,
+            roomCode: '',
+            bindAddress: InternetAddress.loopbackIPv4),
+        throwsA(isA<ArgumentError>()),
+      );
+      await expectLater(
+        HostServer.start(
+            authority: authority,
+            roomCode: 'x' * (maxCodeLength + 1),
+            bindAddress: InternetAddress.loopbackIPv4),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+  });
+
+  test('the throttle forgets addresses once their window passes', () async {
+    final f = await ServerFixture.start(
+      timings: LanTimings.test.copyWith(
+          throttleWindow: const Duration(milliseconds: 50)),
+    );
+    addTearDown(f.dispose);
+
+    final first = await RawGuest.connect(f.server);
+    await first.close();
+    expect(f.server.throttledAddresses, 1);
+
+    await settle(80); // the window passes
+    final second = await RawGuest.connect(f.server);
+    addTearDown(second.close);
+    expect(f.server.throttledAddresses, 1,
+        reason: 'the expired entry was swept, not accumulated');
   });
 }
