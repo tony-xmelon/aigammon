@@ -4,6 +4,7 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 
 import '../data/persistence_hooks.dart';
+import 'applied_move.dart';
 import 'dice_roller.dart';
 import 'match_controller.dart';
 import 'player_agent.dart';
@@ -84,9 +85,11 @@ class GameController extends ChangeNotifier implements MatchController {
   MatchState _match;
 
   /// The last applied move, published for the animation layer. Set in [_append]
-  /// whenever a [MoveEvent] is appended, BEFORE the loop notifies its own
-  /// listeners — so a subscriber still observes the pre-move [state].
-  final ValueNotifier<MoveEvent?> _lastMove = ValueNotifier<MoveEvent?>(null);
+  /// whenever a [MoveEvent] is appended, carrying the board the move was applied
+  /// TO (captured before the append) so the animation's base position never
+  /// depends on when the subscriber last rebuilt. See [AppliedMove].
+  final ValueNotifier<AppliedMove?> _lastMove =
+      ValueNotifier<AppliedMove?>(null);
 
   /// 1-based index of the current game within the match.
   int _gameNumber = 0;
@@ -127,7 +130,7 @@ class GameController extends ChangeNotifier implements MatchController {
 
   /// The most recently applied move (for the animation layer), or `null`.
   @override
-  ValueListenable<MoveEvent?> get lastMove => _lastMove;
+  ValueListenable<AppliedMove?> get lastMove => _lastMove;
 
   /// True while an agent decision is in flight (an `await` on a [PlayerAgent]).
   @override
@@ -457,11 +460,14 @@ class GameController extends ChangeNotifier implements MatchController {
       _cancelledCompleter.future.then((_) => _cancelSentinel);
 
   void _append(GameEvent event) {
+    // The board the event is about to be applied to — the animation's starting
+    // position. Captured HERE because this is the only moment it is knowable:
+    // the loop may append several events (a commit, the opponent's roll, the
+    // opponent's reply) before the UI paints a single frame, so an observer
+    // cannot recover it from its own view of [state]. See [AppliedMove].
+    final preBoard = _game.state.board;
     _game = _game.append(event);
-    // Publish the move for the animation layer BEFORE notifying the loop's own
-    // listeners: a subscriber (the board) still sees the pre-move [state] when
-    // this fires, and only rebuilds to the post-move state on the later notify.
-    if (event is MoveEvent) _lastMove.value = event;
+    if (event is MoveEvent) _lastMove.value = AppliedMove(event, preBoard);
     _notify();
   }
 

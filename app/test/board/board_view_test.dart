@@ -1,6 +1,7 @@
 import 'package:aigammon_app/board/board_geometry.dart';
 import 'package:aigammon_app/board/board_painter.dart';
 import 'package:aigammon_app/board/board_view.dart';
+import 'package:aigammon_app/game/applied_move.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -37,7 +38,7 @@ BoardPainter _painterOf(WidgetTester t) {
 /// `disableAnimations: false` so the ticker runs under test.
 Widget _animHarness(
   GameState state,
-  ValueNotifier<MoveEvent?> lastMove, {
+  ValueNotifier<AppliedMove?> lastMove, {
   Duration hopDuration = const Duration(milliseconds: 150),
   Duration interHopDuration = Duration.zero,
   ValueListenable<bool>? holdMoveAnimation,
@@ -71,10 +72,11 @@ Widget _animHarness(
 /// animation gate: a hand-entered commit must NOT replay, a staged one must.
 Widget _interactiveAnimHarness(
   GameState state,
-  ValueNotifier<MoveEvent?> lastMove, {
+  ValueNotifier<AppliedMove?> lastMove, {
   required bool interactive,
   BoardEntryController? control,
   ValueListenable<Move?>? externalMove,
+  ValueListenable<bool>? holdMoveAnimation,
   Duration hopDuration = const Duration(milliseconds: 150),
 }) =>
     MaterialApp(
@@ -91,6 +93,7 @@ Widget _interactiveAnimHarness(
                 onMoveCommitted: (_) {},
                 lastMove: lastMove,
                 externalMove: externalMove,
+                holdMoveAnimation: holdMoveAnimation,
                 entryControl: control,
                 hopDuration: hopDuration,
               ),
@@ -577,14 +580,15 @@ void main() {
   testWidgets('mid-animation shows a travelling overlay checker', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
 
     // Mount PRE-move, then fire the move (the controller fires lastMove BEFORE
     // notifying, so state is still pre-move at fire time) and rebuild POST-move.
     await t.pumpWidget(_animHarness(goldenState, lastMove));
     expect(_painterOf(t).overlayChecker, isNull);
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(_animHarness(postState, lastMove));
 
     // 75ms into the 300ms (2 hops × 150ms) travel: an overlay checker is drawn
@@ -600,11 +604,12 @@ void main() {
       (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
 
     await t.pumpWidget(_animHarness(goldenState, lastMove));
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(_animHarness(postState, lastMove));
 
     // After settling, the overlay is gone and the post-move board is shown.
@@ -617,12 +622,13 @@ void main() {
       (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
 
     await t.pumpWidget(
         _animHarness(goldenState, lastMove, hopDuration: Duration.zero));
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(
         _animHarness(postState, lastMove, hopDuration: Duration.zero));
     await t.pump();
@@ -636,7 +642,7 @@ void main() {
       'the move plays after release', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
     final hold = ValueNotifier<bool>(true);
     addTearDown(hold.dispose);
@@ -645,7 +651,8 @@ void main() {
     // the game screen does while the opponent dice beat is still presenting.
     await t.pumpWidget(
         _animHarness(goldenState, lastMove, holdMoveAnimation: hold));
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(
         _animHarness(postState, lastMove, holdMoveAnimation: hold));
 
@@ -674,7 +681,7 @@ void main() {
       (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
 
     // 2 hops × 100ms travel with a 100ms pause between them → 300ms total.
@@ -682,7 +689,8 @@ void main() {
     await t.pumpWidget(_animHarness(goldenState, lastMove,
         hopDuration: const Duration(milliseconds: 100),
         interHopDuration: const Duration(milliseconds: 100)));
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(_animHarness(postState, lastMove,
         hopDuration: const Duration(milliseconds: 100),
         interHopDuration: const Duration(milliseconds: 100)));
@@ -710,13 +718,14 @@ void main() {
       'n·hop + (n-1)·interHop', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
 
     // 2 hops × 400ms = 800ms total — deliberately past the old 600ms cap.
     await t.pumpWidget(_animHarness(goldenState, lastMove,
         hopDuration: const Duration(milliseconds: 400)));
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(_animHarness(postState, lastMove,
         hopDuration: const Duration(milliseconds: 400)));
 
@@ -735,13 +744,14 @@ void main() {
       (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
 
     // Fast: 2 hops × 100ms = 200ms total → settled by 260ms.
     await t.pumpWidget(_animHarness(goldenState, lastMove,
         hopDuration: const Duration(milliseconds: 100)));
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(_animHarness(postState, lastMove,
         hopDuration: const Duration(milliseconds: 100)));
     await t.pump(const Duration(milliseconds: 260));
@@ -756,7 +766,7 @@ void main() {
       (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
     final control = BoardEntryController();
     addTearDown(control.dispose);
@@ -773,7 +783,8 @@ void main() {
     // Confirm, then fire the SAME move as lastMove and rebuild post-move /
     // non-interactive — the exact sequence the controller drives after a commit.
     control.confirm();
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(_interactiveAnimHarness(postState, lastMove,
         interactive: false, control: control));
 
@@ -788,11 +799,77 @@ void main() {
         reason: 'the post-move board is shown without a replay');
   });
 
+  testWidgets(
+      "a commit followed IMMEDIATELY by the opponent's held reply keeps the "
+      'confirmed position painted (no revert)', (t) async {
+    await t.binding.setSurfaceSize(_size);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final lastMove = ValueNotifier<AppliedMove?>(null);
+    addTearDown(lastMove.dispose);
+    final hold = ValueNotifier<bool>(false);
+    addTearDown(hold.dispose);
+    final control = BoardEntryController();
+    addTearDown(control.dispose);
+
+    // Black's reply from the post-commit position, and the board it leaves.
+    final blackMove =
+        MoveGenerator.legalMoves(postBoard, Player.black, Dice(6, 5)).first;
+    final finalBoard = postBoard.applyMove(Player.black, blackMove);
+    final finalState = GameState.testState(
+      board: finalBoard,
+      turn: Player.white,
+      phase: GamePhase.awaitingRoll,
+    );
+
+    // Enter the golden 3-1 by HAND and confirm it.
+    await t.pumpWidget(_interactiveAnimHarness(goldenState, lastMove,
+        interactive: true, control: control, holdMoveAnimation: hold));
+    await tapPoint(t, 7);
+    await tapPoint(t, 4); // 8/5
+    await tapPoint(t, 5);
+    await tapPoint(t, 4); // 6/5
+    expect(control.canConfirm, isTrue);
+    control.confirm();
+
+    // The controller now runs the WHOLE opponent turn inside the commit's
+    // microtask chain — no frame is painted in between, so the view is still
+    // mounted with the PRE-commit state when both moves fire. The commit fires
+    // first (suppressed: the user just played it live), then the opponent's roll
+    // holds the animation and its reply fires.
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
+    hold.value = true;
+    lastMove.value = AppliedMove(MoveEvent(Player.black, blackMove), postBoard);
+    await t.pumpWidget(_interactiveAnimHarness(finalState, lastMove,
+        interactive: false, control: control, holdMoveAnimation: hold));
+
+    // While the opponent's dice are presented the board is frozen at the
+    // CONFIRMED position — the user's own move must not un-happen.
+    await t.pump(const Duration(milliseconds: 500));
+    expect(_painterOf(t).overlayChecker, isNull,
+        reason: 'the reply must not travel while held');
+    expect(_painterOf(t).board, postBoard,
+        reason: 'the held board keeps the confirmed move applied');
+
+    // Releasing the hold plays ONLY the opponent's reply, still on top of the
+    // confirmed position, and settles on the full post-reply board.
+    hold.value = false;
+    await t.pump(const Duration(milliseconds: 75));
+    expect(_painterOf(t).overlayChecker, isNotNull,
+        reason: 'releasing the hold starts the queued reply');
+    expect(_painterOf(t).board, postBoard,
+        reason: "the reply's first hop travels from the confirmed position");
+
+    await t.pumpAndSettle();
+    expect(_painterOf(t).overlayChecker, isNull);
+    expect(_painterOf(t).board, finalBoard);
+  });
+
   testWidgets('an externally-STAGED (tap-to-apply hint) commit STILL animates',
       (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
-    final lastMove = ValueNotifier<MoveEvent?>(null);
+    final lastMove = ValueNotifier<AppliedMove?>(null);
     addTearDown(lastMove.dispose);
     final external = ValueNotifier<Move?>(null);
     addTearDown(external.dispose);
@@ -808,7 +885,8 @@ void main() {
     await t.pump();
     expect(control.canConfirm, isTrue);
     control.confirm();
-    lastMove.value = MoveEvent(Player.white, goldenMove);
+    lastMove.value =
+        AppliedMove(MoveEvent(Player.white, goldenMove), goldenState.board);
     await t.pumpWidget(_interactiveAnimHarness(postState, lastMove,
         interactive: false, externalMove: external, control: control));
 

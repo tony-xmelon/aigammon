@@ -1518,6 +1518,72 @@ void main() {
       c.disposeController();
     });
 
+    testWidgets(
+        'vs-AI: the confirmed move STAYS applied through the opponent roll '
+        'and reply (it never reverts and is never re-played)', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // White (human) wins the opening (6 > 1) and plays; Black (AI) then rolls
+        // (6,5) and replies instantly — inside the SAME frame gap as the commit,
+        // exactly as the real engine does on device.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      final preMove = c.state.board;
+      await commitFirstMove(t);
+
+      // Both moves have already landed on the controller (the AI answers within
+      // the commit's microtask chain — no frame in between), so the whole
+      // legitimate board sequence is known: White's committed move applied, then
+      // Black's reply hop by hop as its animation plays it out.
+      final moves = c.game.events.whereType<MoveEvent>().toList();
+      expect(moves.length, greaterThanOrEqualTo(2),
+          reason: 'White committed and the AI replied');
+      expect(moves.first.player, Player.white);
+      final afterWhite = preMove.applyMove(Player.white, moves.first.move);
+      expect(afterWhite, isNot(preMove), reason: 'the commit changed the board');
+      final allowed = <BoardState>[afterWhite];
+      for (final hop in moves[1].move.checkerMoves) {
+        allowed.add(allowed.last.applyMove(Player.black, Move([hop])));
+      }
+
+      // (a) The very first frame after Confirm already shows the move applied —
+      // no revert to the pre-move position.
+      expect(boardPainterOf(t).board, afterWhite,
+          reason: 'the confirmed move is painted immediately');
+
+      // (b) EVERY frame from here until the AI's reply animation settles paints
+      // one of the legitimate boards: the confirmed position, or that position
+      // with a prefix of Black's hops. The pre-move board is never among them.
+      var sawOverlay = false;
+      var settled = false;
+      for (var i = 0; i < 2000 && !settled; i++) {
+        final painter = boardPainterOf(t);
+        expect(allowed, contains(painter.board),
+            reason: 'frame $i paints neither the confirmed position nor a '
+                "prefix of Black's reply — the committed move reverted");
+        if (painter.overlayChecker != null) sawOverlay = true;
+        settled = sawOverlay && painter.overlayChecker == null;
+        if (!settled) await t.pump(const Duration(milliseconds: 8));
+      }
+      expect(sawOverlay, isTrue, reason: "Black's reply animates");
+      expect(settled, isTrue, reason: "Black's reply settles");
+      expect(boardPainterOf(t).board, allowed.last,
+          reason: 'both moves are applied once the reply settles');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
     testWidgets('tap-to-apply hint: the applied move DOES animate', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));

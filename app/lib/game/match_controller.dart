@@ -1,6 +1,7 @@
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
 
+import 'applied_move.dart';
 import 'player_agent.dart';
 
 /// The surface [GameScreen] needs to run a match, implemented by the local
@@ -38,13 +39,16 @@ abstract interface class MatchController implements Listenable {
   /// The current event-sourced game (the tutor/assessment reads its log).
   Game get game;
 
-  /// The most recently applied [MoveEvent], or `null` before any move has
-  /// landed. Fires (as a [Listenable]) each time a move is appended/folded so a
-  /// cosmetic animation layer can sequence the move's hops. The value carries
-  /// the applied move plus its mover; the pre-move board is the observer's
-  /// then-current [state] board (the value fires BEFORE this controller notifies
-  /// its own listeners, so a subscriber still sees the pre-move [state]).
-  ValueListenable<MoveEvent?> get lastMove;
+  /// The most recently applied move, or `null` before any move has landed. Fires
+  /// (as a [Listenable]) each time a move is appended/folded so a cosmetic
+  /// animation layer can sequence the move's hops.
+  ///
+  /// The value carries the applied move, its mover, AND the board it was applied
+  /// to — see [AppliedMove] for why the pre-move board must travel WITH the
+  /// event rather than being read back off the observer's own (frame-lagged)
+  /// view of [state]. Each fire publishes a fresh [AppliedMove] instance, so
+  /// repeating an identical move still notifies.
+  ValueListenable<AppliedMove?> get lastMove;
 
   /// True while a decision is in flight (an AI/engine await).
   bool get isThinking;

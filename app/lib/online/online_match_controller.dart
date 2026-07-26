@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:online_client/online_client.dart';
 
 import '../data/persistence_hooks.dart';
+import '../game/applied_move.dart';
 import '../game/match_controller.dart';
 import '../game/player_agent.dart';
 
@@ -130,9 +131,11 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
       ValueNotifier(null);
 
   /// The last folded move, published for the animation layer. Set in [_fold]
-  /// when a [MoveEvent] folds, BEFORE [_afterFold] notifies — so a subscriber
-  /// still sees the pre-move [state].
-  final ValueNotifier<MoveEvent?> _lastMove = ValueNotifier<MoveEvent?>(null);
+  /// when a [MoveEvent] folds, carrying the board it was applied TO (captured
+  /// before the fold) so the animation's base position never depends on when the
+  /// subscriber last rebuilt. See [AppliedMove].
+  final ValueNotifier<AppliedMove?> _lastMove =
+      ValueNotifier<AppliedMove?>(null);
 
   // --- observable state ------------------------------------------------------
 
@@ -179,7 +182,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
 
   /// The most recently folded move (for the animation layer), or `null`.
   @override
-  ValueListenable<MoveEvent?> get lastMove => _lastMove;
+  ValueListenable<AppliedMove?> get lastMove => _lastMove;
 
   /// True while the controller is waiting on the opponent or the server (i.e.
   /// the match is active but it is NOT the local side's moment to act).
@@ -410,11 +413,13 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
       _game = Game.start(event, isCrawfordGame: _match.isCrawfordNext);
       return;
     }
+    // The board the event is about to fold onto — the animation's starting
+    // position, knowable only here (several events may fold between two painted
+    // frames, so an observer cannot recover it from [state]). See [AppliedMove].
+    final preBoard = _game!.state.board;
     final next = _game!.append(event);
     _game = next;
-    // Publish the move for the animation layer BEFORE [_afterFold] notifies, so
-    // a subscriber (the board) still observes the pre-move [state] as it fires.
-    if (event is MoveEvent) _lastMove.value = event;
+    if (event is MoveEvent) _lastMove.value = AppliedMove(event, preBoard);
     if (next.state.phase == GamePhase.gameOver) {
       final result = next.state.result!;
       _match = _match.applyResult(result);

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../game/applied_move.dart';
 import 'board_geometry.dart';
 import 'board_painter.dart';
 import 'board_theme.dart';
@@ -209,13 +210,20 @@ class BoardInteractionOptions {
 ///
 /// ## Move animation ([lastMove] / [hopDuration] / [interHopDuration])
 ///
-/// When [lastMove] fires a non-null [MoveEvent], the view plays a purely
+/// When [lastMove] fires a non-null [AppliedMove], the view plays a purely
 /// cosmetic animation: the moved checker travels hop-by-hop from source to
 /// destination while the board underneath shows the position with the earlier
 /// hops applied and the travelling checker suppressed (see [BoardPainter]'s
-/// `hiddenChecker`/`overlayChecker`). The controller fires [lastMove] BEFORE it
-/// notifies its own listeners, so at the moment the listener runs [state] is
-/// still the PRE-move state — the pre-move board is captured then.
+/// `hiddenChecker`/`overlayChecker`).
+///
+/// The animation's base position is the [AppliedMove.preBoard] the controller
+/// publishes WITH the move — never [state]'s board as of the fire. That
+/// distinction is the whole point of [AppliedMove]: the controller routinely
+/// advances several events (a commit, the opponent's roll, the opponent's reply)
+/// between two painted frames, so at fire time [state] may be older than the
+/// move's true starting position. Basing the animation on it froze the board at
+/// a position that predated the user's OWN committed move, which then appeared
+/// to un-happen and be replayed when the animation ended.
 ///
 /// ## Gating the animation by ENTRY SOURCE (no self-replay)
 ///
@@ -325,10 +333,10 @@ class BoardView extends StatefulWidget {
   /// re-enters the move's hops, leaving it staged for Confirm. See the class doc.
   final ValueListenable<Move?>? externalMove;
 
-  /// Stream of applied moves to animate (from [MatchController.lastMove]). Each
-  /// non-null fire plays a cosmetic hop-by-hop travel of the moved checker. See
-  /// the class doc for timing and the pre-move-state capture contract.
-  final ValueListenable<MoveEvent?>? lastMove;
+  /// Stream of applied moves to animate (from `MatchController.lastMove`). Each
+  /// non-null fire plays a cosmetic hop-by-hop travel of the moved checker over
+  /// the [AppliedMove.preBoard] it carries. See the class doc for timing.
+  final ValueListenable<AppliedMove?>? lastMove;
 
   /// Gate that HOLDS the move animation while `true`: a [lastMove] fired during
   /// the hold is queued (latest wins) and started when this flips `false`. Used
@@ -478,8 +486,8 @@ class BoardView extends StatefulWidget {
 class _BoardAnimation {
   _BoardAnimation(this.preBoard, this.hops, this.player);
 
-  /// The board BEFORE the animated move (captured while [BoardView.state] still
-  /// held the pre-move position).
+  /// The board BEFORE the animated move, as published with it (see
+  /// [AppliedMove.preBoard]).
   final BoardState preBoard;
 
   /// The move's hops, in canonical (applied) order.
@@ -655,14 +663,14 @@ class _BoardViewState extends State<BoardView>
     return mq == null || !mq.disableAnimations;
   }
 
-  /// Reacts to a fired [BoardView.lastMove]: captures the (still) pre-move board
-  /// and plays the hop-by-hop travel. Skipped when animations are disabled or
+  /// Reacts to a fired [BoardView.lastMove]: plays the hop-by-hop travel over
+  /// the board the move was applied to. Skipped when animations are disabled or
   /// the move is an empty pass. When [BoardView.holdMoveAnimation] is `true` the
-  /// captured move is QUEUED (latest wins) and started only when the hold
-  /// releases (see [_onHoldChanged]); otherwise it starts immediately.
+  /// move is QUEUED (latest wins) and started only when the hold releases (see
+  /// [_onHoldChanged]); otherwise it starts immediately.
   void _onLastMove() {
-    final event = widget.lastMove?.value;
-    if (event == null) return;
+    final applied = widget.lastMove?.value;
+    if (applied == null) return;
     // One-shot: the first move to land after a hand-entered commit IS that
     // commit. Skip its cosmetic replay (the user just performed it live on the
     // board). Consumed before the enabled/empty guards so it never leaks onto a
@@ -672,11 +680,12 @@ class _BoardViewState extends State<BoardView>
       return;
     }
     if (!_animationsEnabled) return;
-    final hops = event.move.checkerMoves;
+    final hops = applied.move.checkerMoves;
     if (hops.isEmpty) return; // a pass: nothing to animate
-    // The controller fires this BEFORE it notifies, so [widget.state] is still
-    // the PRE-move state here — capture its board as the animation base.
-    final anim = _BoardAnimation(widget.state.board, hops, event.player);
+    // The move carries the board it was applied to: the animation's base is that
+    // position, NOT [widget.state]'s board (which lags by however many events
+    // the controller advanced since the last painted frame).
+    final anim = _BoardAnimation(applied.preBoard, hops, applied.player);
     if (widget.holdMoveAnimation?.value ?? false) {
       _pendingAnimation = anim; // held: queue it, latest wins
       return;
