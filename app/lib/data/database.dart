@@ -112,7 +112,7 @@ class Settings extends Table {
       boolean().withDefault(const Constant(true))();
 
   /// Whether the hot-seat "Pass the device" cover screen is shown between turns
-  /// (schema v5). OFF by default, per the reported "when playing with two
+  /// (schema v6). OFF by default, per the reported "when playing with two
   /// persons, do not show the pass the device screen, or at least make it a
   /// setting, disabled by default". With it off the board simply flips to the
   /// new actor — that rotation IS the hand-over cue — and nothing has to be
@@ -140,7 +140,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
   // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
@@ -159,17 +159,18 @@ class AppDatabase extends _$AppDatabase {
           // same upsert-if-absent covers both fresh creates and upgrades.
           if (from < 2) {
             // Fresh create of the settings table. `createTable` uses the CURRENT
-            // (v5) table definition, so it already includes every gameplay
-            // column, `drag_hint_shown` AND both v5 columns — the
-            // version-gated `addColumn` blocks below must NOT re-add them (hence
-            // each is gated on `from == N`, not `from < N+1`).
+            // (v6) table definition, so it already includes every gameplay
+            // column, `drag_hint_shown`, `dice_roll_animation` AND
+            // `show_pass_device` — the version-gated `addColumn` blocks below
+            // must NOT re-add them (hence each is gated on an explicit range of
+            // `from`, never `from < N+1`).
             await m.createTable(settings);
           }
           // v2 -> v3: add the four gameplay-option columns to the EXISTING v2
           // settings row. Each has a column default, so the pre-existing (seeded
           // or user-edited) row gains the new fields at their defaults while its
           // other values are preserved. Only runs when the table already existed
-          // at v2 (a v1 -> v5 jump created it whole above).
+          // at v2 (a v1 -> v6 jump created it whole above).
           if (from == 2) {
             await m.addColumn(settings, settings.showHighlights);
             await m.addColumn(settings, settings.enableDrag);
@@ -179,21 +180,30 @@ class AppDatabase extends _$AppDatabase {
           // v3 -> v4: add the `drag_hint_shown` column. It is absent from BOTH
           // the v2 and v3 table shapes (v2 had none of the gameplay columns; v3
           // had the four above but not this one), so add it whenever the table
-          // existed pre-v4 — i.e. any upgrade from 2 or 3. A v1 -> v5 jump created
+          // existed pre-v4 — i.e. any upgrade from 2 or 3. A v1 -> v6 jump created
           // the table whole above, so this is skipped there.
           if (from == 2 || from == 3) {
             await m.addColumn(settings, settings.dragHintShown);
           }
-          // v4 -> v5: add BOTH v5 columns — `dice_roll_animation` and
-          // `show_pass_device`. Absent from every pre-v5 table shape (v2, v3 and
-          // v4 alike), so they are added whenever the table already existed —
-          // i.e. any upgrade from 2, 3 or 4. Their column defaults (the beat ON,
-          // the pass-device cover OFF) fill the migrated row, so an upgrading
-          // user lands exactly where a fresh install does. A v1 -> v5 jump created
-          // the table whole above and is therefore skipped, hence `from == N`
-          // rather than `from < 5`.
-          if (from == 2 || from == 3 || from == 4) {
+          // v4 -> v5: add the `dice_roll_animation` column. Absent from every
+          // pre-v5 table shape (v2, v3 and v4 alike), so add it whenever the
+          // table already existed — i.e. any upgrade from 2, 3 or 4. Its column
+          // default (ON) fills the migrated row, so an upgrading user gets the
+          // beat back exactly as a fresh install does.
+          if (from >= 2 && from <= 4) {
             await m.addColumn(settings, settings.diceRollAnimation);
+          }
+          // v5 -> v6: add the `show_pass_device` column, absent from every
+          // pre-v6 table shape (v2..v5), so add it for any upgrade from 2..5.
+          //
+          // This got its OWN version rather than being folded into v5 even
+          // though v5 was never released: v5 databases exist on the development
+          // machines this branch is being played on, and a schemaVersion that
+          // does not move leaves those installs with a table the code writes a
+          // column into that is not there — every settings save then throws
+          // `no column named show_pass_device`, which is exactly how this was
+          // found. A version bump costs one migration branch and covers them.
+          if (from >= 2 && from <= 5) {
             await m.addColumn(settings, settings.showPassDevice);
           }
           // v3 -> v4 one-time default flip: drag-to-move becomes ON by default.
@@ -207,7 +217,7 @@ class AppDatabase extends _$AppDatabase {
           // Runs after the column-creation blocks above so `enable_drag` always
           // exists (for a v1 jump it was just created, and the row it targets is
           // seeded afterwards in `beforeOpen`, so the UPDATE is a harmless no-op
-          // there). Gated on `from < 4` so a future v4 -> v5 upgrade never re-flips.
+          // there). Gated on `from < 4` so a later upgrade never re-flips it.
           if (from < 4) {
             await customStatement('UPDATE settings SET enable_drag = 1');
           }
