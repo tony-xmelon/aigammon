@@ -251,27 +251,64 @@ class GameState {
     );
   }
 
+  /// The CANONICAL legal move a submitted [move] denotes, or null when [move]
+  /// is not a legal play here. The single place legality of a play is decided:
+  /// [play] applies the answer, and a remote authority (see `lan_play`'s
+  /// HostAuthority) validates AND records it.
+  ///
+  /// Two kinds of submission map onto a legal move:
+  ///  * one whose hops form the same MULTISET ([Move.sameAs]) — hop order is
+  ///    the submitter's business, never the board's;
+  ///  * one that reaches the same POSITION as a legal move but splits the hops
+  ///    differently — a transit-equivalent decomposition [MoveGenerator]
+  ///    deduped away, which hop-by-hop entry can still produce.
+  ///
+  /// Both resolve to the GENERATOR's representative, and callers must use that
+  /// rather than the submission, for two reasons: [BoardState.applyMove] is
+  /// order-dependent for a single checker transiting a point it vacates, and
+  /// the representative carries the engine's own hit flags instead of whatever
+  /// the submitter claimed.
+  ///
+  /// A dance (no legal moves) canonicalises to [Move.none].
+  Move? canonicalPlay(Move move) {
+    if (phase != GamePhase.moving) return null;
+    final legal = legalMoves;
+    if (legal.isEmpty) return move.checkerMoves.isEmpty ? Move.none : null;
+    for (final m in legal) {
+      if (m.sameAs(move)) return m;
+    }
+    if (move.checkerMoves.length != legal.first.checkerMoves.length) return null;
+    for (final cm in move.checkerMoves) {
+      final fromOk =
+          cm.from == CheckerMove.bar || (cm.from >= 0 && cm.from < 24);
+      final toOk = cm.to == CheckerMove.off || (cm.to >= 0 && cm.to < 24);
+      if (!fromOk || !toOk) return null;
+    }
+    final resulting = board.applyMove(turn, move);
+    for (final m in legal) {
+      if (board.applyMove(turn, m) == resulting) return m;
+    }
+    return null;
+  }
+
+  /// Whether [move] is a legal play in this state — [canonicalPlay] without the
+  /// answer.
+  bool isLegalPlay(Move move) => canonicalPlay(move) != null;
+
   GameState play(Move move) {
     _require(phase == GamePhase.moving, 'not in the moving phase');
-    final legal = legalMoves;
-    if (legal.isEmpty) {
-      _require(move.checkerMoves.isEmpty, 'no legal moves: must pass');
+    final canonical = canonicalPlay(move);
+    if (canonical == null) {
+      _require(legalMoves.isNotEmpty, 'no legal moves: must pass');
+      throw StateError('illegal move: $move');
+    }
+    // Only a dance canonicalises to an empty move (legal moves always have
+    // hops), so an empty answer means "pass".
+    if (canonical.checkerMoves.isEmpty) {
       return _copy(
           turn: turn.opponent, phase: GamePhase.awaitingRoll, clearDice: true);
     }
-    // Apply the canonical legal representative when one matches by hop
-    // multiset — applyMove is order-dependent for a single checker transiting
-    // a point it vacates, so the submitted hop ORDER must never reach the
-    // board. Only fall back to the position-equivalence check for submissions
-    // that are NOT multiset-equal to any legal move (a transit-equivalent
-    // decomposition the generator deduped away); those are safe to apply as
-    // submitted because their applied result was verified equal to a legal
-    // move's result.
-    final canonical = _firstMatching(move, legal);
-    if (canonical == null) {
-      _require(_isPositionEquivalent(move, legal), 'illegal move: $move');
-    }
-    final next = board.applyMove(turn, canonical ?? move);
+    final next = board.applyMove(turn, canonical);
     if (next.offFor(turn) == 15) {
       return _copy(
           board: next, phase: GamePhase.gameOver, result: _winResult(next));
@@ -281,35 +318,6 @@ class GameState {
         turn: turn.opponent,
         phase: GamePhase.awaitingRoll,
         clearDice: true);
-  }
-
-  /// The first legal move equal to [move] by hop multiset ([Move.sameAs]), or
-  /// null when none matches. The caller applies this canonical representative
-  /// rather than the submitted hop order, because [BoardState.applyMove] is
-  /// order-dependent for single-checker transits through vacated points.
-  Move? _firstMatching(Move move, List<Move> legal) {
-    for (final m in legal) {
-      if (m.sameAs(move)) return m;
-    }
-    return null;
-  }
-
-  /// True when applying [move] reaches the same resulting position as some
-  /// legal move. The generator dedupes transit-equivalent decompositions to a
-  /// single representative, so a caller may submit a different but position-
-  /// equivalent decomposition. Multiset-equal submissions are handled earlier
-  /// by canonical replacement and never reach here.
-  bool _isPositionEquivalent(Move move, List<Move> legal) {
-    if (move.checkerMoves.length != legal.first.checkerMoves.length) {
-      return false;
-    }
-    for (final cm in move.checkerMoves) {
-      final fromOk = cm.from == CheckerMove.bar || (cm.from >= 0 && cm.from < 24);
-      final toOk = cm.to == CheckerMove.off || (cm.to >= 0 && cm.to < 24);
-      if (!fromOk || !toOk) return false;
-    }
-    final resulting = board.applyMove(turn, move);
-    return legal.any((m) => board.applyMove(turn, m) == resulting);
   }
 
   GameResult _winResult(BoardState finalBoard) {

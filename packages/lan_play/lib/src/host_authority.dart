@@ -51,11 +51,14 @@ class HostOutbound {
 /// STRENGTHENINGS, both affordable here because the host runs the real rules
 /// engine while the Cloud Function is boardless:
 ///
-///  1. **Move legality is fully validated.** A submitted [MoveEvent] must be a
-///     member of `legalMoves` (order-insensitively, [Move.sameAs]) or a
-///     position-equivalent decomposition of one — exactly the set
-///     `GameState.play` accepts. The server v1 accepts any well-shaped move and
-///     relies on client divergence to detect cheating.
+///  1. **Move legality is fully validated, and the play is CANONICALISED.**
+///     A submitted [MoveEvent] is resolved through `GameState.canonicalPlay`:
+///     it must be a legal move up to hop order, or a position-equivalent
+///     decomposition of one, and what gets logged is the engine's own
+///     representative — so a peer can neither play illegally nor write a false
+///     route or false hit flags into the authoritative history. The server v1
+///     accepts any well-shaped move verbatim and relies on client divergence to
+///     detect cheating.
 ///  2. **Terminal results are computed, never claimed.** There is no `result`
 ///     claim on the wire at all: the winner, the points and the outcome come out
 ///     of `GameState.result` after the event is applied, so a guest cannot
@@ -64,8 +67,16 @@ class HostOutbound {
 /// Everything the core already polices (cube ownership, no doubling in the
 /// Crawford game, resign values, phase transitions) is enforced by letting the
 /// core reject it: every submission is applied through [Game.append] inside a
-/// guard that turns ANY failure into a [RejectMessage] carrying the full log to
-/// resync from.
+/// guard that turns ANY failure into a [RejectMessage].
+///
+/// ## Divergence and resync
+///
+/// A [RejectMessage] is constant-size: a reason plus the host's `lastSeq`. A
+/// peer compares that seq with its own fold: BEHIND means it missed events and
+/// must resync, which it does by sending `hello` again — the one message that
+/// replays the whole log. LEVEL means the refusal was about the submission
+/// itself and the peer simply re-prompts its player. Rejections therefore
+/// cannot be used to pump the log out of the host (see [RejectMessage]).
 class HostAuthority {
   HostAuthority({
     required this.config,
@@ -98,8 +109,14 @@ class HostAuthority {
   bool _started = false;
   bool _closed = false;
 
-  /// Targeted messages to deliver. Broadcast: the transport and the host's own
-  /// controller can both listen.
+  /// Targeted messages to deliver.
+  ///
+  /// A BROADCAST stream, so the transport and the host's own controller can
+  /// both listen — but with the usual consequence: it does not buffer. Messages
+  /// emitted before a listener subscribes are dropped, and delivery is
+  /// asynchronous (a microtask), so subscribe BEFORE the first `hello` or local
+  /// action, and do not expect a synchronous callback from the call that
+  /// triggered the emission.
   Stream<HostOutbound> get outbound => _out.stream;
 
   /// The side the guest plays.
@@ -134,10 +151,7 @@ class HostAuthority {
   /// Handle a raw frame from the guest. Undecodable frames never reach the
   /// game logic:
   ///  * an unknown TYPE is ignored (a newer peer may send frames we predate);
-  ///  * anything else is refused with a [RejectMessage] carrying NO log —
-  ///    a protocol error is a peer bug, not a divergence, and replying with the
-  ///    whole log would let a 20-byte hostile frame pull a hundreds-of-KB
-  ///    answer out of the host (amplification).
+  ///  * anything else is refused with a constant-size [RejectMessage].
   void onGuestRaw(String raw) {
     if (_closed) return;
     switch (Envelope.decode(raw)) {
@@ -145,7 +159,8 @@ class HostAuthority {
         onGuestMessage(envelope);
       case DecodeFailure(:final error):
         if (error.kind == ProtocolErrorKind.unknownType) return;
-        _emit(HostDestination.guest, RejectMessage(reason: error.message));
+        _emit(HostDestination.guest,
+            RejectMessage(reason: error.message, lastSeq: _seq));
     }
   }
 
@@ -170,7 +185,9 @@ class HostAuthority {
       case RejectMessage():
       case BusyMessage():
         _emit(HostDestination.guest,
-            RejectMessage(reason: 'host-only message type: ${message.type}'));
+            RejectMessage(
+                reason: 'host-only message type: ${message.type}',
+                lastSeq: _seq));
     }
   }
 
@@ -273,11 +290,22 @@ class HostAuthority {
       _reject(side, 'this match is played without the cube');
       return;
     }
-    if (event is MoveEvent && !_isLegalMove(game.state, event.move)) {
-      _reject(side, 'illegal move: ${event.move}');
-      return;
+    var toApply = event;
+    if (event is MoveEvent && game.state.phase == GamePhase.moving) {
+      // FULL legality, and CANONICALISATION in one step: what goes in the log
+      // is the engine's own representative of the play, never the peer's
+      // rendering of it. That closes two gaps at once — a peer cannot record
+      // false `isHit` flags (which drive replay/history markers), and a
+      // position-equivalent decomposition is logged by the route the generator
+      // sanctions rather than the one the peer invented.
+      final canonical = game.state.canonicalPlay(event.move);
+      if (canonical == null) {
+        _reject(side, 'illegal move: ${event.move}');
+        return;
+      }
+      toApply = MoveEvent(side, canonical);
     }
-    _applyAndAppend(side, event);
+    _applyAndAppend(side, toApply);
   }
 
   /// Shared precondition gate: the match is live and it is [side]'s turn.
@@ -300,36 +328,6 @@ class HostAuthority {
       return null;
     }
     return game;
-  }
-
-  /// Full legality: the submitted move must be a legal move up to hop ORDER
-  /// ([Move.sameAs]), or — when the generator deduped an equivalent
-  /// decomposition away — reach the same position as one. That is precisely the
-  /// set `GameState.play` applies, checked here first so the rejection carries a
-  /// clear reason instead of a state-machine message.
-  bool _isLegalMove(GameState state, Move move) {
-    if (state.phase != GamePhase.moving) return true; // phase check is _apply's
-    final legal = state.legalMoves;
-    if (legal.isEmpty) return move.checkerMoves.isEmpty;
-    if (legal.any((m) => m.sameAs(move))) return true;
-    if (move.checkerMoves.length != legal.first.checkerMoves.length) {
-      return false;
-    }
-    // A decomposition the generator collapsed: legal iff it lands on the same
-    // position as some legal move. Bounds-check first so applyMove cannot be
-    // handed an out-of-range index by a hostile peer.
-    for (final cm in move.checkerMoves) {
-      final fromOk =
-          cm.from == CheckerMove.bar || (cm.from >= 0 && cm.from < 24);
-      final toOk = cm.to == CheckerMove.off || (cm.to >= 0 && cm.to < 24);
-      if (!fromOk || !toOk) return false;
-    }
-    try {
-      final resulting = state.board.applyMove(state.turn, move);
-      return legal.any((m) => state.board.applyMove(state.turn, m) == resulting);
-    } catch (_) {
-      return false;
-    }
   }
 
   /// Apply through the core (the final arbiter), append, broadcast, and fold a
@@ -378,7 +376,7 @@ class HostAuthority {
 
   void _reject(Player side, String reason) => _emit(
         side == hostSide ? HostDestination.local : HostDestination.guest,
-        RejectMessage(reason: reason, log: log),
+        RejectMessage(reason: reason, lastSeq: _seq),
       );
 
   void _emit(HostDestination to, Envelope message) {

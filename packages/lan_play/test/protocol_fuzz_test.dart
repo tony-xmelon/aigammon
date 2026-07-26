@@ -119,16 +119,91 @@ void main() {
     host.close();
   });
 
+  test('the DEEP validation path survives hostile frames with the guest on turn',
+      () async {
+    // The other authority fuzz test never gets past the turn guard (its guest
+    // is not on turn), so move legality is never reached. Here the host plays
+    // Black and the opening roll hands White — the GUEST — the first move, so
+    // every frame below lands squarely in canonicalPlay.
+    final host = HostAuthority(
+      config: const MatchConfig(length: 3),
+      hostSide: Player.black,
+      dice: ScriptedDiceRoller([Dice(6, 1)]),
+    );
+    final seen = <HostOutbound>[];
+    host.outbound.listen(seen.add);
+    host.onGuestMessage(const HelloMessage(name: 'peer'));
+    await Future<void>.delayed(Duration.zero);
+    expect(host.guestSide, Player.white);
+    expect(host.state!.turn, Player.white, reason: 'the guest is on turn');
+    expect(host.state!.phase, GamePhase.moving);
+    final board = host.state!.board;
+
+    String moveFrame(String hops) => '{"v":1,"type":"submit","payload":'
+        '{"event":{"type":"move","player":"white","move":$hops}}}';
+
+    // Targeted adversarial plays: out-of-range hops, bar/off sentinels abused,
+    // non-representable numbers, the wrong number of hops, a pass while moves
+    // exist, and a hop onto a blocked point.
+    final adversarial = <String>[
+      moveFrame('[[-100,-100,false],[5,3,false]]'),
+      moveFrame('[[500,-7,false],[5,3,false]]'),
+      moveFrame('[[24,-1,false],[24,-1,false]]'),
+      moveFrame('[[1e300,6,false],[7,6,false]]'),
+      moveFrame('[[-1e300,-1e300,false],[7,6,false]]'),
+      moveFrame('[[12,6,false],[7,6,false],[5,4,false],[4,3,false]]'),
+      moveFrame('[]'),
+      moveFrame('[[23,17,false],[12,11,false]]'), // lands on a made Black point
+      moveFrame('[[23,17,false],[12,6,false]]'), // two 6s on a 6-1
+    ];
+    var mark = seen.length;
+    for (final frame in adversarial) {
+      host.onGuestRaw(frame);
+    }
+    await Future<void>.delayed(Duration.zero);
+
+    // Every targeted frame drew exactly one rejection.
+    final replies = seen.sublist(mark);
+    expect(replies, hasLength(adversarial.length));
+    expect(replies.every((o) => o.message is RejectMessage), isTrue,
+        reason: 'a hostile frame produced something other than a rejection');
+    expect(replies.every((o) => o.to == HostDestination.guest), isTrue);
+
+    // Then the generic corpus, on the same open turn. (Some of those frames
+    // are valid hellos or pings, so the replies are not all rejections — what
+    // matters is that NONE of them appended an event.)
+    mark = seen.length;
+    final r = Random(99);
+    for (var i = 0; i < cases; i++) {
+      expect(() => host.onGuestRaw(nasty(r)), returnsNormally);
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(seen.sublist(mark).where((o) => o.message is EventMessage), isEmpty,
+        reason: 'a hostile frame moved the game');
+
+    expect(host.lastSeq, 1);
+    expect(host.state!.board, board, reason: 'the board never moved');
+    expect(host.state!.turn, Player.white);
+    expect(host.state!.phase, GamePhase.moving);
+    // And a LEGAL move still works afterwards: nothing was left wedged.
+    host.onGuestMessage(
+        SubmitMessage(MoveEvent(Player.white, host.state!.legalMoves.first)));
+    await Future<void>.delayed(Duration.zero);
+    expect(host.lastSeq, 2);
+    expect(host.state!.turn, Player.black);
+    host.close();
+  });
+
   test('an oversized frame is dropped without a large reply', () async {
     final host = HostAuthority(config: const MatchConfig(length: 1));
     final seen = <HostOutbound>[];
     host.outbound.listen(seen.add);
     host.onGuestRaw('x' * (maxMessageLength + 1));
     await Future<void>.delayed(Duration.zero);
-    // Rejections of PROTOCOL errors carry no log: a 16 KB hostile frame must
-    // not pull the whole match log back out of the host.
+    // A 512 KB hostile frame must not pull anything sizeable back out of the
+    // host: the answer is a constant-size rejection.
     final reject = seen.single.message as RejectMessage;
-    expect(reject.log, isEmpty);
+    expect(reject.encode().length, lessThan(150));
     host.close();
   });
 }

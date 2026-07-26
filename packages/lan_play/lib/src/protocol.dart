@@ -38,6 +38,13 @@ const int maxReasonLength = 256;
 /// The most hops one turn can ever have (doubles: four checkers).
 const int maxMoveHops = 4;
 
+/// Sanity bound on EVERY integer the wire carries (seq, gameNo, hops, match
+/// length). Nothing legitimate approaches it, and it keeps `double.toInt()`
+/// away from its clamping behaviour: `(1e300).toInt()` and `(2^63).toInt()`
+/// both silently yield `9223372036854775807`, so an unbounded decoder would
+/// turn a nonsense number into a plausible one instead of refusing it.
+const int maxIntValue = 1000000000;
+
 /// The largest match length the protocol will carry.
 const int maxMatchLength = 99;
 
@@ -222,7 +229,7 @@ sealed class Envelope {
         'submit' => SubmitMessage(_event(p['event'])),
         'reject' => RejectMessage(
             reason: _string(p, 'reason', max: maxReasonLength),
-            log: _log(p['log']),
+            lastSeq: _nonNegative(p['lastSeq'], 'lastSeq'),
           ),
         'roll_request' => const RollRequestMessage(),
         'busy' => const BusyMessage(),
@@ -296,16 +303,35 @@ sealed class Envelope {
     return _string(p, key, max: max);
   }
 
-  /// An integer, tolerating the integral doubles a JSON encoder may emit.
+  /// An integer, tolerating the integral doubles a JSON encoder may emit, and
+  /// bounded by [maxIntValue] in both directions — see that constant for why an
+  /// unbounded version silently accepts 1e300.
   static int _int(Object? v, String what) {
-    if (v is int) return v;
-    if (v is double && v.isFinite && v == v.roundToDouble()) return v.toInt();
+    if (v is int) {
+      if (v.abs() > maxIntValue) _bad('$what is out of range: $v');
+      return v;
+    }
+    if (v is double) {
+      // Note the order: the range check runs BEFORE toInt(), which is the
+      // operation that would clamp.
+      if (!v.isFinite || v != v.roundToDouble() || v.abs() > maxIntValue) {
+        _bad('$what must be an integer in +/-$maxIntValue');
+      }
+      return v.toInt();
+    }
     _bad('$what must be an integer');
   }
 
   static int _positive(Object? v, String what) {
     final n = _int(v, what);
     if (n < 1) _bad('$what must be >= 1');
+    return n;
+  }
+
+  /// A counter that may legitimately be zero (a log that is still empty).
+  static int _nonNegative(Object? v, String what) {
+    final n = _int(v, what);
+    if (n < 0) _bad('$what must be >= 0');
     return n;
   }
 
@@ -450,21 +476,27 @@ class SubmitMessage extends Envelope {
   Map<String, dynamic> get payload => {'event': event.toJson()};
 }
 
-/// host -> guest: a submission was refused. [log] is the authoritative log to
-/// resync from (empty for protocol-level refusals, which are not a divergence
-/// and must not turn a small hostile frame into a large reply).
+/// host -> guest: a submission was refused.
+///
+/// Deliberately CONSTANT-SIZE: it carries the reason and the host's [lastSeq],
+/// never the log. A guest whose [lastSeq] is behind knows it has drifted and
+/// resyncs by sending `hello` again (which answers with the full log); one that
+/// is level knows the refusal was about the submission itself, not about
+/// divergence. Attaching the log here instead would let any peer pull hundreds
+/// of KB out of the host with one small always-invalid frame, forever.
 class RejectMessage extends Envelope {
-  const RejectMessage({required this.reason, this.log = const []});
+  const RejectMessage({required this.reason, required this.lastSeq});
 
   final String reason;
-  final List<LogEntry> log;
+
+  /// The last seq the host has assigned; 0 before any event.
+  final int lastSeq;
 
   @override
   String get type => 'reject';
 
   @override
-  Map<String, dynamic> get payload =>
-      {'reason': reason, 'log': [for (final e in log) e.toJson()]};
+  Map<String, dynamic> get payload => {'reason': reason, 'lastSeq': lastSeq};
 }
 
 /// guest -> host: "roll for me" (dice are host-authoritative).

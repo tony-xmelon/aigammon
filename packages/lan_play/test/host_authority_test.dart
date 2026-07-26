@@ -165,8 +165,8 @@ void main() {
           MoveEvent(Player.white, Move([const CheckerMove(12, 9)])));
       final reject = h.rejectSince(mark);
       expect(reject.reason, contains('illegal move'));
-      expect(reject.log.map((e) => e.seq), [1],
-          reason: 'a state rejection carries the log');
+      expect(reject.lastSeq, 1,
+          reason: 'a rejection reports how far the host has got, not the log');
       expect(h.state.turn, Player.white, reason: 'nothing was applied');
     });
 
@@ -215,6 +215,63 @@ void main() {
       final mark = h.mark;
       await h.localSubmit(MoveEvent(Player.white, Move.none));
       expect(h.rejectSince(mark).reason, contains('illegal move'));
+    });
+
+    test('the log records the ENGINE\'s hit flags, not the peer\'s claim',
+        () async {
+      // White opens 24/23, 24/18 leaving two blots; Black's 1-4 hits both.
+      final h = HostHarness(dice: [Dice(6, 1), Dice(1, 4)]);
+      addTearDown(h.dispose);
+      await h.hello();
+      await h.localSubmit(MoveEvent(
+          Player.white,
+          Move([
+            // ... and lies about hitting, which must be scrubbed on the way in.
+            const CheckerMove(23, 22, isHit: true),
+            const CheckerMove(23, 17, isHit: true),
+          ])));
+      expect(
+          (h.host.log.last.event as MoveEvent)
+              .move
+              .checkerMoves
+              .any((c) => c.isHit),
+          isFalse,
+          reason: 'a hit was claimed where there was none');
+
+      await h.guestRollRequest();
+      final hitting = h.state.legalMoves.firstWhere(
+          (m) => m.checkerMoves.any((c) => c.isHit),
+          orElse: () => fail('setup produced no hitting play for Black'));
+      // The same play, submitted with every hit flag switched OFF.
+      final lying = Move([
+        for (final c in hitting.checkerMoves) CheckerMove(c.from, c.to),
+      ]);
+      await h.guestSubmit(MoveEvent(Player.black, lying));
+
+      expect(h.state.turn, Player.white, reason: 'the move was applied');
+      final recorded = (h.host.log.last.event as MoveEvent).move;
+      expect(recorded.toString(), hitting.toString(),
+          reason: 'the log carries the engine\'s own rendering of the play');
+      expect(recorded.checkerMoves.any((c) => c.isHit), isTrue);
+      expect(h.state.board.blackBar + h.state.board.whiteBar, greaterThan(0));
+    });
+
+    test('a route through a blocked point is logged by the sanctioned route',
+        () async {
+      // Hops 13/12, 12/7 walk one checker THROUGH the point Black owns with
+      // five checkers. The net position is the legal 13/7/6's, so the play
+      // stands — but what goes in the log is the engine's route, never the
+      // peer's. (This is the residual the position-equivalence fallback would
+      // otherwise leave in the authoritative history.)
+      await h.localSubmit(MoveEvent(
+          Player.white,
+          Move([const CheckerMove(12, 11), const CheckerMove(11, 5)])));
+      expect(h.state.turn, Player.black, reason: 'the play was accepted');
+      final recorded = (h.host.log.last.event as MoveEvent).move;
+      expect(recorded.checkerMoves.any((c) => c.to == 11), isFalse,
+          reason: 'the logged route does not touch the blocked point');
+      expect(h.state.board.points[5], 6);
+      expect(h.state.board.points[11], -5, reason: 'Black\'s point is intact');
     });
 
     test('a move out of turn is refused', () async {
@@ -391,7 +448,7 @@ void main() {
       }));
       final reject = h.rejectSince(mark);
       expect(reject.reason, contains('unreadable event'));
-      expect(reject.log, isEmpty, reason: 'protocol errors carry no log');
+      expect(reject.lastSeq, 1);
       expect(h.host.lastSeq, 1);
     });
   });
@@ -466,7 +523,7 @@ void main() {
             seq: 99, gameNo: 1, event: RollEvent(Player.white, 6, 6))),
         const WelcomeMessage(
             config: MatchConfig(length: 99), side: Player.white, log: []),
-        const RejectMessage(reason: 'you lose'),
+        const RejectMessage(reason: 'you lose', lastSeq: 99),
         const BusyMessage(),
       ]) {
         h.host.onGuestMessage(m);
@@ -488,7 +545,7 @@ void main() {
       }));
       final reject = h.rejectSince(0);
       expect(reject.reason, contains('version'));
-      expect(reject.log, isEmpty);
+      expect(reject.lastSeq, 0, reason: 'nothing has happened yet');
       expect(h.host.started, isFalse, reason: 'no match was started');
     });
 
@@ -499,6 +556,68 @@ void main() {
       final mark = h.mark;
       await h.guestRaw(jsonEncode({'v': 1, 'type': 'chat', 'payload': {}}));
       expect(h.since(mark), isEmpty);
+    });
+
+    test('rejections cannot amplify, however long the log is', () async {
+      final h = HostHarness(length: 3);
+      addTearDown(h.dispose);
+      await h.hello();
+
+      // A rejection while the log holds ONE entry, to size against later.
+      h.host.onGuestMessage(SubmitMessage(MoveEvent(h.guestSide, Move.none)));
+      await h.pump();
+      final earlyReject = h.sent.last.message as RejectMessage;
+      expect(earlyReject.lastSeq, 1);
+
+      // Build a log worth stealing, then stop on the HOST's turn so every
+      // guest submission below is guaranteed invalid.
+      var guard = 0;
+      while ((h.host.lastSeq < 40 || h.state.turn != h.hostSide) &&
+          guard++ < 400) {
+        final s = h.state;
+        if (s.phase == GamePhase.awaitingRoll) {
+          await h.rollForTurn();
+        } else {
+          final legal = s.legalMoves;
+          await h.submitAsTurn((side) =>
+              MoveEvent(side, legal.isEmpty ? Move.none : legal.first));
+        }
+      }
+      expect(h.host.lastSeq, greaterThanOrEqualTo(40));
+      final logBytes =
+          WelcomeMessage(config: h.host.config, side: h.guestSide, log: h.host.log)
+              .encode()
+              .length;
+      expect(logBytes, greaterThan(3000), reason: 'the log is worth stealing');
+
+      final seqBefore = h.host.lastSeq;
+      final mark = h.mark;
+      const junk = 50;
+      for (var i = 0; i < junk; i++) {
+        h.host.onGuestMessage(SubmitMessage(MoveEvent(h.guestSide, Move.none)));
+        h.host.onGuestRaw('not json at all');
+      }
+      await h.pump();
+
+      final replies = h.since(mark);
+      expect(replies, hasLength(junk * 2));
+      expect(replies.every((o) => o.message is RejectMessage), isTrue);
+      final bytes = replies.fold<int>(0, (n, o) => n + o.message.encode().length);
+      expect(bytes, lessThan(junk * 2 * 200));
+      // THE property: a rejection's size is independent of the log. With 40x
+      // the log, the reply grew only by the extra digits in lastSeq — where
+      // attaching the log would have grown it by thousands of bytes.
+      final lateReject = replies
+          .map((o) => o.message)
+          .whereType<RejectMessage>()
+          .firstWhere((m) => m.reason.contains('not your turn'));
+      expect(lateReject.encode().length - earlyReject.encode().length,
+          lessThanOrEqualTo(4));
+      expect(logBytes - earlyReject.encode().length, greaterThan(3000),
+          reason: 'the log really is the big thing being withheld');
+      expect(h.host.lastSeq, seqBefore, reason: 'and nothing moved');
+      expect((replies.first.message as RejectMessage).lastSeq, seqBefore,
+          reason: 'a peer learns only how far the host has got');
     });
 
     test('close stops emission and is idempotent', () async {
@@ -574,10 +693,22 @@ void main() {
       expect(log.map((e) => e.gameNo).toSet(),
           {for (var i = 1; i <= h.host.gameNumber; i++) i});
 
-      // THE GUEST'S VIEW: folding the wire log alone (as Task 3 will) must
-      // reproduce the host's game and score exactly — proof the log carries
-      // everything a peer needs.
-      final folded = _foldAsGuest(h.host.log, h.host.config.length);
+      // THE GUEST'S VIEW, END TO END: every broadcast event goes out through
+      // encode(), comes back through decode(), and is folded exactly as Task 3
+      // will fold it. Reproducing the host's game and score from that alone is
+      // proof the WIRE (not just the in-memory log) carries everything a peer
+      // needs.
+      final wire = <LogEntry>[];
+      for (final o in broadcast) {
+        final raw = o.message.encode();
+        final decoded = Envelope.decode(raw);
+        expect(decoded, isA<DecodeOk>(),
+            reason: 'a broadcast frame failed to decode: $raw');
+        wire.add(((decoded as DecodeOk).envelope as EventMessage).entry);
+      }
+      expect(wire.map((e) => e.seq), log.map((e) => e.seq));
+      expect(wire.map((e) => e.gameNo), log.map((e) => e.gameNo));
+      final folded = _foldAsGuest(wire, h.host.config.length);
       expect(folded.match, h.host.match);
       expect(folded.game.state, h.state);
       expect(folded.gameNo, h.host.gameNumber);
