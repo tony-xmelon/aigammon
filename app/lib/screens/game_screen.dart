@@ -608,6 +608,10 @@ class _GameScreenState extends State<GameScreen> {
           // entry affordances appear. A rebuild is needed for the latter (the
           // notifier alone only wakes the board's own listener).
           setState(_endPresenting);
+          // Entry just opened without a controller notification, so the one-time
+          // drag/tap tip — which waits for exactly these affordances — has to be
+          // re-offered here or it would sit out the whole move.
+          _maybeShowDragHint();
         });
         return;
       }
