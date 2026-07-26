@@ -316,7 +316,12 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
         // conditional height here would have moved both.
         _reserved(
           _captionSlotHeight,
-          preMove ? _preMoveCaption(showingBest: _showBest && hasBest) : null,
+          preMove
+              ? _preMoveCaption(showingBest: _showBest && hasBest)
+              // A bare step (the opening, a roll, a cube/resign event) has no
+              // move to frame; the slot still says what the board is showing
+              // rather than sitting visibly blank.
+              : _caption('Position at this point in the game'),
         ),
         _reserved(_toggleSlotHeight, hasBest ? _playedBestToggle() : null),
         _reserved(
@@ -342,7 +347,12 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   Widget _reserved(double height, Widget? child) =>
       SizedBox(height: height, child: child == null ? null : Center(child: child));
 
-  Widget _preMoveCaption({required bool showingBest}) {
+  Widget _preMoveCaption({required bool showingBest}) => _caption(showingBest
+      ? 'Showing the best move on the position before the move'
+      : 'Showing position before the move');
+
+  /// One eye-icon caption line, sized to fit the reserved slot.
+  Widget _caption(String text) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       child: Row(
@@ -351,11 +361,14 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
           Icon(Icons.visibility_outlined,
               size: 14, color: Theme.of(context).colorScheme.outline),
           const SizedBox(width: 6),
-          Text(
-            showingBest
-                ? 'Showing the best move on the position before the move'
-                : 'Showing position before the move',
-            style: Theme.of(context).textTheme.bodySmall,
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(text,
+                  maxLines: 1,
+                  softWrap: false,
+                  style: Theme.of(context).textTheme.bodySmall),
+            ),
           ),
         ],
       ),

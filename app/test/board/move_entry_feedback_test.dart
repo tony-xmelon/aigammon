@@ -262,6 +262,9 @@ void main() {
       expect(staged, [false]);
       expect(_painterOf(t).selectedCheckerLocation, isNull,
           reason: 'a dead checker is not picked up');
+      expect(_painterOf(t).highlightedSources, isNotEmpty,
+          reason: 'the tap changes nothing: the real sources stay ringed');
+      expect(_painterOf(t).highlightedDestinations, isEmpty);
     });
 
     testWidgets('a legal source is silent', (t) async {
