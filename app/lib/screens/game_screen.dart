@@ -355,6 +355,18 @@ class _GameScreenState extends State<GameScreen> {
   /// roller (see [_rollBeat]).
   Player? _presentingSide;
 
+  /// The side whose move is currently TRAVELLING on the board (its cosmetic
+  /// animation), or `null` when nothing is animating. Reported by the
+  /// [BoardView] through [BoardView.onMoveAnimation], because the board owns
+  /// that timeline (its length depends on the hop count) and this screen must
+  /// not duplicate it.
+  ///
+  /// Keeps the mover's dice lit for as long as their play is being presented:
+  /// the roll settles, then the checkers move, and only when both are done does
+  /// the pair go dim. Only ever set for a move that ANIMATES — a hand-entered
+  /// local move is never replayed, so confirming still dims your pair at once.
+  Player? _animatingSide;
+
   @override
   void initState() {
     super.initState();
@@ -467,9 +479,10 @@ class _GameScreenState extends State<GameScreen> {
   void _maybeShowDragHint() {
     if (_dragHintShown || _dragHintScheduled) return;
     if (!widget.interactionOptions.enableDrag) return;
-    final humanMoving =
-        _humanSideWith((s) => _c.pendingMoveOf(s).value != null) != null;
-    if (!humanMoving) return;
+    // The affordances the hint talks about appear only once the mover's own roll
+    // has finished being presented, so the tip must not arrive a beat early.
+    final pending = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    if (pending == null || _entryHeld(pending)) return;
     _dragHintScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -633,12 +646,29 @@ class _GameScreenState extends State<GameScreen> {
   /// The dice pair to light this frame, or `null` to dim BOTH — the presentation
   /// state machine's single output (see the class doc).
   ///
-  /// The presenting roller wins, so a roll being rolled is always the live pair.
-  /// Otherwise it is [moveSide], the local side whose move is being entered, so a
-  /// mover's dice stay lit (with per-die spent dimming) for as long as they are
-  /// being played. With neither — the pre-roll gate, the moment after a confirm,
-  /// an opponent's checkers travelling — nothing is live and both pairs dim.
-  Player? _activeDiceSide(Player? moveSide) => _presentingSide ?? moveSide;
+  /// Precedence, strongest first:
+  ///
+  /// 1. the presenting roller — a roll being rolled is always the live pair;
+  /// 2. [moveSide], the local side whose move is being ENTERED — a play the user
+  ///    is making by hand outranks a replay finishing in the background, so their
+  ///    own dice (with per-die spent dimming) stay lit while they use them;
+  /// 3. [_animatingSide], the side whose checkers are travelling, so an
+  ///    opponent's roll stays readable for the whole of their play.
+  ///
+  /// With none of the three — the pre-roll gate, the moment after a confirm, a
+  /// finished turn — nothing is live and both pairs dim.
+  Player? _activeDiceSide(Player? moveSide) =>
+      _presentingSide ?? moveSide ?? _animatingSide;
+
+  /// Records the board's animation state (see [_animatingSide]).
+  ///
+  /// Reached from the board's own listener paths — including the one where
+  /// releasing the presentation hold synchronously starts a queued move — all of
+  /// which run outside a build, so a plain [setState] is safe here.
+  void _onMoveAnimation(Player? player) {
+    if (!mounted || _animatingSide == player) return;
+    setState(() => _animatingSide = player);
+  }
 
   /// Whether move entry is WITHHELD because the local mover's own dice are still
   /// being presented. The board is left non-interactive and the action bar shows
@@ -928,6 +958,7 @@ class _GameScreenState extends State<GameScreen> {
                         // enables that button, and null otherwise so dice-area
                         // taps fall through to normal move entry.
                         onDiceTap: _canRoll(moveSide) ? _rollDice : null,
+                        onMoveAnimation: _onMoveAnimation,
                         onNoLegalSourceTap: _showNoLegalSourceHint,
                       ),
                       // Both banners are PURELY informational and float over the
@@ -1288,6 +1319,10 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The idle-bar status line: what the game is waiting on.
   String _statusText() {
+    // Your own roll is on screen being rolled: say so, rather than reporting
+    // whatever the engine happens to be chewing on in the background.
+    final presenting = _presentingSide;
+    if (presenting != null && _c.isLocalHuman(presenting)) return 'Rolling…';
     if (_c.isThinking) return 'Thinking…';
     if (_c.matchOver || _c.awaitingNextGame) return '';
     return "${_playerName(_c.state.turn)}'s turn";

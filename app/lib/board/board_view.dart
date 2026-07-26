@@ -366,6 +366,7 @@ class BoardView extends StatefulWidget {
     this.strongHighlightSources = const {},
     this.highlightMovingPlayer,
     this.onDiceTap,
+    this.onMoveAnimation,
     this.onNoLegalSourceTap,
     this.doubleTapWindow = const Duration(milliseconds: 300),
   });
@@ -497,6 +498,17 @@ class BoardView extends StatefulWidget {
   /// before — a tap there falls through to normal move-entry handling — so this
   /// can never interfere with entering a move.
   final VoidCallback? onDiceTap;
+
+  /// Fired whenever the cosmetic move animation starts or stops: the animating
+  /// move's PLAYER while a checker is travelling, and `null` the moment it is
+  /// done (or is abandoned because a drag lifted a checker).
+  ///
+  /// The board owns the animation's timeline — its duration depends on the hop
+  /// count — so a consumer that needs to know whether one is running cannot
+  /// compute it without duplicating that timeline. The game screen needs exactly
+  /// this to keep the mover's dice pair lit for as long as their play is being
+  /// presented (see [activeDiceSide]).
+  final ValueChanged<Player?>? onMoveAnimation;
 
   /// Called when the user taps one of their OWN checkers that is not a legal
   /// source with the dice still in hand — the silent no-op behind the reported
@@ -844,6 +856,7 @@ class _BoardViewState extends State<BoardView>
   void _startAnimation(_BoardAnimation anim) {
     final seq = ++_animSeq;
     setState(() => _animation = anim);
+    widget.onMoveAnimation?.call(anim.player);
     _animController
       ..stop()
       ..duration = _totalDuration(anim.hops.length)
@@ -851,6 +864,7 @@ class _BoardViewState extends State<BoardView>
       ..forward().whenComplete(() {
         if (!mounted || seq != _animSeq) return;
         setState(() => _animation = null);
+        widget.onMoveAnimation?.call(null);
       });
   }
 
@@ -1367,6 +1381,8 @@ class _BoardViewState extends State<BoardView>
       _selectedSource = null;
       _stagedFromExternal = false; // a manual drag makes this hand entry
     });
+    // A suspended animation is over as far as consumers are concerned.
+    widget.onMoveAnimation?.call(null);
     _disarmDoubleTap(); // a drag is not half of a double-tap
     _syncEntry();
   }

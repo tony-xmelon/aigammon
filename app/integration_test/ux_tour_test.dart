@@ -204,6 +204,13 @@ Future<void> _playMatch(
       if (!done.contains('dice_beat') &&
           fresh.any((e) => e is RollEvent && e.player != human)) {
         await _beat(tester, const Duration(milliseconds: 400));
+        // The emphasis at the sampled frame is the whole point of this capture:
+        // the OPPONENT's pair must be the bright one (tumbling in its own home)
+        // while the human's stale pair is dim — even though `state.turn` is
+        // already back on the human by now.
+        final active = boardPainterOf(tester).activeDiceSide;
+        _log('opponent beat frame: activeDiceSide=${active?.name}, '
+            'turn=${c.state.turn.name}');
         if (await _shot(tester, 'opponent_dice_beat')) done.add('dice_beat');
       }
     }
@@ -271,10 +278,19 @@ Future<void> _playMatch(
           if (await _shot(tester, 'pre_roll_gate')) done.add('pre_roll');
         }
         await tester.tap(roll);
+        // The LOCAL roll is presented too (same tumble, half the settle pause),
+        // so ~300ms in is squarely inside the human's own beat: their pair is
+        // tumbling and bright, and move entry has not opened yet.
         await _beat(tester, const Duration(milliseconds: 300));
+        if (!done.contains('local_beat') && humanMoves >= 1) {
+          final active = boardPainterOf(tester).activeDiceSide;
+          _log('local beat frame: activeDiceSide=${active?.name}');
+          if (await _shot(tester, 'local_dice_beat')) done.add('local_beat');
+        }
         // Both players' persistent dice pairs are on the board once the
         // opponent has rolled at least once.
         if (!done.contains('dice_pairs') && humanMoves >= 1) {
+          await _beat(tester, const Duration(milliseconds: 1100));
           if (await _shot(tester, 'dice_both_pairs')) done.add('dice_pairs');
         }
       }
@@ -289,6 +305,7 @@ Future<void> _playMatch(
     _skipped.add('score sheet with marks in both columns');
   }
   if (!done.contains('dice_beat')) _skipped.add('opponent dice beat');
+  if (!done.contains('local_beat')) _skipped.add("the local player's own beat");
   if (!done.contains('cube')) _skipped.add('cube-offer dialog (AI never doubled)');
   if (!done.contains('resign')) {
     _skipped.add('resign-offer dialog (AI never resigned)');

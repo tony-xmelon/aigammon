@@ -1605,6 +1605,51 @@ void main() {
       c.disposeController();
     });
 
+    testWidgets("the opponent's pair stays lit while their checkers travel, "
+        'then everything goes dim', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // White (human) plays; Black (AI, instant) rolls and replies, so Black's
+      // move is queued behind its dice presentation and travels after it.
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await pumpUntil(t, () => _boardViewOf(t).interactive, maxFrames: 3000);
+      human.submitMove(c.state.legalMoves.first);
+
+      // Wait for BLACK's checker specifically: White's own move was submitted
+      // through the agent (not hand-entered on the board), so it animates too,
+      // and its travel would otherwise be mistaken for the opponent's.
+      await pumpUntil(
+          t, () => boardPainterOf(t).overlayChecker?.isWhite == false,
+          maxFrames: 6000);
+      // Black's checker is travelling, so its dice presentation has already been
+      // released (the hold is what gates the travel) — only the ANIMATION can be
+      // lighting its pair here. And the turn is long since back on White.
+      expect(c.state.turn, Player.white);
+      expect(boardPainterOf(t).activeDiceSide, Player.black,
+          reason: "the mover's dice stay readable while their play is shown");
+
+      // Travel over, nobody has rolled: both pairs dim, and the human's pair has
+      // NOT re-brightened just because it is their turn.
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker == null,
+          maxFrames: 6000);
+      expect(boardPainterOf(t).activeDiceSide, isNull);
+      expect(c.awaitingHumanTurn, isTrue,
+          reason: 'the human is at their pre-roll gate with both pairs dim');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
     testWidgets('the local pair goes DIM the moment the move is confirmed, and '
         'stays dim until it is rolled again', (t) async {
       await t.binding.setSurfaceSize(_surface);
