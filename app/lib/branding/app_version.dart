@@ -1,4 +1,4 @@
-﻿/// The user-visible app version, shown in the home screen footer.
+/// The user-visible app version, shown in the home screen footer.
 ///
 /// Deliberately a plain const rather than a `package_info_plus` lookup: the
 /// version is wanted on the FIRST frame of the first screen, on every platform

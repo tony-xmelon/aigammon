@@ -1408,7 +1408,8 @@ class _GameScreenState extends State<GameScreen> {
 
     Color? markColor;
     String lossText = '';
-    if (assessment != null) {
+    // A dance offers no choice, so grading it "best" is noise — no mark at all.
+    if (assessment != null && assessment.ranked.isNotEmpty) {
       final (color, _) = _markStyle(assessment.mark);
       markColor = color;
       final loss = assessment.equityLoss;
