@@ -202,6 +202,40 @@ void main() {
       f.authority.close();
     });
 
+    test('resync asks for the whole log again without touching the match',
+        () async {
+      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      addTearDown(f.dispose);
+      final g = connectGuest(f);
+      addTearDown(g.client.dispose);
+      await g.client.welcome;
+
+      await advance(f, guest: g.client); // white moves
+      await advance(f, guest: g.client); // black rolls
+      final seqBefore = f.authority.lastSeq;
+
+      // The controller-facing recovery lever: one hello, one full log back.
+      // Spaced past the host's helloMinInterval — inside it, the hello is
+      // DROPPED (the amplification limit), which is why a folding controller
+      // must re-request on the next gap rather than assume one resync lands.
+      await settle(250);
+      expect(g.client.resync(), isTrue);
+      await waitFor(() => g.inbound.whereType<WelcomeMessage>().length == 2,
+          what: 'the resync welcome');
+
+      final resync = g.inbound.whereType<WelcomeMessage>().last;
+      expect(resync.log.map((e) => e.seq), [
+        for (var i = 1; i <= seqBefore; i++) i,
+      ]);
+      expect(f.authority.lastSeq, seqBefore, reason: 'a resync appends nothing');
+      expect(g.client.isConnected, isTrue, reason: 'the link is untouched');
+
+      // A resync on a DOWN link is refused rather than queued — the reconnect
+      // resyncs anyway, so there is nothing to hold on to.
+      await g.client.dispose();
+      expect(g.client.resync(), isFalse);
+    });
+
     test('dispose stops the retry loop', () async {
       final f = await ServerFixture.start(dice: [Dice(6, 1)]);
       addTearDown(f.dispose);

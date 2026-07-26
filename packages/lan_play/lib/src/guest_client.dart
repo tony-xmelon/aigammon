@@ -231,6 +231,18 @@ class GuestClient {
   /// Ask the host (which owns the dice) to roll for this guest.
   bool requestRoll() => send(const RollRequestMessage());
 
+  /// Ask the host to replay the WHOLE log, by re-sending `hello` — the only
+  /// frame that answers with a [WelcomeMessage]. That welcome arrives on
+  /// [inbound] like any other, so a folding controller resyncs through exactly
+  /// the path a reconnect uses.
+  ///
+  /// Returns false when there is no live socket; nothing is lost by that,
+  /// because the reconnect's own `hello` will resync anyway. Spaced by the
+  /// host's [LanTimings.helloMinInterval] — a caller that resyncs in a tight
+  /// loop has its excess hellos dropped, not answered.
+  bool resync() =>
+      send(HelloMessage(name: name, code: roomCode, resume: _resume));
+
   /// Stop reconnecting and release everything. Idempotent.
   Future<void> dispose() async {
     if (_disposed) return;

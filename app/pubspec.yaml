@@ -21,6 +21,8 @@ dependencies:
     path: ../packages/engine_bindings
   online_client:
     path: ../packages/online_client
+  lan_play:
+    path: ../packages/lan_play
 
 dev_dependencies:
   flutter_test:
