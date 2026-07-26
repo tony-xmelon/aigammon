@@ -16,8 +16,9 @@ import 'history_screen.dart';
 import 'metric_explainer.dart';
 
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
-/// bar, the in-game dialogs (cube/resign responses, game-end, match-end), the
-/// error banner, and the hot-seat pass-device overlay.
+/// bar (plus, in tabletop hot-seat, a second one rotated 180° at the top edge —
+/// see [tabletop]), the in-game dialogs (cube/resign responses, game-end,
+/// match-end), the error banner, and the hot-seat pass-device overlay.
 ///
 /// It RECEIVES a ready [MatchController] (a local [GameController] or an online
 /// controller, constructed by the caller), starts its match loop in
@@ -50,11 +51,17 @@ import 'metric_explainer.dart';
 /// [BoardOrientationMode] chooses which side sits at the bottom of the board.
 /// [BoardOrientationMode.fixedWhite] / [BoardOrientationMode.fixedBlack] pin a
 /// side (vs-AI: the human's side stays at the bottom for the whole match).
-/// [BoardOrientationMode.followActive] (hot-seat "rotate for Black") flips the
-/// board so the active player is always at the bottom. With the pass-device
-/// overlay on ([showPassDevice]) the flip happens BEHIND it, so the rotation is
-/// never seen mid-turn; with the overlay off (the default) the flip happens in
-/// the open at the hand-over, and IS the hand-over cue.
+/// [BoardOrientationMode.followActive] (hot-seat "Rotate board between turns",
+/// a setting that is OFF by default) flips the board so the active player is
+/// always at the bottom. With the pass-device overlay on ([showPassDevice]) the
+/// flip happens BEHIND it, so the rotation is never seen mid-turn; with the
+/// overlay off the flip happens in the open at the hand-over, and IS the
+/// hand-over cue.
+///
+/// The hot-seat DEFAULT is neither of those hand-overs: it is the TABLETOP
+/// layout ([tabletop]) — a fixed White-at-bottom board with a second, 180°
+/// rotated action bar at the top edge for the player sitting opposite. Nothing
+/// rotates between turns; only which of the two bars is live changes.
 ///
 /// ## The dice presentation (this screen owns it)
 ///
@@ -106,6 +113,7 @@ class GameScreen extends StatefulWidget {
     this.opponentLabel = 'AI',
     this.opponentDetail,
     this.showPassDevice = false,
+    this.tabletop = false,
   });
 
   final MatchController controller;
@@ -178,6 +186,28 @@ class GameScreen extends StatefulWidget {
   /// outside hot-seat, where there is nobody to pass to.
   final bool showPassDevice;
 
+  /// Hot-seat TABLETOP layout: the two players sit at opposite edges of a device
+  /// lying flat between them, so each gets an action bar at their OWN edge — the
+  /// usual bottom bar for the player the board faces, plus a second bar pinned
+  /// directly under the header and rotated 180° for the player opposite. See
+  /// [_topActionBar].
+  ///
+  /// DEFAULT FALSE — production turns it on for every hot-seat match whose
+  /// "Rotate board between turns" setting is off (which is itself the default):
+  /// "when playing person vs person, the default should be not flipping the
+  /// board. People will share the device at each side, place action buttons for
+  /// each player, and keep the board fixed". Turning the rotation setting ON
+  /// turns this OFF — the flip paradigm keeps the single bottom bar, because the
+  /// board (and with it the acting player) always faces the bottom edge, so a
+  /// second bar would serve nobody.
+  ///
+  /// Ignored outside hot-seat and ignored under
+  /// [BoardOrientationMode.followActive] (see [_tabletopBars]): a mode with one
+  /// local human has nobody at the top edge. It is FIXED for the life of the
+  /// screen, which is what keeps the fixed-height budget constant per screen —
+  /// see the two budgets documented on [_scoreSheetHeight].
+  final bool tabletop;
+
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
   /// surfaces a hint button (top-5 plays), post-move assessments for EVERY move
   /// — both sides, human or not (a mark dot + equity loss in the score sheet's
@@ -226,6 +256,20 @@ class _GameScreenState extends State<GameScreen> {
 
   bool get _hotSeat =>
       _c.isLocalHuman(Player.white) && _c.isLocalHuman(Player.black);
+
+  /// Whether the screen runs PER-EDGE action bars (the tabletop hot-seat
+  /// layout): the requested [GameScreen.tabletop], narrowed to the only
+  /// situation it can mean anything — a hot-seat match on a board that does not
+  /// rotate. Under [BoardOrientationMode.followActive] the acting player is
+  /// always at the bottom already, so the top bar would serve nobody and the
+  /// single bottom bar is kept.
+  ///
+  /// Constant for the life of the screen (every input is), which is what lets
+  /// the fixed-height budget stay per-screen constant — see [_scoreSheetHeight].
+  bool get _tabletopBars =>
+      widget.tabletop &&
+      _hotSeat &&
+      widget.orientation != BoardOrientationMode.followActive;
 
   TutorService? get _tutor => widget.tutor;
 
@@ -952,10 +996,15 @@ class _GameScreenState extends State<GameScreen> {
   /// the match (`_lastActor` null).
   ///
   /// With the setting OFF (the default), the hand-over still happens; it simply
-  /// is not gated. The board FLIPS to the new actor and play continues, which is
-  /// the whole cue the reported feedback asked for ("when playing with two
-  /// persons, do not show the pass the device screen"). The orientation update
-  /// therefore lives on both branches; only [_passDevicePending] is conditional.
+  /// is not gated ("when playing with two persons, do not show the pass the
+  /// device screen"). What signals it then depends on the layout: under
+  /// [BoardOrientationMode.followActive] the board FLIPS to the new actor and
+  /// that rotation is the cue, while in the tabletop layout ([_tabletopBars])
+  /// nothing moves at all — the cue is the other edge's action bar lighting up,
+  /// which is the point of sitting on opposite sides. The orientation update
+  /// therefore lives on both branches (it is a no-op for the fixed modes, which
+  /// ignore [_displayedWhiteAtBottom]); only [_passDevicePending] is
+  /// conditional.
   void _updatePassDevice() {
     if (!_hotSeat || !_humanDecisionActive) return;
     final actor = _c.state.turn;
@@ -1035,6 +1084,13 @@ class _GameScreenState extends State<GameScreen> {
                   opponentDetail: widget.opponentDetail,
                   onSurrender: _hasLocalHuman ? _openSurrender : null,
                 ),
+                // TABLETOP hot-seat only: the second player's action bar, at
+                // THEIR edge (directly under the header) and upside-down so it
+                // reads right-way-up from across the device. Present for the
+                // whole match — reserved height, live only on its owner's turn.
+                if (_tabletopBars)
+                  _topActionBar(
+                      moveSide, whiteAtBottom ? Player.black : Player.white),
                 Expanded(
                   // The board's slot. An error banner FLOATS at its top edge
                   // (just under the HUD, where it used to sit) instead of being
@@ -1118,7 +1174,16 @@ class _GameScreenState extends State<GameScreen> {
                   ),
                 ),
                 _scoreSheet(),
-                _bottomRegion(moveSide),
+                // In the tabletop layout the bottom bar belongs to ONE player
+                // (the side the board faces) and goes inert on the other's turn;
+                // everywhere else it is the screen's only bar and serves whoever
+                // is deciding.
+                _bottomRegion(
+                  moveSide,
+                  _tabletopBars
+                      ? (whiteAtBottom ? Player.white : Player.black)
+                      : null,
+                ),
               ],
             ),
             ..._buildModals(cubeSide, resignSide),
@@ -1450,13 +1515,13 @@ class _GameScreenState extends State<GameScreen> {
   /// The bottom region: the fixed-height contextual action bar and, when the
   /// tutor is on, the fixed-height cube-advice slot beneath it (empty until the
   /// pre-roll gate resolves its advice).
-  Widget _bottomRegion(Player? moveSide) {
+  Widget _bottomRegion(Player? moveSide, Player? owner) {
     final showCube =
         _tutor != null && _cubeAdvice != null && _c.awaitingHumanTurn;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _actionBar(moveSide),
+        _actionBar(moveSide, owner: owner),
         // With no tutor there is never advice, so no slot is reserved at all —
         // the tutor is fixed for the life of the screen, so this is still a
         // constant height per screen.
@@ -1470,7 +1535,31 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  /// The contextual bottom action bar. Its height is ALWAYS 64px (a fixed
+  /// The TOP player's action bar (tabletop hot-seat only): the same contextual
+  /// bar as [_actionBar], owned by [owner] — the side the board does NOT face —
+  /// and turned upside-down with a [RotatedBox] so its labels and its button
+  /// order read correctly to somebody sitting at the far edge of a device lying
+  /// flat on the table.
+  ///
+  /// [RotatedBox] rotates at LAYOUT time (unlike [Transform.rotate]), so the
+  /// child is laid out in the parent's box and hit-testing follows the rotation:
+  /// the top player taps what they see. A half turn also leaves the box's
+  /// dimensions unchanged, so this contributes exactly the bar's own 64px to the
+  /// budget.
+  ///
+  /// It is present for the WHOLE match, not just its owner's turn: appearing and
+  /// disappearing would resize the board's slot on every hand-over (F6). On the
+  /// other player's turn it simply goes inert — see [_actionBar]'s `owner`.
+  Widget _topActionBar(Player? moveSide, Player owner) => RotatedBox(
+        quarterTurns: 2,
+        child: _actionBar(
+          moveSide,
+          owner: owner,
+          key: const ValueKey('topActionBar'),
+        ),
+      );
+
+  /// The contextual action bar. Its height is ALWAYS 64px (a fixed
   /// [SizedBox]) so nothing below the board ever reflows as the phase changes —
   /// only the bar's *contents* swap:
   ///
@@ -1493,17 +1582,30 @@ class _GameScreenState extends State<GameScreen> {
   /// [VisualDensity.compact] on the three, plus a tighter Undo/Confirm gap, buys
   /// that back with ~30pt to spare; it is the same treatment the header's Double
   /// button already uses.
-  Widget _actionBar(Player? moveSide) {
+  /// [owner] — tabletop hot-seat only — is the player this bar belongs to. The
+  /// bar then LIVES only while that player is the one deciding ([_actingSide]);
+  /// on the other player's turn it keeps its shape and its 64px, but every
+  /// control is disabled and the whole row is dimmed, so the pair reads as "your
+  /// buttons / their buttons" rather than two live copies of the same controls.
+  /// `null` (every non-tabletop screen) means the bar serves whoever is
+  /// deciding, exactly as it always did.
+  Widget _actionBar(
+    Player? moveSide, {
+    Player? owner,
+    Key key = const ValueKey('actionBar'),
+  }) {
     final scheme = Theme.of(context).colorScheme;
+    // Whether THIS bar's owner is the one who may act right now.
+    final live = owner == null || _actingSide(moveSide) == owner;
     final showHint = _tutor != null && moveSide != null;
     final Widget content;
     if (moveSide != null && _entryControl.isDance) {
       content = Row(
         children: [
-          if (showHint) _hintButton(),
+          if (showHint) _hintButton(live),
           const Spacer(),
           FilledButton(
-            onPressed: _entryControl.pass,
+            onPressed: live ? _entryControl.pass : null,
             style: _compactButton,
             child: const Text('No moves — pass'),
           ),
@@ -1512,16 +1614,18 @@ class _GameScreenState extends State<GameScreen> {
     } else if (moveSide != null) {
       content = Row(
         children: [
-          if (showHint) _hintButton(),
+          if (showHint) _hintButton(live),
           const Spacer(),
           TextButton(
-            onPressed: _entryControl.canUndo ? _entryControl.undo : null,
+            onPressed:
+                live && _entryControl.canUndo ? _entryControl.undo : null,
             style: _compactButton,
             child: const Text('Undo'),
           ),
           const SizedBox(width: 8),
           FilledButton(
-            onPressed: _entryControl.canConfirm ? _entryControl.confirm : null,
+            onPressed:
+                live && _entryControl.canConfirm ? _entryControl.confirm : null,
             style: _compactButton,
             child: const Text('Confirm'),
           ),
@@ -1532,7 +1636,7 @@ class _GameScreenState extends State<GameScreen> {
         children: [
           const Spacer(),
           FilledButton(
-            onPressed: _rollDice,
+            onPressed: live ? _rollDice : null,
             child: const Text('Roll'),
           ),
         ],
@@ -1546,14 +1650,22 @@ class _GameScreenState extends State<GameScreen> {
       );
     }
     return SizedBox(
-      key: const ValueKey('actionBar'),
+      key: key,
       height: 64,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: content,
+        // Disabled Material buttons are already muted; the extra wash makes the
+        // OTHER player's bar recede as a whole so a glance finds the live one.
+        child: Opacity(opacity: live ? 1 : 0.45, child: content),
       ),
     );
   }
+
+  /// The side whose decision is open right now — the mover while a move is being
+  /// entered, else the player sitting at the pre-roll gate, else nobody. The
+  /// single answer to "whose bar is live" in the tabletop layout.
+  Player? _actingSide(Player? moveSide) =>
+      moveSide ?? (_c.awaitingHumanTurn ? _c.state.turn : null);
 
   /// Whether the local player is at the pre-roll gate, i.e. whether a Roll is
   /// the action on offer. The single source of truth for BOTH routes to it: the
@@ -1588,8 +1700,8 @@ class _GameScreenState extends State<GameScreen> {
         EdgeInsets.symmetric(horizontal: 12)),
   );
 
-  Widget _hintButton() => OutlinedButton.icon(
-        onPressed: _openHint,
+  Widget _hintButton([bool enabled = true]) => OutlinedButton.icon(
+        onPressed: enabled ? _openHint : null,
         icon: const Icon(Icons.lightbulb_outline, size: 18),
         label: const Text('Hint'),
         style: _compactButton,
@@ -1622,6 +1734,18 @@ class _GameScreenState extends State<GameScreen> {
   ///     score sheet (this)              112
   ///     action bar                       64
   ///     tutor advice slot (tutor only)   28
+  ///
+  /// There are exactly TWO budgets, chosen once per screen and never changed
+  /// afterwards, because every input to [_tabletopBars] (the mode, the
+  /// orientation, the tabletop flag) is fixed for the life of the screen:
+  ///
+  ///     every mode but tabletop hot-seat   240 + 28 with a tutor
+  ///     tabletop hot-seat                  304 + 28 with a tutor
+  ///
+  /// The extra 64 is the top player's action bar ([_topActionBar]), which is
+  /// mounted for the whole match rather than only on its owner's turn — that is
+  /// what keeps the per-screen budget CONSTANT, and it is why the inactive bar
+  /// is dimmed-and-disabled rather than removed.
   ///
   /// Round 6 rebalanced it: the header grew from one row to two (+8) while the
   /// standalone 20px pip line was deleted outright, so the board's slot GAINED

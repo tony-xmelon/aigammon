@@ -71,6 +71,18 @@ void main() {
       expect(AppSettings.defaults.timings.diceBeatEnabled, isTrue);
       expect(AppSettings.defaults.showPassDevice, isFalse,
           reason: 'the hot-seat cover screen is opt-IN');
+      expect(AppSettings.defaults.rotateBoardHotSeat, isFalse,
+          reason: 'so is flipping the board between hot-seat turns — the '
+              'default is the fixed tabletop board');
+      // The two hot-seat settings are independent: neither implies the other.
+      expect(
+          AppSettings.defaults
+              .copyWith(rotateBoardHotSeat: true)
+              .showPassDevice,
+          isFalse);
+      expect(
+          AppSettings.defaults.copyWith(showPassDevice: true).rotateBoardHotSeat,
+          isFalse);
 
       // OFF: same checker pacing, no beat.
       final off =

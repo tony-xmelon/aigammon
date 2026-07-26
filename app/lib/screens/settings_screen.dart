@@ -194,10 +194,26 @@ class SettingsScreen extends ConsumerWidget {
                                 save(settings.copyWith(enableCombinedTaps: v)),
                           ),
                           // Hot-seat only, and OFF by default: "when playing
-                          // with two persons, do not show the pass the device
-                          // screen, or at least make it a setting, disabled by
-                          // default". Off, the board's flip to the new actor is
-                          // the hand-over cue and nothing has to be tapped.
+                          // person vs person, the default should be not
+                          // flipping the board. People will share the device at
+                          // each side ... and keep the board fixed". Off is the
+                          // tabletop layout (fixed board, an action bar at each
+                          // player's edge); on restores the pre-v7 flip, where
+                          // the board turns to face whoever is on turn and the
+                          // single bottom bar follows them.
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Rotate board between turns'),
+                            subtitle: const Text(
+                                'Hot-seat: flip the view for the active player'),
+                            value: settings.rotateBoardHotSeat,
+                            onChanged: (v) =>
+                                save(settings.copyWith(rotateBoardHotSeat: v)),
+                          ),
+                          // Independent of the rotation above — it covers the
+                          // hand-over in either layout: "do not show the pass
+                          // the device screen, or at least make it a setting,
+                          // disabled by default".
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('Pass-device screen'),

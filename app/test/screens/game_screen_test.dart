@@ -328,6 +328,26 @@ Widget _harness(GameController c, {bool showPassDevice = false}) => MaterialApp(
       ),
     );
 
+/// The TABLETOP hot-seat harness: a fixed White-at-bottom board with an action
+/// bar at each player's edge — how production wires two players on one device
+/// by default (the "Rotate board between turns" setting off).
+Widget _harnessTabletop(
+  GameController c, {
+  bool showPassDevice = false,
+  BoardOrientationMode orientation = BoardOrientationMode.fixedWhite,
+  TutorService? tutor,
+}) =>
+    MaterialApp(
+      home: GameScreen(
+        key: ValueKey(c),
+        controller: c,
+        orientation: orientation,
+        tabletop: true,
+        tutor: tutor,
+        showPassDevice: showPassDevice,
+      ),
+    );
+
 Widget _harnessOriented(
   GameController c,
   BoardOrientationMode mode, {
@@ -1699,6 +1719,355 @@ void main() {
       expect(find.text('Pass the device'), findsNothing);
       expect(whiteAtBottom(t), isFalse,
           reason: 'orientation is stable across intra-turn state changes');
+
+      c.disposeController();
+    });
+  });
+
+  // The reported tabletop feedback: "when playing person vs person, the default
+  // should be not flipping the board. People will share the device at each side,
+  // place action buttons for each player, and keep the board fixed."
+  group('tabletop hot-seat (per-edge action bars)', () {
+    const phone = Size(390, 844);
+
+    // White wins the opening (6 > 1) and moves; Black's pre-roll gate then opens
+    // with the board still White-at-bottom.
+    GameController hotSeat(LocalHumanAgent white, LocalHumanAgent black) =>
+        GameController(
+          white: white,
+          black: black,
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    GameController vsAi(LocalHumanAgent human) => GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    Finder topBar() => find.byKey(const ValueKey('topActionBar'));
+    Finder bottomBar() => find.byKey(const ValueKey('actionBar'));
+    Finder barButton(Finder bar, Type type, String label) =>
+        find.descendant(of: bar, matching: find.widgetWithText(type, label));
+
+    bool whiteAtBottom(WidgetTester t) =>
+        boardPainterOf(t).geometry.whiteAtBottom;
+
+    /// Drives the board greedily and commits through [bar]'s Confirm.
+    ///
+    /// The shared `commitFirstMove` cannot be used on a tabletop screen: the
+    /// label is on screen TWICE (one live bar, one reserved), so a bare
+    /// `find.widgetWithText` would be ambiguous — which is precisely the layout
+    /// under test.
+    Future<void> commitVia(WidgetTester t, Finder bar) async {
+      final confirm = barButton(bar, FilledButton, 'Confirm');
+      for (var i = 0; i < 6; i++) {
+        if (confirm.evaluate().isNotEmpty && isButtonEnabled(t, confirm)) break;
+        await tapBoardPoint(t, boardPainterOf(t).highlightedSources.first);
+        await tapBoardPoint(t, boardPainterOf(t).highlightedDestinations.first);
+      }
+      await t.tap(confirm);
+      await t.pump();
+    }
+
+    testWidgets('the board NEVER flips: White stays at the bottom across every '
+        'hand-over', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(_harnessTabletop(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(whiteAtBottom(t), isTrue);
+
+      // White → Black.
+      await commitVia(t, bottomBar());
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(whiteAtBottom(t), isTrue,
+          reason: 'the two players sit at opposite edges of a FIXED board');
+
+      // Black rolls, plays, and hands back — still no rotation anywhere.
+      await t.tap(barButton(topBar(), FilledButton, 'Roll'));
+      await pumpUntil(t, () => black.pendingMoveRequest.value != null);
+      expect(whiteAtBottom(t), isTrue);
+      await commitVia(t, topBar());
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white);
+      expect(whiteAtBottom(t), isTrue);
+
+      c.disposeController();
+    });
+
+    testWidgets('the top bar is mounted under the header, rotated a half turn, '
+        'and 64px tall', (t) async {
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final c = hotSeat(white, LocalHumanAgent());
+      await t.pumpWidget(_harnessTabletop(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+
+      expect(topBar(), findsOneWidget);
+      // moreOrLessEquals throughout: reading a rect back THROUGH the half-turn
+      // transform costs a few ULPs of floating point.
+      expect(t.getSize(topBar()).height, moreOrLessEquals(64),
+          reason: 'the same reserved height as the bottom bar');
+      expect(t.getSize(bottomBar()).height, 64);
+
+      // Upside-down, so it reads right-way-up from the far edge of the device.
+      final rotated = t.widget<RotatedBox>(
+          find.ancestor(of: topBar(), matching: find.byType(RotatedBox)));
+      expect(rotated.quarterTurns, 2);
+
+      // It sits between the header and the board — at the top player's edge.
+      final hud = t.getRect(find.byKey(const ValueKey('hud')));
+      expect(t.getRect(topBar()).top, moreOrLessEquals(hud.bottom));
+      expect(boardRect(t).top, moreOrLessEquals(t.getRect(topBar()).bottom));
+
+      c.disposeController();
+    });
+
+    testWidgets('each bar is LIVE only on its own turn; the other keeps its '
+        'controls, disabled', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(_harnessTabletop(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+
+      // White is entering: the bottom bar owns the entry controls, the top bar
+      // mirrors them inert.
+      expect(barButton(bottomBar(), TextButton, 'Undo'), findsOneWidget);
+      expect(barButton(topBar(), TextButton, 'Undo'), findsOneWidget,
+          reason: 'reserved, not removed — the board must not reflow (F6)');
+      await tapBoardPoint(t, boardPainterOf(t).highlightedSources.first);
+      await tapBoardPoint(t, boardPainterOf(t).highlightedDestinations.first);
+      await tapBoardPoint(t, boardPainterOf(t).highlightedSources.first);
+      await tapBoardPoint(t, boardPainterOf(t).highlightedDestinations.first);
+      expect(isButtonEnabled(t, barButton(bottomBar(), FilledButton, 'Confirm')),
+          isTrue,
+          reason: "White's own bar confirms White's move");
+      expect(isButtonEnabled(t, barButton(topBar(), FilledButton, 'Confirm')),
+          isFalse,
+          reason: 'the other player cannot confirm this move');
+
+      await t.tap(barButton(bottomBar(), FilledButton, 'Confirm'));
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+
+      // Black's pre-roll gate: the two bars swap roles, nothing moves.
+      expect(isButtonEnabled(t, barButton(topBar(), FilledButton, 'Roll')),
+          isTrue);
+      expect(isButtonEnabled(t, barButton(bottomBar(), FilledButton, 'Roll')),
+          isFalse,
+          reason: "White cannot roll Black's dice from the bottom edge");
+
+      c.disposeController();
+    });
+
+    testWidgets('Black enters and confirms a move on the fixed board through '
+        'the TOP bar', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(_harnessTabletop(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      await commitVia(t, bottomBar());
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+
+      // Black rolls from their own bar…
+      await t.tap(barButton(topBar(), FilledButton, 'Roll'));
+      await pumpUntil(t, () => black.pendingMoveRequest.value != null);
+      expect(whiteAtBottom(t), isTrue,
+          reason: "Black is playing on a board that faces the OTHER player");
+
+      // …and plays it with ordinary board taps: sources, destinations and the
+      // Confirm all work with Black moving on a White-at-bottom board.
+      final before = c.game.events.length;
+      await commitVia(t, topBar());
+      await pumpUntil(t, () => c.game.events.length > before);
+      expect(c.game.events.last, isA<MoveEvent>());
+      expect((c.game.events.last as MoveEvent).player, Player.black);
+
+      c.disposeController();
+    });
+
+    testWidgets('the top player rolls by tapping the dice, too', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(_harnessTabletop(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      await commitVia(t, bottomBar());
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+
+      // The dice affordance is POSITIONAL (either pair rolls), so it serves the
+      // top player without any orientation-specific wiring.
+      final g = boardPainterOf(t).geometry;
+      await t.tapAt(boardRect(t).topLeft + g.diceTapRect(Player.black).center);
+      await pumpUntil(t, () => black.pendingMoveRequest.value != null);
+      expect(
+          c.game.events
+              .whereType<RollEvent>()
+              .any((e) => e.player == Player.black),
+          isTrue);
+
+      c.disposeController();
+    });
+
+    testWidgets('the rotation setting ON keeps the OLD paradigm: the board '
+        'flips and there is no top bar', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final c = hotSeat(white, LocalHumanAgent());
+
+      // How production wires "Rotate board between turns" = on.
+      await t.pumpWidget(
+          _harnessOriented(c, BoardOrientationMode.followActive));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(topBar(), findsNothing);
+      expect(whiteAtBottom(t), isTrue);
+
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(whiteAtBottom(t), isFalse, reason: 'the flip is the hand-over');
+      expect(topBar(), findsNothing,
+          reason: 'the flip paradigm keeps the single bottom bar');
+
+      c.disposeController();
+    });
+
+    testWidgets('a rotating board never grows a top bar, even asked for one',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final c = hotSeat(white, LocalHumanAgent());
+      await t.pumpWidget(_harnessTabletop(c,
+          orientation: BoardOrientationMode.followActive));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(topBar(), findsNothing,
+          reason: 'the acting player is already at the bottom edge');
+
+      c.disposeController();
+    });
+
+    testWidgets('no top bar outside hot-seat: vs-AI keeps the board directly '
+        'under the header', (t) async {
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = vsAi(human);
+      // Even with the flag set: there is nobody sitting at the top edge.
+      await t.pumpWidget(_harnessTabletop(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(topBar(), findsNothing);
+      expect(boardRect(t).top, t.getRect(find.byKey(const ValueKey('hud'))).bottom,
+          reason: 'the standard budget is unchanged');
+
+      c.disposeController();
+    });
+
+    testWidgets('the two budgets differ by exactly the top bar (64px)',
+        (t) async {
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final w1 = LocalHumanAgent();
+      final standard = hotSeat(w1, LocalHumanAgent());
+      await t.pumpWidget(_harness(standard));
+      await pumpUntil(t, () => w1.pendingMoveRequest.value != null);
+      final standardBoard = boardRect(t).height;
+
+      final w2 = LocalHumanAgent();
+      final tabletop = hotSeat(w2, LocalHumanAgent());
+      await t.pumpWidget(_harnessTabletop(tabletop));
+      await pumpUntil(t, () => w2.pendingMoveRequest.value != null);
+      expect(boardRect(t).height, standardBoard - 64,
+          reason: 'the only difference between the two budgets');
+
+      standard.disposeController();
+      tabletop.disposeController();
+    });
+
+    testWidgets('F6: the board rect is byte-identical across a hand-over, in '
+        'BOTH layouts', (t) async {
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Tabletop: both bars are mounted throughout, so nothing resizes when the
+      // live one changes edge.
+      final white = LocalHumanAgent();
+      final c = hotSeat(white, LocalHumanAgent());
+      await t.pumpWidget(_harnessTabletop(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      final entering = boardRect(t);
+      await commitVia(t, bottomBar());
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(boardRect(t), entering,
+          reason: 'the reserved top bar means the hand-over costs no layout');
+      c.disposeController();
+
+      // The rotating layout holds equally still (it only re-paints).
+      final white2 = LocalHumanAgent();
+      final c2 = hotSeat(white2, LocalHumanAgent());
+      await t.pumpWidget(
+          _harnessOriented(c2, BoardOrientationMode.followActive));
+      await pumpUntil(t, () => white2.pendingMoveRequest.value != null);
+      final before = boardRect(t);
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c2.awaitingHumanTurn && c2.state.turn == Player.black);
+      expect(boardRect(t), before);
+      c2.disposeController();
+    });
+
+    testWidgets('the tutor Hint sits in BOTH bars, live only on its own turn',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final c = hotSeat(white, LocalHumanAgent());
+      await t.pumpWidget(_harnessTabletop(c, tutor: TutorService(TutorEngine())));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+
+      expect(barButton(bottomBar(), OutlinedButton, 'Hint'), findsOneWidget);
+      expect(barButton(topBar(), OutlinedButton, 'Hint'), findsOneWidget);
+      expect(
+          isButtonEnabled(t, barButton(bottomBar(), OutlinedButton, 'Hint')),
+          isTrue);
+      expect(isButtonEnabled(t, barButton(topBar(), OutlinedButton, 'Hint')),
+          isFalse,
+          reason: "the opponent cannot open hints for White's move");
 
       c.disposeController();
     });
