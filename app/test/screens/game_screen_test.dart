@@ -737,27 +737,131 @@ void main() {
     c.disposeController();
   });
 
-  testWidgets('Resign lives behind the header overflow (⋮) menu', (t) async {
-    await t.binding.setSurfaceSize(_surface);
-    addTearDown(() => t.binding.setSurfaceSize(null));
-    final human = LocalHumanAgent();
-    final c = GameController(
-      white: human,
-      black: FakeAgent(),
-      matchLength: 5,
-      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
-    );
-    await t.pumpWidget(_harness(c));
-    await pumpUntil(t, () => c.awaitingHumanTurn);
+  group('Surrender', () {
+    GameController human1(LocalHumanAgent human) => GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
 
-    // Resign entries are hidden until the overflow menu is opened.
-    expect(find.text('Resign — gammon'), findsNothing);
-    await t.tap(find.byIcon(Icons.more_vert));
-    await t.pumpAndSettle();
-    expect(find.text('Resign — single'), findsOneWidget);
-    expect(find.text('Resign — gammon'), findsOneWidget);
-    expect(find.text('Resign — backgammon'), findsOneWidget);
-    c.disposeController();
+    testWidgets('the ⋮ entry opens a sheet naming all three values', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = human1(LocalHumanAgent());
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      expect(find.text('Surrender…'), findsNothing, reason: 'menu closed');
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      expect(find.text('Surrender…'), findsOneWidget);
+
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      expect(find.text('Surrender'), findsOneWidget, reason: 'the sheet title');
+      expect(find.text('Concedes the current game.'), findsOneWidget);
+      expect(find.text('Single (1)'), findsOneWidget);
+      expect(find.text('Gammon (2)'), findsOneWidget);
+      expect(find.text('Backgammon (3)'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('the ⋮ is tappable OFF the gate too, and the sheet explains '
+        'when the values will work', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final human = LocalHumanAgent();
+      final c = human1(human);
+      await t.pumpWidget(_harness(c));
+      // Mid-MOVE, not at the pre-roll gate: the old UI greyed the ⋮ out here.
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      expect(c.awaitingHumanTurn, isFalse);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+
+      expect(find.text('Available at the start of your turn'), findsOneWidget);
+      for (final label in ['Single (1)', 'Gammon (2)', 'Backgammon (3)']) {
+        expect(
+            t
+                .widget<TextButton>(find.widgetWithText(TextButton, label))
+                .onPressed,
+            isNull,
+            reason: '$label is disabled off-gate');
+      }
+      // Cancel is always live, so the sheet is never a trap.
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle();
+      expect(find.text('Concedes the current game.'), findsNothing);
+      expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty);
+
+      c.disposeController();
+    });
+
+    testWidgets('choosing a value at the gate offers that resignation',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = human1(LocalHumanAgent());
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Gammon (2)'));
+      await pumpUntil(t, () => c.game.events.whereType<ResignOfferEvent>()
+          .isNotEmpty, maxFrames: 1200);
+
+      expect(c.game.events.whereType<ResignOfferEvent>().single.value,
+          ResignValue.gammon);
+      expect(find.text('Concedes the current game.'), findsNothing,
+          reason: 'the sheet closes on the choice');
+      expect(c.error, isNull);
+
+      c.disposeController();
+    });
+
+    testWidgets('the sheet yields to a modal the match is waiting on',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final human = LocalHumanAgent();
+      // Black doubles at its first opportunity, so a cube offer lands while the
+      // Surrender sheet sits open.
+      final c = GameController(
+        white: human,
+        black: FakeAgent(doubles: true),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      expect(find.text('Concedes the current game.'), findsOneWidget);
+
+      // Play on: Black's double arrives and must own the screen.
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(t, () => human.pendingCubeRequest.value != null,
+          maxFrames: 1200);
+      expect(find.text('Double offered'), findsOneWidget);
+      expect(find.text('Concedes the current game.'), findsNothing,
+          reason: 'the surrender sheet closed rather than hiding underneath');
+
+      c.disposeController();
+    });
   });
 
   testWidgets('bottom action bar keeps a fixed 64px height across phases',
@@ -3042,11 +3146,11 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      // The overflow menu holds resignations ONLY.
+      // The overflow menu holds Surrender ONLY.
       await t.tap(find.byIcon(Icons.more_vert));
       await t.pumpAndSettle();
       expect(find.text('Game record'), findsNothing);
-      expect(find.text('Resign — single'), findsOneWidget);
+      expect(find.text('Surrender…'), findsOneWidget);
       await t.tapAt(const Offset(450, 700)); // dismiss the menu
       await t.pumpAndSettle();
 
@@ -3469,7 +3573,9 @@ void main() {
           maxFrames: 1200);
       await t.tap(find.byIcon(Icons.more_vert));
       await t.pumpAndSettle();
-      await t.tap(find.text('Resign — single'));
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Single (1)'));
       await pumpUntil(t, () => c.awaitingNextGame, maxFrames: 1200);
 
       final g1 = c.game;
@@ -3866,31 +3972,37 @@ void main() {
           reason: 'the second press offered nothing');
     });
 
-    testWidgets('a resign chosen from a menu that outlived the gate is dropped',
-        (t) async {
+    testWidgets('a surrender chosen from a sheet that outlived the gate is '
+        'dropped', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
       final c = atGate();
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      // A popup menu cannot be selected twice — the first tap pops the route —
-      // so the reachable shape of this race is a menu that OUTLIVES the gate it
-      // was built for: it opens at the gate, something else closes the gate
-      // while it sits there, and the stale entry is then chosen.
+      // The sheet is opened AT the gate, so its value buttons are live; the
+      // gate is then closed underneath it before one is pressed. The button's
+      // enabled-ness is a frame old at that point, so the handler re-checks.
       await t.tap(find.byTooltip('More actions'));
       await t.pumpAndSettle();
-      expect(find.text('Resign — single'), findsOneWidget);
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      expect(
+          t
+              .widget<TextButton>(
+                  find.widgetWithText(TextButton, 'Single (1)'))
+              .onPressed,
+          isNotNull);
 
-      c.rollDice(); // the gate closes underneath the open menu
+      c.rollDice(); // the gate closes underneath the open sheet
       expect(c.awaitingHumanTurn, isFalse);
 
-      await t.tap(find.text('Resign — single'));
+      await t.tap(find.text('Single (1)'));
       await t.pumpAndSettle();
 
       expect(c.error, isNull);
       expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty,
-          reason: 'a resign past the gate must not be offered');
+          reason: 'a surrender past the gate must not be offered');
     });
   });
 

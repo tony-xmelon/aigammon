@@ -445,6 +445,7 @@ class _GameScreenState extends State<GameScreen> {
   void _onChange() {
     if (!mounted) return;
     _updatePassDevice();
+    _closeSurrenderIfOutranked();
     _syncRollBeat();
     _syncDancePass();
     _syncTutor();
@@ -1021,6 +1022,9 @@ class _GameScreenState extends State<GameScreen> {
                   showScoring: widget.showScoring,
                   opponentLabel: widget.opponentLabel,
                   opponentDetail: widget.opponentDetail,
+                  onSurrender: _hasLocalHuman
+                      ? () => setState(() => _surrenderOpen = true)
+                      : null,
                 ),
                 Expanded(
                   // The board's slot. An error banner FLOATS at its top edge
@@ -1117,14 +1121,100 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   /// The single active modal layer, chosen by priority: match end, then game
-  /// end, then the pass-device gate, then the cube/resign response dialogs.
+  /// end, then the pass-device gate, then the cube/resign response dialogs, and
+  /// last the user's own Surrender sheet — which [_onChange] closes outright the
+  /// moment anything above it wants the screen, so it can never sit on top of a
+  /// decision the match is waiting for.
   List<Widget> _buildModals(Player? cubeSide, Player? resignSide) {
     if (_c.matchOver) return [_matchEndDialog()];
     if (_c.awaitingNextGame) return [_gameEndDialog()];
     if (_passDevicePending) return [_passDeviceOverlay()];
     if (cubeSide != null) return [_cubeDialog(cubeSide)];
     if (resignSide != null) return [_resignDialog(resignSide)];
+    if (_surrenderOpen) return [_surrenderDialog()];
     return const [];
+  }
+
+  // --- Surrender -------------------------------------------------------------
+
+  /// Whether the user's Surrender sheet is open.
+  bool _surrenderOpen = false;
+
+  /// Whether any side of this match is driven by a local human — i.e. whether
+  /// there is anybody here who COULD surrender. False only for an AI-vs-AI
+  /// harness, where the ⋮ has nothing to offer.
+  bool get _hasLocalHuman =>
+      _c.isLocalHuman(Player.white) || _c.isLocalHuman(Player.black);
+
+  /// Closes the Surrender sheet if a modal that outranks it has appeared (an
+  /// incoming double, a resignation to answer, the end of the game or match, a
+  /// hot-seat hand-over). Its own layer is last in [_buildModals], so without
+  /// this it would simply be hidden and then pop back afterwards.
+  void _closeSurrenderIfOutranked() {
+    if (!_surrenderOpen) return;
+    final outranked = _c.matchOver ||
+        _c.awaitingNextGame ||
+        _passDevicePending ||
+        _humanSideWith((s) => _c.pendingCubeOf(s).value != null) != null ||
+        _humanSideWith((s) => _c.pendingResignOf(s).value != null) != null;
+    if (outranked) _surrenderOpen = false;
+  }
+
+  /// The Surrender sheet: the three concession values with what each is worth,
+  /// and one line saying what surrendering does.
+  ///
+  /// ## Why the entry point is always live but the ACTIONS are gated
+  ///
+  /// Resigning is legal only at your own pre-roll gate — both [MatchController]
+  /// implementations of [MatchController.offerResign] throw a [StateError]
+  /// otherwise (the local one has no open human-turn gate to complete; the
+  /// online one has no legal action to send). The old UI expressed that by
+  /// disabling the whole ⋮ off-gate, which made the only way to concede a game
+  /// invisible at exactly the moments a losing player reaches for it — reported
+  /// as "add surrender option", of a feature that had shipped long before.
+  ///
+  /// So the menu and this sheet are ALWAYS reachable, and the gate is expressed
+  /// where it can be explained: the three value buttons are disabled off-gate,
+  /// under a line saying when they will work. The alternative — queueing the
+  /// intent and firing it at the next legal moment — was rejected as the less
+  /// robust of the two: a queued resignation has to be invalidated against every
+  /// transition that can happen while it waits (the game ending, the match
+  /// ending, a new game starting, the opponent doubling), and getting any of
+  /// them wrong concedes a game the player did not mean to concede. Nothing is
+  /// lost by waiting, because this sheet is declarative: it rebuilds with the
+  /// controller, so the buttons LIGHT UP the instant the turn comes round with
+  /// the sheet still open.
+  Widget _surrenderDialog() {
+    final atGate = _c.awaitingHumanTurn;
+    return _ModalCard(
+      title: 'Surrender',
+      message: 'Concedes the current game.',
+      footnote: atGate ? null : 'Available at the start of your turn',
+      actions: [
+        _CardAction(
+          label: 'Cancel',
+          onPressed: () => setState(() => _surrenderOpen = false),
+        ),
+        for (final (value, label) in const [
+          (ResignValue.single, 'Single (1)'),
+          (ResignValue.gammon, 'Gammon (2)'),
+          (ResignValue.backgammon, 'Backgammon (3)'),
+        ])
+          _CardAction(
+            label: label,
+            onPressed: atGate ? () => _surrender(value) : null,
+          ),
+      ],
+    );
+  }
+
+  /// Offers the resignation and closes the sheet. Re-checks the gate AT
+  /// INVOCATION for the same reason the header's Double does: the sheet was
+  /// built a frame ago and the match moves on underneath it.
+  void _surrender(ResignValue value) {
+    setState(() => _surrenderOpen = false);
+    if (!_c.awaitingHumanTurn) return;
+    _c.offerResign(value);
   }
 
   Widget _passDeviceOverlay() {
@@ -2046,16 +2136,15 @@ String _compactScore(MatchController c, String opponentLabel) {
   return 'You $mine–$theirs $opponentLabel · to ${m.matchLength}';
 }
 
-/// Entries in the header overflow (⋮) menu — resignations only, and only at the
-/// human's own pre-roll gate.
+/// Entries in the header overflow (⋮) menu — one, always available wherever
+/// there is a local human at all.
 ///
-/// The old "Game record" entry is GONE: the record is now the always-visible
-/// score sheet under the board, so there is nothing here to open.
-enum _MenuAction {
-  resignSingle,
-  resignGammon,
-  resignBackgammon,
-}
+/// The three per-value Resign entries it used to hold have collapsed into a
+/// single "Surrender…" that opens a sheet where the values are named with what
+/// they are worth; see [_GameScreenState._surrenderDialog] for why the entry no
+/// longer disappears off-gate. The old "Game record" entry is GONE too: the
+/// record is now the always-visible score sheet under the board.
+enum _MenuAction { surrender }
 
 // --- HUD (two rows) ----------------------------------------------------------
 
@@ -2097,6 +2186,7 @@ class _Hud extends StatelessWidget {
     this.showScoring = true,
     this.opponentLabel = 'AI',
     this.opponentDetail,
+    this.onSurrender,
   });
 
   /// Height of row 1 (the match context plus the action controls). Sized for the
@@ -2126,6 +2216,11 @@ class _Hud extends StatelessWidget {
   /// where the caller knows it. Null (hot-seat, online, a bare test harness)
   /// simply drops that segment; the row keeps its height either way.
   final String? opponentDetail;
+
+  /// Opens the Surrender sheet. Null only when NO side is locally human (an
+  /// AI-vs-AI harness), which is the one case where the ⋮ has nothing to offer
+  /// and is therefore disabled.
+  final VoidCallback? onSurrender;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
@@ -2166,19 +2261,6 @@ class _Hud extends StatelessWidget {
   void _offerDouble() {
     if (!controller.awaitingHumanTurn || !_doublingLegal) return;
     controller.offerDouble();
-  }
-
-  /// Offers a resignation of [value], re-checking the gate AT INVOCATION.
-  ///
-  /// The overflow menu makes this race reachable in a second way, without any
-  /// double-tap: the menu is built while the gate is open and then OUTLIVES it —
-  /// an AI reply or a remote opponent's event folds in while it sits open — so
-  /// the entry the user finally picks is addressing a gate that has since
-  /// closed. Dropping it is right either way: resigning is only legal at your
-  /// own pre-roll gate.
-  void _offerResign(ResignValue value) {
-    if (!controller.awaitingHumanTurn) return;
-    controller.offerResign(value);
   }
 
   /// Row 1's text: the match context — "You 1–0 AI · to 3 · Game 2", or just
@@ -2318,37 +2400,28 @@ class _Hud extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                         ),
                       ),
-                    // Resign is the menu's ONLY content now that "Game record"
-                    // is gone (the record is the permanent score sheet under the
-                    // board), and it is legal only at the human's own pre-roll
-                    // gate — so away from the gate the ⋮ is DISABLED rather than
-                    // removed. An itemBuilder that returned nothing would assert
-                    // on open, and dropping the button outright would shuffle
-                    // the header's right-hand group every turn.
+                    // ALWAYS enabled wherever a local human exists. Gating the
+                    // whole ⋮ on the pre-roll gate hid the only way to concede a
+                    // game at precisely the moments a losing player looks for
+                    // it, which read as the feature not existing ("add surrender
+                    // option" — of something that had shipped long before). The
+                    // SHEET now owns the legality question and explains it; see
+                    // [_GameScreenState._surrenderDialog].
                     PopupMenuButton<_MenuAction>(
                       icon: const Icon(Icons.more_vert),
                       tooltip: 'More actions',
-                      enabled: atGate,
+                      enabled: onSurrender != null,
                       onSelected: (action) {
                         switch (action) {
-                          case _MenuAction.resignSingle:
-                            _offerResign(ResignValue.single);
-                          case _MenuAction.resignGammon:
-                            _offerResign(ResignValue.gammon);
-                          case _MenuAction.resignBackgammon:
-                            _offerResign(ResignValue.backgammon);
+                          case _MenuAction.surrender:
+                            onSurrender!();
                         }
                       },
                       itemBuilder: (context) => const [
                         PopupMenuItem(
-                            value: _MenuAction.resignSingle,
-                            child: Text('Resign — single')),
-                        PopupMenuItem(
-                            value: _MenuAction.resignGammon,
-                            child: Text('Resign — gammon')),
-                        PopupMenuItem(
-                            value: _MenuAction.resignBackgammon,
-                            child: Text('Resign — backgammon')),
+                          value: _MenuAction.surrender,
+                          child: Text('Surrender…'),
+                        ),
                       ],
                     ),
                   ],
