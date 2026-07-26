@@ -3029,7 +3029,7 @@ void main() {
     });
   });
 
-  group('rolling twice in one frame', () {
+  group('pre-roll verbs pressed twice in one frame', () {
     /// A match parked at White's (the human's) pre-roll gate.
     GameController atGate() => GameController(
           white: LocalHumanAgent(),
@@ -3080,6 +3080,57 @@ void main() {
 
       expect(c.error, isNull);
       expect(whiteRolls(c), 1);
+    });
+
+    testWidgets('two Double presses in the same frame offer exactly one double',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // Double and Resign share the pre-roll gate with Roll, so they share the
+      // race: the callback the current frame captured runs twice before the
+      // rebuild that would have disabled it.
+      final double = find.widgetWithText(OutlinedButton, 'Double');
+      expect(isButtonEnabled(t, double), isTrue);
+      await t.tap(double);
+      await t.tap(double, warnIfMissed: false);
+      await t.pump();
+
+      expect(c.error, isNull);
+      // Let the AI take, so the cube actually turns and the log settles.
+      await pumpUntil(t, () => c.state.cube.value == 2, maxFrames: 1200);
+      expect(c.game.events.whereType<DoubleEvent>().length, 1,
+          reason: 'the second press offered nothing');
+    });
+
+    testWidgets('a resign chosen from a menu that outlived the gate is dropped',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // A popup menu cannot be selected twice — the first tap pops the route —
+      // so the reachable shape of this race is a menu that OUTLIVES the gate it
+      // was built for: it opens at the gate, something else closes the gate
+      // while it sits there, and the stale entry is then chosen.
+      await t.tap(find.byTooltip('More actions'));
+      await t.pumpAndSettle();
+      expect(find.text('Resign — single'), findsOneWidget);
+
+      c.rollDice(); // the gate closes underneath the open menu
+      expect(c.awaitingHumanTurn, isFalse);
+
+      await t.tap(find.text('Resign — single'));
+      await t.pumpAndSettle();
+
+      expect(c.error, isNull);
+      expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty,
+          reason: 'a resign past the gate must not be offered');
     });
   });
 

@@ -1824,6 +1824,40 @@ class _Hud extends StatelessWidget {
         (s.cube.owner == null || s.cube.owner == s.turn);
   }
 
+  /// Offers a double, re-checking AT INVOCATION the very condition the button's
+  /// enabled-ness was built from.
+  ///
+  /// Same race, and the same reason, as [_GameScreenState._rollDice]: Double and
+  /// Resign share the pre-roll gate with Roll. The enabled-ness is baked into
+  /// the last build, so two presses inside one frame both run the callback that
+  /// frame captured while the match moves on underneath them.
+  ///
+  /// Unlike Roll, this re-checks BOTH halves of the precondition, because
+  /// [MatchController.offerDouble] has two: the gate must be open AND doubling
+  /// must be legal right now. Mirroring only the gate was not enough — a second
+  /// press lands after the opponent has taken the cube, by which time the gate
+  /// has reopened for the roll but the double is no longer on offer, and the
+  /// throw comes from the legality check instead ("doubling is not legal now").
+  /// Re-checking exactly `atGate && _doublingLegal` cannot drift from the
+  /// button's own condition.
+  void _offerDouble() {
+    if (!controller.awaitingHumanTurn || !_doublingLegal) return;
+    controller.offerDouble();
+  }
+
+  /// Offers a resignation of [value], re-checking the gate AT INVOCATION.
+  ///
+  /// The overflow menu makes this race reachable in a second way, without any
+  /// double-tap: the menu is built while the gate is open and then OUTLIVES it —
+  /// an AI reply or a remote opponent's event folds in while it sits open — so
+  /// the entry the user finally picks is addressing a gate that has since
+  /// closed. Dropping it is right either way: resigning is only legal at your
+  /// own pre-roll gate.
+  void _offerResign(ResignValue value) {
+    if (!controller.awaitingHumanTurn) return;
+    controller.offerResign(value);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = controller.state;
@@ -1894,8 +1928,7 @@ class _Hud extends StatelessWidget {
             // The Double button is omitted entirely in a cubeless match.
             if (!controller.cubeless)
               OutlinedButton.icon(
-                onPressed:
-                    atGate && _doublingLegal ? controller.offerDouble : null,
+                onPressed: atGate && _doublingLegal ? _offerDouble : null,
                 icon: const Icon(Icons.control_point_duplicate, size: 16),
                 label: const Text('Double'),
                 style: OutlinedButton.styleFrom(
@@ -1911,11 +1944,11 @@ class _Hud extends StatelessWidget {
                   case _MenuAction.gameRecord:
                     onGameRecord();
                   case _MenuAction.resignSingle:
-                    controller.offerResign(ResignValue.single);
+                    _offerResign(ResignValue.single);
                   case _MenuAction.resignGammon:
-                    controller.offerResign(ResignValue.gammon);
+                    _offerResign(ResignValue.gammon);
                   case _MenuAction.resignBackgammon:
-                    controller.offerResign(ResignValue.backgammon);
+                    _offerResign(ResignValue.backgammon);
                 }
               },
               itemBuilder: (context) => [
