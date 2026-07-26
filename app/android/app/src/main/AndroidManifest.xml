@@ -1,4 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required by every networked mode: Play Online (Firestore) and Play
+         Nearby (the LAN WebSocket server/client plus the UDP discovery beacon).
+
+         It must live in THIS manifest, not only in src/debug and src/profile:
+         those variants are merged into debug/profile builds alone, so a RELEASE
+         APK built without this line has no INTERNET permission at all — every
+         socket fails and both remote modes are dead on a shipped build while
+         working perfectly in development. No plugin in this app contributes the
+         permission through manifest merging, so nothing else supplies it. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="AIGammon"
         android:name="${applicationName}"

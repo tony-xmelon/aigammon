@@ -120,6 +120,20 @@ class Settings extends Table {
   BoolColumn get showPassDevice =>
       boolean().withDefault(const Constant(false))();
 
+  /// Whether a hot-seat match FLIPS the board between turns so the active player
+  /// is always at the bottom (schema v7). OFF by default, per the reported "when
+  /// playing person vs person, the default should be not flipping the board.
+  /// People will share the device at each side, place action buttons for each
+  /// player, and keep the board fixed".
+  ///
+  /// Off (the default) is the TABLETOP layout: the board is pinned White-at-
+  /// bottom for the whole match and each player acts from their own edge (the
+  /// top player's action bar is rendered upside-down for them). On restores the
+  /// pre-v7 behaviour — one bottom action bar, and the board rotating to
+  /// whoever is on turn. Only ever consulted in a hot-seat match.
+  BoolColumn get rotateBoardHotSeat =>
+      boolean().withDefault(const Constant(false))();
+
   /// Whether the one-time "you can drag OR tap checkers" discoverability hint
   /// has already been surfaced (schema v4). Flipped true the first time the hint
   /// shows, so it never appears twice. Starts false on a fresh install.
@@ -140,7 +154,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
   // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
@@ -159,9 +173,10 @@ class AppDatabase extends _$AppDatabase {
           // same upsert-if-absent covers both fresh creates and upgrades.
           if (from < 2) {
             // Fresh create of the settings table. `createTable` uses the CURRENT
-            // (v6) table definition, so it already includes every gameplay
-            // column, `drag_hint_shown`, `dice_roll_animation` AND
-            // `show_pass_device` — the version-gated `addColumn` blocks below
+            // (v7) table definition, so it already includes every gameplay
+            // column, `drag_hint_shown`, `dice_roll_animation`,
+            // `show_pass_device` AND `rotate_board_hot_seat` — the
+            // version-gated `addColumn` blocks below
             // must NOT re-add them (hence each is gated on an explicit range of
             // `from`, never `from < N+1`).
             await m.createTable(settings);
@@ -205,6 +220,14 @@ class AppDatabase extends _$AppDatabase {
           // found. A version bump costs one migration branch and covers them.
           if (from >= 2 && from <= 5) {
             await m.addColumn(settings, settings.showPassDevice);
+          }
+          // v6 -> v7: add the `rotate_board_hot_seat` column, absent from every
+          // pre-v7 table shape (v2..v6), so add it for any upgrade from 2..6.
+          // Its column default (OFF) is the new tabletop layout, which is what
+          // an upgrading hot-seat player asked for — the board stops flipping
+          // and each player gets an action bar at their own edge.
+          if (from >= 2 && from <= 6) {
+            await m.addColumn(settings, settings.rotateBoardHotSeat);
           }
           // v3 -> v4 one-time default flip: drag-to-move becomes ON by default.
           // Applied UNCONDITIONALLY to the existing settings row (not just when

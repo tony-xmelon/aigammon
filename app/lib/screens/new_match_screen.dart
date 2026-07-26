@@ -40,9 +40,6 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
   late Difficulty _difficulty;
   _SideChoice _side = _SideChoice.white;
 
-  /// Hot-seat only: rotate the board so the active player is at the bottom.
-  bool _rotateForBlack = true;
-
   /// Per-match: play without the doubling cube. Offered for both local modes
   /// (vs-computer and hot-seat); online is server-mediated and does not expose
   /// it. Threaded into the [GameController] as `cubeless`.
@@ -161,15 +158,11 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                         ),
                       ),
                     ],
-                    if (!widget.vsComputer) ...[
-                      const SizedBox(height: 24),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Rotate board for Black'),
-                        value: _rotateForBlack,
-                        onChanged: (v) => setState(() => _rotateForBlack = v),
-                      ),
-                    ],
+                    // No board-rotation switch here any more: two players share
+                    // one device with the board FIXED between them by default,
+                    // and the opt-in rotation is an app-wide preference
+                    // ("Rotate board between turns") rather than a per-match
+                    // choice — see [GameScreen.tabletop].
                     const SizedBox(height: 8),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
@@ -211,15 +204,15 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
   }
 
   void _startMatch() {
-    final (controller, orientation, matchIdFuture) = _buildController();
+    // Checker animation speed, the gameplay option toggles and the hot-seat
+    // layout all come from the persisted settings.
+    final settings =
+        ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
+    final (controller, orientation, matchIdFuture) = _buildController(settings);
     // Build a tutor over the same engine facade when enabled; null = off.
     final tutor = _tutorEnabled
         ? TutorService(ref.read(engineFacadeProvider))
         : null;
-    // Checker animation speed and the gameplay option toggles come from the
-    // persisted settings.
-    final settings =
-        ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
     Navigator.of(context).push(
       MaterialPageRoute(
         // Key by the controller so a fresh GameScreen State is mounted per
@@ -243,6 +236,11 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           showScoring: settings.showScoring,
           // Hot-seat hand-over cover; off by default (see the setting).
           showPassDevice: settings.showPassDevice,
+          // TABLETOP hot-seat: a fixed board with an action bar at each
+          // player's own edge. The default for two players sharing one device,
+          // and mutually exclusive with the board rotation (which keeps the
+          // acting player at the bottom, where the one bottom bar already is).
+          tabletop: !widget.vsComputer && !settings.rotateBoardHotSeat,
           // One-time drag/tap hint: shown on the first human move when drag is on
           // and it has not been shown before. Persist the flag fire-and-forget.
           dragHintShown: settings.dragHintShown,
@@ -256,10 +254,14 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
 
   /// Builds the controller, picks the board orientation, and returns the
   /// persisted match id future (threaded into [GameScreen.persistedMatchId] for
-  /// the post-match "Match summary" link). Orientation: hot-seat follows the
-  /// active player when "Rotate board for Black" is on (else White stays fixed at
-  /// the bottom); vs-AI pins the human's side at the bottom.
-  (GameController, BoardOrientationMode, Future<int>) _buildController() {
+  /// the post-match "Match summary" link).
+  ///
+  /// Orientation: hot-seat follows the active player only when the persisted
+  /// "Rotate board between turns" setting is on; by DEFAULT it is off and White
+  /// stays pinned at the bottom for the whole match (the tabletop layout — see
+  /// [GameScreen.tabletop]). vs-AI always pins the human's side at the bottom.
+  (GameController, BoardOrientationMode, Future<int>) _buildController(
+      AppSettings settings) {
     if (!widget.vsComputer) {
       final (persistence, matchIdFuture) = _persistenceFor(
         mode: 'hotSeat',
@@ -274,7 +276,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           cubeless: _cubeless,
           persistence: persistence,
         ),
-        _rotateForBlack
+        settings.rotateBoardHotSeat
             ? BoardOrientationMode.followActive
             : BoardOrientationMode.fixedWhite,
         matchIdFuture,

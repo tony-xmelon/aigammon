@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../branding/app_mark.dart';
 import '../branding/app_version.dart';
 import 'history_screen.dart';
+import 'lan_screen.dart';
 import 'new_match_screen.dart';
 import 'online_screen.dart';
 import 'settings_screen.dart';
@@ -83,6 +84,16 @@ class HomeScreen extends StatelessWidget {
                             label: 'Two Players',
                             icon: Icons.people_outline,
                             onPressed: () => _open(context, vsComputer: false),
+                          ),
+                          const SizedBox(height: 12),
+                          _ModeButton(
+                            label: 'Play Nearby',
+                            icon: Icons.wifi_tethering,
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const LanScreen(),
+                              ),
+                            ),
                           ),
                           const SizedBox(height: 12),
                           _ModeButton(

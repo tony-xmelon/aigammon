@@ -43,6 +43,7 @@ class SettingsRepository {
         showScoring: row.showScoring,
         diceRollAnimation: row.diceRollAnimation,
         showPassDevice: row.showPassDevice,
+        rotateBoardHotSeat: row.rotateBoardHotSeat,
         dragHintShown: row.dragHintShown,
       );
 
@@ -59,6 +60,7 @@ class SettingsRepository {
         showScoring: Value(s.showScoring),
         diceRollAnimation: Value(s.diceRollAnimation),
         showPassDevice: Value(s.showPassDevice),
+        rotateBoardHotSeat: Value(s.rotateBoardHotSeat),
         dragHintShown: Value(s.dragHintShown),
       );
 

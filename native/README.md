@@ -178,3 +178,65 @@ automatically and needs no flag.
 default `13.0`, which is fine for the Rust staticlib (`aarch64-apple-ios`
 defaults below that) — left unchanged.
 
+
+---
+
+## Nearby (LAN) play — platform notes
+
+Nearby play (`packages/lan_play`) is pure `dart:io`: an `HttpServer` upgraded to
+a WebSocket for the match, and a `RawDatagramSocket` on UDP **47777** for
+discovery. No plugin is involved in the networking itself — only
+`network_info_plus`, and only to display the host's Wi-Fi address.
+
+### Android
+
+**No manifest change is needed for the LAN feature.**
+
+- `INTERNET` is what binding a socket and connecting to one requires, and it is
+  already present: Flutter's tooling merges it in from
+  `android/app/src/{debug,profile}/AndroidManifest.xml` for those variants, and
+  the Play-published release variant gets it from the merged manifest of the
+  plugins the app already depends on. If a future release build ever fails to
+  open a socket, add `<uses-permission android:name="android.permission.INTERNET"/>`
+  to `android/app/src/main/AndroidManifest.xml` — that is the single fix.
+- **UDP broadcast needs no permission at all.** `CHANGE_WIFI_MULTICAST_STATE`
+  (and a `WifiManager.MulticastLock`) is required only for **multicast** and for
+  receiving *subnet-directed* broadcasts on some older devices; AIGammon's
+  prober sends to `255.255.255.255` as well, which is delivered without a lock,
+  and its beacon binds the wildcard address. Nothing here needs
+  `ACCESS_FINE_LOCATION` either — that is a Wi-Fi *scanning* permission, and the
+  app never scans.
+- `network_info_plus` merges in `ACCESS_WIFI_STATE` on its own. `getWifiIP()`
+  needs no runtime prompt (only `getWifiName()` would, and it is not used).
+
+### iOS
+
+- **`NSLocalNetworkUsageDescription` is set** in `app/ios/Runner/Info.plist`.
+  Since iOS 14 the *first* local-network access raises a system prompt carrying
+  that string; denying it makes both discovery and the direct TCP connection
+  fail, so the copy has to be honest about what the feature does.
+- **The multicast-entitlement caveat.** Apple gates *broadcast and multicast*
+  traffic behind the special-request entitlement
+  `com.apple.developer.networking.multicast`. Without it an iOS build can still
+  **receive** the answers to its own probes in most configurations, but
+  **sending** to `255.255.255.255` may be silently dropped — so automatic
+  discovery is Android-first by design and must be treated as best-effort on
+  iOS.
+  - **The fallback is always available and always works:** the JOIN tab's
+    "Enter address" form takes the `IP:port` the HOST tab displays plus the room
+    code, and that is a plain outbound TCP connection — no entitlement, no
+    broadcast, nothing to request.
+  - To enable reliable discovery on iOS later: request the multicast entitlement
+    from Apple (a manual form, granted per Team ID), add
+    `com.apple.developer.networking.multicast` to `Runner.entitlements`, and add
+    `_aigammon._tcp` to `NSBonjourServices` if the discovery mechanism is ever
+    switched from raw UDP to Bonjour/`NSNetService` (which is the better path on
+    iOS, and needs no multicast entitlement).
+- Nothing about the LAN feature affects the FFI/static-linking setup documented
+  above.
+
+### Desktop
+
+Windows raises a firewall prompt the first time the host binds its port. Tests
+never trigger it: every socket test in `packages/lan_play` binds loopback, and
+the discovery tests probe a loopback target rather than a broadcast address.

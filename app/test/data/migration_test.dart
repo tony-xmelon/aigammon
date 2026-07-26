@@ -43,7 +43,7 @@ CREATE TABLE "games" (
 /// The exact v2 `settings` DDL — as drift generated it at schemaVersion 2,
 /// BEFORE the v3 gameplay-option columns, the v4 `drag_hint_shown` column and
 /// the v5 `dice_roll_animation` column existed. Embedded so this test can
-/// materialise a genuine v2 database and prove the 2 -> 6 `onUpgrade` adds every
+/// materialise a genuine v2 database and prove the 2 -> 7 `onUpgrade` adds every
 /// later column.
 const _v2SettingsDdl = '''
 CREATE TABLE "settings" (
@@ -112,7 +112,7 @@ CREATE TABLE "settings" (
 ///
 /// v5 was never released, but it WAS built and run on development machines, so
 /// a v5 database on disk is a real shape the app has to migrate. Embedded so
-/// this test can materialise one and prove the 5 -> 6 `onUpgrade` adds the
+/// this test can materialise one and prove the 5 -> 7 `onUpgrade` adds the
 /// missing column rather than leaving the app writing into a column that is not
 /// there (the failure that motivated the v6 bump).
 const _v5SettingsDdl = '''
@@ -134,11 +134,38 @@ CREATE TABLE "settings" (
 );
 ''';
 
+/// The exact v6 `settings` DDL — as drift generated it at schemaVersion 6:
+/// everything v5 had plus `show_pass_device`, but WITHOUT the v7
+/// `rotate_board_hot_seat` column. The shape currently on every tester's device,
+/// so this is the upgrade path that actually matters for the tabletop hot-seat
+/// change; without the 6 -> 7 branch a settings save would throw "table settings
+/// has no column named rotate_board_hot_seat".
+const _v6SettingsDdl = '''
+CREATE TABLE "settings" (
+  "id" INTEGER NOT NULL DEFAULT 1,
+  "theme_mode" TEXT NOT NULL DEFAULT 'system',
+  "animation_speed" TEXT NOT NULL DEFAULT 'normal',
+  "default_match_length" INTEGER NOT NULL DEFAULT 5,
+  "default_difficulty" TEXT NOT NULL DEFAULT 'medium',
+  "tutor_override" TEXT NULL,
+  "show_highlights" INTEGER NOT NULL DEFAULT 1 CHECK ("show_highlights" IN (0, 1)),
+  "enable_drag" INTEGER NOT NULL DEFAULT 1 CHECK ("enable_drag" IN (0, 1)),
+  "enable_combined_taps" INTEGER NOT NULL DEFAULT 1 CHECK ("enable_combined_taps" IN (0, 1)),
+  "show_scoring" INTEGER NOT NULL DEFAULT 1 CHECK ("show_scoring" IN (0, 1)),
+  "dice_roll_animation" INTEGER NOT NULL DEFAULT 1 CHECK ("dice_roll_animation" IN (0, 1)),
+  "show_pass_device" INTEGER NOT NULL DEFAULT 0 CHECK ("show_pass_device" IN (0, 1)),
+  "drag_hint_shown" INTEGER NOT NULL DEFAULT 0 CHECK ("drag_hint_shown" IN (0, 1)),
+  PRIMARY KEY ("id"),
+  CHECK (id = 1)
+);
+''';
+
 void main() {
   test(
-      'fresh install (onCreate) seeds v6 defaults: drag ON, dice roll animation '
-      'ON, pass-device cover OFF, hint not shown', () async {
-    // A brand-new database goes through onCreate (not onUpgrade): the v6 table
+      'fresh install (onCreate) seeds v7 defaults: drag ON, dice roll animation '
+      'ON, pass-device cover OFF, hot-seat board rotation OFF, hint not shown',
+      () async {
+    // A brand-new database goes through onCreate (not onUpgrade): the v7 table
     // shape + the beforeOpen seed.
     final db = AppDatabase(NativeDatabase.memory());
 
@@ -149,6 +176,9 @@ void main() {
         reason: 'the dice roll tumbles by default as of v5');
     expect(settings.showPassDevice, isFalse,
         reason: 'the hot-seat cover screen is OFF by default as of v6');
+    expect(settings.rotateBoardHotSeat, isFalse,
+        reason: 'hot-seat keeps the board FIXED by default as of v7 — the '
+            'tabletop layout, an action bar at each player edge');
     expect(settings.dragHintShown, isFalse,
         reason: 'the one-time hint has not been shown yet on a fresh install');
     expect(settings.showHighlights, isTrue);
@@ -156,14 +186,15 @@ void main() {
     expect(settings.showScoring, isTrue);
 
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 6);
+    expect(version.read<int>('user_version'), 7);
 
     await db.close();
   });
 
-  test('1 -> 6 upgrade creates the settings table whole (v6 shape: drag ON, '
-      'drag_hint_shown + dice_roll_animation + show_pass_device present), '
-      'seeds it, and preserves v1 data', () async {
+  test('1 -> 7 upgrade creates the settings table whole (v7 shape: drag ON, '
+      'drag_hint_shown + dice_roll_animation + show_pass_device + '
+      'rotate_board_hot_seat present), seeds it, and preserves v1 data',
+      () async {
     // 1. Build a genuine v1 database: the v1 tables, a real match row, and
     //    user_version = 1.
     final raw = sqlite3.openInMemory();
@@ -180,12 +211,13 @@ void main() {
         "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'");
     expect(before, isEmpty, reason: 'v1 has no settings table');
 
-    // 2. Open the SAME database through AppDatabase (schemaVersion 6). drift
-    //    sees user_version 1 and runs onUpgrade(1 -> 6), then beforeOpen.
+    // 2. Open the SAME database through AppDatabase (schemaVersion 7). drift
+    //    sees user_version 1 and runs onUpgrade(1 -> 7), then beforeOpen.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
     // 3a. The settings table now exists with the single default row — including
-    //     the v6 shape: drag ON, the dice beat ON, no cover screen, no hint.
+    //     the v7 shape: drag ON, the dice beat ON, no cover screen, a fixed
+    //     hot-seat board, no hint.
     final settings = await db.select(db.settings).getSingle();
     expect(settings.id, 1);
     expect(settings.themeMode, 'system');
@@ -200,6 +232,7 @@ void main() {
     expect(settings.dragHintShown, isFalse);
     expect(settings.diceRollAnimation, isTrue);
     expect(settings.showPassDevice, isFalse);
+    expect(settings.rotateBoardHotSeat, isFalse);
 
     // 3b. The pre-migration v1 match row survived intact.
     final matches = await db.select(db.matches).get();
@@ -209,9 +242,9 @@ void main() {
     expect(matches.single.whiteType, 'human');
     expect(matches.single.blackType, 'ai:expert');
 
-    // 3c. The schema version was bumped to 6.
+    // 3c. The schema version was bumped to 7.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 6);
+    expect(version.read<int>('user_version'), 7);
 
     // 3d. Writes still work post-migration (FK/insert into the migrated schema).
     final newId = await db.into(db.matches).insert(MatchesCompanion.insert(
@@ -227,9 +260,10 @@ void main() {
     await db.close();
   });
 
-  test('2 -> 6 upgrade adds the gameplay + drag_hint_shown + '
-      'dice_roll_animation + show_pass_device columns, flips drag ON, and '
-      'preserves the existing v2 settings row values', () async {
+  test('2 -> 7 upgrade adds the gameplay + drag_hint_shown + '
+      'dice_roll_animation + show_pass_device + rotate_board_hot_seat columns, '
+      'flips drag ON, and preserves the existing v2 settings row values',
+      () async {
     // 1. Build a genuine v2 database: the matches/games tables (unchanged), the
     //    v2 settings table, a settings row with NON-default preferences, and
     //    user_version = 2.
@@ -253,16 +287,20 @@ void main() {
     expect(cols, isNot(contains('enable_drag')));
     expect(cols, isNot(contains('drag_hint_shown')), reason: 'nor the v4 col');
     expect(cols, isNot(contains('dice_roll_animation')),
-        reason: 'nor either v5 col');
+        reason: 'nor the v5 col');
     expect(cols, isNot(contains('show_pass_device')));
+    expect(cols, isNot(contains('rotate_board_hot_seat')),
+        reason: 'nor the v7 col');
 
-    // 2. Open through AppDatabase (schemaVersion 6): drift runs onUpgrade(2 -> 6),
+    // 2. Open through AppDatabase (schemaVersion 7): drift runs onUpgrade(2 -> 7),
     //    adding the four gameplay columns + drag_hint_shown +
-    //    dice_roll_animation + show_pass_device, then flipping drag.
+    //    dice_roll_animation + show_pass_device + rotate_board_hot_seat, then
+    //    flipping drag.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
-    // 3a. The new columns exist at their v6 defaults on the migrated row —
-    //     including drag flipped ON, the dice beat ON, the hint not yet shown.
+    // 3a. The new columns exist at their v7 defaults on the migrated row —
+    //     including drag flipped ON, the dice beat ON, the hint not yet shown
+    //     and the hot-seat board left unrotated.
     final settings = await db.select(db.settings).getSingle();
     expect(settings.showHighlights, isTrue);
     expect(settings.enableDrag, isTrue, reason: 'the v4 flip turns drag ON');
@@ -272,7 +310,9 @@ void main() {
     expect(settings.diceRollAnimation, isTrue,
         reason: 'the v5 column defaults ON for an upgraded row too');
     expect(settings.showPassDevice, isFalse,
-        reason: 'the other v5 column defaults OFF for an upgraded row too');
+        reason: 'the v6 column defaults OFF for an upgraded row too');
+    expect(settings.rotateBoardHotSeat, isFalse,
+        reason: 'and the v7 column lands on the tabletop default');
 
     // 3b. The pre-existing v2 settings row values SURVIVED intact.
     expect(settings.id, 1);
@@ -282,17 +322,18 @@ void main() {
     expect(settings.defaultDifficulty, 'expert');
     expect(settings.tutorOverride, 'on');
 
-    // 3c. The schema version was bumped to 6, and still exactly one row.
+    // 3c. The schema version was bumped to 7, and still exactly one row.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 6);
+    expect(version.read<int>('user_version'), 7);
     expect(await db.select(db.settings).get(), hasLength(1));
 
     await db.close();
   });
 
-  test('3 -> 6 upgrade adds drag_hint_shown (=false) + dice_roll_animation '
-      '(=true) + show_pass_device (=false) and flips a user-OFF enable_drag to '
-      'ON, preserving every other v3 value', () async {
+  test('3 -> 7 upgrade adds drag_hint_shown (=false) + dice_roll_animation '
+      '(=true) + show_pass_device (=false) + rotate_board_hot_seat (=false) and '
+      'flips a user-OFF enable_drag to ON, preserving every other v3 value',
+      () async {
     // 1. Build a genuine v3 database: matches/games + the v3 settings table with
     //    a row where the user deliberately turned drag OFF (enable_drag = 0) and
     //    tweaked other preferences. user_version = 3.
@@ -321,8 +362,10 @@ void main() {
         reason: 'v3 predates the dice-roll-animation column');
     expect(cols, isNot(contains('show_pass_device')),
         reason: 'v3 predates the pass-device column');
+    expect(cols, isNot(contains('rotate_board_hot_seat')),
+        reason: 'v3 predates the hot-seat rotation column');
 
-    // 2. Open through AppDatabase (schemaVersion 6): drift runs onUpgrade(3 -> 6),
+    // 2. Open through AppDatabase (schemaVersion 7): drift runs onUpgrade(3 -> 7),
     //    which addColumn's the three later columns and UPDATEs enable_drag = 1.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
@@ -335,6 +378,8 @@ void main() {
         reason: 'the dice_roll_animation column exists and starts ON');
     expect(settings.showPassDevice, isFalse,
         reason: 'the show_pass_device column exists and starts OFF');
+    expect(settings.rotateBoardHotSeat, isFalse,
+        reason: 'the rotate_board_hot_seat column exists and starts OFF');
     expect(settings.enableDrag, isTrue,
         reason: 'the v4 upgrade flips a user-disabled drag back ON (one-time)');
 
@@ -348,9 +393,9 @@ void main() {
     expect(settings.enableCombinedTaps, isFalse);
     expect(settings.showScoring, isFalse);
 
-    // 3c. The schema version was bumped to 6, still exactly one row.
+    // 3c. The schema version was bumped to 7, still exactly one row.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 6);
+    expect(version.read<int>('user_version'), 7);
     expect(await db.select(db.settings).get(), hasLength(1));
 
     // 3d. Writes still work post-migration (upsert the migrated settings row).
@@ -361,9 +406,9 @@ void main() {
     await db.close();
   });
 
-  test('4 -> 6 upgrade adds dice_roll_animation (=true) + show_pass_device '
-      '(=false) and changes nothing else — no re-run of the v4 drag flip',
-      () async {
+  test('4 -> 7 upgrade adds dice_roll_animation (=true) + show_pass_device '
+      '(=false) + rotate_board_hot_seat (=false) and changes nothing else — no '
+      're-run of the v4 drag flip', () async {
     // 1. Build a genuine v4 database: matches/games + the v4 settings table with
     //    a row where the user turned drag OFF *after* the v4 flip had already
     //    run, and tweaked other preferences. user_version = 4.
@@ -391,7 +436,7 @@ void main() {
     expect(cols, isNot(contains('show_pass_device')),
         reason: 'v4 predates the pass-device column');
 
-    // 2. Open through AppDatabase (schemaVersion 6): drift runs onUpgrade(4 -> 6),
+    // 2. Open through AppDatabase (schemaVersion 7): drift runs onUpgrade(4 -> 7),
     //    which only addColumn's the two later columns.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
@@ -401,11 +446,13 @@ void main() {
         reason: 'an upgrading user gets the dice beat, like a fresh install');
     expect(settings.showPassDevice, isFalse,
         reason: 'and no pass-device cover, like a fresh install');
+    expect(settings.rotateBoardHotSeat, isFalse,
+        reason: 'and a fixed hot-seat board, like a fresh install');
 
     // 3b. Every v4 value survived — crucially the user's OFF drag is NOT flipped
     //     again (the one-time v4 flip is gated on `from < 4`).
     expect(settings.enableDrag, isFalse,
-        reason: 'the v4 drag flip must never re-run on a v4 -> v5 upgrade');
+        reason: 'the v4 drag flip must never re-run on a v4 -> v7 upgrade');
     expect(settings.themeMode, 'dark');
     expect(settings.animationSpeed, 'fast');
     expect(settings.defaultMatchLength, 7);
@@ -417,9 +464,9 @@ void main() {
     expect(settings.dragHintShown, isTrue,
         reason: 'a hint already shown stays shown');
 
-    // 3c. The schema version was bumped to 6, still exactly one row.
+    // 3c. The schema version was bumped to 7, still exactly one row.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 6);
+    expect(version.read<int>('user_version'), 7);
     expect(await db.select(db.settings).get(), hasLength(1));
 
     // 3d. Writes still work post-migration (upsert the migrated settings row).
@@ -430,8 +477,9 @@ void main() {
 
     await db.close();
   });
-  test('5 -> 6 upgrade adds show_pass_device (=false) and preserves every v5 '
-      'value — the unreleased-but-installed shape', () async {
+  test('5 -> 7 upgrade adds show_pass_device (=false) + rotate_board_hot_seat '
+      '(=false) and preserves every v5 value — the unreleased-but-installed '
+      'shape', () async {
     // 1. Build a genuine v5 database: matches/games + the v5 settings table with
     //    a row the user had already edited. user_version = 5.
     final raw = sqlite3.openInMemory();
@@ -455,13 +503,14 @@ void main() {
     expect(cols, isNot(contains('show_pass_device')),
         reason: 'v5 predates the pass-device column');
 
-    // 2. Open through AppDatabase (schemaVersion 6): onUpgrade(5 -> 6).
+    // 2. Open through AppDatabase (schemaVersion 7): onUpgrade(5 -> 7).
     final db = AppDatabase(NativeDatabase.opened(raw));
 
     // 3a. The column exists at its default, so a settings SAVE no longer throws
     //     "table settings has no column named show_pass_device".
     final settings = await db.select(db.settings).getSingle();
     expect(settings.showPassDevice, isFalse);
+    expect(settings.rotateBoardHotSeat, isFalse);
 
     // 3b. Every v5 value survived — including a deliberately-off dice beat and
     //     an already-shown drag hint.
@@ -473,16 +522,82 @@ void main() {
     expect(settings.showHighlights, isFalse);
     expect(settings.enableDrag, isTrue);
     expect(settings.diceRollAnimation, isFalse,
-        reason: 'a user-disabled beat is NOT re-enabled by the v6 upgrade');
+        reason: 'a user-disabled beat is NOT re-enabled by the v7 upgrade');
     expect(settings.dragHintShown, isTrue);
 
     // 3c. Version bumped, still one row, and writes go through.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 6);
+    expect(version.read<int>('user_version'), 7);
     expect(await db.select(db.settings).get(), hasLength(1));
     await db.into(db.settings).insertOnConflictUpdate(SettingsCompanion(
         id: const Value(1), showPassDevice: const Value(true)));
     expect((await db.select(db.settings).getSingle()).showPassDevice, isTrue);
+
+    await db.close();
+  });
+
+  test('6 -> 7 upgrade adds rotate_board_hot_seat (=false) and preserves every '
+      'v6 value — the shape on every tester device today', () async {
+    // 1. Build a genuine v6 database: matches/games + the v6 settings table with
+    //    a row the user had already edited — including the pass-device cover
+    //    turned ON, which the v7 upgrade must leave alone (the two hot-seat
+    //    settings are independent).
+    final raw = sqlite3.openInMemory();
+    raw.execute(_v1MatchesDdl);
+    raw.execute(_v1GamesDdl);
+    raw.execute(_v6SettingsDdl);
+    raw.execute(
+      'INSERT INTO settings (id, theme_mode, animation_speed, '
+      'default_match_length, default_difficulty, tutor_override, '
+      'show_highlights, enable_drag, enable_combined_taps, show_scoring, '
+      'dice_roll_animation, show_pass_device, drag_hint_shown) '
+      "VALUES (1, 'dark', 'normal', 7, 'hard', 'off', 1, 0, 1, 0, 1, 1, 1)",
+    );
+    raw.execute('PRAGMA user_version = 6');
+
+    final cols = raw
+        .select('PRAGMA table_info(settings)')
+        .map((r) => r['name'] as String)
+        .toSet();
+    expect(cols, contains('show_pass_device'), reason: 'v6 has the cover col');
+    expect(cols, isNot(contains('rotate_board_hot_seat')),
+        reason: 'v6 predates the hot-seat rotation column');
+
+    // 2. Open through AppDatabase (schemaVersion 7): onUpgrade(6 -> 7).
+    final db = AppDatabase(NativeDatabase.opened(raw));
+
+    // 3a. The column exists at its default — OFF, i.e. the tabletop layout an
+    //     upgrading hot-seat player now gets, exactly as a fresh install does.
+    final settings = await db.select(db.settings).getSingle();
+    expect(settings.rotateBoardHotSeat, isFalse);
+
+    // 3b. Every v6 value survived — in particular the pass-device cover the user
+    //     had switched ON: it is INDEPENDENT of the rotation and works with
+    //     either layout.
+    expect(settings.showPassDevice, isTrue,
+        reason: 'the v7 upgrade must not touch the pass-device setting');
+    expect(settings.themeMode, 'dark');
+    expect(settings.animationSpeed, 'normal');
+    expect(settings.defaultMatchLength, 7);
+    expect(settings.defaultDifficulty, 'hard');
+    expect(settings.tutorOverride, 'off');
+    expect(settings.showHighlights, isTrue);
+    expect(settings.enableDrag, isFalse,
+        reason: 'the one-time v4 drag flip must not re-run on a 6 -> 7 upgrade');
+    expect(settings.enableCombinedTaps, isTrue);
+    expect(settings.showScoring, isFalse);
+    expect(settings.diceRollAnimation, isTrue);
+    expect(settings.dragHintShown, isTrue);
+
+    // 3c. Version bumped, still one row, and a save into the new column works
+    //     (the failure mode a missing migration branch would produce).
+    final version = await db.customSelect('PRAGMA user_version').getSingle();
+    expect(version.read<int>('user_version'), 7);
+    expect(await db.select(db.settings).get(), hasLength(1));
+    await db.into(db.settings).insertOnConflictUpdate(SettingsCompanion(
+        id: const Value(1), rotateBoardHotSeat: const Value(true)));
+    expect((await db.select(db.settings).getSingle()).rotateBoardHotSeat,
+        isTrue);
 
     await db.close();
   });

@@ -1,7 +1,7 @@
 name: aigammon_app
-description: AIGammon â€” backgammon with a neural-net engine.
+description: AIGammon — backgammon with a neural-net engine.
 publish_to: 'none'
-version: 0.8.0+10
+version: 0.9.0+11
 
 environment:
   sdk: ^3.12.2
@@ -21,6 +21,8 @@ dependencies:
     path: ../packages/engine_bindings
   online_client:
     path: ../packages/online_client
+  lan_play:
+    path: ../packages/lan_play
 
 dev_dependencies:
   flutter_test:

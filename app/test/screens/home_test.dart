@@ -103,19 +103,33 @@ Future<void> _tapPoint(WidgetTester t, int index) async {
   await t.pump();
 }
 
-bool _enabled(WidgetTester t, Finder f) {
-  final w = t.widget(f);
-  return w is ButtonStyleButton && w.onPressed != null;
+/// The one LIVE button among [f]'s matches, or `null` when none of them is
+/// enabled.
+///
+/// A given label can be on screen twice: the tabletop hot-seat layout (the
+/// default for two players on one device) mounts an action bar at EACH player's
+/// edge, so at any moment one copy carries the callback and the other is the
+/// inert reservation belonging to the player whose turn it is not. Driving the
+/// UI therefore means pressing the enabled one, whichever edge it is at.
+Finder? _liveButton(WidgetTester t, Finder f) {
+  for (final element in f.evaluate()) {
+    final w = element.widget;
+    if (w is ButtonStyleButton && w.onPressed != null) return find.byWidget(w);
+  }
+  return null;
 }
+
+bool _enabled(WidgetTester t, Finder f) => _liveButton(t, f) != null;
 
 /// Drives the interactive board greedily (first highlighted source → first
 /// destination) until Confirm is enabled, then commits (or passes a dance).
 Future<void> _commitOneMove(WidgetTester t) async {
   for (var i = 0; i < 6; i++) {
     final confirm = find.widgetWithText(FilledButton, 'Confirm');
-    if (confirm.evaluate().isNotEmpty && _enabled(t, confirm)) break;
-    final pass = find.text('No moves — pass');
-    if (pass.evaluate().isNotEmpty) {
+    if (_enabled(t, confirm)) break;
+    final pass =
+        _liveButton(t, find.widgetWithText(FilledButton, 'No moves — pass'));
+    if (pass != null) {
       await t.tap(pass);
       await t.pump();
       return;
@@ -123,7 +137,7 @@ Future<void> _commitOneMove(WidgetTester t) async {
     await _tapPoint(t, _painterOf(t).highlightedSources.first);
     await _tapPoint(t, _painterOf(t).highlightedDestinations.first);
   }
-  await t.tap(find.widgetWithText(FilledButton, 'Confirm'));
+  await t.tap(_liveButton(t, find.widgetWithText(FilledButton, 'Confirm'))!);
   await t.pump();
 }
 
@@ -164,6 +178,11 @@ void main() {
     expect(find.text('AIGammon'), findsOneWidget);
     expect(find.text('Play vs Computer'), findsOneWidget);
     expect(find.text('Two Players'), findsOneWidget);
+    // The two remote modes sit below the local ones, nearby before online.
+    expect(find.text('Play Nearby'), findsOneWidget);
+    expect(find.text('Play Online'), findsOneWidget);
+    expect(t.getTopLeft(find.text('Play Nearby')).dy,
+        lessThan(t.getTopLeft(find.text('Play Online')).dy));
 
     // Play vs Computer → difficulty + side selectors appear.
     await t.tap(find.text('Play vs Computer'));
@@ -171,7 +190,8 @@ void main() {
     expect(find.byType(NewMatchScreen), findsOneWidget);
     expect(find.text('Difficulty'), findsOneWidget);
     expect(find.text('Your side'), findsOneWidget);
-    // vs-computer has no hot-seat rotate toggle.
+    // The board-rotation choice is no longer a per-match switch on either mode:
+    // it moved to Settings ("Rotate board between turns", default off).
     expect(find.text('Rotate board for Black'), findsNothing);
 
     // Back to home, then Two Players → those selectors are gone.
@@ -183,8 +203,10 @@ void main() {
     expect(find.text('Match length'), findsOneWidget);
     expect(find.text('Difficulty'), findsNothing);
     expect(find.text('Your side'), findsNothing);
-    // Hot-seat exposes the rotate-for-Black toggle.
-    expect(find.text('Rotate board for Black'), findsOneWidget);
+    // Hot-seat setup carries no rotation switch either — two players share a
+    // FIXED board by default (the tabletop layout).
+    expect(find.text('Rotate board for Black'), findsNothing);
+    expect(find.text('Rotate board between turns'), findsNothing);
   });
 
   group('first impression (phone portrait)', () {
@@ -298,9 +320,16 @@ void main() {
     await t.tap(find.text('Start match'));
     await t.pumpAndSettle();
     expect(find.byType(GameScreen), findsOneWidget);
+    // Production wires hot-seat as TABLETOP by default: a fixed board with an
+    // action bar at each player's edge, the top one rotated a half turn.
+    expect(t.widget<GameScreen>(find.byType(GameScreen)).tabletop, isTrue);
+    expect(find.byKey(const ValueKey('topActionBar')), findsOneWidget);
 
     await _driveToRollGate(t);
-    expect(find.widgetWithText(FilledButton, 'Roll'), findsOneWidget);
+    // Both bars carry a Roll; exactly one of them is live (the player on turn).
+    final rolls = find.widgetWithText(FilledButton, 'Roll');
+    expect(rolls, findsNWidgets(2));
+    expect(_liveButton(t, rolls), isNotNull);
   });
 
   bool tutorSwitchValue(WidgetTester t) => t

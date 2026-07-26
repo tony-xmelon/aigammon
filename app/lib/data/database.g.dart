@@ -1373,6 +1373,20 @@ class $SettingsTable extends Settings
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _rotateBoardHotSeatMeta =
+      const VerificationMeta('rotateBoardHotSeat');
+  @override
+  late final GeneratedColumn<bool> rotateBoardHotSeat = GeneratedColumn<bool>(
+    'rotate_board_hot_seat',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("rotate_board_hot_seat" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _dragHintShownMeta = const VerificationMeta(
     'dragHintShown',
   );
@@ -1402,6 +1416,7 @@ class $SettingsTable extends Settings
     showScoring,
     diceRollAnimation,
     showPassDevice,
+    rotateBoardHotSeat,
     dragHintShown,
   ];
   @override
@@ -1512,6 +1527,15 @@ class $SettingsTable extends Settings
         ),
       );
     }
+    if (data.containsKey('rotate_board_hot_seat')) {
+      context.handle(
+        _rotateBoardHotSeatMeta,
+        rotateBoardHotSeat.isAcceptableOrUnknown(
+          data['rotate_board_hot_seat']!,
+          _rotateBoardHotSeatMeta,
+        ),
+      );
+    }
     if (data.containsKey('drag_hint_shown')) {
       context.handle(
         _dragHintShownMeta,
@@ -1578,6 +1602,10 @@ class $SettingsTable extends Settings
         DriftSqlType.bool,
         data['${effectivePrefix}show_pass_device'],
       )!,
+      rotateBoardHotSeat: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}rotate_board_hot_seat'],
+      )!,
       dragHintShown: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}drag_hint_shown'],
@@ -1634,6 +1662,19 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
   /// tapped through. Only ever consulted in a hot-seat match.
   final bool showPassDevice;
 
+  /// Whether a hot-seat match FLIPS the board between turns so the active player
+  /// is always at the bottom (schema v7). OFF by default, per the reported "when
+  /// playing person vs person, the default should be not flipping the board.
+  /// People will share the device at each side, place action buttons for each
+  /// player, and keep the board fixed".
+  ///
+  /// Off (the default) is the TABLETOP layout: the board is pinned White-at-
+  /// bottom for the whole match and each player acts from their own edge (the
+  /// top player's action bar is rendered upside-down for them). On restores the
+  /// pre-v7 behaviour — one bottom action bar, and the board rotating to
+  /// whoever is on turn. Only ever consulted in a hot-seat match.
+  final bool rotateBoardHotSeat;
+
   /// Whether the one-time "you can drag OR tap checkers" discoverability hint
   /// has already been surfaced (schema v4). Flipped true the first time the hint
   /// shows, so it never appears twice. Starts false on a fresh install.
@@ -1651,6 +1692,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     required this.showScoring,
     required this.diceRollAnimation,
     required this.showPassDevice,
+    required this.rotateBoardHotSeat,
     required this.dragHintShown,
   });
   @override
@@ -1670,6 +1712,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     map['show_scoring'] = Variable<bool>(showScoring);
     map['dice_roll_animation'] = Variable<bool>(diceRollAnimation);
     map['show_pass_device'] = Variable<bool>(showPassDevice);
+    map['rotate_board_hot_seat'] = Variable<bool>(rotateBoardHotSeat);
     map['drag_hint_shown'] = Variable<bool>(dragHintShown);
     return map;
   }
@@ -1690,6 +1733,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       showScoring: Value(showScoring),
       diceRollAnimation: Value(diceRollAnimation),
       showPassDevice: Value(showPassDevice),
+      rotateBoardHotSeat: Value(rotateBoardHotSeat),
       dragHintShown: Value(dragHintShown),
     );
   }
@@ -1712,6 +1756,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       showScoring: serializer.fromJson<bool>(json['showScoring']),
       diceRollAnimation: serializer.fromJson<bool>(json['diceRollAnimation']),
       showPassDevice: serializer.fromJson<bool>(json['showPassDevice']),
+      rotateBoardHotSeat: serializer.fromJson<bool>(json['rotateBoardHotSeat']),
       dragHintShown: serializer.fromJson<bool>(json['dragHintShown']),
     );
   }
@@ -1731,6 +1776,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       'showScoring': serializer.toJson<bool>(showScoring),
       'diceRollAnimation': serializer.toJson<bool>(diceRollAnimation),
       'showPassDevice': serializer.toJson<bool>(showPassDevice),
+      'rotateBoardHotSeat': serializer.toJson<bool>(rotateBoardHotSeat),
       'dragHintShown': serializer.toJson<bool>(dragHintShown),
     };
   }
@@ -1748,6 +1794,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     bool? showScoring,
     bool? diceRollAnimation,
     bool? showPassDevice,
+    bool? rotateBoardHotSeat,
     bool? dragHintShown,
   }) => SettingsRow(
     id: id ?? this.id,
@@ -1764,6 +1811,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     showScoring: showScoring ?? this.showScoring,
     diceRollAnimation: diceRollAnimation ?? this.diceRollAnimation,
     showPassDevice: showPassDevice ?? this.showPassDevice,
+    rotateBoardHotSeat: rotateBoardHotSeat ?? this.rotateBoardHotSeat,
     dragHintShown: dragHintShown ?? this.dragHintShown,
   );
   SettingsRow copyWithCompanion(SettingsCompanion data) {
@@ -1800,6 +1848,9 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       showPassDevice: data.showPassDevice.present
           ? data.showPassDevice.value
           : this.showPassDevice,
+      rotateBoardHotSeat: data.rotateBoardHotSeat.present
+          ? data.rotateBoardHotSeat.value
+          : this.rotateBoardHotSeat,
       dragHintShown: data.dragHintShown.present
           ? data.dragHintShown.value
           : this.dragHintShown,
@@ -1821,6 +1872,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           ..write('showScoring: $showScoring, ')
           ..write('diceRollAnimation: $diceRollAnimation, ')
           ..write('showPassDevice: $showPassDevice, ')
+          ..write('rotateBoardHotSeat: $rotateBoardHotSeat, ')
           ..write('dragHintShown: $dragHintShown')
           ..write(')'))
         .toString();
@@ -1840,6 +1892,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     showScoring,
     diceRollAnimation,
     showPassDevice,
+    rotateBoardHotSeat,
     dragHintShown,
   );
   @override
@@ -1858,6 +1911,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           other.showScoring == this.showScoring &&
           other.diceRollAnimation == this.diceRollAnimation &&
           other.showPassDevice == this.showPassDevice &&
+          other.rotateBoardHotSeat == this.rotateBoardHotSeat &&
           other.dragHintShown == this.dragHintShown);
 }
 
@@ -1874,6 +1928,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
   final Value<bool> showScoring;
   final Value<bool> diceRollAnimation;
   final Value<bool> showPassDevice;
+  final Value<bool> rotateBoardHotSeat;
   final Value<bool> dragHintShown;
   const SettingsCompanion({
     this.id = const Value.absent(),
@@ -1888,6 +1943,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.showScoring = const Value.absent(),
     this.diceRollAnimation = const Value.absent(),
     this.showPassDevice = const Value.absent(),
+    this.rotateBoardHotSeat = const Value.absent(),
     this.dragHintShown = const Value.absent(),
   });
   SettingsCompanion.insert({
@@ -1903,6 +1959,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.showScoring = const Value.absent(),
     this.diceRollAnimation = const Value.absent(),
     this.showPassDevice = const Value.absent(),
+    this.rotateBoardHotSeat = const Value.absent(),
     this.dragHintShown = const Value.absent(),
   });
   static Insertable<SettingsRow> custom({
@@ -1918,6 +1975,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Expression<bool>? showScoring,
     Expression<bool>? diceRollAnimation,
     Expression<bool>? showPassDevice,
+    Expression<bool>? rotateBoardHotSeat,
     Expression<bool>? dragHintShown,
   }) {
     return RawValuesInsertable({
@@ -1935,6 +1993,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
       if (showScoring != null) 'show_scoring': showScoring,
       if (diceRollAnimation != null) 'dice_roll_animation': diceRollAnimation,
       if (showPassDevice != null) 'show_pass_device': showPassDevice,
+      if (rotateBoardHotSeat != null)
+        'rotate_board_hot_seat': rotateBoardHotSeat,
       if (dragHintShown != null) 'drag_hint_shown': dragHintShown,
     });
   }
@@ -1952,6 +2012,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Value<bool>? showScoring,
     Value<bool>? diceRollAnimation,
     Value<bool>? showPassDevice,
+    Value<bool>? rotateBoardHotSeat,
     Value<bool>? dragHintShown,
   }) {
     return SettingsCompanion(
@@ -1967,6 +2028,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
       showScoring: showScoring ?? this.showScoring,
       diceRollAnimation: diceRollAnimation ?? this.diceRollAnimation,
       showPassDevice: showPassDevice ?? this.showPassDevice,
+      rotateBoardHotSeat: rotateBoardHotSeat ?? this.rotateBoardHotSeat,
       dragHintShown: dragHintShown ?? this.dragHintShown,
     );
   }
@@ -2010,6 +2072,9 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     if (showPassDevice.present) {
       map['show_pass_device'] = Variable<bool>(showPassDevice.value);
     }
+    if (rotateBoardHotSeat.present) {
+      map['rotate_board_hot_seat'] = Variable<bool>(rotateBoardHotSeat.value);
+    }
     if (dragHintShown.present) {
       map['drag_hint_shown'] = Variable<bool>(dragHintShown.value);
     }
@@ -2031,6 +2096,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
           ..write('showScoring: $showScoring, ')
           ..write('diceRollAnimation: $diceRollAnimation, ')
           ..write('showPassDevice: $showPassDevice, ')
+          ..write('rotateBoardHotSeat: $rotateBoardHotSeat, ')
           ..write('dragHintShown: $dragHintShown')
           ..write(')'))
         .toString();
@@ -2866,6 +2932,7 @@ typedef $$SettingsTableCreateCompanionBuilder =
       Value<bool> showScoring,
       Value<bool> diceRollAnimation,
       Value<bool> showPassDevice,
+      Value<bool> rotateBoardHotSeat,
       Value<bool> dragHintShown,
     });
 typedef $$SettingsTableUpdateCompanionBuilder =
@@ -2882,6 +2949,7 @@ typedef $$SettingsTableUpdateCompanionBuilder =
       Value<bool> showScoring,
       Value<bool> diceRollAnimation,
       Value<bool> showPassDevice,
+      Value<bool> rotateBoardHotSeat,
       Value<bool> dragHintShown,
     });
 
@@ -2951,6 +3019,11 @@ class $$SettingsTableFilterComposer
 
   ColumnFilters<bool> get showPassDevice => $composableBuilder(
     column: $table.showPassDevice,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get rotateBoardHotSeat => $composableBuilder(
+    column: $table.rotateBoardHotSeat,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3029,6 +3102,11 @@ class $$SettingsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get rotateBoardHotSeat => $composableBuilder(
+    column: $table.rotateBoardHotSeat,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get dragHintShown => $composableBuilder(
     column: $table.dragHintShown,
     builder: (column) => ColumnOrderings(column),
@@ -3100,6 +3178,11 @@ class $$SettingsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<bool> get rotateBoardHotSeat => $composableBuilder(
+    column: $table.rotateBoardHotSeat,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<bool> get dragHintShown => $composableBuilder(
     column: $table.dragHintShown,
     builder: (column) => column,
@@ -3149,6 +3232,7 @@ class $$SettingsTableTableManager
                 Value<bool> showScoring = const Value.absent(),
                 Value<bool> diceRollAnimation = const Value.absent(),
                 Value<bool> showPassDevice = const Value.absent(),
+                Value<bool> rotateBoardHotSeat = const Value.absent(),
                 Value<bool> dragHintShown = const Value.absent(),
               }) => SettingsCompanion(
                 id: id,
@@ -3163,6 +3247,7 @@ class $$SettingsTableTableManager
                 showScoring: showScoring,
                 diceRollAnimation: diceRollAnimation,
                 showPassDevice: showPassDevice,
+                rotateBoardHotSeat: rotateBoardHotSeat,
                 dragHintShown: dragHintShown,
               ),
           createCompanionCallback:
@@ -3179,6 +3264,7 @@ class $$SettingsTableTableManager
                 Value<bool> showScoring = const Value.absent(),
                 Value<bool> diceRollAnimation = const Value.absent(),
                 Value<bool> showPassDevice = const Value.absent(),
+                Value<bool> rotateBoardHotSeat = const Value.absent(),
                 Value<bool> dragHintShown = const Value.absent(),
               }) => SettingsCompanion.insert(
                 id: id,
@@ -3193,6 +3279,7 @@ class $$SettingsTableTableManager
                 showScoring: showScoring,
                 diceRollAnimation: diceRollAnimation,
                 showPassDevice: showPassDevice,
+                rotateBoardHotSeat: rotateBoardHotSeat,
                 dragHintShown: dragHintShown,
               ),
           withReferenceMapper: (p0) => p0

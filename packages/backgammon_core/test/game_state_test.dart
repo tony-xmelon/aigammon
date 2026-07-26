@@ -40,6 +40,92 @@ void main() {
     expect(a.phase, GamePhase.awaitingRoll);
   });
 
+  group('canonicalPlay', () {
+    test('resolves every accepted submission to the generator\'s move', () {
+      final s = fresh();
+      final generated = s.legalMoves.map((m) => m.toString());
+      final viaA = s.canonicalPlay(
+          Move(const [CheckerMove(23, 20), CheckerMove(20, 19)]))!;
+      // The other decomposition of the same 24/20 play.
+      final viaB = s.canonicalPlay(
+          Move(const [CheckerMove(23, 22), CheckerMove(22, 19)]))!;
+      expect(generated, contains(viaA.toString()),
+          reason: 'the answer is a move the generator itself produced');
+      expect(generated, contains(viaB.toString()));
+      expect(s.board.applyMove(Player.white, viaA),
+          s.board.applyMove(Player.white, viaB));
+      // Hop ORDER is the submitter's business.
+      expect(
+          s
+              .canonicalPlay(
+                  Move(const [CheckerMove(5, 4), CheckerMove(7, 4)]))!
+              .sameAs(Move(const [CheckerMove(7, 4), CheckerMove(5, 4)])),
+          isTrue);
+    });
+
+    test('answers null for anything illegal', () {
+      final s = fresh();
+      expect(s.canonicalPlay(Move(const [CheckerMove(23, 20)])), isNull,
+          reason: 'one hop when two dice are playable');
+      expect(s.isLegalPlay(Move(const [CheckerMove(23, 20)])), isFalse);
+      expect(s.canonicalPlay(Move.none), isNull,
+          reason: 'a pass while moves exist');
+      // Out-of-range hops are refused before the board ever sees them.
+      expect(
+          s.canonicalPlay(
+              Move(const [CheckerMove(-100, -100), CheckerMove(500, -7)])),
+          isNull);
+      expect(
+          s.canonicalPlay(
+              Move(const [CheckerMove(24, -1), CheckerMove(24, -1)])),
+          isNull);
+    });
+
+    test('reports hits from the BOARD, not from the submission', () {
+      final pts = List<int>.filled(24, 0);
+      pts[7] = 2; // White on the 8-point
+      pts[4] = -1; // a Black blot on the 5-point
+      final s = GameState.testState(
+        board: BoardState(points: pts),
+        turn: Player.white,
+        phase: GamePhase.moving,
+        dice: Dice(3, 1),
+      );
+      // 8/5, 5/4 submitted with the hit flag switched OFF.
+      final lying =
+          Move(const [CheckerMove(7, 4), CheckerMove(4, 3)]);
+      final canonical = s.canonicalPlay(lying);
+      expect(canonical, isNotNull);
+      final hop = canonical!.checkerMoves
+          .firstWhere((c) => c.from == 7 && c.to == 4);
+      expect(hop.isHit, isTrue);
+    });
+
+    test('a dance canonicalises to Move.none', () {
+      final pts = List<int>.filled(24, 0);
+      pts[20] = 2;
+      for (final i in [18, 19, 21, 22, 23]) {
+        pts[i] = -2;
+      }
+      final s = GameState.testState(
+        board: BoardState(points: pts, whiteBar: 1),
+        turn: Player.white,
+        phase: GamePhase.moving,
+        dice: Dice(2, 3),
+      );
+      expect(s.legalMoves, isEmpty);
+      expect(s.canonicalPlay(Move.none)?.checkerMoves, isEmpty);
+      expect(s.canonicalPlay(Move(const [CheckerMove(20, 18)])), isNull);
+    });
+
+    test('is null outside the moving phase', () {
+      final s = fresh()
+          .play(Move(const [CheckerMove(7, 4), CheckerMove(5, 4)]));
+      expect(s.phase, GamePhase.awaitingRoll);
+      expect(s.canonicalPlay(Move.none), isNull);
+    });
+  });
+
   test('roll only when awaiting roll', () {
     expect(() => fresh().roll(Dice(2, 2)), throwsStateError);
     final s = fresh()

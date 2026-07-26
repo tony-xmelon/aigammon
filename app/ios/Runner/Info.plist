@@ -26,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Nearby (LAN) play: the host binds a local TCP port and both devices
+	     exchange UDP discovery datagrams on the Wi-Fi. iOS shows this string in
+	     the local-network permission prompt. See native/README.md for the
+	     multicast-entitlement caveat — manual address entry works without it. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>AIGammon uses the local network to find and play against another device on the same Wi-Fi.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

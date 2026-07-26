@@ -157,14 +157,15 @@ class AppSettings {
     this.showScoring = true,
     this.diceRollAnimation = true,
     this.showPassDevice = false,
+    this.rotateBoardHotSeat = false,
     this.dragHintShown = false,
   });
 
   /// The out-of-the-box defaults, matching the `Settings` table's column
   /// defaults (theme: system, animation: normal, length: 5, difficulty:
   /// medium, tutor override: none, highlights/drag/combined-taps/scoring and the
-  /// dice-roll animation on, the hot-seat pass-device cover OFF, drag-hint not
-  /// yet shown).
+  /// dice-roll animation on, the hot-seat pass-device cover OFF, the hot-seat
+  /// board rotation OFF (the tabletop layout), drag-hint not yet shown).
   static const AppSettings defaults = AppSettings(
     themeMode: ThemeMode.system,
     animationSpeed: AnimationSpeed.normal,
@@ -219,6 +220,19 @@ class AppSettings {
   /// in a hot-seat match; every other mode ignores it.
   final bool showPassDevice;
 
+  /// Whether a hot-seat match flips the board between turns so the active player
+  /// is at the bottom (schema v7). OFF by default — the TABLETOP layout the
+  /// reported feedback asked for: "when playing person vs person, the default
+  /// should be not flipping the board. People will share the device at each
+  /// side, place action buttons for each player, and keep the board fixed".
+  ///
+  /// Off, the board is pinned White-at-bottom and BOTH players get an action bar
+  /// at their own edge (the top one rendered upside-down for them). On restores
+  /// the pre-v7 paradigm: one bottom action bar, and the board rotating to
+  /// whoever is on turn. Read only in a hot-seat match; every other mode ignores
+  /// it. Independent of [showPassDevice], which works with either.
+  final bool rotateBoardHotSeat;
+
   /// Whether the one-time drag/tap discoverability hint has already been shown.
   final bool dragHintShown;
 
@@ -241,6 +255,7 @@ class AppSettings {
     bool? showScoring,
     bool? diceRollAnimation,
     bool? showPassDevice,
+    bool? rotateBoardHotSeat,
     bool? dragHintShown,
   }) {
     return AppSettings(
@@ -257,6 +272,7 @@ class AppSettings {
       showScoring: showScoring ?? this.showScoring,
       diceRollAnimation: diceRollAnimation ?? this.diceRollAnimation,
       showPassDevice: showPassDevice ?? this.showPassDevice,
+      rotateBoardHotSeat: rotateBoardHotSeat ?? this.rotateBoardHotSeat,
       dragHintShown: dragHintShown ?? this.dragHintShown,
     );
   }
@@ -275,6 +291,7 @@ class AppSettings {
       other.showScoring == showScoring &&
       other.diceRollAnimation == diceRollAnimation &&
       other.showPassDevice == showPassDevice &&
+      other.rotateBoardHotSeat == rotateBoardHotSeat &&
       other.dragHintShown == dragHintShown;
 
   @override
@@ -290,6 +307,7 @@ class AppSettings {
       showScoring,
       diceRollAnimation,
       showPassDevice,
+      rotateBoardHotSeat,
       dragHintShown);
 
   @override
@@ -304,6 +322,7 @@ class AppSettings {
       'showScoring: $showScoring, '
       'diceRollAnimation: $diceRollAnimation, '
       'showPassDevice: $showPassDevice, '
+      'rotateBoardHotSeat: $rotateBoardHotSeat, '
       'dragHintShown: $dragHintShown)';
 }
 

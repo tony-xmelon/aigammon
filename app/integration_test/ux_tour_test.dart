@@ -164,6 +164,8 @@ void main() {
       await _leaveMatch(tester);
       await _historyAndAnalysis(tester);
       await _settings(tester);
+      await _playNearby(tester);
+      await _tabletopHotSeat(tester);
       await _cubelessOpening(tester);
 
       final elapsed = DateTime.now().difference(started);
@@ -693,6 +695,26 @@ Future<void> _settings(WidgetTester tester) async {
   await _shot(tester, 'settings');
 }
 
+/// Home → Play Nearby (the HOST tab's setup form).
+///
+/// Deliberately the HOST tab ONLY, and deliberately without tapping "Start
+/// hosting": the setup form touches no socket, while the JOIN tab starts
+/// broadcasting discovery probes the moment it is shown — which on the tour's
+/// Windows host raises a firewall prompt and puts real datagrams on whatever
+/// network the machine is on. A screenshot harness must not do that.
+Future<void> _playNearby(WidgetTester tester) async {
+  await _backToHome(tester);
+  final entry = find.text('Play Nearby');
+  if (entry.evaluate().isEmpty) {
+    _skipped.add('play nearby screen (no Play Nearby entry on home)');
+    return;
+  }
+  await tester.tap(entry);
+  await _beat(tester, const Duration(milliseconds: 800));
+  await _shot(tester, 'lan_host_setup');
+  await _backToHome(tester);
+}
+
 /// Pops routes until the home screen is the visible one.
 Future<void> _backToHome(WidgetTester tester) async {
   for (var i = 0; i < 8; i++) {
@@ -766,6 +788,30 @@ String _hudLine(int row) {
       .whereType<String>()
       .toList();
   return texts.isEmpty ? '<empty>' : texts.join(' | ');
+}
+
+/// A throwaway TWO-PLAYER match, purely to capture the tabletop hot-seat
+/// layout: a board that does not flip, with an action bar at each player's edge
+/// (the top one upside-down for the player sitting opposite). Left immediately —
+/// it is a screenshot, not a game.
+Future<void> _tabletopHotSeat(WidgetTester tester) async {
+  await _backToHome(tester);
+  final twoPlayers = find.text('Two Players');
+  if (twoPlayers.evaluate().isEmpty) {
+    _skipped.add('tabletop hot-seat (no two-player entry on home)');
+    return;
+  }
+  await tester.tap(twoPlayers.first);
+  await _beat(tester, const Duration(milliseconds: 700));
+  await _shot(tester, 'new_match_setup_two_players');
+
+  await _tapText(tester, 'Start match');
+  await _beat(tester, const Duration(milliseconds: 900));
+  final top = find.byKey(const ValueKey('topActionBar'));
+  _log('tabletop hot-seat: top action bar present=${top.evaluate().isNotEmpty}, '
+      'white at bottom=${boardPainterOf(tester).geometry.whiteAtBottom}');
+  await _shot(tester, 'game_tabletop_hot_seat');
+  await _backToHome(tester);
 }
 
 /// A second, throwaway match started with "Play without cube" on, purely to
