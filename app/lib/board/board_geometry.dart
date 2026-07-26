@@ -50,9 +50,10 @@ import 'package:backgammon_core/backgammon_core.dart';
 ///   at full spacing). The vertical slack a tall board leaves over goes to the
 ///   empty middle band, where [diceSide] grows to use it.
 ///
-/// Only tall boards (aspect below ~0.75 width : height) reach the cap; on a
+/// Only tall boards (aspect below ~0.61 width : height) reach the cap; on a
 /// landscape-ish board every metric is what it was before the board became
-/// responsive.
+/// responsive. That threshold is a consequence of the cap's own size — see
+/// [_maxPointRadii], which derives it.
 ///
 /// ```
 ///  (everything below is inside fieldRect — the rail is outside it)
@@ -116,14 +117,21 @@ class BoardGeometry {
   /// Longest a triangle may be, in checker radii. A point holds five checkers
   /// at full spacing over exactly 10 radii; 18 leaves four checkers of headroom
   /// above a full stack and stops the tallest board from drawing endless
-  /// spikes. Binds only below an aspect of ~0.75 (width : height); the surplus
-  /// goes to the middle band, where the dice grow into it.
+  /// spikes. The surplus goes to the middle band, where the dice grow into it.
   ///
-  /// Sized against [BoardView.minAspect]: at the tallest board that clamp
-  /// allows, 18-radii triangles leave the empty middle band around a sixth of
-  /// the playing height — close to a real board's proportions. A smaller cap
-  /// would push that surplus into the middle instead, which is the "bed of
-  /// spikes over a wide empty gap" look this metric exists to avoid.
+  /// Binds only below an aspect of ~0.61 (width : height). That figure follows
+  /// from the cap: on a tall board the columns set the checker size, so a
+  /// triangle wants `colWidth · 0.46 · 18` of height and may have
+  /// `bandHeight · 0.44`; substituting `colWidth = fieldW · 0.92 / 12` and
+  /// `bandHeight = fieldH · 0.86` makes the cap bind at a FIELD aspect of
+  /// ~0.596, i.e. a board aspect of ~0.61 once the frame inset is added back.
+  ///
+  /// Sized against [BoardView.minAspect]: at the tallest board that clamp allows
+  /// (0.55), 18-radii triangles leave the empty middle band at about a fifth of
+  /// the triangle band — ~21% of it, ~18% of the full field height — close to a
+  /// real board's proportions. A smaller cap would push more of that surplus
+  /// into the middle, which is the "bed of spikes over a wide empty gap" look
+  /// this metric exists to avoid.
   static const double _maxPointRadii = 18.0;
 
   /// Fraction of the empty middle band a die may span, and fraction of a

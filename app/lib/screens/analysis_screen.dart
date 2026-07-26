@@ -344,8 +344,22 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
 
   /// A fixed-height slot holding [child], or empty space of the same height when
   /// [child] is `null`. The whole point is that the two cases measure alike.
+  ///
+  /// The heights are fixed in LOGICAL pixels, but the contents are text, which
+  /// the user's system text-scale setting grows without asking. Every slot's
+  /// content is therefore wrapped in a scale-down [FittedBox] (see
+  /// [_scaleToFit]), so a large setting shrinks the row instead of squeezing it
+  /// into a box it no longer fits — the board's fixed size is the invariant here,
+  /// and it cannot be traded away for a taller caption.
   Widget _reserved(double height, Widget? child) =>
       SizedBox(height: height, child: child == null ? null : Center(child: child));
+
+  /// Wraps [child] so it never asks for more room than it is given: measured at
+  /// its natural size, then scaled down to fit. [alignment] is where the scaled
+  /// result sits in the slot.
+  static Widget _scaleToFit(Widget child,
+          {Alignment alignment = Alignment.center}) =>
+      FittedBox(fit: BoxFit.scaleDown, alignment: alignment, child: child);
 
   Widget _preMoveCaption({required bool showingBest}) => _caption(showingBest
       ? 'Showing the best move on the position before the move'
@@ -362,13 +376,10 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
               size: 14, color: Theme.of(context).colorScheme.outline),
           const SizedBox(width: 6),
           Flexible(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(text,
-                  maxLines: 1,
-                  softWrap: false,
-                  style: Theme.of(context).textTheme.bodySmall),
-            ),
+            child: _scaleToFit(Text(text,
+                maxLines: 1,
+                softWrap: false,
+                style: Theme.of(context).textTheme.bodySmall)),
           ),
         ],
       ),
@@ -383,7 +394,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   Widget _playedBestToggle() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: SegmentedButton<bool>(
+      child: _scaleToFit(SegmentedButton<bool>(
         showSelectedIcon: false,
         segments: const [
           ButtonSegment(value: false, label: Text('Played')),
@@ -391,7 +402,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
         ],
         selected: {_showBest},
         onSelectionChanged: (s) => setState(() => _showBest = s.first),
-      ),
+      )),
     );
   }
 
@@ -427,20 +438,31 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     final best = a.best.checkerMoves.isEmpty ? '(no play)' : '${a.best}';
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Icon(Icons.circle, size: 12, color: color),
-            const SizedBox(width: 8),
-            Text('${_sideLabel(m.player)}: $label$lossText',
-                style:
-                    TextStyle(color: color, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 12),
-            Flexible(
-              child: Text('Best: $best', overflow: TextOverflow.ellipsis),
+      // The bar keeps its full width (it is a coloured band) while its CONTENT
+      // scales, so the row inside is measured unbounded — hence no [Flexible]
+      // here, and the best-move notation scales with the rest rather than
+      // ellipsizing. Same idiom as the game screen's HUD.
+      child: SizedBox(
+        width: double.infinity,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: _scaleToFit(
+            Row(
+              key: const ValueKey('moveVerdictRow'),
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.circle, size: 12, color: color),
+                const SizedBox(width: 8),
+                Text('${_sideLabel(m.player)}: $label$lossText',
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
+                Text('Best: $best', maxLines: 1, softWrap: false),
+              ],
             ),
-          ],
+            alignment: Alignment.centerLeft,
+          ),
         ),
       ),
     );

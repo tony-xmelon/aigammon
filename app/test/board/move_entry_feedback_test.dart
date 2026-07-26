@@ -224,6 +224,65 @@ void main() {
           reason: 'still exactly one hop played');
     });
 
+    testWidgets('a quick tap on an ADJACENT DESTINATION plays that die, not the '
+        'double-tap hop', (t) async {
+      await t.binding.setSurfaceSize(_size);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final control = BoardEntryController();
+      addTearDown(control.dispose);
+      // White has a blot on the 9-point (index 8) which 6-1 can play either way:
+      // index 2 (the 6) or the NEIGHBOURING column index 7 (the 1). Black owns
+      // index 1, so nothing can continue from index 7 — index 7 is therefore a
+      // destination and NOT itself a source, which is exactly the case where
+      // tap-forgiveness resolves a tap on the 1's triangle back to the blot. A
+      // naive double-tap detector then claims the tap and plays the 6 instead.
+      final pts = List<int>.filled(24, 0);
+      pts[8] = 1; // the blot
+      pts[12] = 1; // keeps White off the bear-off (so index 0 offers nothing)
+      pts[0] = 13;
+      pts[1] = -2; // Black blocks 8/2, so no hop continues from index 7
+      pts[23] = -13;
+      final state = GameState.testState(
+        board: BoardState(points: pts),
+        turn: Player.white,
+        phase: GamePhase.moving,
+        dice: Dice(6, 1),
+      );
+      final sources = MoveBuilder(state.legalMoves).selectableSources;
+      expect(sources, contains(8), reason: 'precondition: the blot is a source');
+      expect(sources, isNot(contains(7)),
+          reason: 'precondition: the 1-destination is NOT itself a source');
+
+      await t.pumpWidget(_harness(BoardView(
+        state: state,
+        interactive: true,
+        onMoveCommitted: (_) {},
+        entryControl: control,
+        doubleTapWindow: _forcedDoubleTap,
+      )));
+
+      // Pick the blot up; both destinations light.
+      final blot = _geometry.checkerCenter(8, 0, 1);
+      await t.tapAt(blot);
+      await t.pump();
+      expect(_painterOf(t).selectedCheckerLocation, 8);
+      expect(_painterOf(t).highlightedDestinations, {2, 7});
+
+      // Tap the 1-destination's triangle a hair inside its edge — the nearest
+      // point of it to the blot.
+      final edge = Offset(_geometry.pointRect(7).left + 1, blot.dy);
+      expect(_geometry.locationAt(edge), 7,
+          reason: 'precondition: the raw hit really is the destination');
+      await t.tapAt(edge);
+      await t.pump();
+
+      final board = _painterOf(t).board;
+      expect(board.points[7], 1, reason: 'the tapped 1 (9/8) was played');
+      expect(board.points[2], 0, reason: 'the 6 (9/3) was NOT played');
+      expect(_painterOf(t).usedDiceSlots, {1},
+          reason: 'die2 (the 1) is the spent one');
+    });
+
     testWidgets('double-tapping a dead checker reports it instead of moving',
         (t) async {
       await t.binding.setSurfaceSize(_size);

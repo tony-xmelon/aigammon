@@ -952,11 +952,23 @@ class _BoardViewState extends State<BoardView>
   /// handling).
   ///
   /// The second tap counts only when it lands on the same target within
-  /// [BoardView.doubleTapWindow] AND that target is the source the first tap
-  /// picked up ([_selectedSource]). Requiring the pickup is what keeps this from
-  /// hijacking an ordinary "complete a hop here, then start the next hop from
-  /// the same point" sequence: a completed hop clears the selection, so the
-  /// follow-up tap is a plain pickup however fast it arrives.
+  /// [BoardView.doubleTapWindow], that target is the source the first tap picked
+  /// up ([_selectedSource]), and the tap does NOT address one of that source's
+  /// destinations. Each of those three conditions rules out a distinct
+  /// misinterpretation:
+  ///
+  /// * requiring the pickup keeps an ordinary "complete a hop here, then start
+  ///   the next hop from the same point" sequence intact — a completed hop
+  ///   clears the selection, so the follow-up tap is a plain pickup however fast
+  ///   it arrives;
+  /// * deferring to destinations keeps a genuine MOVE from being stolen. A
+  ///   destination one column over from the picked-up checker sits inside the
+  ///   tap-forgiveness radius (at least 22pt), so [_tapTarget] resolves a tap on
+  ///   its triangle back to the source. Without this check, quickly tapping the
+  ///   1's triangle of a 6-1 played the 6 instead — a wrong move, entered
+  ///   silently. Destination handling therefore wins, exactly as it does in
+  ///   [_handleTap]; the double-tap only ever fires on a tap that would
+  ///   otherwise have done nothing but re-select or deselect.
   bool _consumeDoubleTap(BoardGeometry geometry, Offset localPosition) {
     final builder = _builder;
     if (builder == null) return false;
@@ -974,11 +986,31 @@ class _BoardViewState extends State<BoardView>
     if (now.difference(previousAt) > window) return false;
     if (_selectedSource != target) return false;
     if (!builder.selectableSources.contains(target)) return false;
+    if (_addressesDestination(geometry, localPosition, builder, target)) {
+      return false;
+    }
     // Consumed: a third quick tap starts a fresh pair rather than chaining.
     _lastTapAt = null;
     _lastTapTarget = null;
     _applyQuickHop(builder, target);
     return true;
+  }
+
+  /// Whether a tap at [pos] would be read as a MOVE for the picked-up [source] —
+  /// a direct destination or a combined landing, by exact hit or by the same
+  /// forgiveness [_handleTap] applies. Mirrors [_handleTap]'s precedence so the
+  /// two can never disagree about what a tap means.
+  bool _addressesDestination(
+      BoardGeometry geometry, Offset pos, MoveBuilder builder, int source) {
+    final loc = geometry.locationAt(pos);
+    final chained = _chainedDestinations(builder, source);
+    if (loc != null &&
+        (builder.destinationsFor(source).contains(loc) ||
+            chained.contains(loc))) {
+      return true;
+    }
+    return _nearestDestination(geometry, pos, builder, source) != null ||
+        _nearestTarget(geometry, pos, chained) != null;
   }
 
   /// The location a tap at [pos] addresses for double-tap purposes: the exact
@@ -1050,7 +1082,9 @@ class _BoardViewState extends State<BoardView>
         _selectedSource = null;
         return;
       }
-      // Re-tapping the picked-up source deselects it.
+      // Re-tapping the picked-up source deselects it — but only a SLOW re-tap
+      // gets here: a second tap inside [BoardView.doubleTapWindow] is claimed by
+      // [_consumeDoubleTap] and plays a hop instead.
       if (loc == selected) {
         _selectedSource = null;
         return;

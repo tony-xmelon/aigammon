@@ -153,7 +153,7 @@ void main() {
           // Larger stacks never EXCEED full spacing (they only ever tighten).
           // How soon tightening starts depends on the shape: a landscape point
           // is 10 radii long, so the sixth checker already compresses; a tall
-          // board's capped 16-radii point holds eight at full spacing. Fifteen
+          // board's capped 18-radii point holds nine at full spacing. Fifteen
           // compress on every board.
           for (final count in [6, 15]) {
             final gap = (g.checkerCenter(i, 1, count) -

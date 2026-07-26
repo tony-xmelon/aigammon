@@ -807,15 +807,24 @@ class _GameScreenState extends State<GameScreen> {
                         // Roll button — wired under exactly the condition that
                         // enables that button, and null otherwise so dice-area
                         // taps fall through to normal move entry.
-                        onDiceTap: _canRoll(moveSide) ? _c.rollDice : null,
+                        onDiceTap: _canRoll(moveSide) ? _rollDice : null,
                         onNoLegalSourceTap: _showNoLegalSourceHint,
                       ),
+                      // Both banners are PURELY informational and float over the
+                      // board, so both are hit-test transparent: a [Stack]
+                      // returns the topmost child that reports a hit, so a
+                      // banner left tappable silently ate every board tap in
+                      // its band — and each band covers a bear-off tray strip
+                      // (the error banner Black's, the hint White's). Bearing
+                      // off went dead for as long as the banner was up.
                       if (_c.error != null)
                         Positioned(
                           top: 0,
                           left: 0,
                           right: 0,
-                          child: _ErrorBanner(error: _c.error!),
+                          child: IgnorePointer(
+                            child: _ErrorBanner(error: _c.error!),
+                          ),
                         ),
                       // Floats over the board's bottom edge, so it never takes
                       // layout height (F6) and never covers the action bar.
@@ -824,7 +833,9 @@ class _GameScreenState extends State<GameScreen> {
                           bottom: 0,
                           left: 0,
                           right: 0,
-                          child: _TapHintBanner(message: _tapHint!),
+                          child: IgnorePointer(
+                            child: _TapHintBanner(message: _tapHint!),
+                          ),
                         ),
                     ],
                   ),
@@ -1081,7 +1092,7 @@ class _GameScreenState extends State<GameScreen> {
         children: [
           const Spacer(),
           FilledButton(
-            onPressed: _c.rollDice,
+            onPressed: _rollDice,
             child: const Text('Roll'),
           ),
         ],
@@ -1109,6 +1120,25 @@ class _GameScreenState extends State<GameScreen> {
   /// action bar's Roll button and the board's tap-the-dice affordance, so the
   /// two can never disagree about when rolling is allowed.
   bool _canRoll(Player? moveSide) => moveSide == null && _c.awaitingHumanTurn;
+
+  /// Rolls the dice — the shared handler behind BOTH routes (the action bar's
+  /// Roll button and the on-board dice tap).
+  ///
+  /// Re-checks the gate AT INVOCATION rather than trusting the enabled-ness
+  /// baked into the last build. Two presses inside one frame — a double-tap on
+  /// the dice, or an impatient second jab at Roll — both run the callback that
+  /// frame captured, and the second arrives at a gate the first already closed:
+  /// [MatchController.rollDice] is documented as valid only while
+  /// [MatchController.awaitingHumanTurn], and both implementations throw
+  /// otherwise (a `StateError` straight out of the gesture handler). The first
+  /// press did exactly what the user wanted, so the duplicate is dropped
+  /// silently; this narrows the guard to that benign race and never hides a real
+  /// failure, since the throw it replaces carried no information the UI could
+  /// act on.
+  void _rollDice() {
+    if (!_c.awaitingHumanTurn) return;
+    _c.rollDice();
+  }
 
   Widget _hintButton() => OutlinedButton.icon(
         onPressed: _openHint,

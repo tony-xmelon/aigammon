@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:aigammon_app/board/board_painter.dart';
 import 'package:aigammon_app/board/board_view.dart';
 import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
@@ -2950,6 +2951,135 @@ void main() {
           findsOneWidget);
 
       c.disposeController();
+    });
+  });
+
+  group('banners never intercept board taps', () {
+    /// The board's own paint surface render object — what a board tap must reach.
+    RenderObject boardSurface(WidgetTester t) => t.renderObject(find
+        .byWidgetPredicate((w) => w is CustomPaint && w.painter is BoardPainter));
+
+    /// Whether a tap at [global] reaches the board rather than being swallowed
+    /// by whatever floats over it.
+    void expectBoardReachableAt(WidgetTester t, Offset global) {
+      final targets =
+          t.hitTestOnBinding(global).path.map((e) => e.target).toList();
+      expect(targets, contains(boardSurface(t)),
+          reason: 'a tap at $global must reach the board surface');
+    }
+
+    testWidgets('the no-legal-move hint does not block the bear-off tray under '
+        'it', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(5, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+
+      // Raise the hint (the 24-point is stranded on 5-5).
+      await tapBoardPoint(t, 23);
+      final hint = find.byType(Material).evaluate();
+      expect(hint, isNotEmpty);
+      expect(
+          find.text('No legal move for that checker with the remaining dice'),
+          findsOneWidget);
+
+      // The banner sits over the bottom bear-off tray. A tap in the middle of it
+      // must still land on the board — otherwise bear-off taps go dead for the
+      // 1.2s the hint is up.
+      final banner = t.getRect(
+          find.text('No legal move for that checker with the remaining dice'));
+      expectBoardReachableAt(t, banner.center);
+
+      c.disposeController();
+    });
+
+    testWidgets('the error banner does not block the tray under it', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: ThrowingAgent(),
+        matchLength: 3,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.pendingMoveOf(Player.white).value != null);
+      await commitFirstMove(t);
+      await pumpUntil(t, () => c.error != null);
+      await t.pump();
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+
+      expectBoardReachableAt(
+          t, t.getRect(find.byIcon(Icons.error_outline)).center);
+
+      c.disposeController();
+    });
+  });
+
+  group('rolling twice in one frame', () {
+    /// A match parked at White's (the human's) pre-roll gate.
+    GameController atGate() => GameController(
+          white: LocalHumanAgent(),
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+
+    int whiteRolls(GameController c) => c.game.events
+        .whereType<RollEvent>()
+        .where((e) => e.player == Player.white)
+        .length;
+
+    testWidgets('two dice taps in the same frame roll exactly once', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final painter = boardPainterOf(t);
+      final target = boardRect(t).topLeft +
+          painter.geometry.diceRect(c.state.turn, mover: c.state.turn).center;
+      // No pump between the taps: BOTH hit the callback captured by the frame
+      // that is already on screen, exactly as a real double-tap on the dice
+      // does. The second must be swallowed, not throw out of the gesture
+      // handler (GameController's gate is already completed by then).
+      await t.tapAt(target);
+      await t.tapAt(target);
+      await t.pump();
+
+      expect(c.error, isNull);
+      expect(whiteRolls(c), 1, reason: 'the second tap rolled nothing');
+    });
+
+    testWidgets('two Roll presses in the same frame roll exactly once',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final roll = find.widgetWithText(FilledButton, 'Roll');
+      await t.tap(roll);
+      await t.tap(roll, warnIfMissed: false);
+      await t.pump();
+
+      expect(c.error, isNull);
+      expect(whiteRolls(c), 1);
     });
   });
 

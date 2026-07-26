@@ -113,13 +113,26 @@ BoardPainter _painterOf(WidgetTester t) => t
 late AppDatabase _db;
 late MatchRepository _repo;
 
-Widget _app(int gameId, {EngineFacade facade = const FlatFacade()}) =>
+Widget _app(
+  int gameId, {
+  EngineFacade facade = const FlatFacade(),
+  double textScale = 1.0,
+}) =>
     ProviderScope(
       overrides: [
         databaseProvider.overrideWithValue(_db),
         engineFacadeProvider.overrideWithValue(facade),
       ],
-      child: MaterialApp(home: AnalysisScreen(gameId: gameId)),
+      child: MaterialApp(
+        // Applied through `builder` so the override lands INSIDE the app's own
+        // MediaQuery (which supplies the surface size) rather than replacing it.
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
+        home: AnalysisScreen(gameId: gameId),
+      ),
     );
 
 Future<void> _pumpLoaded(WidgetTester t, Widget app) async {
@@ -299,6 +312,58 @@ void main() {
               '(caption/toggle/verdict rows are reserved space)');
     }
   });
+
+  for (final scale in [1.6, 3.0]) {
+    testWidgets(
+        'system text at ${scale}x: the reserved rows absorb it and the board '
+        'still holds still', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final gameId = await _seedCachedBlunder(t);
+      await _pumpLoaded(t, _app(gameId, textScale: scale));
+
+      Rect boardRect() => t.getRect(find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is BoardPainter));
+
+      // Step onto White's blunder: caption + Played/Best + verdict all present.
+      await t.tap(find.byTooltip('Next'));
+      await t.pumpAndSettle();
+      expect(find.byType(SegmentedButton<bool>), findsOneWidget);
+      expect(t.takeException(), isNull,
+          reason: 'the fixed slots must not overflow at ${scale}x');
+
+      // Everything actually ends up inside its reserved slot on screen.
+      // `getRect` applies the scale-down transform, so this is what the user
+      // sees, not what the row asked for.
+      expect(t.getRect(find.byType(SegmentedButton<bool>)).height,
+          lessThanOrEqualTo(56.5));
+      final verdict = find.byKey(const ValueKey('moveVerdictRow'));
+      expect(t.getRect(verdict).height, lessThanOrEqualTo(40.5));
+
+      // At 3x the verdict row genuinely outgrows its 40pt slot, so this is the
+      // case that proves the slot SCALES its content rather than squeezing it:
+      // the laid-out height (measured unbounded inside the FittedBox) exceeds
+      // the slot, while the on-screen height does not.
+      if (scale >= 3.0) {
+        final laidOut = t.getSize(verdict).height;
+        expect(laidOut, greaterThan(40),
+            reason: 'premise: 3x text outgrows the verdict slot');
+        expect(t.getRect(verdict).height, lessThan(laidOut),
+            reason: 'the row is scaled down, not clipped');
+      }
+
+      final withRows = boardRect();
+
+      // Step to the bare roll step (none of the three rows).
+      await t.tap(find.byTooltip('Next'));
+      await t.pumpAndSettle();
+      expect(find.byType(SegmentedButton<bool>), findsNothing);
+      expect(boardRect(), withRows,
+          reason: 'reserved space holds the board still at ${scale}x too');
+      expect(t.takeException(), isNull);
+    });
+  }
 
   testWidgets('move list: all moves listed, current highlighted, tap jumps',
       (t) async {
