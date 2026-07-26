@@ -423,6 +423,7 @@ class _GameScreenState extends State<GameScreen> {
     }
     _rollBeatTimer?.cancel();
     _tapHintTimer?.cancel();
+    _cancelDancePass();
     _observable.removeListener(_onChange);
     _dicePresenting.dispose();
     _stagedMove.dispose();
@@ -445,9 +446,81 @@ class _GameScreenState extends State<GameScreen> {
     if (!mounted) return;
     _updatePassDevice();
     _syncRollBeat();
+    _syncDancePass();
     _syncTutor();
     _maybeShowDragHint();
     setState(() {});
+  }
+
+  // --- Auto-pass on a dance --------------------------------------------------
+
+  /// How long a human's dance is HELD on screen before the turn passes itself,
+  /// with animations on. Long enough to read the dice and the "No moves" line
+  /// and understand why nothing can be played — the roll's own beat has already
+  /// shown the dice by the time this starts — and short enough not to feel like
+  /// a hang. Collapses to zero with animations off (see [_dancePause]).
+  static const Duration _danceHold = Duration(milliseconds: 1200);
+
+  /// The pending auto-pass, or `null` when no dance is being held.
+  Timer? _dancePassTimer;
+
+  /// Fences a superseded hold (the position moved on) against a timer that has
+  /// already been scheduled.
+  int _dancePassSeq = 0;
+
+  /// The hold before a dance passes itself: [_danceHold] normally, ZERO with
+  /// animations off — where every other beat is instant too, and a deliberate
+  /// pause would be the only thing on screen that waits.
+  ///
+  /// Even at zero the pass goes through a timer rather than firing inline: this
+  /// runs from a controller/entry notification, and committing a move straight
+  /// back into the controller from inside its own notify is exactly the
+  /// re-entrancy the rest of this screen avoids.
+  Duration get _dancePause =>
+      widget.timings.enabled ? _danceHold : Duration.zero;
+
+  /// Passes a HUMAN's danced turn automatically after [_dancePause].
+  ///
+  /// A dance offers no choice at all, so making the player tap "No moves — pass"
+  /// was pure ceremony — and in hot-seat it was worse than ceremony: the device
+  /// changed hands for a turn with nothing in it ("when two players play, and
+  /// one has no possible moves, skip the turn"). The affordance STAYS on screen
+  /// throughout the hold, so a player who has already read the position can tap
+  /// it and skip the wait; either route commits the same [Move.none].
+  ///
+  /// The hold begins only once the mover's own roll has finished being presented
+  /// — [_entryHeld] keeps `moveSide` null until then — so the dice are always
+  /// legible before the turn goes.
+  ///
+  /// Applies wherever the danced side is locally human: vs-AI, hot-seat, and the
+  /// local side of an online match alike. An AI's dance never reaches here (it
+  /// has no pending move request).
+  void _syncDancePass() {
+    final pending = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    final moveSide = _entryHeld(pending) ? null : pending;
+    final dancing = moveSide != null && _entryControl.isDance;
+    if (!dancing) {
+      _cancelDancePass();
+      return;
+    }
+    if (_dancePassTimer != null) return; // this dance is already being held
+    final seq = ++_dancePassSeq;
+    _dancePassTimer = Timer(_dancePause, () {
+      if (!mounted || seq != _dancePassSeq) return;
+      _dancePassTimer = null;
+      // Re-check at fire time: a manual tap during the hold has already passed,
+      // and the position has moved on.
+      if (!_entryControl.isDance) return;
+      _entryControl.pass();
+    });
+  }
+
+  /// Drops any pending auto-pass (the dance ended, or the screen is going away),
+  /// fencing a timer that has already been scheduled.
+  void _cancelDancePass() {
+    _dancePassTimer?.cancel();
+    _dancePassTimer = null;
+    _dancePassSeq++;
   }
 
   // --- "That checker cannot move" hint ---------------------------------------
@@ -1238,7 +1311,9 @@ class _GameScreenState extends State<GameScreen> {
   /// only the bar's *contents* swap:
   ///
   /// * entering a move → `[Undo] [Confirm]` (Confirm primary, right),
-  /// * a dance → `[No moves — pass]`,
+  /// * a dance → `[No moves — pass]` — which the turn no longer WAITS on: the
+  ///   dance passes itself after a readable beat (see [_syncDancePass]), and
+  ///   this stays tappable throughout so an impatient player can skip it,
   /// * the human pre-roll gate → `[Roll]`,
   /// * otherwise → a subtle status line (whose turn / thinking).
   ///

@@ -7,6 +7,7 @@ import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
 import 'package:aigammon_app/data/match_repository.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
+import 'package:aigammon_app/game/applied_move.dart';
 import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/game_record.dart';
@@ -19,6 +20,7 @@ import 'package:aigammon_app/screens/metric_explainer.dart';
 import 'package:aigammon_app/tutor/tutor_service.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -400,6 +402,112 @@ Future<void> _dismissPassDevice(WidgetTester t) async {
     await t.tap(find.text('Tap to continue'));
     await t.pump();
   }
+}
+
+/// A hand-built [MatchController] parked on a DANCE for [danceSide]: White is on
+/// the bar and Black's home board is fully closed, so the mover has no legal
+/// play at all.
+///
+/// A real [GameController] cannot be steered into a dance deterministically from
+/// the opening position (it would take a scripted rally of hits and made
+/// points), and the auto-pass is a pure SCREEN behaviour — it reads the pending
+/// move request and the board's own "no selectable sources" verdict, then calls
+/// the same [BoardEntryController.pass] the button does. This stub supplies
+/// exactly that surface and records the committed move.
+class _DanceController extends ChangeNotifier implements MatchController {
+  _DanceController({this.bothLocal = false}) {
+    final pts = List<int>.filled(24, 0);
+    for (var i = 18; i < 24; i++) {
+      pts[i] = -2; // Black's home board fully closed
+    }
+    pts[0] = -3;
+    pts[12] = 14;
+    _state = GameState.testState(
+      board: BoardState(points: pts, whiteBar: 1),
+      turn: danceSide,
+      phase: GamePhase.moving,
+      dice: Dice(6, 2),
+    );
+    _pending = ValueNotifier<GameState?>(_state);
+  }
+
+  /// The side that is stuck. White is the one on the bar above.
+  static const Player danceSide = Player.white;
+
+  /// Hot-seat when true (both sides locally human), vs-AI when false.
+  final bool bothLocal;
+
+  late final GameState _state;
+  late final ValueNotifier<GameState?> _pending;
+
+  /// Every move handed back by the screen, in order. A dance commits
+  /// [Move.none], so a passed turn appends an empty move here.
+  final List<Move> committed = [];
+
+  @override
+  GameState get state => _state;
+  @override
+  MatchState get match => MatchState(matchLength: 5);
+  @override
+  int get gameNumber => 1;
+  @override
+  Game get game => Game.start(const OpeningRollEvent(whiteDie: 6, blackDie: 1));
+  @override
+  final ValueListenable<AppliedMove?> lastMove = ValueNotifier(null);
+  @override
+  bool get isThinking => false;
+  @override
+  Object? get error => null;
+  @override
+  Object? get persistenceError => null;
+  @override
+  bool get matchOver => false;
+  @override
+  bool get cubeless => false;
+  @override
+  bool get awaitingNextGame => false;
+  @override
+  void continueToNextGame() {}
+  @override
+  bool get awaitingHumanTurn => false;
+  @override
+  Future<void> playMatch() async {}
+  @override
+  void rollDice() {}
+  @override
+  void offerDouble() {}
+  @override
+  void offerResign(ResignValue value) {}
+  @override
+  MatchContext contextFor(Player actor) =>
+      const MatchContext(moverAway: 5, opponentAway: 5, crawfordPlayed: false);
+  @override
+  void disposeController() {}
+  @override
+  bool isLocalHuman(Player side) => bothLocal || side == danceSide;
+  @override
+  ValueListenable<GameState?> pendingMoveOf(Player side) =>
+      side == danceSide ? _pending : _neverPending;
+  @override
+  void submitMove(Player side, Move move) {
+    committed.add(move);
+    _pending.value = null; // the turn is over; entry affordances go
+    notifyListeners();
+  }
+
+  @override
+  ValueListenable<GameState?> pendingCubeOf(Player side) => _neverPending;
+  @override
+  void submitCubeResponse(Player side, CubeAction action) {}
+  @override
+  ValueListenable<(GameState, ResignValue)?> pendingResignOf(Player side) =>
+      _neverResign;
+  @override
+  void submitResignResponse(Player side, bool accept) {}
+
+  static final ValueNotifier<GameState?> _neverPending = ValueNotifier(null);
+  static final ValueNotifier<(GameState, ResignValue)?> _neverResign =
+      ValueNotifier(null);
 }
 
 void main() {
@@ -1076,6 +1184,86 @@ void main() {
       expect(find.widgetWithText(TextButton, 'Analyze game'), findsNothing);
 
       c.disposeController();
+    });
+  });
+
+  group('auto-pass on a dance', () {
+    // Animations ON, so the hold is the real 1.2s beat.
+    Widget harness(_DanceController c,
+            {AnimationTimings timings = AnimationTimings.normal}) =>
+        MaterialApp(
+          home: GameScreen(key: ValueKey(c), controller: c, timings: timings),
+        );
+
+    testWidgets('the dance is HELD, then the turn passes itself', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      // The beat: the affordance is up and NOTHING has been committed yet, so
+      // the dice and the reason are readable.
+      expect(c.committed, isEmpty);
+      await t.pump(const Duration(milliseconds: 600));
+      expect(c.committed, isEmpty, reason: 'still being held, mid-beat');
+      expect(find.text('No moves — pass'), findsOneWidget,
+          reason: 'the manual route stays available throughout the hold');
+
+      // Past the hold: the turn passed itself, with no tap.
+      await t.pump(const Duration(milliseconds: 800));
+      expect(c.committed, hasLength(1));
+      expect(c.committed.single.checkerMoves, isEmpty, reason: 'Move.none');
+    });
+
+    testWidgets('with animations off the pass is immediate', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c, timings: AnimationTimings.off));
+      // One frame past the entry opening is enough — no deliberate pause is
+      // inserted when nothing else on screen waits either.
+      await pumpUntil(t, () => c.committed.isNotEmpty);
+      expect(c.committed.single.checkerMoves, isEmpty);
+    });
+
+    testWidgets('tapping the affordance passes sooner, and only once',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      await t.tap(find.text('No moves — pass'));
+      await t.pump();
+      expect(c.committed, hasLength(1), reason: 'the tap skipped the wait');
+
+      // The scheduled auto-pass must not fire a SECOND Move.none afterwards.
+      await t.pump(const Duration(milliseconds: 1500));
+      expect(c.committed, hasLength(1));
+    });
+
+    testWidgets('hot-seat: a danced turn hands over on its own', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Both sides local — the reported "when two players play, and one has no
+      // possible moves, skip the turn".
+      final c = _DanceController(bothLocal: true);
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      await t.pump(const Duration(milliseconds: 1400));
+      expect(c.committed, hasLength(1));
+      expect(c.committed.single.checkerMoves, isEmpty);
     });
   });
 
