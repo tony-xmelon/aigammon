@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:aigammon_app/board/board_painter.dart';
 import 'package:aigammon_app/board/board_view.dart';
 import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
@@ -382,6 +383,105 @@ Future<void> _dismissPassDevice(WidgetTester t) async {
 
 void main() {
   setUp(() => TestWidgetsFlutterBinding.ensureInitialized());
+
+  group('pre-roll: tapping the dice rolls', () {
+    /// A match parked at White's (the human's) pre-roll gate.
+    GameController atGate() => GameController(
+          white: LocalHumanAgent(),
+          black: FakeAgent(),
+          matchLength: 5,
+          // Black wins the opening (6 > 1) and moves; White then reaches its
+          // pre-roll gate as its first action.
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+
+    /// Taps the centre of [player]'s dice pair on the board.
+    Future<void> tapDice(WidgetTester t, Player player, Player mover) async {
+      final painter = boardPainterOf(t);
+      final target = painter.geometry.diceRect(player, mover: mover).center;
+      await t.tapAt(boardRect(t).topLeft + target);
+      await t.pump();
+    }
+
+    testWidgets("tapping the mover's dice rolls, like the Roll button",
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // The Roll button STAYS: the dice tap is a second route, not a swap.
+      expect(find.widgetWithText(FilledButton, 'Roll'), findsOneWidget);
+      expect(boardPainterOf(t).diceTapHint, isTrue,
+          reason: 'the tappable pair is ringed while the gate is open');
+
+      await tapDice(t, c.state.turn, c.state.turn);
+      await pumpUntil(t, () => !c.awaitingHumanTurn);
+      expect(c.awaitingHumanTurn, isFalse, reason: 'the tap rolled the dice');
+      c.disposeController();
+    });
+
+    testWidgets("tapping the WAITING player's pair rolls too", (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final mover = c.state.turn;
+      await tapDice(t, mover.opponent, mover);
+      await pumpUntil(t, () => !c.awaitingHumanTurn);
+      expect(c.awaitingHumanTurn, isFalse);
+      c.disposeController();
+    });
+
+    testWidgets('the hint clears once the gate closes (a move is being entered)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(boardPainterOf(t).diceTapHint, isFalse,
+          reason: 'no dice affordance while a move is being entered');
+      // And the board is interactive again: the dice area must not swallow taps.
+      expect(boardPainterOf(t).highlightedSources, isNotEmpty);
+      c.disposeController();
+    });
+  });
+
+  testWidgets('the board spans the FULL width of its slot (no side padding)',
+      (t) async {
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    final c = GameController(
+      white: LocalHumanAgent(),
+      black: FakeAgent(),
+      matchLength: 5,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+
+    // On a phone-shaped surface the slot is taller than the board's aspect
+    // clamp allows, so the WIDTH binds: the board must start at x=0 and end at
+    // the screen's right edge — every pixel, no inset.
+    final board = boardRect(t);
+    final screen = t.getRect(find.byType(GameScreen));
+    expect(board.left, closeTo(screen.left, 0.5));
+    expect(board.right, closeTo(screen.right, 0.5));
+    c.disposeController();
+  });
 
   testWidgets('human vs AI: Roll → interactive board → commit advances',
       (t) async {
@@ -1414,6 +1514,72 @@ void main() {
           maxFrames: 2000);
       expect(boardPainterOf(t).overlayChecker, isNotNull,
           reason: 'the AI reply still animates');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets(
+        'vs-AI: the confirmed move STAYS applied through the opponent roll '
+        'and reply (it never reverts and is never re-played)', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // White (human) wins the opening (6 > 1) and plays; Black (AI) then rolls
+        // (6,5) and replies instantly — inside the SAME frame gap as the commit,
+        // exactly as the real engine does on device.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      final preMove = c.state.board;
+      await commitFirstMove(t);
+
+      // Both moves have already landed on the controller (the AI answers within
+      // the commit's microtask chain — no frame in between), so the whole
+      // legitimate board sequence is known: White's committed move applied, then
+      // Black's reply hop by hop as its animation plays it out.
+      final moves = c.game.events.whereType<MoveEvent>().toList();
+      expect(moves.length, greaterThanOrEqualTo(2),
+          reason: 'White committed and the AI replied');
+      expect(moves.first.player, Player.white);
+      final afterWhite = preMove.applyMove(Player.white, moves.first.move);
+      expect(afterWhite, isNot(preMove), reason: 'the commit changed the board');
+      final allowed = <BoardState>[afterWhite];
+      for (final hop in moves[1].move.checkerMoves) {
+        allowed.add(allowed.last.applyMove(Player.black, Move([hop])));
+      }
+
+      // (a) The very first frame after Confirm already shows the move applied —
+      // no revert to the pre-move position.
+      expect(boardPainterOf(t).board, afterWhite,
+          reason: 'the confirmed move is painted immediately');
+
+      // (b) EVERY frame from here until the AI's reply animation settles paints
+      // one of the legitimate boards: the confirmed position, or that position
+      // with a prefix of Black's hops. The pre-move board is never among them.
+      var sawOverlay = false;
+      var settled = false;
+      for (var i = 0; i < 2000 && !settled; i++) {
+        final painter = boardPainterOf(t);
+        expect(allowed, contains(painter.board),
+            reason: 'frame $i paints neither the confirmed position nor a '
+                "prefix of Black's reply — the committed move reverted");
+        if (painter.overlayChecker != null) sawOverlay = true;
+        settled = sawOverlay && painter.overlayChecker == null;
+        if (!settled) await t.pump(const Duration(milliseconds: 8));
+      }
+      expect(sawOverlay, isTrue, reason: "Black's reply animates");
+      expect(settled, isTrue, reason: "Black's reply settles");
+      expect(boardPainterOf(t).board, allowed.last,
+          reason: 'both moves are applied once the reply settles');
 
       await t.pumpAndSettle();
       c.disposeController();
@@ -2783,6 +2949,363 @@ void main() {
           find.textContaining(
               'Black wins this game (+1) — White declined the double.'),
           findsOneWidget);
+
+      c.disposeController();
+    });
+  });
+
+  group('banners never intercept board taps', () {
+    /// The board's own paint surface render object — what a board tap must reach.
+    RenderObject boardSurface(WidgetTester t) => t.renderObject(find
+        .byWidgetPredicate((w) => w is CustomPaint && w.painter is BoardPainter));
+
+    /// Whether a tap at [global] reaches the board rather than being swallowed
+    /// by whatever floats over it.
+    void expectBoardReachableAt(WidgetTester t, Offset global) {
+      final targets =
+          t.hitTestOnBinding(global).path.map((e) => e.target).toList();
+      expect(targets, contains(boardSurface(t)),
+          reason: 'a tap at $global must reach the board surface');
+    }
+
+    testWidgets('the no-legal-move hint does not block the bear-off tray under '
+        'it', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(5, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+
+      // Raise the hint (the 24-point is stranded on 5-5).
+      await tapBoardPoint(t, 23);
+      final hint = find.byType(Material).evaluate();
+      expect(hint, isNotEmpty);
+      expect(
+          find.text('No legal move for that checker with the remaining dice'),
+          findsOneWidget);
+
+      // The banner sits over the bottom bear-off tray. A tap in the middle of it
+      // must still land on the board — otherwise bear-off taps go dead for the
+      // 1.2s the hint is up.
+      final banner = t.getRect(
+          find.text('No legal move for that checker with the remaining dice'));
+      expectBoardReachableAt(t, banner.center);
+
+      c.disposeController();
+    });
+
+    testWidgets('the error banner does not block the tray under it', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: ThrowingAgent(),
+        matchLength: 3,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.pendingMoveOf(Player.white).value != null);
+      await commitFirstMove(t);
+      await pumpUntil(t, () => c.error != null);
+      await t.pump();
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+
+      expectBoardReachableAt(
+          t, t.getRect(find.byIcon(Icons.error_outline)).center);
+
+      c.disposeController();
+    });
+  });
+
+  group('pre-roll verbs pressed twice in one frame', () {
+    /// A match parked at White's (the human's) pre-roll gate.
+    GameController atGate() => GameController(
+          white: LocalHumanAgent(),
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+
+    int whiteRolls(GameController c) => c.game.events
+        .whereType<RollEvent>()
+        .where((e) => e.player == Player.white)
+        .length;
+
+    testWidgets('two dice taps in the same frame roll exactly once', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final painter = boardPainterOf(t);
+      final target = boardRect(t).topLeft +
+          painter.geometry.diceRect(c.state.turn, mover: c.state.turn).center;
+      // No pump between the taps: BOTH hit the callback captured by the frame
+      // that is already on screen, exactly as a real double-tap on the dice
+      // does. The second must be swallowed, not throw out of the gesture
+      // handler (GameController's gate is already completed by then).
+      await t.tapAt(target);
+      await t.tapAt(target);
+      await t.pump();
+
+      expect(c.error, isNull);
+      expect(whiteRolls(c), 1, reason: 'the second tap rolled nothing');
+    });
+
+    testWidgets('two Roll presses in the same frame roll exactly once',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final roll = find.widgetWithText(FilledButton, 'Roll');
+      await t.tap(roll);
+      await t.tap(roll, warnIfMissed: false);
+      await t.pump();
+
+      expect(c.error, isNull);
+      expect(whiteRolls(c), 1);
+    });
+
+    testWidgets('two Double presses in the same frame offer exactly one double',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // Double and Resign share the pre-roll gate with Roll, so they share the
+      // race: the callback the current frame captured runs twice before the
+      // rebuild that would have disabled it.
+      final double = find.widgetWithText(OutlinedButton, 'Double');
+      expect(isButtonEnabled(t, double), isTrue);
+      await t.tap(double);
+      await t.tap(double, warnIfMissed: false);
+      await t.pump();
+
+      expect(c.error, isNull);
+      // Let the AI take, so the cube actually turns and the log settles.
+      await pumpUntil(t, () => c.state.cube.value == 2, maxFrames: 1200);
+      expect(c.game.events.whereType<DoubleEvent>().length, 1,
+          reason: 'the second press offered nothing');
+    });
+
+    testWidgets('a resign chosen from a menu that outlived the gate is dropped',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = atGate();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // A popup menu cannot be selected twice — the first tap pops the route —
+      // so the reachable shape of this race is a menu that OUTLIVES the gate it
+      // was built for: it opens at the gate, something else closes the gate
+      // while it sits there, and the stale entry is then chosen.
+      await t.tap(find.byTooltip('More actions'));
+      await t.pumpAndSettle();
+      expect(find.text('Resign — single'), findsOneWidget);
+
+      c.rollDice(); // the gate closes underneath the open menu
+      expect(c.awaitingHumanTurn, isFalse);
+
+      await t.tap(find.text('Resign — single'));
+      await t.pumpAndSettle();
+
+      expect(c.error, isNull);
+      expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty,
+          reason: 'a resign past the gate must not be offered');
+    });
+  });
+
+  group('pip counts', () {
+    testWidgets('the line is always present and names the local side', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      expect(find.byKey(const ValueKey('pipLine')), findsOneWidget);
+      // The local (White) side is "You" and the computer takes the opponent
+      // label; Black has already played its opening 6-1 by this gate.
+      final white = c.state.board.pipCount(Player.white);
+      final black = c.state.board.pipCount(Player.black);
+      expect(white, 167, reason: 'White has not moved yet');
+      expect(black, lessThan(167), reason: 'Black opened');
+      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('the counts follow the position and match BoardState.pipCount',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // White wins the opening 6-1 and moves first.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(find.text('Pips: You 167 · AI 167'), findsOneWidget);
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+
+      final white = c.state.board.pipCount(Player.white);
+      final black = c.state.board.pipCount(Player.black);
+      expect(white, lessThan(167), reason: 'White has played a move');
+      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat keeps the neutral W / B naming', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: LocalHumanAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => find.byKey(const ValueKey('pipLine')).evaluate().isNotEmpty);
+      await _dismissPassDevice(t);
+
+      expect(find.text('Pips: W 167 · B 167'), findsOneWidget);
+
+      c.disposeController();
+    });
+  });
+
+  group('no-legal-move hint', () {
+    /// A match parked at White's move with 5-5 from the opening position.
+    ///
+    /// Black opens 6-1 and replies; White then rolls 5-5, and the two checkers
+    /// on the 24-point (index 23) are STRANDED — their only hop, 24/19, lands on
+    /// Black's five-strong 19-point (index 18). That is the reported "why am I
+    /// not able to move this checker?" shape, reachable from a real game.
+    (GameController, LocalHumanAgent) strandedFives() {
+      final human = LocalHumanAgent();
+      return (
+        GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          // Black wins the opening roll (6 > 1) and moves; White then rolls 5-5.
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(5, 5), Dice(4, 3)]),
+        ),
+        human,
+      );
+    }
+
+    /// Rolls White in and waits for its move request.
+    Future<void> reachWhitesMove(
+        WidgetTester t, GameController c, LocalHumanAgent human) async {
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      expect(c.state.dice, Dice(5, 5), reason: 'precondition: White rolled 5-5');
+      expect(c.state.board.points[18], lessThanOrEqualTo(-2),
+          reason: 'precondition: Black still owns the 19-point');
+    }
+
+    testWidgets('a dead checker tap surfaces a hint that auto-clears, and the '
+        'board never reflows', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = strandedFives();
+      await t.pumpWidget(_harness(c));
+      await reachWhitesMove(t, c, human);
+
+      final before = t.getRect(find.byType(BoardView));
+      expect(find.textContaining('No legal move for that checker'), findsNothing);
+
+      await tapBoardPoint(t, 23);
+      expect(
+          find.text('No legal move for that checker with the remaining dice'),
+          findsOneWidget);
+      expect(t.getRect(find.byType(BoardView)), before,
+          reason: 'the hint floats over the board — no reflow (F6)');
+
+      // Rate-limited: a second tap replaces the hint rather than stacking one.
+      await tapBoardPoint(t, 23);
+      expect(find.textContaining('No legal move for that checker'),
+          findsOneWidget);
+
+      // It clears itself.
+      await t.pump(const Duration(milliseconds: 1300));
+      expect(find.textContaining('No legal move for that checker'), findsNothing);
+      expect(t.getRect(find.byType(BoardView)), before);
+
+      c.disposeController();
+    });
+
+    testWidgets('a staged partial move adds the Undo nudge', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = strandedFives();
+      await t.pumpWidget(_harness(c));
+      await reachWhitesMove(t, c, human);
+
+      await tapBoardPoint(t, 12); // 13/8 — one of four hops
+      await tapBoardPoint(t, 7);
+      expect(isButtonEnabled(t, find.widgetWithText(TextButton, 'Undo')), isTrue,
+          reason: 'precondition: a partial move is staged');
+
+      await tapBoardPoint(t, 23);
+      expect(
+          find.text('No legal move for that checker with the remaining dice '
+              '— try Undo'),
+          findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('tapping a checker that CAN move stays silent', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = strandedFives();
+      await t.pumpWidget(_harness(c));
+      await reachWhitesMove(t, c, human);
+
+      await tapBoardPoint(t, 12);
+      expect(boardPainterOf(t).selectedCheckerLocation, 12);
+      expect(find.textContaining('No legal move for that checker'), findsNothing);
 
       c.disposeController();
     });

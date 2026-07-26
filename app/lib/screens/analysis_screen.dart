@@ -22,10 +22,10 @@ import 'metric_explainer.dart';
 ///
 ///  * BOTH players' persistent dice pairs as of that step (the historical roll,
 ///    folded from the event log via [persistentDice]);
-///  * for a [MoveEvent] step, the recorded move drawn ON the board — origins as
-///    source rings, destinations as triangle highlights, over the PRE-move
-///    position — with a Played/Best toggle that swaps the overlay to the engine's
-///    best play when it differs;
+///  * for a [MoveEvent] step, the recorded move drawn ON the board — origins
+///    ringed with the STRONG yellow selection highlight, destinations as
+///    triangle highlights, over the PRE-move position — with a Played/Best
+///    toggle that swaps the overlay to the engine's best play when it differs;
 ///  * a scrollable list of EVERY move with its mark + equity loss, the current
 ///    step highlighted and tappable to jump; and
 ///  * an ⓘ explainer for the metrics (equity, equity loss, error rate, marks).
@@ -297,7 +297,11 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                 onMoveCommitted: (_) {},
                 whiteDice: whiteDice,
                 blackDice: blackDice,
-                highlightedSources: srcs,
+                // The checker(s) the shown play MOVES wear the strong yellow
+                // ring — the same one live selection uses — not the thin
+                // "could be picked up" ring, which read as a weak suggestion
+                // on a board where nothing is actually pickable.
+                strongHighlightSources: srcs,
                 highlightedDestinations: dests,
                 highlightMovingPlayer:
                     overlayMove == null ? null : current!.player,
@@ -305,16 +309,64 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
             ),
           ),
         ),
-        if (preMove) _preMoveCaption(showingBest: _showBest && hasBest),
-        if (hasBest) _playedBestToggle(),
-        if (current != null) _moveInfo(current),
+        // Every row below the board occupies a RESERVED, unconditional height,
+        // so stepping between an assessed move (caption + toggle + verdict) and
+        // a bare roll (none of them) cannot resize the board. The board and the
+        // move list share what is left through their two [Expanded]s, so ANY
+        // conditional height here would have moved both.
+        _reserved(
+          _captionSlotHeight,
+          preMove
+              ? _preMoveCaption(showingBest: _showBest && hasBest)
+              // A bare step (the opening, a roll, a cube/resign event) has no
+              // move to frame; the slot still says what the board is showing
+              // rather than sitting visibly blank.
+              : _caption('Position at this point in the game'),
+        ),
+        _reserved(_toggleSlotHeight, hasBest ? _playedBestToggle() : null),
+        _reserved(
+            _moveInfoSlotHeight, current == null ? null : _moveInfo(current)),
         _cursorBar(states.length),
         Expanded(child: _moveList()),
       ],
     );
   }
 
-  Widget _preMoveCaption({required bool showingBest}) {
+  /// Height of the "showing position before the move" caption slot.
+  static const double _captionSlotHeight = 24;
+
+  /// Height of the Played/Best toggle slot (a Material 3 [SegmentedButton] is
+  /// 48pt with its padded tap target, plus a little breathing room).
+  static const double _toggleSlotHeight = 56;
+
+  /// Height of the move-verdict slot (mark + loss + best play).
+  static const double _moveInfoSlotHeight = 40;
+
+  /// A fixed-height slot holding [child], or empty space of the same height when
+  /// [child] is `null`. The whole point is that the two cases measure alike.
+  ///
+  /// The heights are fixed in LOGICAL pixels, but the contents are text, which
+  /// the user's system text-scale setting grows without asking. Every slot's
+  /// content is therefore wrapped in a scale-down [FittedBox] (see
+  /// [_scaleToFit]), so a large setting shrinks the row instead of squeezing it
+  /// into a box it no longer fits — the board's fixed size is the invariant here,
+  /// and it cannot be traded away for a taller caption.
+  Widget _reserved(double height, Widget? child) =>
+      SizedBox(height: height, child: child == null ? null : Center(child: child));
+
+  /// Wraps [child] so it never asks for more room than it is given: measured at
+  /// its natural size, then scaled down to fit. [alignment] is where the scaled
+  /// result sits in the slot.
+  static Widget _scaleToFit(Widget child,
+          {Alignment alignment = Alignment.center}) =>
+      FittedBox(fit: BoxFit.scaleDown, alignment: alignment, child: child);
+
+  Widget _preMoveCaption({required bool showingBest}) => _caption(showingBest
+      ? 'Showing the best move on the position before the move'
+      : 'Showing position before the move');
+
+  /// One eye-icon caption line, sized to fit the reserved slot.
+  Widget _caption(String text) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       child: Row(
@@ -323,11 +375,11 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
           Icon(Icons.visibility_outlined,
               size: 14, color: Theme.of(context).colorScheme.outline),
           const SizedBox(width: 6),
-          Text(
-            showingBest
-                ? 'Showing the best move on the position before the move'
-                : 'Showing position before the move',
-            style: Theme.of(context).textTheme.bodySmall,
+          Flexible(
+            child: _scaleToFit(Text(text,
+                maxLines: 1,
+                softWrap: false,
+                style: Theme.of(context).textTheme.bodySmall)),
           ),
         ],
       ),
@@ -336,11 +388,13 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
 
   /// The Played / Best segmented toggle: swaps the board overlay between the
   /// move that was played and the engine's best play. Shown only when the two
-  /// differ (see [_loaded]).
+  /// differ — but its SPACE is reserved either way (see [_loaded]), so the board
+  /// keeps its size when the toggle comes and goes. Vertical padding is left to
+  /// the reserved slot so the button can never overflow it.
   Widget _playedBestToggle() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: SegmentedButton<bool>(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: _scaleToFit(SegmentedButton<bool>(
         showSelectedIcon: false,
         segments: const [
           ButtonSegment(value: false, label: Text('Played')),
@@ -348,7 +402,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
         ],
         selected: {_showBest},
         onSelectionChanged: (s) => setState(() => _showBest = s.first),
-      ),
+      )),
     );
   }
 
@@ -384,20 +438,31 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     final best = a.best.checkerMoves.isEmpty ? '(no play)' : '${a.best}';
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Icon(Icons.circle, size: 12, color: color),
-            const SizedBox(width: 8),
-            Text('${_sideLabel(m.player)}: $label$lossText',
-                style:
-                    TextStyle(color: color, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 12),
-            Flexible(
-              child: Text('Best: $best', overflow: TextOverflow.ellipsis),
+      // The bar keeps its full width (it is a coloured band) while its CONTENT
+      // scales, so the row inside is measured unbounded — hence no [Flexible]
+      // here, and the best-move notation scales with the rest rather than
+      // ellipsizing. Same idiom as the game screen's HUD.
+      child: SizedBox(
+        width: double.infinity,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: _scaleToFit(
+            Row(
+              key: const ValueKey('moveVerdictRow'),
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.circle, size: 12, color: color),
+                const SizedBox(width: 8),
+                Text('${_sideLabel(m.player)}: $label$lossText',
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
+                Text('Best: $best', maxLines: 1, softWrap: false),
+              ],
             ),
-          ],
+            alignment: Alignment.centerLeft,
+          ),
         ),
       ),
     );

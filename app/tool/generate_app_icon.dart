@@ -29,26 +29,33 @@ void main() {
     final dir = Directory(p.join('assets', 'icon'))
       ..createSync(recursive: true);
 
-    // Full bleed, square: the base image must have NO transparency — iOS
-    // forbids an alpha channel and a rounded source would leave pale corners
-    // once flattened. iOS and Windows round/mask it themselves.
+    // Full bleed, square: the board frame runs to the canvas edge, so the image
+    // has NO transparency — iOS forbids an alpha channel, and a rounded source
+    // would leave pale corners once flattened. iOS and Windows round it
+    // themselves.
     await _write(
       p.join(dir.path, 'app_icon.png'),
-      const AppMarkPainter(cornerRadiusFraction: 0, contentScale: 0.76),
+      const AppMarkPainter(cornerRadiusFraction: 0),
     );
 
-    // Android adaptive foreground: transparent plate, motif sized so its ink
-    // stays inside the 66/108 circular safe zone whatever mask a launcher
-    // applies. The mark's ink is near-square, so the limit is its DIAGONAL —
-    // and flutter_launcher_icons wraps this drawable in a further 16% inset
-    // (see mipmap-anydpi-v26/ic_launcher.xml), which the size below accounts
-    // for. At 108dp: 0.60 * 108 = 64.8dp across, whose ink DIAGONAL after the
-    // launcher-icons 16%-per-side inset lands ~62dp — inside the 66dp safe
-    // circle with a few dp to spare. The previous 0.64 computed to 66.5dp: a
-    // hair OVER the circle, so a maximally circular mask could shave the mark.
+    // Android adaptive foreground: transparent around a rounded board, sized so
+    // the frame's CORNERS stay inside the 66/108 circular safe zone whatever
+    // mask a launcher applies, remembering that flutter_launcher_icons wraps
+    // this drawable in a further 16%-per-side inset (see
+    // mipmap-anydpi-v26/ic_launcher.xml), i.e. scales it to 0.68.
+    //
+    // The mark is now the whole board, so its ink is the frame's rounded square
+    // — the extreme point is a corner arc, at
+    //   sqrt(2) * (0.5 - r) + r = 0.649 of the board's side  (r = 0.14),
+    // against 0.707 for a sharp square. So the ink half-extent on the launcher's
+    // 108dp canvas is
+    //   0.60 * 0.649 * 0.68 = 0.265  ->  28.6dp,
+    // comfortably inside the 33dp safe radius (the ceiling would be 0.69). Kept
+    // at 0.60: the frame is the silhouette, and a mark that grazes the mask edge
+    // looks clipped even when it technically is not.
     await _write(
       p.join(dir.path, 'app_icon_adaptive.png'),
-      const AppMarkPainter(background: false, contentScale: 0.60),
+      const AppMarkPainter(cornerRadiusFraction: 0.14, contentScale: 0.60),
     );
   });
 }

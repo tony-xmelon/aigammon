@@ -8,9 +8,10 @@ void main() {
   const size = Size(800, 600);
 
   /// A phone-portrait board: what [BoardView] hands the geometry on a 390pt
-  /// phone — the slot's full width at the tallest allowed aspect (0.62). Every
-  /// invariant below must hold on a board TALLER than it is wide.
-  const portrait = Size(374, 603);
+  /// phone — the game screen's board slot, filled edge to edge (aspect ~0.58,
+  /// inside the 0.55 clamp). Every invariant below must hold on a board TALLER
+  /// than it is wide.
+  const portrait = Size(390, 677);
 
   /// A SQUARE board (aspect 1.0), the regime BETWEEN the two above: past ~1.07
   /// the point band sets the checker size (as at 800x600), below ~0.67 the
@@ -136,7 +137,7 @@ void main() {
         }
       });
 
-      test('first five checkers never overlap; the sixth compresses', () {
+      test('the first five never overlap; a big stack compresses to fit', () {
         final twoR = g.checkerRadius * 2;
         for (final i in [0, 5, 12, 23]) {
           // Count <= 5: consecutive centres are a full diameter apart.
@@ -149,16 +150,118 @@ void main() {
                   reason: 'point $i count $count gap $s');
             }
           }
-          // Count 6 (and up): the stack compresses below a full diameter.
-          final gap6 =
-              (g.checkerCenter(i, 1, 6) - g.checkerCenter(i, 0, 6)).distance;
-          expect(gap6, lessThan(twoR),
-              reason: 'point $i six-stack should compress');
+          // Larger stacks never EXCEED full spacing (they only ever tighten).
+          // How soon tightening starts depends on the shape: a landscape point
+          // is 10 radii long, so the sixth checker already compresses; a tall
+          // board's capped 18-radii point holds nine at full spacing. Fifteen
+          // compress on every board.
+          for (final count in [6, 15]) {
+            final gap = (g.checkerCenter(i, 1, count) -
+                    g.checkerCenter(i, 0, count))
+                .distance;
+            expect(gap, lessThanOrEqualTo(twoR + 1e-6),
+                reason: 'point $i $count-stack must not exceed full spacing');
+          }
+          final gap15 =
+              (g.checkerCenter(i, 1, 15) - g.checkerCenter(i, 0, 15)).distance;
+          expect(gap15, lessThan(twoR),
+              reason: 'point $i fifteen-stack should compress');
+        }
+      });
+
+      test('every playing element sits INSIDE the frame rail', () {
+        final field = g.fieldRect;
+        // The field clears the painted rail with a felt margin of its own.
+        expect(field.left, greaterThan(g.frameThickness));
+        expect(boardSize.width - field.right, greaterThan(g.frameThickness));
+        expect(field.top, greaterThan(g.frameThickness));
+        expect(boardSize.height - field.bottom, greaterThan(g.frameThickness));
+        for (var i = 0; i < 24; i++) {
+          final r = g.pointRect(i);
+          expect(r.left, greaterThanOrEqualTo(field.left - 1e-6),
+              reason: 'point $i left edge crosses the frame');
+          expect(r.right, lessThanOrEqualTo(field.right + 1e-6),
+              reason: 'point $i right edge crosses the frame');
+          expect(r.top, greaterThanOrEqualTo(field.top - 1e-6),
+              reason: 'point $i top edge crosses the frame');
+          expect(r.bottom, lessThanOrEqualTo(field.bottom + 1e-6),
+              reason: 'point $i bottom edge crosses the frame');
+        }
+        for (final player in Player.values) {
+          for (final r in [
+            g.barRect(player),
+            g.offRect(player),
+            g.diceRect(player, mover: Player.white),
+          ]) {
+            expect(field.inflate(1e-6).contains(r.topLeft), isTrue);
+            expect(field.inflate(1e-6).contains(r.bottomRight), isTrue);
+          }
+        }
+      });
+
+      test('checkers, not just triangles, clear the frame rail', () {
+        final field = g.fieldRect;
+        final r = g.checkerRadius;
+        for (final i in [0, 5, 6, 11, 12, 17, 18, 23]) {
+          for (final count in [1, 5, 15]) {
+            for (var s = 0; s < count; s++) {
+              final c = g.checkerCenter(i, s, count);
+              expect(c.dx - r, greaterThanOrEqualTo(field.left - 1e-6),
+                  reason: 'point $i checker $s spills left of the field');
+              expect(c.dx + r, lessThanOrEqualTo(field.right + 1e-6),
+                  reason: 'point $i checker $s spills right of the field');
+            }
+          }
+        }
+      });
+
+      test('a tap on the frame rail is forgiven into the field', () {
+        // Every point that touches a side of the field is still reachable from
+        // the very edge of the WIDGET: insetting the field must not cost a
+        // touch target on the rail.
+        final field = g.fieldRect;
+        for (var i = 0; i < 24; i++) {
+          final r = g.pointRect(i);
+          if ((r.left - field.left).abs() < 1e-6) {
+            expect(g.locationAt(Offset(0.5, r.center.dy)), i,
+                reason: 'point $i from the LEFT rail');
+          }
+          if ((r.right - field.right).abs() < 1e-6) {
+            expect(g.locationAt(Offset(boardSize.width - 0.5, r.center.dy)), i,
+                reason: 'point $i from the RIGHT rail');
+          }
+        }
+        // And the rail above/below the tray strips still bears off.
+        expect(g.locationAt(Offset(boardSize.width / 2, 0.5)), CheckerMove.off);
+        expect(g.locationAt(Offset(boardSize.width / 2, boardSize.height - 0.5)),
+            CheckerMove.off);
+      });
+
+      test('the dice tap target is generous and covers the pair', () {
+        for (final mover in Player.values) {
+          for (final player in Player.values) {
+            final pair = g.diceRect(player, mover: mover);
+            final target = g.diceTapRect(player, mover: mover);
+            expect(target.contains(pair.topLeft), isTrue);
+            expect(target.contains(pair.bottomRight), isTrue);
+            expect(target.width,
+                greaterThanOrEqualTo(BoardGeometry.minDiceTapTarget - 1e-6));
+            expect(target.height,
+                greaterThanOrEqualTo(BoardGeometry.minDiceTapTarget - 1e-6));
+          }
+          // The two players' targets stay disjoint, so a tap is never ambiguous
+          // about which pair it hit.
+          expect(
+            g
+                .diceTapRect(Player.white, mover: mover)
+                .overlaps(g.diceTapRect(Player.black, mover: mover)),
+            isFalse,
+          );
         }
       });
 
       test('a checker fits its column and a five-stack fits its point', () {
-        final colWidth = boardSize.width * (1 - 0.08) / 12;
+        final colWidth = g.fieldRect.width * (1 - 0.08) / 12;
         expect(g.checkerRadius * 2, lessThanOrEqualTo(colWidth),
             reason: 'checkers must not spill into the neighbouring column');
         // Ten radii of travel: five checkers at full spacing.
@@ -182,10 +285,11 @@ void main() {
   test('a square board is the middle regime: column-bound, triangles uncapped',
       () {
     final g = BoardGeometry(square, whiteAtBottom: true);
-    final colWidth = square.width * (1 - 0.08) / 12;
+    final colWidth = g.fieldRect.width * (1 - 0.08) / 12;
     expect(g.checkerRadius, closeTo(colWidth * 0.46, 1e-6),
         reason: 'below an aspect of ~1.07 the column sets the checker size');
-    expect(g.pointRect(0).height, closeTo(square.height * 0.86 * 0.44, 1e-6),
+    expect(g.pointRect(0).height,
+        closeTo(g.fieldRect.height * 0.86 * 0.44, 1e-6),
         reason: 'above an aspect of ~0.67 the triangle cap does not bind');
   });
 
@@ -226,20 +330,26 @@ void main() {
     }
   });
 
-  test('the board fills the full width symmetrically (no side tray)', () {
+  test('the board fills the FIELD width symmetrically (no side tray)', () {
     final g = BoardGeometry(size, whiteAtBottom: true);
-    // Leftmost columns touch x=0; rightmost columns touch x=width. Left and
-    // right margins are equal (both ~0) — the symmetric full-width board.
-    expect(g.pointRect(11).left, closeTo(0, 1e-6), reason: 'bottom-left col');
-    expect(g.pointRect(12).left, closeTo(0, 1e-6), reason: 'top-left col');
-    expect(g.pointRect(0).right, closeTo(size.width, 1e-6),
+    final field = g.fieldRect;
+    // Leftmost columns touch the field's left edge; rightmost columns its
+    // right edge. Left and right margins are equal — the symmetric board,
+    // now inset inside the frame rail rather than running under it.
+    expect(g.pointRect(11).left, closeTo(field.left, 1e-6),
+        reason: 'bottom-left col');
+    expect(g.pointRect(12).left, closeTo(field.left, 1e-6),
+        reason: 'top-left col');
+    expect(g.pointRect(0).right, closeTo(field.right, 1e-6),
         reason: 'bottom-right col');
-    expect(g.pointRect(23).right, closeTo(size.width, 1e-6),
+    expect(g.pointRect(23).right, closeTo(field.right, 1e-6),
         reason: 'top-right col');
     // pointRect(0) mirrors pointRect(11) about the vertical centre line.
     final leftMargin = g.pointRect(11).left;
     final rightMargin = size.width - g.pointRect(0).right;
     expect(leftMargin, closeTo(rightMargin, 1e-6));
+    expect(leftMargin, greaterThan(g.frameThickness),
+        reason: 'a visible felt margin between the rail and the triangles');
   });
 
   test('bear-off trays are full-width top/bottom strips, orientation-aware', () {
@@ -247,8 +357,8 @@ void main() {
     // White (local bottom) bears off toward the BOTTOM strip; Black the TOP.
     final whiteTray = bottom.offRect(Player.white);
     final blackTray = bottom.offRect(Player.black);
-    expect(whiteTray.width, closeTo(size.width, 1e-6));
-    expect(blackTray.width, closeTo(size.width, 1e-6));
+    expect(whiteTray.width, closeTo(bottom.fieldRect.width, 1e-6));
+    expect(blackTray.width, closeTo(bottom.fieldRect.width, 1e-6));
     expect(whiteTray.top, greaterThan(size.height / 2), reason: 'white bottom');
     expect(blackTray.bottom, lessThan(size.height / 2), reason: 'black top');
     // The strips do not overlap the point bands (they sit outside the board).
@@ -267,28 +377,29 @@ void main() {
     final wide = BoardGeometry(size, whiteAtBottom: true);
 
     test('the checker is sized by the COLUMN, not the height', () {
-      // On a tall board a 12th of the width is the scarce dimension: the disc
-      // fills its column (92% of it) instead of a tenth of the point band.
-      final colWidth = portrait.width * (1 - 0.08) / 12;
+      // On a tall board a 12th of the field width is the scarce dimension: the
+      // disc fills its column (92% of it) instead of a tenth of the point band.
+      final colWidth = tall.fieldRect.width * (1 - 0.08) / 12;
       expect(tall.checkerRadius, closeTo(colWidth * 0.46, 1e-6));
       // The 800x600 board is the other regime: the point band binds there.
-      final wideCol = size.width * (1 - 0.08) / 12;
+      final wideCol = wide.fieldRect.width * (1 - 0.08) / 12;
       expect(wide.checkerRadius, lessThan(wideCol * 0.46));
     });
 
     test('triangles are capped, so the middle band grows instead of spikes',
         () {
-      final band = portrait.height * 0.86;
+      final band = tall.fieldRect.height * 0.86;
       final pointHeight = tall.pointRect(0).height;
-      // Capped well under the 44%-of-band a landscape board would take.
+      // Capped under the 44%-of-band a landscape board would take.
       expect(pointHeight, lessThan(band * 0.44));
-      expect(pointHeight, closeTo(tall.checkerRadius * 16, 1e-6));
+      expect(pointHeight, closeTo(tall.checkerRadius * 18, 1e-6));
       // The surplus lands in the empty middle band, which stays comfortably
       // taller than a die.
       final middle = band - 2 * pointHeight;
       expect(middle, greaterThan(tall.diceSide));
       // The landscape board is NOT capped: it keeps the full 44% band.
-      expect(wide.pointRect(0).height, closeTo(size.height * 0.86 * 0.44, 1e-6));
+      expect(wide.pointRect(0).height,
+          closeTo(wide.fieldRect.height * 0.86 * 0.44, 1e-6));
     });
 
     test('dice grow with the middle band and stay clear of it', () {

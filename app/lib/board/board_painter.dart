@@ -24,9 +24,12 @@ class BoardPainter extends CustomPainter {
     this.highlightedDestinations = const {},
     this.combinedDestinations = const {},
     this.selectedCheckerLocation,
+    this.strongHighlightLocations = const {},
     this.movingPlayer,
     this.hiddenChecker,
     this.overlayChecker,
+    this.diceTapHint = false,
+    this.usedDiceSlots = const {},
   });
 
   final BoardState board;
@@ -73,6 +76,18 @@ class BoardPainter extends CustomPainter {
   /// beaten checker resting on the bar highlights just like any other.
   final int? selectedCheckerLocation;
 
+  /// Locations whose top checker wears the SAME bright selection ring as
+  /// [selectedCheckerLocation], as a SET.
+  ///
+  /// Live move entry picks up one checker at a time, so it uses the single
+  /// [selectedCheckerLocation]. A recorded move's overlay (the analysis screen's
+  /// Played/Best board) has to mark every ORIGIN of a play that may move two or
+  /// three different checkers, and the user asked for those origins to wear the
+  /// strong yellow ring rather than the thin "could be picked up" source ring —
+  /// hence a set. Painted identically to the selection ring; empty by default,
+  /// in which case painting is byte-identical to the un-extended path.
+  final Set<int> strongHighlightLocations;
+
   /// The side to move, used only to resolve WHICH bar half a bar source/selection
   /// refers to (both players may have checkers on the bar at once). Required for
   /// a bar ring to render; ignored for point sources.
@@ -87,6 +102,19 @@ class BoardPainter extends CustomPainter {
   /// A checker to draw on top of everything at [center] during a move animation
   /// (the travelling piece). `null` when idle.
   final ({Offset center, bool isWhite})? overlayChecker;
+
+  /// Whether to ring the [diceMover]'s dice pair as a "tap here to roll"
+  /// affordance. Set only while the board actually accepts a dice tap (the
+  /// local player's pre-roll gate); `false` otherwise, in which case painting is
+  /// byte-identical to the un-extended path.
+  final bool diceTapHint;
+
+  /// Slots of the MOVER's dice pair already consumed by the hops staged so far
+  /// (slot 0 is `dice.die1`, slot 1 is `dice.die2`), rendered heavily dimmed so
+  /// a played die reads as spent. Empty outside move entry — and after an Undo,
+  /// which restores the die to full brightness. See `dice_usage.dart` for how
+  /// hops are mapped back onto slots.
+  final Set<int> usedDiceSlots;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -122,7 +150,9 @@ class BoardPainter extends CustomPainter {
   void _paintBackground(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     canvas.drawRect(rect, Paint()..color = theme.boardColor);
-    final border = math.min(size.width, size.height) * 0.012;
+    // The rail's thickness is the geometry's, so the playing field it insets
+    // for and the band actually painted can never drift apart.
+    final border = geometry.frameThickness;
     canvas.drawRect(
       rect.deflate(border / 2),
       Paint()
@@ -222,6 +252,13 @@ class BoardPainter extends CustomPainter {
     for (final loc in highlightedSources) {
       final c = _topCheckerCenter(loc);
       if (c != null) _drawSourceRing(canvas, c);
+    }
+    // The strong ring set (a recorded move's origins) is painted with exactly
+    // the live selection's ring, so "this is the checker that moves" reads the
+    // same on the analysis board as it does mid-turn.
+    for (final loc in strongHighlightLocations) {
+      final c = _topCheckerCenter(loc);
+      if (c != null) _drawSelectedRing(canvas, c);
     }
     final sel = selectedCheckerLocation;
     if (sel != null) {
@@ -425,13 +462,47 @@ class BoardPainter extends CustomPainter {
   /// this game renders as blank dimmed outlines (no pips).
   void _paintDice(Canvas canvas) {
     final mover = diceMover ?? Player.white;
+    if (diceTapHint) _paintDiceTapHint(canvas, mover);
     _paintPlayerDice(canvas, Player.white, whiteDice, mover);
     _paintPlayerDice(canvas, Player.black, blackDice, mover);
+  }
+
+  /// The pre-roll "tap to roll" affordance: a soft glow plus a crisp rounded
+  /// ring around the MOVER's dice pair, drawn UNDER the dice themselves so it
+  /// reads as a halo rather than a frame over the pips. Deliberately quiet —
+  /// the Roll button remains the primary, discoverable control.
+  void _paintDiceTapHint(Canvas canvas, Player mover) {
+    final rect = geometry.diceRect(mover, mover: mover);
+    final pad = geometry.diceSide * 0.28;
+    final halo = RRect.fromRectXY(
+      rect.inflate(pad),
+      geometry.diceSide * 0.34,
+      geometry.diceSide * 0.34,
+    );
+    canvas.drawRRect(
+      halo,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = geometry.diceSide * 0.24
+        ..color = theme.selectedOutline.withValues(alpha: 0.22),
+    );
+    canvas.drawRRect(
+      halo,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = geometry.diceSide * 0.07
+        ..color = theme.selectedOutline.withValues(alpha: 0.85),
+    );
   }
 
   /// Alpha applied to the WAITING player's dice so the mover's pair reads as the
   /// live roll while the opponent's persisted roll stays legible beneath it.
   static const double _waitingDiceOpacity = 0.6;
+
+  /// Alpha applied to a die of the MOVER's pair that the staged hops have
+  /// already consumed. Deliberately below [_waitingDiceOpacity]: a spent die
+  /// must read as *disabled*, not merely as "not your turn".
+  static const double _usedDiceOpacity = 0.28;
 
   void _paintPlayerDice(
       Canvas canvas, Player player, Dice? dice, Player mover) {
@@ -449,8 +520,13 @@ class BoardPainter extends CustomPainter {
     final pip = isWhite ? theme.blackChecker : theme.whiteChecker;
     final rim = isWhite ? theme.whiteCheckerBorder : theme.blackCheckerBorder;
     final dim = player == mover ? 1.0 : _waitingDiceOpacity;
-    _drawDie(canvas, first, side, dice?.die1, body, pip, rim, dim);
-    _drawDie(canvas, second, side, dice?.die2, body, pip, rim, dim);
+    // A die the mover has already played out is dimmed further still. Only the
+    // mover's own pair can carry played dice (the waiting pair is a memento).
+    double slot(int index) => (player == mover && usedDiceSlots.contains(index))
+        ? _usedDiceOpacity
+        : dim;
+    _drawDie(canvas, first, side, dice?.die1, body, pip, rim, slot(0));
+    _drawDie(canvas, second, side, dice?.die2, body, pip, rim, slot(1));
   }
 
   void _drawDie(Canvas canvas, Offset center, double side, int? value,
@@ -592,6 +668,9 @@ class BoardPainter extends CustomPainter {
         old.movingPlayer != movingPlayer ||
         old.hiddenChecker != hiddenChecker ||
         old.overlayChecker != overlayChecker ||
+        old.diceTapHint != diceTapHint ||
+        !setEquals(old.usedDiceSlots, usedDiceSlots) ||
+        !setEquals(old.strongHighlightLocations, strongHighlightLocations) ||
         !setEquals(old.highlightedSources, highlightedSources) ||
         !setEquals(old.highlightedDestinations, highlightedDestinations) ||
         !setEquals(old.combinedDestinations, combinedDestinations);

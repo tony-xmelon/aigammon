@@ -301,6 +301,13 @@ Future<void> _playMatch(
   }
   if (!done.contains('hint')) _skipped.add('hint panel');
   if (!done.contains('selection')) _skipped.add('move entry with a selection');
+  if (!done.contains('dice_dim')) {
+    _skipped.add('a played die rendered dim mid-entry');
+  }
+  if (!done.contains('dead_tap')) {
+    _skipped.add('the "no legal move for that checker" hint (every one of the '
+        "mover's points could play something)");
+  }
   if (!done.contains('drag_hint')) _skipped.add('drag-hint SnackBar');
   if (!done.contains('record')) _skipped.add('expanded history sheet');
 }
@@ -373,6 +380,31 @@ Future<void> _humanMove(
     }
   }
 
+  // Tapping one of your own checkers that no remaining die can play: the brief
+  // hint pinned to the board's bottom edge. Waits for it to clear again so it
+  // cannot bleed into the next capture.
+  if (!done.contains('dead_tap') && !_confirmReady(tester)) {
+    // Let any queued opponent-move animation finish first: while a move travels
+    // the painter deliberately drops the whole highlight layer, so a capture
+    // taken then shows a board with no source rings at all.
+    await _beat(tester, const Duration(milliseconds: 900));
+    final dead = _deadCheckerPoint(tester);
+    if (dead != null) {
+      await tapBoardPoint(tester, dead);
+      await _beat(tester, const Duration(milliseconds: 250));
+      final shown = find
+          .textContaining('No legal move for that checker')
+          .evaluate()
+          .isNotEmpty;
+      // Only bank the checkpoint on a frame that also shows the normal entry
+      // affordances; otherwise leave it for a later move.
+      if (shown && boardPainterOf(tester).highlightedSources.isNotEmpty) {
+        if (await _shot(tester, 'no_legal_move_hint')) done.add('dead_tap');
+      }
+      await _beat(tester, const Duration(milliseconds: 1200));
+    }
+  }
+
   // A checker selected, with its destinations lit.
   if (!done.contains('selection') && !_confirmReady(tester)) {
     final sources = boardPainterOf(tester).highlightedSources;
@@ -385,8 +417,23 @@ Future<void> _humanMove(
     }
   }
 
-  await _finishMove(tester);
+  await _finishMove(tester, done);
   await _beat(tester, const Duration(milliseconds: 200));
+}
+
+/// A point holding the MOVER's own checkers that the builder does not offer as
+/// a source, or `null` when every one of their points can play something. The
+/// tap target for the "no legal move for that checker" checkpoint.
+int? _deadCheckerPoint(WidgetTester tester) {
+  final painter = boardPainterOf(tester);
+  final mover = painter.movingPlayer;
+  if (mover == null) return null;
+  for (var i = 0; i < 24; i++) {
+    final count = painter.board.points[i];
+    final own = mover == Player.white ? count > 0 : count < 0;
+    if (own && !painter.highlightedSources.contains(i)) return i;
+  }
+  return null;
 }
 
 /// Whether the action bar's Confirm is present and enabled (the move is
@@ -399,10 +446,20 @@ bool _confirmReady(WidgetTester tester) {
 /// Completes whatever move entry is open: greedily walks the first offered
 /// destination (or source) until Confirm lights up, then commits — or takes the
 /// "No moves — pass" affordance during a dance.
-Future<void> _finishMove(WidgetTester tester) async {
+///
+/// Also the natural place to catch the mid-entry frame where a die has been
+/// PLAYED OUT and renders dim on the mover's pair (the `dice_dim` checkpoint):
+/// it is the only moment in the tour with a partial move staged and the board
+/// otherwise unobstructed.
+Future<void> _finishMove(WidgetTester tester, Set<String> done) async {
   // A still-open hint panel would eat every board tap through its scrim.
   await _dismissHintPanel(tester);
   for (var i = 0; i < 10; i++) {
+    if (!done.contains('dice_dim') &&
+        !_confirmReady(tester) &&
+        boardPainterOf(tester).usedDiceSlots.isNotEmpty) {
+      if (await _shot(tester, 'played_die_dimmed')) done.add('dice_dim');
+    }
     if (_confirmReady(tester)) {
       await tester.tap(find.widgetWithText(FilledButton, 'Confirm'));
       await tester.pump();

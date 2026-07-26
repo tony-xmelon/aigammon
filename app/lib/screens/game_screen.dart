@@ -234,6 +234,18 @@ class _GameScreenState extends State<GameScreen> {
   /// screen never tears down a SnackBar that belongs to somebody else.
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _dragHintBar;
 
+  /// The transient "that checker cannot move" hint currently shown over the
+  /// bottom edge of the board, or `null` when nothing is shown. Raised by the
+  /// [BoardView]'s [BoardView.onNoLegalSourceTap] and cleared by [_tapHintTimer].
+  String? _tapHint;
+
+  /// Auto-clear timer for [_tapHint]. A repeat tap RESTARTS it rather than
+  /// stacking a second hint (the rate limit).
+  Timer? _tapHintTimer;
+
+  /// How long a [_tapHint] stays up.
+  static const Duration _tapHintDuration = Duration(milliseconds: 1200);
+
   /// Whether the move-history ("Game record") bottom panel is open.
   bool _recordOpen = false;
 
@@ -326,6 +338,7 @@ class _GameScreenState extends State<GameScreen> {
       });
     }
     _rollBeatTimer?.cancel();
+    _tapHintTimer?.cancel();
     _observable.removeListener(_onChange);
     _dicePresenting.dispose();
     _stagedMove.dispose();
@@ -351,6 +364,30 @@ class _GameScreenState extends State<GameScreen> {
     _syncTutor();
     _maybeShowDragHint();
     setState(() {});
+  }
+
+  // --- "That checker cannot move" hint ---------------------------------------
+
+  /// Surfaces the brief hint behind the reported "why am I not able to move the
+  /// 7?" confusion: tapping one of your own checkers that no remaining die can
+  /// play used to be a completely silent no-op, leaving the user to guess
+  /// whether the tap registered at all.
+  ///
+  /// Deliberately NOT a floating [SnackBar]: one would cover the action bar (and
+  /// outlive the route). This is an in-tree layer pinned to the BOTTOM EDGE of
+  /// the board's slot — right above the history strip, next to where the eye
+  /// already is — so it can never reflow the board or block Undo/Confirm. A
+  /// repeat tap restarts the timer instead of queueing a second hint.
+  void _showNoLegalSourceHint(bool hasStagedHops) {
+    final message = hasStagedHops
+        ? 'No legal move for that checker with the remaining dice — try Undo'
+        : 'No legal move for that checker with the remaining dice';
+    _tapHintTimer?.cancel();
+    setState(() => _tapHint = message);
+    _tapHintTimer = Timer(_tapHintDuration, () {
+      if (!mounted) return;
+      setState(() => _tapHint = null);
+    });
   }
 
   // --- One-time drag/tap hint ------------------------------------------------
@@ -741,42 +778,70 @@ class _GameScreenState extends State<GameScreen> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Center(
-                          child: BoardView(
-                            state: state,
-                            interactive: moveSide != null,
-                            onMoveCommitted: (move) {
-                              if (moveSide != null) {
-                                _c.submitMove(moveSide, move);
-                              }
-                            },
-                            whiteAtBottom: whiteAtBottom,
-                            externalMove: _stagedMove,
-                            lastMove: _c.lastMove,
-                            holdMoveAnimation: _dicePresenting,
-                            entryControl: _entryControl,
-                            hopDuration: widget.timings.hop,
-                            interHopDuration: widget.timings.interHop,
-                            interactionOptions: widget.interactionOptions,
-                            whiteDice: whiteDice,
-                            blackDice: blackDice,
-                            diceOverride: _rollBeatDice,
-                          ),
-                        ),
+                      // NO padding: the board gets every pixel of this slot (a
+                      // reported complaint — an 8pt inset on a 390pt phone cost
+                      // 4% of the board's width, and the aspect clamp then left
+                      // ~24pt of dead space above and below it). With
+                      // [BoardView.minAspect] relaxed below a phone slot's
+                      // shape, the board now fills the slot outright.
+                      BoardView(
+                        state: state,
+                        interactive: moveSide != null,
+                        onMoveCommitted: (move) {
+                          if (moveSide != null) {
+                            _c.submitMove(moveSide, move);
+                          }
+                        },
+                        whiteAtBottom: whiteAtBottom,
+                        externalMove: _stagedMove,
+                        lastMove: _c.lastMove,
+                        holdMoveAnimation: _dicePresenting,
+                        entryControl: _entryControl,
+                        hopDuration: widget.timings.hop,
+                        interHopDuration: widget.timings.interHop,
+                        interactionOptions: widget.interactionOptions,
+                        whiteDice: whiteDice,
+                        blackDice: blackDice,
+                        diceOverride: _rollBeatDice,
+                        // Tapping the dice is a second, on-board route to the
+                        // Roll button — wired under exactly the condition that
+                        // enables that button, and null otherwise so dice-area
+                        // taps fall through to normal move entry.
+                        onDiceTap: _canRoll(moveSide) ? _rollDice : null,
+                        onNoLegalSourceTap: _showNoLegalSourceHint,
                       ),
+                      // Both banners are PURELY informational and float over the
+                      // board, so both are hit-test transparent: a [Stack]
+                      // returns the topmost child that reports a hit, so a
+                      // banner left tappable silently ate every board tap in
+                      // its band — and each band covers a bear-off tray strip
+                      // (the error banner Black's, the hint White's). Bearing
+                      // off went dead for as long as the banner was up.
                       if (_c.error != null)
                         Positioned(
                           top: 0,
                           left: 0,
                           right: 0,
-                          child: _ErrorBanner(error: _c.error!),
+                          child: IgnorePointer(
+                            child: _ErrorBanner(error: _c.error!),
+                          ),
+                        ),
+                      // Floats over the board's bottom edge, so it never takes
+                      // layout height (F6) and never covers the action bar.
+                      if (_tapHint != null)
+                        Positioned(
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                          child: IgnorePointer(
+                            child: _TapHintBanner(message: _tapHint!),
+                          ),
                         ),
                     ],
                   ),
                 ),
                 _historyStrip(),
+                _pipLine(),
                 _bottomRegion(moveSide),
               ],
             ),
@@ -1022,12 +1087,12 @@ class _GameScreenState extends State<GameScreen> {
           ),
         ],
       );
-    } else if (_c.awaitingHumanTurn) {
+    } else if (_canRoll(moveSide)) {
       content = Row(
         children: [
           const Spacer(),
           FilledButton(
-            onPressed: _c.rollDice,
+            onPressed: _rollDice,
             child: const Text('Roll'),
           ),
         ],
@@ -1048,6 +1113,31 @@ class _GameScreenState extends State<GameScreen> {
         child: content,
       ),
     );
+  }
+
+  /// Whether the local player is at the pre-roll gate, i.e. whether a Roll is
+  /// the action on offer. The single source of truth for BOTH routes to it: the
+  /// action bar's Roll button and the board's tap-the-dice affordance, so the
+  /// two can never disagree about when rolling is allowed.
+  bool _canRoll(Player? moveSide) => moveSide == null && _c.awaitingHumanTurn;
+
+  /// Rolls the dice — the shared handler behind BOTH routes (the action bar's
+  /// Roll button and the on-board dice tap).
+  ///
+  /// Re-checks the gate AT INVOCATION rather than trusting the enabled-ness
+  /// baked into the last build. Two presses inside one frame — a double-tap on
+  /// the dice, or an impatient second jab at Roll — both run the callback that
+  /// frame captured, and the second arrives at a gate the first already closed:
+  /// [MatchController.rollDice] is documented as valid only while
+  /// [MatchController.awaitingHumanTurn], and both implementations throw
+  /// otherwise (a `StateError` straight out of the gesture handler). The first
+  /// press did exactly what the user wanted, so the duplicate is dropped
+  /// silently; this narrows the guard to that benign race and never hides a real
+  /// failure, since the throw it replaces carried no information the UI could
+  /// act on.
+  void _rollDice() {
+    if (!_c.awaitingHumanTurn) return;
+    _c.rollDice();
   }
 
   Widget _hintButton() => OutlinedButton.icon(
@@ -1111,6 +1201,58 @@ class _GameScreenState extends State<GameScreen> {
                 Icon(Icons.expand_less,
                     size: 18, color: scheme.onSurfaceVariant),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Height of the always-present pip-count line. Like the action bar and the
+  /// advice slot it is FIXED and unconditional: the board fills the slot above
+  /// it, so a line that came and went would resize the board (F6).
+  static const double _pipLineHeight = 20;
+
+  /// The live pip counts for both sides, sitting with the tutor metrics just
+  /// under the history strip ("missing pip count along the tutor metrics").
+  ///
+  /// Named from the local player's point of view where there is one — "Pips:
+  /// You 132 · AI 145", reusing [GameScreen.opponentLabel] so an online match
+  /// reads "Opp" — and neutrally ("W … · B …") in hot-seat, where both sides are
+  /// local and neither of them is "you". Same rule as the header score.
+  ///
+  /// Counts come from the COMMITTED board, so they step once per move rather
+  /// than flickering through a half-entered turn.
+  Widget _pipLine() {
+    final scheme = Theme.of(context).colorScheme;
+    final board = _c.state.board;
+    final white = board.pipCount(Player.white);
+    final black = board.pipCount(Player.black);
+    final localWhite = _c.isLocalHuman(Player.white);
+    final localBlack = _c.isLocalHuman(Player.black);
+    final soleLocal = localWhite != localBlack;
+    final String text;
+    if (!soleLocal) {
+      text = 'Pips: W $white · B $black';
+    } else {
+      final (mine, theirs) =
+          localWhite ? (white, black) : (black, white);
+      text = 'Pips: You $mine · ${widget.opponentLabel} $theirs';
+    }
+    return SizedBox(
+      key: const ValueKey('pipLine'),
+      height: _pipLineHeight,
+      child: Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            text,
+            maxLines: 1,
+            softWrap: false,
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontSize: 12,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ),
@@ -1682,6 +1824,40 @@ class _Hud extends StatelessWidget {
         (s.cube.owner == null || s.cube.owner == s.turn);
   }
 
+  /// Offers a double, re-checking AT INVOCATION the very condition the button's
+  /// enabled-ness was built from.
+  ///
+  /// Same race, and the same reason, as [_GameScreenState._rollDice]: Double and
+  /// Resign share the pre-roll gate with Roll. The enabled-ness is baked into
+  /// the last build, so two presses inside one frame both run the callback that
+  /// frame captured while the match moves on underneath them.
+  ///
+  /// Unlike Roll, this re-checks BOTH halves of the precondition, because
+  /// [MatchController.offerDouble] has two: the gate must be open AND doubling
+  /// must be legal right now. Mirroring only the gate was not enough — a second
+  /// press lands after the opponent has taken the cube, by which time the gate
+  /// has reopened for the roll but the double is no longer on offer, and the
+  /// throw comes from the legality check instead ("doubling is not legal now").
+  /// Re-checking exactly `atGate && _doublingLegal` cannot drift from the
+  /// button's own condition.
+  void _offerDouble() {
+    if (!controller.awaitingHumanTurn || !_doublingLegal) return;
+    controller.offerDouble();
+  }
+
+  /// Offers a resignation of [value], re-checking the gate AT INVOCATION.
+  ///
+  /// The overflow menu makes this race reachable in a second way, without any
+  /// double-tap: the menu is built while the gate is open and then OUTLIVES it —
+  /// an AI reply or a remote opponent's event folds in while it sits open — so
+  /// the entry the user finally picks is addressing a gate that has since
+  /// closed. Dropping it is right either way: resigning is only legal at your
+  /// own pre-roll gate.
+  void _offerResign(ResignValue value) {
+    if (!controller.awaitingHumanTurn) return;
+    controller.offerResign(value);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = controller.state;
@@ -1752,8 +1928,7 @@ class _Hud extends StatelessWidget {
             // The Double button is omitted entirely in a cubeless match.
             if (!controller.cubeless)
               OutlinedButton.icon(
-                onPressed:
-                    atGate && _doublingLegal ? controller.offerDouble : null,
+                onPressed: atGate && _doublingLegal ? _offerDouble : null,
                 icon: const Icon(Icons.control_point_duplicate, size: 16),
                 label: const Text('Double'),
                 style: OutlinedButton.styleFrom(
@@ -1769,11 +1944,11 @@ class _Hud extends StatelessWidget {
                   case _MenuAction.gameRecord:
                     onGameRecord();
                   case _MenuAction.resignSingle:
-                    controller.offerResign(ResignValue.single);
+                    _offerResign(ResignValue.single);
                   case _MenuAction.resignGammon:
-                    controller.offerResign(ResignValue.gammon);
+                    _offerResign(ResignValue.gammon);
                   case _MenuAction.resignBackgammon:
-                    controller.offerResign(ResignValue.backgammon);
+                    _offerResign(ResignValue.backgammon);
                 }
               },
               itemBuilder: (context) => [
@@ -1902,6 +2077,42 @@ class _ErrorBanner extends StatelessWidget {
               child: Text(
                 '$error',
                 style: TextStyle(color: scheme.onErrorContainer),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// --- Transient board hint ----------------------------------------------------
+
+/// The brief "that checker cannot move" strip pinned to the bottom edge of the
+/// board slot. A plain [Material] row — not a [SnackBar] — so it neither covers
+/// the action bar nor survives a route change, and no animation is left pending
+/// for `pumpAndSettle`.
+class _TapHintBanner extends StatelessWidget {
+  const _TapHintBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.inverseSurface,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline, size: 16, color: scheme.onInverseSurface),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                maxLines: 2,
+                style: TextStyle(color: scheme.onInverseSurface, fontSize: 12),
               ),
             ),
           ],
