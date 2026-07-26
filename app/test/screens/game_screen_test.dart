@@ -2050,6 +2050,258 @@ void main() {
       c2.disposeController();
     });
 
+    // On a shared device the header and the ⋮ belong to nobody in particular:
+    // both players can reach them, and both acted on `state.turn`. Every verb
+    // that COSTS something therefore has to be owned by an edge (Double) or name
+    // its side out loud (Surrender).
+    group('verb ownership', () {
+      testWidgets('Double leaves the shared header and lives at each edge',
+          (t) async {
+        await t.binding.setSurfaceSize(_surface);
+        addTearDown(() => t.binding.setSurfaceSize(null));
+
+        final white = LocalHumanAgent();
+        final black = LocalHumanAgent();
+        final c = hotSeat(white, black);
+
+        await t.pumpWidget(_harnessTabletop(c));
+        await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+        expect(_inHud(find.widgetWithText(OutlinedButton, 'Double')),
+            findsNothing,
+            reason: 'the header cannot tell which of the two people pressed it');
+
+        // At Black's gate the verb is on Black's own bar and live there only.
+        await commitVia(t, bottomBar());
+        await pumpUntil(
+            t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+        final topDouble = barButton(topBar(), OutlinedButton, 'Double');
+        final bottomDouble = barButton(bottomBar(), OutlinedButton, 'Double');
+        expect(topDouble, findsOneWidget);
+        expect(bottomDouble, findsOneWidget);
+        expect(isButtonEnabled(t, topDouble), isTrue);
+        expect(isButtonEnabled(t, bottomDouble), isFalse,
+            reason: "White cannot double on Black's turn from the far edge");
+
+        // And it actually doubles, for the right side.
+        await t.tap(topDouble);
+        await pumpUntil(t, () => white.pendingCubeRequest.value != null);
+        expect(c.game.events.whereType<DoubleEvent>().last.player, Player.black);
+
+        c.disposeController();
+      });
+
+      testWidgets('a cubeless tabletop match offers Double nowhere', (t) async {
+        await t.binding.setSurfaceSize(_surface);
+        addTearDown(() => t.binding.setSurfaceSize(null));
+
+        final white = LocalHumanAgent();
+        final c = GameController(
+          white: white,
+          black: LocalHumanAgent(),
+          matchLength: 5,
+          cubeless: true,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+        await t.pumpWidget(_harnessTabletop(c));
+        await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+        await commitVia(t, bottomBar());
+        await pumpUntil(
+            t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+
+        expect(find.widgetWithText(OutlinedButton, 'Double'), findsNothing);
+
+        c.disposeController();
+      });
+
+      testWidgets('the non-tabletop header keeps its Double', (t) async {
+        await t.binding.setSurfaceSize(_surface);
+        addTearDown(() => t.binding.setSurfaceSize(null));
+
+        final human = LocalHumanAgent();
+        final c = vsAi(human);
+        await t.pumpWidget(_harness(c));
+        await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+        expect(_inHud(find.widgetWithText(OutlinedButton, 'Double')),
+            findsOneWidget);
+        expect(topBar(), findsNothing);
+
+        c.disposeController();
+      });
+
+      testWidgets('the ATTACK: the player off turn can no longer concede for '
+          'their opponent', (t) async {
+        await t.binding.setSurfaceSize(_surface);
+        addTearDown(() => t.binding.setSurfaceSize(null));
+
+        final white = LocalHumanAgent();
+        final black = LocalHumanAgent();
+        final c = hotSeat(white, black);
+
+        await t.pumpWidget(_harnessTabletop(c));
+        await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+        await commitVia(t, bottomBar());
+        // White's move is in; WHITE's gate is the one that will open next.
+        await pumpUntil(
+            t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+        await t.tap(barButton(topBar(), FilledButton, 'Roll'));
+        await pumpUntil(t, () => black.pendingMoveRequest.value != null);
+        await commitVia(t, topBar());
+        await pumpUntil(
+            t, () => c.awaitingHumanTurn && c.state.turn == Player.white);
+
+        // Black — NOT on turn — reaches over and opens the ⋮ during White's
+        // gate. Previously the sheet latched `state.turn` (White) and lit its
+        // values immediately, so the very next tap booked a 3-point
+        // backgammon resignation AGAINST White.
+        await t.tap(find.byIcon(Icons.more_vert));
+        await t.pumpAndSettle();
+        await t.tap(find.text('Surrender…'));
+        await t.pumpAndSettle();
+
+        expect(find.text('Who is conceding this game?'), findsOneWidget);
+        expect(find.text('Backgammon (3)'), findsNothing,
+            reason: 'no value is reachable before a side is named — the whole '
+                'attack was that this tap existed');
+        expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty);
+
+        c.disposeController();
+      });
+
+      testWidgets('the chooser binds the values to the CHOSEN side, not the '
+          'side on turn', (t) async {
+        await t.binding.setSurfaceSize(_surface);
+        addTearDown(() => t.binding.setSurfaceSize(null));
+
+        final white = LocalHumanAgent();
+        final black = LocalHumanAgent();
+        final c = hotSeat(white, black);
+
+        await t.pumpWidget(_harnessTabletop(c));
+        await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+        await commitVia(t, bottomBar());
+        await pumpUntil(
+            t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+
+        // BLACK's gate is open. Choose WHITE: the values must stay shut and say
+        // so, rather than firing against the side that happens to be on turn.
+        await t.tap(find.byIcon(Icons.more_vert));
+        await t.pumpAndSettle();
+        await t.tap(find.text('Surrender…'));
+        await t.pumpAndSettle();
+        await t.tap(find.widgetWithText(TextButton, 'White'));
+        await t.pump();
+
+        expect(find.text('White concedes the current game.'), findsOneWidget);
+        expect(find.text("Available at the start of White's turn"),
+            findsOneWidget);
+        expect(
+            isButtonEnabled(
+                t, find.widgetWithText(TextButton, 'Backgammon (3)')),
+            isFalse,
+            reason: "it is Black's gate that is open, not White's");
+        expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty);
+
+        // The sheet is MODAL, so the only way on from here is Cancel — naming a
+        // side whose gate is shut is a dead end by construction, which is
+        // exactly the property being bought.
+        await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await t.pumpAndSettle();
+
+        // Play round to WHITE's own gate, then concede for White deliberately.
+        await t.tap(barButton(topBar(), FilledButton, 'Roll'));
+        await pumpUntil(t, () => black.pendingMoveRequest.value != null);
+        await commitVia(t, topBar());
+        await pumpUntil(
+            t, () => c.awaitingHumanTurn && c.state.turn == Player.white);
+
+        await t.tap(find.byIcon(Icons.more_vert));
+        await t.pumpAndSettle();
+        await t.tap(find.text('Surrender…'));
+        await t.pumpAndSettle();
+        await t.tap(find.widgetWithText(TextButton, 'White'));
+        await t.pump();
+        expect(
+            isButtonEnabled(
+                t, find.widgetWithText(TextButton, 'Backgammon (3)')),
+            isTrue,
+            reason: "White's own gate is open now");
+
+        await t.tap(find.widgetWithText(TextButton, 'Backgammon (3)'));
+        await pumpUntil(
+            t, () => c.game.events.whereType<ResignOfferEvent>().isNotEmpty);
+        expect(c.game.events.whereType<ResignOfferEvent>().last.player,
+            Player.white,
+            reason: 'the chosen side conceded — nobody else');
+
+        c.disposeController();
+      });
+
+      testWidgets('non-tabletop surrender is unchanged: no chooser step',
+          (t) async {
+        await t.binding.setSurfaceSize(_surface);
+        addTearDown(() => t.binding.setSurfaceSize(null));
+
+        final human = LocalHumanAgent();
+        final c = vsAi(human);
+        await t.pumpWidget(_harness(c));
+        await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+        await t.tap(find.byIcon(Icons.more_vert));
+        await t.pumpAndSettle();
+        await t.tap(find.text('Surrender…'));
+        await t.pumpAndSettle();
+        expect(find.text('Who is conceding this game?'), findsNothing);
+        expect(find.text('Concedes the current game.'), findsOneWidget);
+        expect(find.text('Backgammon (3)'), findsOneWidget);
+
+        c.disposeController();
+      });
+    });
+
+    testWidgets('the pass-device cover is suppressed: nothing is handed over',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      // The setting is ON and independent — but the cover exists to hide a board
+      // being rotated for somebody the device is passed to, and here it is
+      // passed to nobody.
+      await t.pumpWidget(_harnessTabletop(c, showPassDevice: true));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      await commitVia(t, bottomBar());
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+
+      expect(find.text('Pass the device'), findsNothing);
+      // And play is immediately open at Black's own edge — no tap-through.
+      expect(isButtonEnabled(t, barButton(topBar(), FilledButton, 'Roll')),
+          isTrue);
+
+      c.disposeController();
+    });
+
+    testWidgets('the cover still works in the FLIP layout (setting intact)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final c = hotSeat(white, LocalHumanAgent());
+      await t.pumpWidget(_harnessOriented(c, BoardOrientationMode.followActive,
+          showPassDevice: true));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(find.text('Pass the device'), findsOneWidget);
+
+      c.disposeController();
+    });
+
     testWidgets('the tutor Hint sits in BOTH bars, live only on its own turn',
         (t) async {
       await t.binding.setSurfaceSize(_surface);

@@ -1012,7 +1012,15 @@ class _GameScreenState extends State<GameScreen> {
       _lastActor = actor; // first turn: reveal immediately, no overlay
       _displayedWhiteAtBottom = actor == Player.white; // orient to first actor
     } else if (actor != _lastActor && !_passDevicePending) {
-      if (widget.showPassDevice) {
+      // The cover is meaningless in the TABLETOP layout and actively wrong
+      // there: it exists to hide a board being rotated while a device is handed
+      // from one player to the other, and in tabletop the device is handed to
+      // nobody and the board is never rotated. Both settings are independent, so
+      // a user who had turned the cover on for the old flip paradigm would
+      // otherwise be made to tap through a full-screen "Pass the device" between
+      // every turn of a game where they are sitting opposite each other. The
+      // setting itself is untouched and still governs the flip layout.
+      if (widget.showPassDevice && !_tabletopBars) {
         _passDevicePending = true;
       } else {
         // No cover to hide behind: the flip happens in the open, and the actor
@@ -1083,6 +1091,9 @@ class _GameScreenState extends State<GameScreen> {
                   opponentLabel: widget.opponentLabel,
                   opponentDetail: widget.opponentDetail,
                   onSurrender: _hasLocalHuman ? _openSurrender : null,
+                  // Tabletop moves Double to the players' own edges — the shared
+                  // header cannot tell which of the two people pressed it.
+                  showDouble: !_tabletopBars,
                 ),
                 // TABLETOP hot-seat only: the second player's action bar, at
                 // THEIR edge (directly under the header) and upside-down so it
@@ -1250,20 +1261,52 @@ class _GameScreenState extends State<GameScreen> {
         _passDevicePending ||
         _humanSideWith((s) => _c.pendingCubeOf(s).value != null) != null ||
         _humanSideWith((s) => _c.pendingResignOf(s).value != null) != null;
-    // HOT-SEAT ONLY: the turn leaving the side that opened this sheet means the
-    // device has changed hands, so the sheet belongs to somebody who is no
-    // longer playing — it goes, rather than lingering for the new player to tap
-    // by accident. Not applied when one side is the AI or a remote opponent:
-    // the turn leaving you there is just them playing, nobody else has touched
-    // the device, and the sheet is still yours when it comes back.
-    final handedOver = _hotSeat && _c.state.turn != _surrenderFor;
+    // HOT-SEAT WITH A ROTATING BOARD ONLY: the turn leaving the side that opened
+    // this sheet means the device has changed hands, so the sheet belongs to
+    // somebody who is no longer playing — it goes, rather than lingering for the
+    // new player to tap by accident. Not applied when one side is the AI or a
+    // remote opponent: the turn leaving you there is just them playing, nobody
+    // else has touched the device, and the sheet is still yours when it comes
+    // back.
+    //
+    // NOT applied in tabletop either, for the same reason it needs a side
+    // chooser at all: the device changes hands at no point and both players are
+    // present throughout, so a turn change is not somebody walking away. The
+    // sheet there is bound to an explicitly NAMED side, so a turn change cannot
+    // retarget it — the values simply go dark ([_surrenderReady] compares
+    // against the latch, not against whoever is on turn). `_surrenderFor` is
+    // also null while the chooser step is up, which this comparison would read
+    // as "handed over" and close on the very next rebuild.
+    //
+    // Note the sheet is MODAL, so a side named while its own gate is shut
+    // cannot then wait for that gate to open — nobody can play underneath it.
+    // Cancelling is the only way on, which is a deliberate dead end rather than
+    // a deadlock: it is what makes "concede for the player who is not on turn"
+    // unreachable instead of merely discouraged.
+    final handedOver =
+        _hotSeat && !_tabletopBars && _c.state.turn != _surrenderFor;
     if (outranked || handedOver) _closeSurrender();
   }
 
-  /// Opens the sheet, latching the side it is for (see [_surrenderFor]).
+  /// Whether the surrender flow must ASK who is conceding before it will offer
+  /// any values — true in the tabletop layout, false everywhere else.
+  ///
+  /// Everywhere else the answer is not in doubt: either exactly one side is
+  /// locally human (vs-AI, online, LAN — nobody else can concede), or the board
+  /// rotates to face whoever is on turn, so the person holding the device is the
+  /// one the turn names. In tabletop BOTH players are sitting at the device at
+  /// once and neither of those inferences holds, which is precisely the hole:
+  /// latching `state.turn` let the player who is NOT on turn open the ⋮ and
+  /// immediately concede — at their opponent's own open gate, for up to three
+  /// points. Naming the side is the only honest way to resolve it, so it becomes
+  /// an explicit first step rather than a silent guess.
+  bool get _surrenderNeedsSideChoice => _tabletopBars;
+
+  /// Opens the sheet, latching the side it is for (see [_surrenderFor]) — or
+  /// leaving it UNSET in tabletop, where [_surrenderSideChooser] asks first.
   void _openSurrender() {
     setState(() {
-      _surrenderFor = _surrenderSide();
+      _surrenderFor = _surrenderNeedsSideChoice ? null : _surrenderSide();
       _surrenderOpen = true;
     });
   }
@@ -1321,11 +1364,22 @@ class _GameScreenState extends State<GameScreen> {
   /// the sheet does not wait that long, because the turn changing hands closes
   /// it outright (see [_closeSurrenderIfOutranked]).
   Widget _surrenderDialog() {
+    // Tabletop: nothing is on offer until the sheet knows who is conceding.
+    if (_surrenderFor == null) return _surrenderSideChooser();
     final ready = _surrenderReady;
+    final side = _surrenderFor!;
     return _ModalCard(
       title: 'Surrender',
-      message: 'Concedes the current game.',
-      footnote: ready ? null : 'Available at the start of your turn',
+      message: _surrenderNeedsSideChoice
+          // Name the side back to the user: on a shared device the sheet is the
+          // only place that says WHO this concession costs.
+          ? '${_playerName(side)} concedes the current game.'
+          : 'Concedes the current game.',
+      footnote: ready
+          ? null
+          : _surrenderNeedsSideChoice
+              ? "Available at the start of ${_playerName(side)}'s turn"
+              : 'Available at the start of your turn',
       actions: [
         _CardAction(
           label: 'Cancel',
@@ -1343,6 +1397,30 @@ class _GameScreenState extends State<GameScreen> {
       ],
     );
   }
+
+  /// The tabletop-only first step: WHICH player is conceding. Until one is
+  /// chosen there is no value button on screen at all, so there is no path from
+  /// "open the ⋮" to a live concession without naming the side it costs.
+  ///
+  /// The chosen side is latched into [_surrenderFor], and [_surrenderReady] then
+  /// holds the values shut until THAT side's own pre-roll gate — so a choice
+  /// made during the opponent's turn simply waits rather than firing against
+  /// whoever happens to be on turn.
+  Widget _surrenderSideChooser() => _ModalCard(
+        title: 'Surrender',
+        message: 'Who is conceding this game?',
+        actions: [
+          _CardAction(
+            label: 'Cancel',
+            onPressed: () => setState(_closeSurrender),
+          ),
+          for (final side in [Player.white, Player.black])
+            _CardAction(
+              label: _playerName(side),
+              onPressed: () => setState(() => _surrenderFor = side),
+            ),
+        ],
+      );
 
   /// Offers the resignation and closes the sheet. Re-checks [_surrenderReady] AT
   /// INVOCATION for the same reason the header's Double re-checks its own
@@ -1634,6 +1712,17 @@ class _GameScreenState extends State<GameScreen> {
     } else if (_canRoll(moveSide)) {
       content = Row(
         children: [
+          // TABLETOP ONLY: Double belongs to the player whose gate is open, so
+          // in this layout it lives at their EDGE rather than in the shared
+          // header — see [_ownsTheVerbs]. Far left, away from Roll: it is the
+          // irreversible one of the two verbs on offer at this gate.
+          if (_tabletopBars && !_c.cubeless)
+            OutlinedButton.icon(
+              onPressed: live && _doublingLegal(_c.state) ? _offerDouble : null,
+              icon: const Icon(Icons.control_point_duplicate, size: 16),
+              label: const Text('Double'),
+              style: _compactButton,
+            ),
           const Spacer(),
           FilledButton(
             onPressed: live ? _rollDice : null,
@@ -1690,6 +1779,18 @@ class _GameScreenState extends State<GameScreen> {
   void _rollDice() {
     if (!_c.awaitingHumanTurn) return;
     _c.rollDice();
+  }
+
+  /// Offers a double from the acting player's own edge (tabletop only — every
+  /// other layout doubles from the header's button, [_Hud._offerDouble]).
+  ///
+  /// Re-checks BOTH halves of the precondition at invocation, exactly as the
+  /// header's copy does and for the same reason: the enabled-ness was baked into
+  /// the last build, and a second press inside one frame lands after the first
+  /// has already closed the gate or the opponent has taken the cube.
+  void _offerDouble() {
+    if (!_c.awaitingHumanTurn || !_doublingLegal(_c.state)) return;
+    _c.offerDouble();
   }
 
   /// The shared compact style for the action bar's buttons — see [_actionBar] for
@@ -2388,6 +2489,7 @@ class _Hud extends StatelessWidget {
     this.opponentLabel = 'AI',
     this.opponentDetail,
     this.onSurrender,
+    this.showDouble = true,
   });
 
   /// Height of row 1 (the match context plus the action controls).
@@ -2435,6 +2537,16 @@ class _Hud extends StatelessWidget {
   /// AI-vs-AI harness), which is the one case where the ⋮ has nothing to offer
   /// and is therefore disabled.
   final VoidCallback? onSurrender;
+
+  /// Whether the header carries the Double button.
+  ///
+  /// False in the TABLETOP layout only. This header sits at one edge of a device
+  /// two people share, but the button acts for whoever is on turn — so the
+  /// player who is NOT on turn could double on their opponent's behalf simply by
+  /// reaching over. There the verb belongs to the per-edge action bars, which
+  /// are owner-gated; everywhere else exactly one human can be on turn at all,
+  /// so the shared header is unambiguous and keeps it.
+  final bool showDouble;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
@@ -2601,8 +2713,12 @@ class _Hud extends StatelessWidget {
                       const _ThinkingDot(),
                       const SizedBox(width: 8),
                     ],
-                    // The Double button is omitted entirely in a cubeless match.
-                    if (!controller.cubeless)
+                    // Omitted entirely in a cubeless match, and in the tabletop
+                    // layout — where it is not the header's verb to offer, since
+                    // the header is shared by two players and this button acts
+                    // for whoever is on turn. It moves to the per-edge action
+                    // bars instead (see [_GameScreenState._actionBar]).
+                    if (!controller.cubeless && showDouble)
                       OutlinedButton.icon(
                         onPressed:
                             atGate && _doublingLegal ? _offerDouble : null,
