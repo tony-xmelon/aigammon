@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -147,7 +148,10 @@ class BoardInteractionOptions {
 
   /// When true, a pan gesture that starts on a selectable source's top checker
   /// lifts it and drops it on the released location (a drag-to-move). When
-  /// false, pan gestures are ignored and only taps drive move entry.
+  /// false, no pan recogniser is attached at all: nothing is ever lifted and a
+  /// travelling press falls through to the tap handler, which reads it as a tap
+  /// on the point the finger came down on (see
+  /// `_BoardViewState._tapDownPosition`).
   final bool enableDrag;
 
   /// When true, combined (multi-hop, same-checker) landings are highlighted (a
@@ -283,9 +287,20 @@ class BoardInteractionOptions {
 /// from this checker, else the lower. Detection is manual (a timestamp plus a
 /// same-target check inside the existing tap handler) rather than
 /// [GestureDetector.onDoubleTap], because that recogniser delays EVERY single
-/// tap by its timeout; selection must stay instant. The second tap must land on
-/// the checker the first one picked up, so completing a hop and then starting
-/// the next one from the same point is never mistaken for a double-tap.
+/// tap by its timeout; selection must stay instant.
+///
+/// Only a tap that SELECTED a source arms it, and a tap is consumed only when
+/// the quick hop actually applies — so no tap that would advance move entry can
+/// ever be swallowed by the detector (see [_BoardViewState._consumeDoubleTap]).
+/// Completing a hop and then starting the next one from the same point is
+/// therefore an ordinary pickup, however fast it arrives.
+///
+/// ## Sloppy taps still count ([_BoardViewState._tapDownPosition])
+///
+/// A press that slid a few millimetres — routine for a thumb on a phone — used to
+/// fall into the gap between Flutter's tap and pan recognisers and vanish. The
+/// recognisers are wired by hand so a gesture that never became a drag is always
+/// delivered as a tap, routed by the point the finger came DOWN on.
 ///
 /// ## Played dice read as spent ([BoardPainter.usedDiceSlots])
 ///
@@ -609,12 +624,37 @@ class _BoardViewState extends State<BoardView>
   /// lifted checker's ghost is painted. `null` when not dragging.
   Offset? _dragPointer;
 
-  /// Wall-clock time of the previous tap that resolved to [_lastTapTarget], for
-  /// the manual double-tap detector. `null` before the first tap.
+  /// Wall-clock time the double-tap detector was ARMED — i.e. of the tap that
+  /// picked [_lastTapTarget] up. `null` whenever the detector is disarmed, which
+  /// is after every tap that did not leave a source selected. See
+  /// [_armDoubleTap] / [_consumeDoubleTap].
   DateTime? _lastTapAt;
 
-  /// The location the previous tap resolved to, for the double-tap detector.
+  /// The source the arming tap picked up; a second tap on THIS checker is what
+  /// the double-tap detector looks for. `null` when disarmed.
   int? _lastTapTarget;
+
+  /// Where the finger came DOWN for the tap in progress (board-local), and the
+  /// reason the recognisers are wired by hand (see the [RawGestureDetector] in
+  /// [build]).
+  ///
+  /// A press drifts. Flutter's tap recogniser abandons one as soon as the finger
+  /// has moved [kTouchSlop] (18pt), while the pan recogniser only claims the
+  /// gesture at [kPanSlop] (36pt) — so with drag enabled (the shipped default) a
+  /// press that slid 18-36pt was dropped by BOTH: no selection, no hop, no hint,
+  /// nothing. A thumb on a phone-sized board slides that far constantly, which is
+  /// the other half of "I cannot move a valid move".
+  ///
+  /// Both tap tolerances are therefore switched off, which makes the split the
+  /// one the user intends: travel far enough and the PAN claims the gesture (a
+  /// drag); otherwise the tap survives to the release. It is then routed by THIS
+  /// position — where the user aimed — rather than by where the finger left the
+  /// glass, and the tap's own forgiveness ([_tapTolerance]) resolves what that
+  /// addressed. With drag disabled there is no pan to claim anything, so even a
+  /// long swipe arrives as a tap on the checker it started on.
+  ///
+  /// `null` between taps.
+  Offset? _tapDownPosition;
 
   @override
   void initState() {
@@ -695,6 +735,7 @@ class _BoardViewState extends State<BoardView>
       _selectedSource = null;
       _stagedFromExternal = false; // a manual undo makes this hand entry
     });
+    _disarmDoubleTap(); // nothing is picked up any more
     _syncEntry();
   }
 
@@ -828,13 +869,18 @@ class _BoardViewState extends State<BoardView>
     _selectedSource = null;
     _dragSource = null;
     _dragPointer = null;
-    _lastTapAt = null; // a new position never inherits a half-finished double-tap
-    _lastTapTarget = null;
+    _disarmDoubleTap(); // a new position never inherits a half-finished pair
+    _tapDownPosition = null;
     _stagedFromExternal = false; // a fresh phase defaults to hand entry
     if (widget.interactive && widget.state.phase == GamePhase.moving) {
-      final legal = widget.state.legalMoves;
-      _builder = MoveBuilder(legal);
-      _isDance = legal.isEmpty;
+      // POSITION-AWARE: every playable way to enter each legal move is offered,
+      // so the checker just moved with one die can still play the other, and no
+      // unplayable (phantom) source is ever offered. See MoveBuilder.forState.
+      final builder = MoveBuilder.forState(widget.state);
+      _builder = builder;
+      // A fresh builder with nothing chosen offers no sources only when there is
+      // no legal move at all — a dance.
+      _isDance = builder.selectableSources.isEmpty;
     } else {
       _builder = null;
       _isDance = false;
@@ -948,6 +994,7 @@ class _BoardViewState extends State<BoardView>
   /// either dice pair rolls; a DOUBLE-tap on the checker already picked up plays
   /// a hop outright; everything else goes to move entry.
   void _onTapUp(BoardGeometry geometry, Offset localPosition) {
+    _tapDownPosition = null; // consumed: the next tap records its own
     final roll = widget.onDiceTap;
     if (roll != null && _isDiceTap(geometry, localPosition)) {
       roll();
@@ -961,49 +1008,64 @@ class _BoardViewState extends State<BoardView>
   /// double-tap that PLAYED a hop (so the caller must not also run normal tap
   /// handling).
   ///
-  /// The second tap counts only when it lands on the same target within
-  /// [BoardView.doubleTapWindow], that target is the source the first tap picked
-  /// up ([_selectedSource]), and the tap does NOT address one of that source's
-  /// destinations. Each of those three conditions rules out a distinct
-  /// misinterpretation:
+  /// ## A tap can never be eaten
   ///
-  /// * requiring the pickup keeps an ordinary "complete a hop here, then start
-  ///   the next hop from the same point" sequence intact — a completed hop
-  ///   clears the selection, so the follow-up tap is a plain pickup however fast
-  ///   it arrives;
-  /// * deferring to destinations keeps a genuine MOVE from being stolen. A
-  ///   destination one column over from the picked-up checker sits inside the
-  ///   tap-forgiveness radius (at least 22pt), so [_tapTarget] resolves a tap on
-  ///   its triangle back to the source. Without this check, quickly tapping the
-  ///   1's triangle of a 6-1 played the 6 instead — a wrong move, entered
-  ///   silently. Destination handling therefore wins, exactly as it does in
-  ///   [_handleTap]; the double-tap only ever fires on a tap that would
-  ///   otherwise have done nothing but re-select or deselect.
+  /// The detector is ARMED only by a tap that SELECTED a source (see
+  /// [_armDoubleTap], called from [_handleTap]); every other tap — a destination
+  /// tap that staged a hop, a deselect, a tap on dead felt — leaves it disarmed,
+  /// so nothing but "pick a checker up, tap it again" can even be a candidate.
+  /// Each further condition below must also hold, and the LAST of them is the
+  /// invariant that matters: the tap is consumed only when the quick hop really
+  /// applies. If any check fails the tap falls through to [_handleTap] unchanged,
+  /// so a tap that would advance move entry is never swallowed.
+  ///
+  /// * the pickup must still be live ([_selectedSource]) and still selectable —
+  ///   so "complete a hop here, then start the next hop from the same point"
+  ///   stays an ordinary pickup however fast it arrives (a staged hop clears the
+  ///   selection AND disarms);
+  /// * the tap must land on that same checker ([_tapTarget]);
+  /// * and it must NOT address one of that source's destinations — a genuine MOVE
+  ///   is never stolen. A destination one column over from the picked-up checker
+  ///   sits inside the tap-forgiveness radius (at least 22pt), so [_tapTarget]
+  ///   resolves a tap on its triangle back to the source; without this check,
+  ///   quickly tapping the 1's triangle of a 6-1 played the 6 instead — a wrong
+  ///   move, entered silently. Destination handling wins, exactly as in
+  ///   [_handleTap].
   bool _consumeDoubleTap(BoardGeometry geometry, Offset localPosition) {
     final builder = _builder;
-    if (builder == null) return false;
+    final armedAt = _lastTapAt;
+    final armedTarget = _lastTapTarget;
+    // Whatever happens, this tap does not stay armed: a double-tap fires at most
+    // once per pair, and a third quick tap starts a fresh pair.
+    _disarmDoubleTap();
+    if (builder == null || armedAt == null || armedTarget == null) return false;
     final window = widget.doubleTapWindow;
-    final target = _tapTarget(geometry, localPosition, builder);
-    final previousAt = _lastTapAt;
-    final previousTarget = _lastTapTarget;
-    final now = DateTime.now();
-    _lastTapAt = now;
-    _lastTapTarget = target;
     if (window <= Duration.zero) return false;
-    if (target == null || previousAt == null || previousTarget != target) {
+    if (DateTime.now().difference(armedAt) > window) return false;
+    if (_selectedSource != armedTarget) return false;
+    if (!builder.selectableSources.contains(armedTarget)) return false;
+    if (_tapTarget(geometry, localPosition, builder) != armedTarget) return false;
+    if (_addressesDestination(geometry, localPosition, builder, armedTarget)) {
       return false;
     }
-    if (now.difference(previousAt) > window) return false;
-    if (_selectedSource != target) return false;
-    if (!builder.selectableSources.contains(target)) return false;
-    if (_addressesDestination(geometry, localPosition, builder, target)) {
-      return false;
-    }
-    // Consumed: a third quick tap starts a fresh pair rather than chaining.
+    // The decisive guard: consume the tap only when there is a hop to play.
+    final destination =
+        highestDieDestination(builder, armedTarget, widget.state.turn);
+    if (destination == null) return false;
+    _applyQuickHop(builder, armedTarget, destination);
+    return true;
+  }
+
+  /// Arms the double-tap detector on [source], which this tap just picked up.
+  void _armDoubleTap(int source) {
+    _lastTapAt = DateTime.now();
+    _lastTapTarget = source;
+  }
+
+  /// Disarms the detector: the next tap starts a fresh pair.
+  void _disarmDoubleTap() {
     _lastTapAt = null;
     _lastTapTarget = null;
-    _applyQuickHop(builder, target);
-    return true;
   }
 
   /// Whether a tap at [pos] would be read as a MOVE for the picked-up [source] —
@@ -1033,13 +1095,10 @@ class _BoardViewState extends State<BoardView>
     return _nearestSource(geometry, pos, builder) ?? loc;
   }
 
-  /// Plays ONE hop from [source] immediately: the destination consuming the
-  /// HIGHER remaining die when that is legal from this checker, else the lower
-  /// (see [highestDieDestination]). No-op when the source offers no hop.
-  void _applyQuickHop(MoveBuilder builder, int source) {
-    final destination =
-        highestDieDestination(builder, source, widget.state.turn);
-    if (destination == null) return;
+  /// Plays the hop [source] → [destination] immediately (the double-tap's
+  /// quick hop; [highestDieDestination] chooses the destination — the HIGHER
+  /// remaining die when that is legal from this checker, else the lower).
+  void _applyQuickHop(MoveBuilder builder, int source, int destination) {
     setState(() {
       _stagedFromExternal = false; // a manual gesture makes this hand entry
       builder.addHop(source, destination);
@@ -1093,8 +1152,8 @@ class _BoardViewState extends State<BoardView>
         return;
       }
       // Re-tapping the picked-up source deselects it — but only a SLOW re-tap
-      // gets here: a second tap inside [BoardView.doubleTapWindow] is claimed by
-      // [_consumeDoubleTap] and plays a hop instead.
+      // gets here: a re-tap inside [BoardView.doubleTapWindow] that has a hop to
+      // play is claimed by [_consumeDoubleTap] and plays it instead.
       if (loc == selected) {
         _selectedSource = null;
         return;
@@ -1124,6 +1183,15 @@ class _BoardViewState extends State<BoardView>
       _selectedSource = _nearestSource(geometry, localPosition, builder);
       missed = _selectedSource == null && _isOwnChecker(loc);
     });
+    // A tap that leaves a source PICKED UP is a selection tap — the only kind
+    // that arms the double-tap detector. Every hop-staging branch above clears
+    // the selection, so this reads the outcome without tracking it by hand.
+    final picked = _selectedSource;
+    if (picked != null) {
+      _armDoubleTap(picked);
+    } else {
+      _disarmDoubleTap();
+    }
     _syncEntry();
     if (missed) {
       widget.onNoLegalSourceTap?.call(builder.chosenHops.isNotEmpty);
@@ -1181,6 +1249,7 @@ class _BoardViewState extends State<BoardView>
   /// Half of the 44pt minimum touch target: the tap-forgiveness radius never
   /// drops below this, however small the board's checkers are.
   static const double _minTapTolerance = 22;
+
 
   /// The selectable source whose top-checker anchor is nearest [pos] within
   /// [_tapTolerance], or `null` when none is close enough. Anchors are computed
@@ -1275,6 +1344,7 @@ class _BoardViewState extends State<BoardView>
       _selectedSource = null;
       _stagedFromExternal = false; // a manual drag makes this hand entry
     });
+    _disarmDoubleTap(); // a drag is not half of a double-tap
     _syncEntry();
   }
 
@@ -1496,20 +1566,49 @@ class _BoardViewState extends State<BoardView>
           }
           final dragEnabled =
               widget.interactive && widget.interactionOptions.enableDrag;
-          return GestureDetector(
+          // A RawGestureDetector rather than GestureDetector so the TAP
+          // recogniser's movement tolerances can be switched off — see
+          // [_tapSurvivesTravel] for the dead zone that closes.
+          return RawGestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapUp: (details) => _onTapUp(geometry, details.localPosition),
-            // Pan recognisers are attached only when drag is enabled, so with
-            // drag off a pan simply falls through (does nothing) while taps keep
-            // working. With both attached, Flutter's gesture arena routes a
-            // static press+release to onTapUp and a moving gesture to the pan
-            // handlers, so tap and drag coexist.
-            onPanStart: dragEnabled
-                ? (details) => _onPanStart(geometry, details.localPosition)
-                : null,
-            onPanUpdate:
-                dragEnabled ? (details) => _onPanUpdate(details.localPosition) : null,
-            onPanEnd: dragEnabled ? (_) => _onPanEnd(geometry) : null,
+            gestures: <Type, GestureRecognizerFactory>{
+              TapGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                () => TapGestureRecognizer(
+                  debugOwner: this,
+                  // Movement never cancels the tap; only the pan claiming the
+                  // gesture does. See [_tapSurvivesTravel].
+                  preAcceptSlopTolerance: null,
+                  postAcceptSlopTolerance: null,
+                ),
+                (recognizer) {
+                  // The DOWN position is where the user aimed; the release may
+                  // have drifted. Route by the aim.
+                  recognizer.onTapDown =
+                      (details) => _tapDownPosition = details.localPosition;
+                  recognizer.onTapUp = (details) => _onTapUp(
+                      geometry, _tapDownPosition ?? details.localPosition);
+                  recognizer.onTapCancel = () => _tapDownPosition = null;
+                },
+              ),
+              // Pan recognisers are attached only when drag is enabled, so with
+              // drag off a pan simply falls through (does nothing) while taps
+              // keep working. With both attached, Flutter's gesture arena routes
+              // a press+release that never travelled far to the tap and a
+              // travelling gesture to the pan handlers.
+              if (dragEnabled)
+                PanGestureRecognizer:
+                    GestureRecognizerFactoryWithHandlers<PanGestureRecognizer>(
+                  () => PanGestureRecognizer(debugOwner: this),
+                  (recognizer) {
+                    recognizer.onStart = (details) =>
+                        _onPanStart(geometry, details.localPosition);
+                    recognizer.onUpdate =
+                        (details) => _onPanUpdate(details.localPosition);
+                    recognizer.onEnd = (_) => _onPanEnd(geometry);
+                  },
+                ),
+            },
             child: CustomPaint(size: size, painter: painter),
           );
         },
