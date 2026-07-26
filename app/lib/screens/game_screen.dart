@@ -700,9 +700,20 @@ class _GameScreenState extends State<GameScreen> {
           // entry affordances appear. A rebuild is needed for the latter (the
           // notifier alone only wakes the board's own listener).
           setState(_endPresenting);
-          // Entry just opened without a controller notification, so the one-time
-          // drag/tap tip — which waits for exactly these affordances — has to be
-          // re-offered here or it would sit out the whole move.
+          // Entry just opened without a controller notification, so the two
+          // things that wait for exactly these affordances have to be re-offered
+          // here or they would sit out the whole move: the one-time drag/tap
+          // tip, and the dance hold.
+          //
+          // The dance hold DID already start without this call — the board's
+          // [BoardEntryController] defers its notify to the next frame, which
+          // lands back in [_onChange] — but relying on another object's
+          // scheduling for a turn to advance itself is emergent, not designed.
+          // Arming it on the same line that opens entry makes the beat start
+          // when the dice become readable, by construction. [_syncDancePass] is
+          // idempotent while a hold is already pending, so the later
+          // notification is a no-op.
+          _syncDancePass();
           _maybeShowDragHint();
         });
         return;
@@ -1022,9 +1033,7 @@ class _GameScreenState extends State<GameScreen> {
                   showScoring: widget.showScoring,
                   opponentLabel: widget.opponentLabel,
                   opponentDetail: widget.opponentDetail,
-                  onSurrender: _hasLocalHuman
-                      ? () => setState(() => _surrenderOpen = true)
-                      : null,
+                  onSurrender: _hasLocalHuman ? _openSurrender : null,
                 ),
                 Expanded(
                   // The board's slot. An error banner FLOATS at its top edge
@@ -1140,6 +1149,25 @@ class _GameScreenState extends State<GameScreen> {
   /// Whether the user's Surrender sheet is open.
   bool _surrenderOpen = false;
 
+  /// The side the open sheet BELONGS to — latched when it opens, `null` when it
+  /// is closed. Every gate on the sheet is keyed to this rather than to the
+  /// side-agnostic [MatchController.awaitingHumanTurn].
+  ///
+  /// Without it, hot-seat could resign for the wrong player. `awaitingHumanTurn`
+  /// says only "some local human's gate is open", and since round 6 two things
+  /// can hand the turn over UNDER an open sheet with nothing to interrupt it: a
+  /// danced turn passing itself, and the pass-device cover being off by default.
+  /// White would open the sheet mid-dance (values disabled), the auto-pass would
+  /// advance to Black's gate, the values would light up — and White's tap booked
+  /// the resignation against BLACK.
+  ///
+  /// Latched to the side that will actually be conceding: the sole local human
+  /// where there is one (vs-AI, online — no other side is even possible there,
+  /// so the sheet survives the opponent's turn as it always did), else the side
+  /// on turn when the sheet opened (hot-seat, where "who is holding the device"
+  /// is exactly what the turn tells us).
+  Player? _surrenderFor;
+
   /// Whether any side of this match is driven by a local human — i.e. whether
   /// there is anybody here who COULD surrender. False only for an AI-vs-AI
   /// harness, where the ⋮ has nothing to offer.
@@ -1157,8 +1185,47 @@ class _GameScreenState extends State<GameScreen> {
         _passDevicePending ||
         _humanSideWith((s) => _c.pendingCubeOf(s).value != null) != null ||
         _humanSideWith((s) => _c.pendingResignOf(s).value != null) != null;
-    if (outranked) _surrenderOpen = false;
+    // HOT-SEAT ONLY: the turn leaving the side that opened this sheet means the
+    // device has changed hands, so the sheet belongs to somebody who is no
+    // longer playing — it goes, rather than lingering for the new player to tap
+    // by accident. Not applied when one side is the AI or a remote opponent:
+    // the turn leaving you there is just them playing, nobody else has touched
+    // the device, and the sheet is still yours when it comes back.
+    final handedOver = _hotSeat && _c.state.turn != _surrenderFor;
+    if (outranked || handedOver) _closeSurrender();
   }
+
+  /// Opens the sheet, latching the side it is for (see [_surrenderFor]).
+  void _openSurrender() {
+    setState(() {
+      _surrenderFor = _surrenderSide();
+      _surrenderOpen = true;
+    });
+  }
+
+  /// Closes the sheet and drops the latch. Callers already inside a rebuild path
+  /// ([_closeSurrenderIfOutranked]) do not need their own [setState]; the ones
+  /// reached from a tap wrap it.
+  void _closeSurrender() {
+    _surrenderOpen = false;
+    _surrenderFor = null;
+  }
+
+  /// Which side a sheet opened right now would belong to. See [_surrenderFor].
+  Player _surrenderSide() {
+    final localWhite = _c.isLocalHuman(Player.white);
+    final localBlack = _c.isLocalHuman(Player.black);
+    if (localWhite != localBlack) {
+      return localWhite ? Player.white : Player.black;
+    }
+    return _c.state.turn;
+  }
+
+  /// Whether the open sheet's value buttons may fire: a local gate is open AND
+  /// it is the latched side's gate. Both halves are needed — see [_surrenderFor]
+  /// for the hot-seat case the first half alone got wrong.
+  bool get _surrenderReady =>
+      _c.awaitingHumanTurn && _c.state.turn == _surrenderFor;
 
   /// The Surrender sheet: the three concession values with what each is worth,
   /// and one line saying what surrendering does.
@@ -1174,26 +1241,30 @@ class _GameScreenState extends State<GameScreen> {
   /// as "add surrender option", of a feature that had shipped long before.
   ///
   /// So the menu and this sheet are ALWAYS reachable, and the gate is expressed
-  /// where it can be explained: the three value buttons are disabled off-gate,
-  /// under a line saying when they will work. The alternative — queueing the
-  /// intent and firing it at the next legal moment — was rejected as the less
-  /// robust of the two: a queued resignation has to be invalidated against every
-  /// transition that can happen while it waits (the game ending, the match
-  /// ending, a new game starting, the opponent doubling), and getting any of
-  /// them wrong concedes a game the player did not mean to concede. Nothing is
-  /// lost by waiting, because this sheet is declarative: it rebuilds with the
-  /// controller, so the buttons LIGHT UP the instant the turn comes round with
-  /// the sheet still open.
+  /// where it can be explained: the three value buttons are disabled until it is
+  /// the latched side's own pre-roll gate ([_surrenderReady]), under a line
+  /// saying when they will work. The alternative — queueing the intent and
+  /// firing it at the next legal moment — was rejected as the less robust of the
+  /// two: a queued resignation has to be invalidated against every transition
+  /// that can happen while it waits (the game ending, the match ending, a new
+  /// game starting, the opponent doubling), and getting any of them wrong
+  /// concedes a game the player did not mean to concede.
+  ///
+  /// Nothing is lost by waiting: the sheet is declarative, so it rebuilds with
+  /// the controller and the buttons light up as soon as the latched side's gate
+  /// opens — during your own move or dance, that is this same turn. In hot-seat
+  /// the sheet does not wait that long, because the turn changing hands closes
+  /// it outright (see [_closeSurrenderIfOutranked]).
   Widget _surrenderDialog() {
-    final atGate = _c.awaitingHumanTurn;
+    final ready = _surrenderReady;
     return _ModalCard(
       title: 'Surrender',
       message: 'Concedes the current game.',
-      footnote: atGate ? null : 'Available at the start of your turn',
+      footnote: ready ? null : 'Available at the start of your turn',
       actions: [
         _CardAction(
           label: 'Cancel',
-          onPressed: () => setState(() => _surrenderOpen = false),
+          onPressed: () => setState(_closeSurrender),
         ),
         for (final (value, label) in const [
           (ResignValue.single, 'Single (1)'),
@@ -1202,18 +1273,21 @@ class _GameScreenState extends State<GameScreen> {
         ])
           _CardAction(
             label: label,
-            onPressed: atGate ? () => _surrender(value) : null,
+            onPressed: ready ? () => _surrender(value) : null,
           ),
       ],
     );
   }
 
-  /// Offers the resignation and closes the sheet. Re-checks the gate AT
-  /// INVOCATION for the same reason the header's Double does: the sheet was
-  /// built a frame ago and the match moves on underneath it.
+  /// Offers the resignation and closes the sheet. Re-checks [_surrenderReady] AT
+  /// INVOCATION for the same reason the header's Double re-checks its own
+  /// condition: the sheet was built a frame ago and the match moves on
+  /// underneath it. Re-checking the SIDE as well as the gate is what keeps a
+  /// stale tap from booking the resignation against whoever is on turn now.
   void _surrender(ResignValue value) {
-    setState(() => _surrenderOpen = false);
-    if (!_c.awaitingHumanTurn) return;
+    final ready = _surrenderReady;
+    setState(_closeSurrender);
+    if (!ready) return;
     _c.offerResign(value);
   }
 

@@ -422,13 +422,20 @@ class _DanceController extends ChangeNotifier implements MatchController {
     }
     pts[0] = -3;
     pts[12] = 14;
-    _state = GameState.testState(
+    _danceState = GameState.testState(
       board: BoardState(points: pts, whiteBar: 1),
       turn: danceSide,
       phase: GamePhase.moving,
       dice: Dice(6, 2),
     );
-    _pending = ValueNotifier<GameState?>(_state);
+    // The position AFTER the dance passes: the same board, the turn handed to
+    // the other side, parked on ITS pre-roll gate.
+    _handedOverState = GameState.testState(
+      board: BoardState(points: pts, whiteBar: 1),
+      turn: danceSide.opponent,
+      phase: GamePhase.awaitingRoll,
+    );
+    _pending = ValueNotifier<GameState?>(_danceState);
   }
 
   /// The side that is stuck. White is the one on the bar above.
@@ -437,15 +444,24 @@ class _DanceController extends ChangeNotifier implements MatchController {
   /// Hot-seat when true (both sides locally human), vs-AI when false.
   final bool bothLocal;
 
-  late final GameState _state;
+  late final GameState _danceState;
+  late final GameState _handedOverState;
   late final ValueNotifier<GameState?> _pending;
+
+  /// Whether the danced turn has been passed, i.e. whether the turn has been
+  /// handed to the other side and ITS pre-roll gate is open.
+  bool _handedOver = false;
 
   /// Every move handed back by the screen, in order. A dance commits
   /// [Move.none], so a passed turn appends an empty move here.
   final List<Move> committed = [];
 
+  /// Every resignation the screen offered, with the side it was booked against
+  /// — the whole point of the hot-seat wrong-player regression.
+  final List<(Player, ResignValue)> resignOffers = [];
+
   @override
-  GameState get state => _state;
+  GameState get state => _handedOver ? _handedOverState : _danceState;
   @override
   MatchState get match => MatchState(matchLength: 5);
   @override
@@ -469,7 +485,7 @@ class _DanceController extends ChangeNotifier implements MatchController {
   @override
   void continueToNextGame() {}
   @override
-  bool get awaitingHumanTurn => false;
+  bool get awaitingHumanTurn => _handedOver && isLocalHuman(state.turn);
   @override
   Future<void> playMatch() async {}
   @override
@@ -477,7 +493,7 @@ class _DanceController extends ChangeNotifier implements MatchController {
   @override
   void offerDouble() {}
   @override
-  void offerResign(ResignValue value) {}
+  void offerResign(ResignValue value) => resignOffers.add((state.turn, value));
   @override
   MatchContext contextFor(Player actor) =>
       const MatchContext(moverAway: 5, opponentAway: 5, crawfordPlayed: false);
@@ -491,6 +507,7 @@ class _DanceController extends ChangeNotifier implements MatchController {
   @override
   void submitMove(Player side, Move move) {
     committed.add(move);
+    _handedOver = true; // the turn passes to the other side, whose gate opens
     _pending.value = null; // the turn is over; entry affordances go
     notifyListeners();
   }
@@ -1354,6 +1371,84 @@ void main() {
       expect(c.committed, hasLength(1));
     });
 
+    testWidgets('hot-seat: a hand-over UNDER an open Surrender sheet can never '
+        'resign for the incoming player', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // The exact reported sequence. Hot-seat, White is dancing, and the
+      // pass-device cover is OFF (the default since round 6) — so nothing else
+      // interrupts the sheet when the turn changes hands.
+      final c = _DanceController(bothLocal: true);
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      // White opens the sheet DURING its own dance. Deliberately stepped by
+      // hand rather than pumpAndSettle: the auto-pass is a timer, and settling
+      // would run it before the sheet is even up.
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Surrender…'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Concedes the current game.'), findsOneWidget);
+      expect(find.text('Available at the start of your turn'), findsOneWidget,
+          reason: 'mid-dance is not White\'s pre-roll gate');
+
+      // The dance passes itself. The turn — and the device — is now BLACK's,
+      // and Black's pre-roll gate is open, which is exactly the state the old
+      // side-agnostic `awaitingHumanTurn` check lit the buttons on.
+      await t.pump(const Duration(milliseconds: 900));
+      expect(c.committed, hasLength(1), reason: 'the dance auto-passed');
+      expect(c.state.turn, Player.black);
+      expect(c.awaitingHumanTurn, isTrue);
+
+      expect(find.text('Concedes the current game.'), findsNothing,
+          reason: 'the sheet White opened cannot survive the hand-over');
+      expect(c.resignOffers, isEmpty);
+
+      // And nothing left behind can book a resignation against Black.
+      await t.pump(const Duration(milliseconds: 600));
+      expect(c.resignOffers, isEmpty,
+          reason: 'White\'s sheet must never resign for Black');
+    });
+
+    testWidgets('the sheet is latched to the side that opened it', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // vs-AI: the sole local human is the only side that can ever resign, so
+      // the sheet stays put across the opponent's turn and its buttons still
+      // light up at the human's own gate.
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Surrender…'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+
+      // The dance passes; the turn is the AI's, so the human's sheet survives
+      // but its values stay disabled — there is nobody else here to resign for.
+      await t.pump(const Duration(milliseconds: 900));
+      expect(c.state.turn, Player.black, reason: 'the AI is on turn');
+      expect(find.text('Concedes the current game.'), findsOneWidget,
+          reason: 'no hand-over happened — only one human is playing');
+      expect(
+          t
+              .widget<TextButton>(
+                  find.widgetWithText(TextButton, 'Single (1)'))
+              .onPressed,
+          isNull,
+          reason: 'not the human\'s turn, so nothing is offerable yet');
+      expect(c.resignOffers, isEmpty);
+    });
     testWidgets('hot-seat: a danced turn hands over on its own', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -4110,6 +4205,7 @@ void main() {
       c.disposeController();
     });
 
+/*__TEXTSCALE_TEST__*/
     testWidgets('the header is a FIXED height, both rows always present',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
