@@ -1,10 +1,16 @@
-/// Nearby (LAN) play: the wire protocol and the host-side authority.
+/// Nearby (LAN) play: the wire protocol, the host-side authority, and the
+/// sockets that carry them.
 ///
-/// Transport-free by design — [HostAuthority] consumes decoded [Envelope]s (or
-/// raw frames) and emits targeted [HostOutbound] messages, so it is fully
-/// unit-testable in memory. The socket layer lives in Task 2.
+/// [HostAuthority] is transport-free by design — it consumes decoded
+/// [Envelope]s (or raw frames) and emits targeted [HostOutbound] messages, so
+/// it is fully unit-testable in memory. [HostServer] and [GuestClient] wrap it
+/// in `dart:io` WebSockets, adding the room-code handshake, the single-guest
+/// policy, heartbeats, rate limits and reconnection.
 library;
 
 export 'src/dice_roller.dart';
+export 'src/guest_client.dart';
 export 'src/host_authority.dart';
+export 'src/host_server.dart';
+export 'src/lan_timings.dart';
 export 'src/protocol.dart';

@@ -29,6 +29,32 @@ void main() {
           as HelloMessage;
       expect(b.name, 'Bo');
       expect(b.resume, 'tok-1');
+      expect(b.code, isNull, reason: 'the code is optional on the wire');
+    });
+
+    test('hello carries the room code, bounded', () {
+      final withCode =
+          ok(const HelloMessage(name: 'Bo', code: '0421').encode())
+              as HelloMessage;
+      expect(withCode.code, '0421');
+
+      // An oversized code is a bad field, not a truncation.
+      expect(
+        bad(jsonEncode({
+          'v': 1,
+          'type': 'hello',
+          'payload': {'name': 'Bo', 'code': 'x' * (maxCodeLength + 1)},
+        })).kind,
+        ProtocolErrorKind.badField,
+      );
+      expect(
+        bad(jsonEncode({
+          'v': 1,
+          'type': 'hello',
+          'payload': {'name': 'Bo', 'code': 421},
+        })).kind,
+        ProtocolErrorKind.badField,
+      );
     });
 
     test('welcome carries config, side and the seq-numbered log', () {

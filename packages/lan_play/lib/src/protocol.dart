@@ -32,6 +32,11 @@ const int maxNameLength = 64;
 /// Cap on a peer-supplied resume token.
 const int maxResumeLength = 64;
 
+/// Cap on the peer-supplied room code. The host mints four digits; the bound is
+/// looser so a later format still fits, but small enough that a code is never a
+/// vehicle for bulk data.
+const int maxCodeLength = 16;
+
 /// Cap on a peer-supplied reject reason (host-authored, but validated on read).
 const int maxReasonLength = 256;
 
@@ -213,6 +218,7 @@ sealed class Envelope {
       return DecodeOk(switch (type) {
         'hello' => HelloMessage(
             name: _string(p, 'name', max: maxNameLength),
+            code: _optString(p, 'code', max: maxCodeLength),
             resume: _optString(p, 'resume', max: maxResumeLength),
           ),
         'welcome' => WelcomeMessage(
@@ -397,10 +403,16 @@ sealed class Envelope {
 
 /// guest -> host: open (or resume) the session.
 class HelloMessage extends Envelope {
-  const HelloMessage({required this.name, this.resume});
+  const HelloMessage({required this.name, this.code, this.resume});
 
   /// The guest's display name.
   final String name;
+
+  /// The room code shown on the host's screen. OPTIONAL on the wire (the
+  /// authority never reads it — an in-process host has no code to present), but
+  /// the socket transport requires it and closes the connection when it is
+  /// absent or wrong. See `HostServer`.
+  final String? code;
 
   /// A token from a previous [WelcomeMessage]; presenting it asks for a replay
   /// of the existing match rather than a fresh session.
@@ -410,8 +422,11 @@ class HelloMessage extends Envelope {
   String get type => 'hello';
 
   @override
-  Map<String, dynamic> get payload =>
-      {'name': name, if (resume != null) 'resume': resume};
+  Map<String, dynamic> get payload => {
+        'name': name,
+        if (code != null) 'code': code,
+        if (resume != null) 'resume': resume,
+      };
 }
 
 /// host -> guest: accepted; here is the match, your side, and the log so far.
