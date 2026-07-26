@@ -406,7 +406,7 @@ void main() {
     /// Taps the centre of [player]'s dice pair on the board.
     Future<void> tapDice(WidgetTester t, Player player, Player mover) async {
       final painter = boardPainterOf(t);
-      final target = painter.geometry.diceRect(player, mover: mover).center;
+      final target = painter.geometry.diceRect(player).center;
       await t.tapAt(boardRect(t).topLeft + target);
       await t.pump();
     }
@@ -1432,6 +1432,11 @@ void main() {
       expect(painter.whiteDice, Dice(6, 1),
           reason: "the human's pair must hold their OWN last roll — never "
               "cycle with the opponent's roll");
+      // The other half of the same regression: EMPHASIS follows the roller too,
+      // so the tumbling pair is the bright one and the human's stale pair is
+      // dim — "my dice gets enabled while the opponent moves".
+      expect(painter.activeDiceSide, Player.black,
+          reason: 'the roller is lit even though the turn is already White');
 
       // Once the beat ends, Black's pair settles on the real roll and White's
       // pair is still its own opening roll.
@@ -1509,33 +1514,201 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('local human roll is instant (no beat override)', (t) async {
-      await t.binding.setSurfaceSize(_surface);
-      addTearDown(() => t.binding.setSurfaceSize(null));
+    // --- The LOCAL player's own roll beats too --------------------------------
 
+    /// A match parked at White's (the human's) pre-roll gate, with the opening
+    /// roll's own presentation already finished: Black wins the opening (6 > 1),
+    /// plays instantly, and White reaches its gate.
+    (GameController, LocalHumanAgent) atLocalGate() {
       final human = LocalHumanAgent();
       final c = GameController(
         white: human,
         black: FakeAgent(),
         matchLength: 5,
-        // Black (AI) wins the opening and moves; White (human) then rolls at its
-        // gate — its own roll must never trigger a beat.
         diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
       );
+      return (c, human);
+    }
 
-      await t.pumpWidget(_animHarness(c));
+    /// Pumps until the local player is at a QUIET pre-roll gate: the opponent's
+    /// roll presentation is over, its move has finished travelling, and the Roll
+    /// button is live.
+    Future<void> settleAtGate(WidgetTester t, GameController c) async {
       await pumpUntil(t, () => c.awaitingHumanTurn);
+      await pumpUntil(
+          t,
+          () =>
+              boardPainterOf(t).overlayChecker == null &&
+              boardPainterOf(t).activeDiceSide == null,
+          maxFrames: 4000);
+    }
+
+    /// Whether the board is currently accepting move entry.
+    bool entryOpen(WidgetTester t) => _boardViewOf(t).interactive;
+
+    testWidgets('the local player\'s own roll TUMBLES, and entry waits for it',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      await t.pumpWidget(_animHarness(c));
+      await settleAtGate(t, c);
+      expect(entryOpen(t), isFalse, reason: 'nothing to enter at the gate');
+
       await t.tap(find.widgetWithText(FilledButton, 'Roll'));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
+      // The roll has landed in the state, but the pair is TUMBLING: the painted
+      // faces are override faces, not the settled roll, and they are painted on
+      // the local player's OWN pair at full emphasis.
       final realRoll = c.state.dice;
       expect(realRoll, isNotNull);
-      // The human's own roll shows immediately: White's (the mover's) pair
-      // equals the real state dice with no override in between.
-      expect(boardPainterOf(t).whiteDice, realRoll,
-          reason: 'a local roll is instant — no beat override');
+      expect(boardPainterOf(t).whiteDice, isNot(realRoll),
+          reason: "the local player's own roll tumbles before it settles");
+      expect(boardPainterOf(t).activeDiceSide, Player.white,
+          reason: 'the roller is the live pair — bright, in its own home');
+      expect(entryOpen(t), isFalse,
+          reason: 'no hop can be staged against dice that are still tumbling');
 
-      // Let any move animation from the AI opening finish before teardown.
+      // It settles on the real roll, then (after the HALVED settle pause) entry
+      // opens with the roller still emphasised.
+      await pumpUntil(t, () => boardPainterOf(t).whiteDice == realRoll,
+          maxFrames: 2000);
+      await pumpUntil(t, () => entryOpen(t), maxFrames: 2000);
+      expect(boardPainterOf(t).activeDiceSide, Player.white,
+          reason: 'the mover keeps the live pair while entering the move');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('a dice TAP gets the same beat as the Roll button', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      await t.pumpWidget(_animHarness(c));
+      await settleAtGate(t, c);
+
+      // Tap the local player's own pair (its fixed home) instead of the button.
+      final painter = boardPainterOf(t);
+      await t.tapAt(boardRect(t).topLeft +
+          painter.geometry.diceRect(Player.white).center);
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(boardPainterOf(t).whiteDice, isNot(c.state.dice),
+          reason: 'the dice-tap route presents the roll exactly as Roll does');
+      expect(boardPainterOf(t).activeDiceSide, Player.white);
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('the local pair goes DIM the moment the move is confirmed, and '
+        'stays dim until it is rolled again', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Hot-seat, so the turn passes to a side that will NOT roll on its own:
+      // the window after the confirm stays open for as long as the test needs.
+      // This is the reported bug's exact shape — "after my turn is over, my dice
+      // gets enabled while the opponent moves".
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = GameController(
+        white: white,
+        black: black,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      // The opening roll is White's and is presented: White is the live pair.
+      await pumpUntil(t, () => entryOpen(t), maxFrames: 3000);
+      expect(boardPainterOf(t).activeDiceSide, Player.white);
+
+      await commitFirstMove(t);
+      await _dismissPassDevice(t);
+      await t.pump(const Duration(milliseconds: 200));
+
+      // Turn over, nobody has rolled: BOTH pairs dim. White's memento pair must
+      // NOT re-brighten just because the state says it is White's turn again
+      // later, and Black's has nothing live either until Black rolls.
+      expect(boardPainterOf(t).activeDiceSide, isNull,
+          reason: 'the local pair is disabled until it is rolled again');
+      // Both rolls are still READABLE (dim, not gone).
+      expect(boardPainterOf(t).whiteDice, isNotNull);
+
+      // And it stays that way — no timer re-lights it.
+      await t.pump(const Duration(milliseconds: 1500));
+      expect(boardPainterOf(t).activeDiceSide, isNull);
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('the dice-roll animation setting OFF: no tumble, no hold',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      // Checker travel keeps the normal pacing; only the beat is off — exactly
+      // what `AppSettings.diceRollAnimation: false` produces.
+      final noBeat = AnimationTimings.normal.withoutDiceBeat();
+      await t.pumpWidget(_animHarness(c, timings: noBeat));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // The OPPONENT's roll settled instantly — no override frame ever painted.
+      expect(boardPainterOf(t).blackDice, Dice(1, 6),
+          reason: "Black's opening roll shows settled at once");
+      expect(_boardViewOf(t).diceOverride, isNull);
+
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      // The LOCAL roll likewise: settled immediately, no override, and entry is
+      // open on the very frame the roll lands (nothing is held).
+      expect(_boardViewOf(t).diceOverride, isNull,
+          reason: 'no beat runs, so no tumbling faces are ever painted');
+      expect(boardPainterOf(t).whiteDice, c.state.dice);
+      expect(entryOpen(t), isTrue,
+          reason: 'with no beat there is no settle pause to wait through');
+      expect(boardPainterOf(t).activeDiceSide, Player.white,
+          reason: 'the mover is still the live pair — emphasis is not animation');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('a dice pair never MOVES between presentations (fixed homes)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      await t.pumpWidget(_animHarness(c));
+      await settleAtGate(t, c);
+
+      Rect whiteHome() => boardPainterOf(t).geometry.diceRect(Player.white);
+      Rect blackHome() => boardPainterOf(t).geometry.diceRect(Player.black);
+      final white0 = whiteHome();
+      final black0 = blackHome();
+
+      // Mid-tumble of the local player's own roll — the turn, the emphasis and
+      // the painted faces have all changed since the gate.
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      expect(whiteHome(), white0, reason: 'the tumbling pair does not jump');
+      expect(blackHome(), black0);
+
+      // And once entry is open.
+      await pumpUntil(t, () => entryOpen(t), maxFrames: 2000);
+      expect(whiteHome(), white0);
+      expect(blackHome(), black0);
+
       await t.pumpAndSettle();
       c.disposeController();
     });
@@ -1677,7 +1850,13 @@ void main() {
           maxFrames: 2000);
 
       await t.tap(find.widgetWithText(FilledButton, 'Roll'));
-      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      // The local roll is PRESENTED first (tumble + half settle), and move-entry
+      // affordances — the Hint button among them — appear only once it settles.
+      await pumpUntil(
+          t,
+          () =>
+              find.widgetWithText(OutlinedButton, 'Hint').evaluate().isNotEmpty,
+          maxFrames: 3000);
 
       final s = c.state;
       final expected = MoveGenerator.legalMoves(s.board, s.turn, s.dice!).first;
@@ -1880,7 +2059,8 @@ void main() {
       // White's turn (the mover is White).
       expect(boardPainterOf(t).blackDice, eb);
       expect(boardPainterOf(t).whiteDice, ew);
-      expect(boardPainterOf(t).diceMover, Player.white);
+      expect(boardPainterOf(t).activeDiceSide, isNull,
+          reason: 'at the pre-roll gate no roll is live, so both pairs dim');
 
       // White rolls and enters its move: its own pair updates to the new roll,
       // while the AI's roll REMAINS on the black pair (the core fix).
@@ -3325,7 +3505,7 @@ void main() {
 
       final painter = boardPainterOf(t);
       final target = boardRect(t).topLeft +
-          painter.geometry.diceRect(c.state.turn, mover: c.state.turn).center;
+          painter.geometry.diceRect(c.state.turn).center;
       // No pump between the taps: BOTH hit the callback captured by the frame
       // that is already on screen, exactly as a real double-tap on the dice
       // does. The second must be swallowed, not throw out of the gesture
