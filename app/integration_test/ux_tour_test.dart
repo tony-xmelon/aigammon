@@ -143,6 +143,14 @@ void main() {
       // position is seen before the first move-entry affordances appear.
       await _beat(tester, const Duration(milliseconds: 500));
       await _shot(tester, 'game_opening');
+      // Round 6: the header is the single home for the summary info. Log both
+      // rows so a reviewer can check the copy against the pixels, and assert
+      // the deleted duplicates are really gone.
+      _log('header row 1: ${_hudLine(0)}');
+      _log('header row 2: ${_hudLine(1)}');
+      if (find.byKey(const ValueKey('pipLine')).evaluate().isNotEmpty) {
+        _log('warning: the standalone pip line is still in the tree');
+      }
 
       final controller =
           tester.widget<GameScreen>(find.byType(GameScreen)).controller;
@@ -156,6 +164,7 @@ void main() {
       await _leaveMatch(tester);
       await _historyAndAnalysis(tester);
       await _settings(tester);
+      await _cubelessOpening(tester);
 
       final elapsed = DateTime.now().difference(started);
       _log('tour finished in ${elapsed.inMinutes}m ${elapsed.inSeconds % 60}s');
@@ -320,6 +329,10 @@ Future<void> _playMatch(
         "mover's points could play something)");
   }
   if (!done.contains('drag_hint')) _skipped.add('drag-hint SnackBar');
+  if (!done.contains('surrender')) _skipped.add('surrender sheet');
+  if (!done.contains('dance')) {
+    _skipped.add('a dance auto-passing (neither side ever danced)');
+  }
   if (!done.contains('sheet_scroll')) {
     _skipped.add('score sheet scrolled back to an earlier turn (the game never '
         'grew past the panel height)');
@@ -415,6 +428,30 @@ Future<void> _humanMove(
     }
   }
 
+  // The Surrender sheet, reachable from the ⋮ at ANY moment now (this one is
+  // taken mid-move, which is exactly where the old menu was greyed out). It is
+  // cancelled straight away — the tour is not conceding the game.
+  if (!done.contains('surrender')) {
+    final menu = find.byTooltip('More actions');
+    if (menu.evaluate().isNotEmpty) {
+      await tester.tap(menu.first);
+      await _beat(tester, const Duration(milliseconds: 400));
+      final entry = find.text('Surrender…');
+      if (entry.evaluate().isNotEmpty) {
+        await tester.tap(entry.first);
+        await _beat(tester, const Duration(milliseconds: 400));
+        if (await _shot(tester, 'surrender_sheet')) done.add('surrender');
+        final cancel = find.text('Cancel');
+        if (cancel.evaluate().isNotEmpty) await tester.tap(cancel.first);
+        await _beat(tester, const Duration(milliseconds: 300));
+      } else {
+        // The menu opened but held nothing we recognise: close it again.
+        await tester.tapAt(Offset(_phone.width / 2, 400));
+        await _beat(tester, const Duration(milliseconds: 300));
+      }
+    }
+  }
+
   // A checker selected, with its destinations lit.
   if (!done.contains('selection') && !_confirmReady(tester)) {
     final sources = boardPainterOf(tester).highlightedSources;
@@ -477,8 +514,13 @@ Future<void> _finishMove(WidgetTester tester, Set<String> done) async {
     }
     final pass = find.text('No moves — pass');
     if (pass.evaluate().isNotEmpty) {
-      await tester.tap(pass);
-      await tester.pump();
+      // Round 6: a dance PASSES ITSELF after a readable beat. Capture the beat,
+      // then wait it out rather than tapping, so the tour exercises the same
+      // path a player would see.
+      if (!done.contains('dance')) {
+        if (await _shot(tester, 'dance_auto_pass')) done.add('dance');
+      }
+      await _beat(tester, const Duration(milliseconds: 1600));
       return;
     }
     final painter = boardPainterOf(tester);
@@ -707,6 +749,56 @@ Future<bool> _stepOnce(WidgetTester tester) async {
   await tester.tap(next.first);
   await _beat(tester, const Duration(milliseconds: 110));
   return true;
+}
+
+/// The text of HUD row [row] (0 = the match context, 1 = the opponent/pips
+/// line), or a marker when that row is not in the tree. Logged rather than
+/// asserted: the tour is a harness, and the point is to read the copy next to
+/// the screenshot.
+String _hudLine(int row) {
+  final key = row == 0 ? 'hudContextRow' : 'hudDetailRow';
+  final rowFinder = find.byKey(ValueKey(key));
+  if (rowFinder.evaluate().isEmpty) return '<missing>';
+  final texts = find
+      .descendant(of: rowFinder, matching: find.byType(Text))
+      .evaluate()
+      .map((e) => (e.widget as Text).data)
+      .whereType<String>()
+      .toList();
+  return texts.isEmpty ? '<empty>' : texts.join(' | ');
+}
+
+/// A second, throwaway match started with "Play without cube" on, purely to
+/// capture the cubeless board: no cube on the bar, no ×N chip in the header, no
+/// Double button. Left immediately — it is a screenshot, not a game.
+Future<void> _cubelessOpening(WidgetTester tester) async {
+  await _backToHome(tester);
+  final vsComputer = find.text('Play vs Computer');
+  if (vsComputer.evaluate().isEmpty) {
+    _skipped.add('cubeless opening (no vs-computer entry on home)');
+    return;
+  }
+  await tester.tap(vsComputer.first);
+  await _beat(tester, const Duration(milliseconds: 700));
+
+  final toggle = find.widgetWithText(SwitchListTile, 'Play without cube');
+  if (toggle.evaluate().isEmpty) {
+    _skipped.add('cubeless opening (no cubeless toggle on setup)');
+    await _backToHome(tester);
+    return;
+  }
+  await tester.ensureVisible(toggle.first);
+  await tester.tap(toggle.first);
+  await _beat(tester, const Duration(milliseconds: 400));
+  await _shot(tester, 'new_match_setup_cubeless');
+
+  await _tapText(tester, 'Start match');
+  await _beat(tester, const Duration(milliseconds: 900));
+  final painter = boardPainterOf(tester);
+  _log('cubeless board: painter.cube=${painter.cube}, '
+      'Double button=${find.widgetWithText(OutlinedButton, 'Double').evaluate().length}');
+  await _shot(tester, 'game_opening_cubeless');
+  await _backToHome(tester);
 }
 
 // --- Capture + timing plumbing ----------------------------------------------
