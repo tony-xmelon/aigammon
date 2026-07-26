@@ -241,6 +241,8 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
             enableCombinedTaps: settings.enableCombinedTaps,
           ),
           showScoring: settings.showScoring,
+          // Hot-seat hand-over cover; off by default (see the setting).
+          showPassDevice: settings.showPassDevice,
           // One-time drag/tap hint: shown on the first human move when drag is on
           // and it has not been shown before. Persist the flag fire-and-forget.
           dragHintShown: settings.dragHintShown,

@@ -193,6 +193,20 @@ class SettingsScreen extends ConsumerWidget {
                             onChanged: (v) =>
                                 save(settings.copyWith(enableCombinedTaps: v)),
                           ),
+                          // Hot-seat only, and OFF by default: "when playing
+                          // with two persons, do not show the pass the device
+                          // screen, or at least make it a setting, disabled by
+                          // default". Off, the board's flip to the new actor is
+                          // the hand-over cue and nothing has to be tapped.
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Pass-device screen'),
+                            subtitle: const Text(
+                                'Cover the board between hot-seat turns'),
+                            value: settings.showPassDevice,
+                            onChanged: (v) =>
+                                save(settings.copyWith(showPassDevice: v)),
+                          ),
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('Show score'),

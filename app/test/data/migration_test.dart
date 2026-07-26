@@ -44,7 +44,7 @@ CREATE TABLE "games" (
 /// BEFORE the v3 gameplay-option columns, the v4 `drag_hint_shown` column and
 /// the v5 `dice_roll_animation` column existed. Embedded so this test can
 /// materialise a genuine v2 database and prove the 2 -> 5 `onUpgrade` adds every
-/// later column.
+/// later column (v5 adds TWO: `dice_roll_animation` and `show_pass_device`).
 const _v2SettingsDdl = '''
 CREATE TABLE "settings" (
   "id" INTEGER NOT NULL DEFAULT 1,
@@ -109,7 +109,7 @@ CREATE TABLE "settings" (
 void main() {
   test(
       'fresh install (onCreate) seeds v5 defaults: drag ON, dice roll animation '
-      'ON, hint not shown', () async {
+      'ON, pass-device cover OFF, hint not shown', () async {
     // A brand-new database goes through onCreate (not onUpgrade): the v5 table
     // shape + the beforeOpen seed.
     final db = AppDatabase(NativeDatabase.memory());
@@ -119,6 +119,8 @@ void main() {
         reason: 'drag-to-move is ON by default as of v4');
     expect(settings.diceRollAnimation, isTrue,
         reason: 'the dice roll tumbles by default as of v5');
+    expect(settings.showPassDevice, isFalse,
+        reason: 'the hot-seat cover screen is OFF by default as of v5');
     expect(settings.dragHintShown, isFalse,
         reason: 'the one-time hint has not been shown yet on a fresh install');
     expect(settings.showHighlights, isTrue);
@@ -169,6 +171,7 @@ void main() {
     expect(settings.showScoring, isTrue);
     expect(settings.dragHintShown, isFalse);
     expect(settings.diceRollAnimation, isTrue);
+    expect(settings.showPassDevice, isFalse);
 
     // 3b. The pre-migration v1 match row survived intact.
     final matches = await db.select(db.matches).get();
@@ -222,7 +225,8 @@ void main() {
     expect(cols, isNot(contains('enable_drag')));
     expect(cols, isNot(contains('drag_hint_shown')), reason: 'nor the v4 col');
     expect(cols, isNot(contains('dice_roll_animation')),
-        reason: 'nor the v5 col');
+        reason: 'nor either v5 col');
+    expect(cols, isNot(contains('show_pass_device')));
 
     // 2. Open through AppDatabase (schemaVersion 5): drift runs onUpgrade(2 -> 5),
     //    adding the four gameplay columns + drag_hint_shown +
@@ -239,6 +243,8 @@ void main() {
     expect(settings.dragHintShown, isFalse);
     expect(settings.diceRollAnimation, isTrue,
         reason: 'the v5 column defaults ON for an upgraded row too');
+    expect(settings.showPassDevice, isFalse,
+        reason: 'the other v5 column defaults OFF for an upgraded row too');
 
     // 3b. The pre-existing v2 settings row values SURVIVED intact.
     expect(settings.id, 1);
@@ -285,6 +291,8 @@ void main() {
         reason: 'v3 predates the drag-hint column');
     expect(cols, isNot(contains('dice_roll_animation')),
         reason: 'v3 predates the dice-roll-animation column');
+    expect(cols, isNot(contains('show_pass_device')),
+        reason: 'v3 predates the pass-device column');
 
     // 2. Open through AppDatabase (schemaVersion 5): drift runs onUpgrade(3 -> 5),
     //    which addColumn's drag_hint_shown + dice_roll_animation and UPDATEs
@@ -298,6 +306,8 @@ void main() {
         reason: 'the drag_hint_shown column exists and starts false');
     expect(settings.diceRollAnimation, isTrue,
         reason: 'the dice_roll_animation column exists and starts ON');
+    expect(settings.showPassDevice, isFalse,
+        reason: 'the show_pass_device column exists and starts OFF');
     expect(settings.enableDrag, isTrue,
         reason: 'the v4 upgrade flips a user-disabled drag back ON (one-time)');
 
@@ -324,8 +334,9 @@ void main() {
     await db.close();
   });
 
-  test('4 -> 5 upgrade adds dice_roll_animation (=true) and changes nothing '
-      'else — no re-run of the v4 drag flip', () async {
+  test('4 -> 5 upgrade adds dice_roll_animation (=true) + show_pass_device '
+      '(=false) and changes nothing else — no re-run of the v4 drag flip',
+      () async {
     // 1. Build a genuine v4 database: matches/games + the v4 settings table with
     //    a row where the user turned drag OFF *after* the v4 flip had already
     //    run, and tweaked other preferences. user_version = 4.
@@ -350,15 +361,19 @@ void main() {
     expect(cols, contains('drag_hint_shown'), reason: 'v4 has the hint column');
     expect(cols, isNot(contains('dice_roll_animation')),
         reason: 'v4 predates the dice-roll-animation column');
+    expect(cols, isNot(contains('show_pass_device')),
+        reason: 'v4 predates the pass-device column');
 
     // 2. Open through AppDatabase (schemaVersion 5): drift runs onUpgrade(4 -> 5),
-    //    which only addColumn's dice_roll_animation.
+    //    which only addColumn's the two v5 columns.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
-    // 3a. The new column exists at its default (ON) on the migrated row.
+    // 3a. The new columns exist at their defaults on the migrated row.
     final settings = await db.select(db.settings).getSingle();
     expect(settings.diceRollAnimation, isTrue,
         reason: 'an upgrading user gets the dice beat, like a fresh install');
+    expect(settings.showPassDevice, isFalse,
+        reason: 'and no pass-device cover, like a fresh install');
 
     // 3b. Every v4 value survived — crucially the user's OFF drag is NOT flipped
     //     again (the one-time v4 flip is gated on `from < 4`).

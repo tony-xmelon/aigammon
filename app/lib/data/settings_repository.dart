@@ -42,6 +42,7 @@ class SettingsRepository {
         enableCombinedTaps: row.enableCombinedTaps,
         showScoring: row.showScoring,
         diceRollAnimation: row.diceRollAnimation,
+        showPassDevice: row.showPassDevice,
         dragHintShown: row.dragHintShown,
       );
 
@@ -57,6 +58,7 @@ class SettingsRepository {
         enableCombinedTaps: Value(s.enableCombinedTaps),
         showScoring: Value(s.showScoring),
         diceRollAnimation: Value(s.diceRollAnimation),
+        showPassDevice: Value(s.showPassDevice),
         dragHintShown: Value(s.dragHintShown),
       );
 

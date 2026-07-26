@@ -51,8 +51,10 @@ import 'metric_explainer.dart';
 /// [BoardOrientationMode.fixedWhite] / [BoardOrientationMode.fixedBlack] pin a
 /// side (vs-AI: the human's side stays at the bottom for the whole match).
 /// [BoardOrientationMode.followActive] (hot-seat "rotate for Black") flips the
-/// board so the active player is always at the bottom — but ONLY while the
-/// pass-device overlay hides the board, so the rotation is never seen mid-turn.
+/// board so the active player is always at the bottom. With the pass-device
+/// overlay on ([showPassDevice]) the flip happens BEHIND it, so the rotation is
+/// never seen mid-turn; with the overlay off (the default) the flip happens in
+/// the open at the hand-over, and IS the hand-over cue.
 ///
 /// ## The dice presentation (this screen owns it)
 ///
@@ -103,6 +105,7 @@ class GameScreen extends StatefulWidget {
     this.onDragHintShown,
     this.opponentLabel = 'AI',
     this.opponentDetail,
+    this.showPassDevice = false,
   });
 
   final MatchController controller;
@@ -166,6 +169,14 @@ class GameScreen extends StatefulWidget {
   /// Easy · Pips 129–78". Null wherever there is no such thing to say (hot-seat,
   /// online, a bare test harness); the row keeps its reserved height regardless.
   final String? opponentDetail;
+
+  /// Whether the hot-seat "Pass the device" cover screen gates each hand-over
+  /// (the persisted `AppSettings.showPassDevice`). DEFAULT FALSE, matching the
+  /// stored default: the reported feedback was that the cover screen is an
+  /// unwanted extra tap between two people sharing one device. With it off the
+  /// board still flips to the new actor — that rotation is the cue. Ignored
+  /// outside hot-seat, where there is nobody to pass to.
+  final bool showPassDevice;
 
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
   /// surfaces a hint button (top-5 plays), post-move assessments for EVERY move
@@ -850,9 +861,16 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  /// Tracks the acting side and raises the pass-device overlay when, in a
-  /// hot-seat game, a human decision opens for a DIFFERENT actor than the last.
-  /// Skipped for the very first human decision of the match (`_lastActor` null).
+  /// Tracks the acting side and — when [GameScreen.showPassDevice] is on —
+  /// raises the pass-device overlay as a hot-seat human decision opens for a
+  /// DIFFERENT actor than the last. Skipped for the very first human decision of
+  /// the match (`_lastActor` null).
+  ///
+  /// With the setting OFF (the default), the hand-over still happens; it simply
+  /// is not gated. The board FLIPS to the new actor and play continues, which is
+  /// the whole cue the reported feedback asked for ("when playing with two
+  /// persons, do not show the pass the device screen"). The orientation update
+  /// therefore lives on both branches; only [_passDevicePending] is conditional.
   void _updatePassDevice() {
     if (!_hotSeat || !_humanDecisionActive) return;
     final actor = _c.state.turn;
@@ -860,9 +878,15 @@ class _GameScreenState extends State<GameScreen> {
       _lastActor = actor; // first turn: reveal immediately, no overlay
       _displayedWhiteAtBottom = actor == Player.white; // orient to first actor
     } else if (actor != _lastActor && !_passDevicePending) {
-      _passDevicePending = true;
-      // Flip now, while the overlay that is about to raise hides the board;
-      // the new orientation is revealed only when the user taps to continue.
+      if (widget.showPassDevice) {
+        _passDevicePending = true;
+      } else {
+        // No cover to hide behind: the flip happens in the open, and the actor
+        // is adopted at once so the next change is detected against it.
+        _lastActor = actor;
+      }
+      // Flip now. With the overlay on, this happens behind it and the new
+      // orientation is revealed only when the user taps to continue.
       _displayedWhiteAtBottom = actor == Player.white;
     }
   }

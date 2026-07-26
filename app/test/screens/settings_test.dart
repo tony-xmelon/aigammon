@@ -142,6 +142,26 @@ void main() {
     expect(t.widget<SwitchListTile>(toggle).value, isFalse);
   });
 
+  testWidgets('the pass-device toggle is OFF by default and autosaves',
+      (t) async {
+    await t.binding.setSurfaceSize(const Size(600, 1600));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(_app());
+    _feed.add(AppSettings.defaults);
+    await t.pumpAndSettle();
+
+    final toggle = find.widgetWithText(SwitchListTile, 'Pass-device screen');
+    expect(t.widget<SwitchListTile>(toggle).value, isFalse,
+        reason: 'disabled by default, per the reported feedback');
+    expect(find.text('Cover the board between hot-seat turns'), findsOneWidget);
+
+    await t.ensureVisible(toggle);
+    await t.tap(toggle);
+    await _refresh(t);
+    expect((await _persisted(t)).showPassDevice, isTrue);
+    expect(t.widget<SwitchListTile>(toggle).value, isTrue);
+  });
+
   testWidgets('every selector hides the selected checkmark', (t) async {
     await t.pumpWidget(_app());
     _feed.add(AppSettings.defaults);

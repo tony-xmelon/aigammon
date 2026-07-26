@@ -69,6 +69,8 @@ void main() {
       // ON by default: the full preset, beat included.
       expect(AppSettings.defaults.diceRollAnimation, isTrue);
       expect(AppSettings.defaults.timings.diceBeatEnabled, isTrue);
+      expect(AppSettings.defaults.showPassDevice, isFalse,
+          reason: 'the hot-seat cover screen is opt-IN');
 
       // OFF: same checker pacing, no beat.
       final off =

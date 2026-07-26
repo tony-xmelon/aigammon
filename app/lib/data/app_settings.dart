@@ -156,13 +156,15 @@ class AppSettings {
     this.enableCombinedTaps = true,
     this.showScoring = true,
     this.diceRollAnimation = true,
+    this.showPassDevice = false,
     this.dragHintShown = false,
   });
 
   /// The out-of-the-box defaults, matching the `Settings` table's column
   /// defaults (theme: system, animation: normal, length: 5, difficulty:
   /// medium, tutor override: none, highlights/drag/combined-taps/scoring and the
-  /// dice-roll animation on, drag-hint not yet shown).
+  /// dice-roll animation on, the hot-seat pass-device cover OFF, drag-hint not
+  /// yet shown).
   static const AppSettings defaults = AppSettings(
     themeMode: ThemeMode.system,
     animationSpeed: AnimationSpeed.normal,
@@ -210,6 +212,13 @@ class AppSettings {
   /// this flag — see [AnimationTimings.withoutDiceBeat].
   final bool diceRollAnimation;
 
+  /// Whether the hot-seat "Pass the device" cover screen is shown between turns
+  /// (schema v5). OFF by default, per the reported "do not show the pass the
+  /// device screen, or at least make it a setting, disabled by default": with it
+  /// off the turn simply hands over and the board's flip is the cue. Read only
+  /// in a hot-seat match; every other mode ignores it.
+  final bool showPassDevice;
+
   /// Whether the one-time drag/tap discoverability hint has already been shown.
   final bool dragHintShown;
 
@@ -231,6 +240,7 @@ class AppSettings {
     bool? enableCombinedTaps,
     bool? showScoring,
     bool? diceRollAnimation,
+    bool? showPassDevice,
     bool? dragHintShown,
   }) {
     return AppSettings(
@@ -246,6 +256,7 @@ class AppSettings {
       enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
       showScoring: showScoring ?? this.showScoring,
       diceRollAnimation: diceRollAnimation ?? this.diceRollAnimation,
+      showPassDevice: showPassDevice ?? this.showPassDevice,
       dragHintShown: dragHintShown ?? this.dragHintShown,
     );
   }
@@ -263,6 +274,7 @@ class AppSettings {
       other.enableCombinedTaps == enableCombinedTaps &&
       other.showScoring == showScoring &&
       other.diceRollAnimation == diceRollAnimation &&
+      other.showPassDevice == showPassDevice &&
       other.dragHintShown == dragHintShown;
 
   @override
@@ -277,6 +289,7 @@ class AppSettings {
       enableCombinedTaps,
       showScoring,
       diceRollAnimation,
+      showPassDevice,
       dragHintShown);
 
   @override
@@ -290,6 +303,7 @@ class AppSettings {
       'enableCombinedTaps: $enableCombinedTaps, '
       'showScoring: $showScoring, '
       'diceRollAnimation: $diceRollAnimation, '
+      'showPassDevice: $showPassDevice, '
       'dragHintShown: $dragHintShown)';
 }
 

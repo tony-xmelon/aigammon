@@ -111,6 +111,15 @@ class Settings extends Table {
   BoolColumn get diceRollAnimation =>
       boolean().withDefault(const Constant(true))();
 
+  /// Whether the hot-seat "Pass the device" cover screen is shown between turns
+  /// (schema v5). OFF by default, per the reported "when playing with two
+  /// persons, do not show the pass the device screen, or at least make it a
+  /// setting, disabled by default". With it off the board simply flips to the
+  /// new actor — that rotation IS the hand-over cue — and nothing has to be
+  /// tapped through. Only ever consulted in a hot-seat match.
+  BoolColumn get showPassDevice =>
+      boolean().withDefault(const Constant(false))();
+
   /// Whether the one-time "you can drag OR tap checkers" discoverability hint
   /// has already been surfaced (schema v4). Flipped true the first time the hint
   /// shows, so it never appears twice. Starts false on a fresh install.
@@ -151,7 +160,7 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             // Fresh create of the settings table. `createTable` uses the CURRENT
             // (v5) table definition, so it already includes every gameplay
-            // column, `drag_hint_shown` AND `dice_roll_animation` — the
+            // column, `drag_hint_shown` AND both v5 columns — the
             // version-gated `addColumn` blocks below must NOT re-add them (hence
             // each is gated on `from == N`, not `from < N+1`).
             await m.createTable(settings);
@@ -175,15 +184,17 @@ class AppDatabase extends _$AppDatabase {
           if (from == 2 || from == 3) {
             await m.addColumn(settings, settings.dragHintShown);
           }
-          // v4 -> v5: add the `dice_roll_animation` column. Absent from every
-          // pre-v5 table shape (v2, v3 and v4 alike), so add it whenever the
-          // table already existed — i.e. any upgrade from 2, 3 or 4. Its column
-          // default (ON) fills the migrated row, so an upgrading user gets the
-          // beat back exactly as a fresh install does. A v1 -> v5 jump created the
-          // table whole above and is therefore skipped, hence `from == N` rather
-          // than `from < 5`.
+          // v4 -> v5: add BOTH v5 columns — `dice_roll_animation` and
+          // `show_pass_device`. Absent from every pre-v5 table shape (v2, v3 and
+          // v4 alike), so they are added whenever the table already existed —
+          // i.e. any upgrade from 2, 3 or 4. Their column defaults (the beat ON,
+          // the pass-device cover OFF) fill the migrated row, so an upgrading
+          // user lands exactly where a fresh install does. A v1 -> v5 jump created
+          // the table whole above and is therefore skipped, hence `from == N`
+          // rather than `from < 5`.
           if (from == 2 || from == 3 || from == 4) {
             await m.addColumn(settings, settings.diceRollAnimation);
+            await m.addColumn(settings, settings.showPassDevice);
           }
           // v3 -> v4 one-time default flip: drag-to-move becomes ON by default.
           // Applied UNCONDITIONALLY to the existing settings row (not just when

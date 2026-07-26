@@ -316,13 +316,28 @@ Widget _tutorHarness(GameController c, TutorService tutor) => MaterialApp(
 
 // Keyed by the controller so pumping a different controller into the same test
 // remounts a fresh GameScreen State (re-running initState / playMatch).
-Widget _harness(GameController c) => MaterialApp(
-      home: GameScreen(key: ValueKey(c), controller: c),
+/// [showPassDevice] mirrors the production default (OFF): a hot-seat turn hands
+/// over with nothing but the board flip. Tests of the cover screen opt in.
+Widget _harness(GameController c, {bool showPassDevice = false}) => MaterialApp(
+      home: GameScreen(
+        key: ValueKey(c),
+        controller: c,
+        showPassDevice: showPassDevice,
+      ),
     );
 
-Widget _harnessOriented(GameController c, BoardOrientationMode mode) =>
+Widget _harnessOriented(
+  GameController c,
+  BoardOrientationMode mode, {
+  bool showPassDevice = false,
+}) =>
     MaterialApp(
-      home: GameScreen(key: ValueKey(c), controller: c, orientation: mode),
+      home: GameScreen(
+        key: ValueKey(c),
+        controller: c,
+        orientation: mode,
+        showPassDevice: showPassDevice,
+      ),
     );
 
 /// A [GameScreen] harness with animation ENABLED (a nonzero [AnimationTimings]
@@ -1065,18 +1080,21 @@ void main() {
   });
 
   group('pass-device overlay', () {
-    testWidgets('hot-seat: absent on the first turn, present on actor change',
-        (t) async {
+    GameController twoHumans(LocalHumanAgent white, LocalHumanAgent black) =>
+        GameController(
+          white: white,
+          black: black,
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    testWidgets('hot-seat, setting ON: absent on the first turn, present on '
+        'actor change', (t) async {
       final white = LocalHumanAgent();
       final black = LocalHumanAgent();
-      final c = GameController(
-        white: white,
-        black: black,
-        matchLength: 5,
-        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
-      );
+      final c = twoHumans(white, black);
 
-      await t.pumpWidget(_harness(c));
+      await t.pumpWidget(_harness(c, showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
       // First turn of the match: no overlay.
       expect(find.text('Pass the device'), findsNothing);
@@ -1087,6 +1105,38 @@ void main() {
       // Actor changed White → Black: overlay gates the reveal.
       expect(find.text('Pass the device'), findsOneWidget);
       expect(find.textContaining("Black's turn"), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat, setting OFF (the default): the turn hands over with '
+        'no overlay at all', (t) async {
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = twoHumans(white, black);
+
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(find.text('Pass the device'), findsNothing);
+
+      white.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(find.text('Pass the device'), findsNothing,
+          reason: 'nothing to tap through — the board flip is the cue');
+      // And play is genuinely open for Black: the Roll gate is live.
+      expect(isButtonEnabled(t, find.widgetWithText(FilledButton, 'Roll')),
+          isTrue);
+
+      // A second hand-over (Black → White) is equally uncovered.
+      c.rollDice();
+      await pumpUntil(t, () => black.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      black.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white,
+          maxFrames: 1200);
+      expect(find.text('Pass the device'), findsNothing);
 
       c.disposeController();
     });
@@ -1137,8 +1187,8 @@ void main() {
       final black = LocalHumanAgent();
       final c = hotSeat(white, black);
 
-      await t.pumpWidget(
-          _harnessOriented(c, BoardOrientationMode.followActive));
+      await t.pumpWidget(_harnessOriented(c, BoardOrientationMode.followActive,
+          showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
       // White is the active player: White at the bottom.
       expect(whiteAtBottom(t), isTrue);
@@ -1157,6 +1207,30 @@ void main() {
       c.disposeController();
     });
 
+    testWidgets('hot-seat followActive with the overlay OFF: the flip itself '
+        'is the hand-over', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(
+          _harnessOriented(c, BoardOrientationMode.followActive));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(whiteAtBottom(t), isTrue);
+
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(find.text('Pass the device'), findsNothing);
+      expect(whiteAtBottom(t), isFalse,
+          reason: 'the board flipped to Black with nothing to tap through');
+
+      c.disposeController();
+    });
+
     testWidgets('hot-seat fixedWhite (toggle off): White stays at the bottom',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
@@ -1166,8 +1240,8 @@ void main() {
       final black = LocalHumanAgent();
       final c = hotSeat(white, black);
 
-      await t.pumpWidget(
-          _harnessOriented(c, BoardOrientationMode.fixedWhite));
+      await t.pumpWidget(_harnessOriented(c, BoardOrientationMode.fixedWhite,
+          showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
       expect(whiteAtBottom(t), isTrue);
 
@@ -1219,8 +1293,8 @@ void main() {
       final black = LocalHumanAgent();
       final c = hotSeat(white, black);
 
-      await t.pumpWidget(
-          _harnessOriented(c, BoardOrientationMode.followActive));
+      await t.pumpWidget(_harnessOriented(c, BoardOrientationMode.followActive,
+          showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
 
       // Advance to Black's turn and dismiss the overlay: Black now at bottom.
