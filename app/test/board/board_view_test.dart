@@ -1370,11 +1370,11 @@ void main() {
       await t.pumpWidget(preRoll(goldenState, () => rolls++));
 
       final mover = goldenState.turn;
-      await t.tapAt(_geometry.diceRect(mover, mover: mover).center);
+      await t.tapAt(_geometry.diceRect(mover).center);
       await t.pump();
       expect(rolls, 1, reason: "the mover's own pair rolls");
 
-      await t.tapAt(_geometry.diceRect(mover.opponent, mover: mover).center);
+      await t.tapAt(_geometry.diceRect(mover.opponent).center);
       await t.pump();
       expect(rolls, 2, reason: 'the waiting pair rolls too');
     });
@@ -1386,7 +1386,7 @@ void main() {
       await t.pumpWidget(preRoll(goldenState, () => rolls++));
 
       final mover = goldenState.turn;
-      final target = _geometry.diceTapRect(mover, mover: mover);
+      final target = _geometry.diceTapRect(mover);
       // Just inside the padded box's corner — outside the dice themselves.
       await t.tapAt(target.bottomRight - const Offset(1, 1));
       await t.pump();
@@ -1425,7 +1425,7 @@ void main() {
       await tapPoint(t, 7);
       expect(_painterOf(t).selectedCheckerLocation, 7);
       final mover = goldenState.turn;
-      await t.tapAt(_geometry.diceRect(mover, mover: mover).center);
+      await t.tapAt(_geometry.diceRect(mover).center);
       await t.pump();
       expect(_painterOf(t).selectedCheckerLocation, isNull);
     });

@@ -77,6 +77,11 @@ Future<void> commitFirstMove(WidgetTester t) async {
   // async); wait until the board actually shows entry affordances before
   // driving it (pre-existing E2E race fixed here — the painter's
   // highlightedSources is empty until the BoardView rebuilds).
+  //
+  // The budget is deliberately long: a roll is now PRESENTED before entry opens
+  // (tumble frames plus a settle pause — about 1.1s at the production `normal`
+  // preset), so a caller that rolls and immediately drives the board waits
+  // through that. The default 800 frames would expire just short of it.
   await pumpUntil(
     t,
     () =>
@@ -84,6 +89,7 @@ Future<void> commitFirstMove(WidgetTester t) async {
         find.text('No moves — pass').evaluate().isNotEmpty ||
         (find.widgetWithText(FilledButton, 'Confirm').evaluate().isNotEmpty &&
             isButtonEnabled(t, find.widgetWithText(FilledButton, 'Confirm'))),
+    maxFrames: 3000,
   );
   for (var i = 0; i < 6; i++) {
     final confirm = find.widgetWithText(FilledButton, 'Confirm');

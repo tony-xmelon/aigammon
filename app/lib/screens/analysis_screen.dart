@@ -297,6 +297,10 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                 onMoveCommitted: (_) {},
                 whiteDice: whiteDice,
                 blackDice: blackDice,
+                // A replay frame's "live" roll is the one the shown position is
+                // about to play, i.e. the side on turn there. Static board, so
+                // this never changes under the reader's eye mid-step.
+                activeDiceSide: shownState.turn,
                 // The checker(s) the shown play MOVES wear the strong yellow
                 // ring — the same one live selection uses — not the thin
                 // "could be picked up" ring, which read as a weak suggestion

@@ -7,6 +7,7 @@ import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
 import 'package:aigammon_app/data/match_repository.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
+import 'package:aigammon_app/game/applied_move.dart';
 import 'package:aigammon_app/game/dice_roller.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/game_record.dart';
@@ -19,6 +20,7 @@ import 'package:aigammon_app/screens/metric_explainer.dart';
 import 'package:aigammon_app/tutor/tutor_service.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -316,13 +318,28 @@ Widget _tutorHarness(GameController c, TutorService tutor) => MaterialApp(
 
 // Keyed by the controller so pumping a different controller into the same test
 // remounts a fresh GameScreen State (re-running initState / playMatch).
-Widget _harness(GameController c) => MaterialApp(
-      home: GameScreen(key: ValueKey(c), controller: c),
+/// [showPassDevice] mirrors the production default (OFF): a hot-seat turn hands
+/// over with nothing but the board flip. Tests of the cover screen opt in.
+Widget _harness(GameController c, {bool showPassDevice = false}) => MaterialApp(
+      home: GameScreen(
+        key: ValueKey(c),
+        controller: c,
+        showPassDevice: showPassDevice,
+      ),
     );
 
-Widget _harnessOriented(GameController c, BoardOrientationMode mode) =>
+Widget _harnessOriented(
+  GameController c,
+  BoardOrientationMode mode, {
+  bool showPassDevice = false,
+}) =>
     MaterialApp(
-      home: GameScreen(key: ValueKey(c), controller: c, orientation: mode),
+      home: GameScreen(
+        key: ValueKey(c),
+        controller: c,
+        orientation: mode,
+        showPassDevice: showPassDevice,
+      ),
     );
 
 /// A [GameScreen] harness with animation ENABLED (a nonzero [AnimationTimings]
@@ -370,10 +387,8 @@ Widget _settingsHarness(GameController c, AppSettings settings) => ProviderScope
 BoardView _boardViewOf(WidgetTester t) =>
     t.widget<BoardView>(find.byType(BoardView));
 
-/// Scopes [inner] to the HUD header row. The compact match score now appears
-/// TWICE on the screen — in the header and on the permanent score sheet's own
-/// context line ("Game 2 · You 1–0 AI · to 5") — so a header assertion has to
-/// say which one it means.
+/// Scopes [inner] to the two-row HUD header — the single home for the match
+/// score, the game number, the opponent/level and the pip counts.
 Finder _inHud(Finder inner) =>
     find.descendant(of: find.byKey(const ValueKey('hud')), matching: inner);
 
@@ -387,6 +402,129 @@ Future<void> _dismissPassDevice(WidgetTester t) async {
     await t.tap(find.text('Tap to continue'));
     await t.pump();
   }
+}
+
+/// A hand-built [MatchController] parked on a DANCE for [danceSide]: White is on
+/// the bar and Black's home board is fully closed, so the mover has no legal
+/// play at all.
+///
+/// A real [GameController] cannot be steered into a dance deterministically from
+/// the opening position (it would take a scripted rally of hits and made
+/// points), and the auto-pass is a pure SCREEN behaviour — it reads the pending
+/// move request and the board's own "no selectable sources" verdict, then calls
+/// the same [BoardEntryController.pass] the button does. This stub supplies
+/// exactly that surface and records the committed move.
+class _DanceController extends ChangeNotifier implements MatchController {
+  _DanceController({this.bothLocal = false}) {
+    final pts = List<int>.filled(24, 0);
+    for (var i = 18; i < 24; i++) {
+      pts[i] = -2; // Black's home board fully closed
+    }
+    pts[0] = -3;
+    pts[12] = 14;
+    _danceState = GameState.testState(
+      board: BoardState(points: pts, whiteBar: 1),
+      turn: danceSide,
+      phase: GamePhase.moving,
+      dice: Dice(6, 2),
+    );
+    // The position AFTER the dance passes: the same board, the turn handed to
+    // the other side, parked on ITS pre-roll gate.
+    _handedOverState = GameState.testState(
+      board: BoardState(points: pts, whiteBar: 1),
+      turn: danceSide.opponent,
+      phase: GamePhase.awaitingRoll,
+    );
+    _pending = ValueNotifier<GameState?>(_danceState);
+  }
+
+  /// The side that is stuck. White is the one on the bar above.
+  static const Player danceSide = Player.white;
+
+  /// Hot-seat when true (both sides locally human), vs-AI when false.
+  final bool bothLocal;
+
+  late final GameState _danceState;
+  late final GameState _handedOverState;
+  late final ValueNotifier<GameState?> _pending;
+
+  /// Whether the danced turn has been passed, i.e. whether the turn has been
+  /// handed to the other side and ITS pre-roll gate is open.
+  bool _handedOver = false;
+
+  /// Every move handed back by the screen, in order. A dance commits
+  /// [Move.none], so a passed turn appends an empty move here.
+  final List<Move> committed = [];
+
+  /// Every resignation the screen offered, with the side it was booked against
+  /// — the whole point of the hot-seat wrong-player regression.
+  final List<(Player, ResignValue)> resignOffers = [];
+
+  @override
+  GameState get state => _handedOver ? _handedOverState : _danceState;
+  @override
+  MatchState get match => MatchState(matchLength: 5);
+  @override
+  int get gameNumber => 1;
+  @override
+  Game get game => Game.start(const OpeningRollEvent(whiteDie: 6, blackDie: 1));
+  @override
+  final ValueListenable<AppliedMove?> lastMove = ValueNotifier(null);
+  @override
+  bool get isThinking => false;
+  @override
+  Object? get error => null;
+  @override
+  Object? get persistenceError => null;
+  @override
+  bool get matchOver => false;
+  @override
+  bool get cubeless => false;
+  @override
+  bool get awaitingNextGame => false;
+  @override
+  void continueToNextGame() {}
+  @override
+  bool get awaitingHumanTurn => _handedOver && isLocalHuman(state.turn);
+  @override
+  Future<void> playMatch() async {}
+  @override
+  void rollDice() {}
+  @override
+  void offerDouble() {}
+  @override
+  void offerResign(ResignValue value) => resignOffers.add((state.turn, value));
+  @override
+  MatchContext contextFor(Player actor) =>
+      const MatchContext(moverAway: 5, opponentAway: 5, crawfordPlayed: false);
+  @override
+  void disposeController() {}
+  @override
+  bool isLocalHuman(Player side) => bothLocal || side == danceSide;
+  @override
+  ValueListenable<GameState?> pendingMoveOf(Player side) =>
+      side == danceSide ? _pending : _neverPending;
+  @override
+  void submitMove(Player side, Move move) {
+    committed.add(move);
+    _handedOver = true; // the turn passes to the other side, whose gate opens
+    _pending.value = null; // the turn is over; entry affordances go
+    notifyListeners();
+  }
+
+  @override
+  ValueListenable<GameState?> pendingCubeOf(Player side) => _neverPending;
+  @override
+  void submitCubeResponse(Player side, CubeAction action) {}
+  @override
+  ValueListenable<(GameState, ResignValue)?> pendingResignOf(Player side) =>
+      _neverResign;
+  @override
+  void submitResignResponse(Player side, bool accept) {}
+
+  static final ValueNotifier<GameState?> _neverPending = ValueNotifier(null);
+  static final ValueNotifier<(GameState, ResignValue)?> _neverResign =
+      ValueNotifier(null);
 }
 
 void main() {
@@ -406,7 +544,7 @@ void main() {
     /// Taps the centre of [player]'s dice pair on the board.
     Future<void> tapDice(WidgetTester t, Player player, Player mover) async {
       final painter = boardPainterOf(t);
-      final target = painter.geometry.diceRect(player, mover: mover).center;
+      final target = painter.geometry.diceRect(player).center;
       await t.tapAt(boardRect(t).topLeft + target);
       await t.pump();
     }
@@ -616,27 +754,131 @@ void main() {
     c.disposeController();
   });
 
-  testWidgets('Resign lives behind the header overflow (⋮) menu', (t) async {
-    await t.binding.setSurfaceSize(_surface);
-    addTearDown(() => t.binding.setSurfaceSize(null));
-    final human = LocalHumanAgent();
-    final c = GameController(
-      white: human,
-      black: FakeAgent(),
-      matchLength: 5,
-      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
-    );
-    await t.pumpWidget(_harness(c));
-    await pumpUntil(t, () => c.awaitingHumanTurn);
+  group('Surrender', () {
+    GameController human1(LocalHumanAgent human) => GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
 
-    // Resign entries are hidden until the overflow menu is opened.
-    expect(find.text('Resign — gammon'), findsNothing);
-    await t.tap(find.byIcon(Icons.more_vert));
-    await t.pumpAndSettle();
-    expect(find.text('Resign — single'), findsOneWidget);
-    expect(find.text('Resign — gammon'), findsOneWidget);
-    expect(find.text('Resign — backgammon'), findsOneWidget);
-    c.disposeController();
+    testWidgets('the ⋮ entry opens a sheet naming all three values', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = human1(LocalHumanAgent());
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      expect(find.text('Surrender…'), findsNothing, reason: 'menu closed');
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      expect(find.text('Surrender…'), findsOneWidget);
+
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      expect(find.text('Surrender'), findsOneWidget, reason: 'the sheet title');
+      expect(find.text('Concedes the current game.'), findsOneWidget);
+      expect(find.text('Single (1)'), findsOneWidget);
+      expect(find.text('Gammon (2)'), findsOneWidget);
+      expect(find.text('Backgammon (3)'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('the ⋮ is tappable OFF the gate too, and the sheet explains '
+        'when the values will work', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final human = LocalHumanAgent();
+      final c = human1(human);
+      await t.pumpWidget(_harness(c));
+      // Mid-MOVE, not at the pre-roll gate: the old UI greyed the ⋮ out here.
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      expect(c.awaitingHumanTurn, isFalse);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+
+      expect(find.text('Available at the start of your turn'), findsOneWidget);
+      for (final label in ['Single (1)', 'Gammon (2)', 'Backgammon (3)']) {
+        expect(
+            t
+                .widget<TextButton>(find.widgetWithText(TextButton, label))
+                .onPressed,
+            isNull,
+            reason: '$label is disabled off-gate');
+      }
+      // Cancel is always live, so the sheet is never a trap.
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle();
+      expect(find.text('Concedes the current game.'), findsNothing);
+      expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty);
+
+      c.disposeController();
+    });
+
+    testWidgets('choosing a value at the gate offers that resignation',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final c = human1(LocalHumanAgent());
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Gammon (2)'));
+      await pumpUntil(t, () => c.game.events.whereType<ResignOfferEvent>()
+          .isNotEmpty, maxFrames: 1200);
+
+      expect(c.game.events.whereType<ResignOfferEvent>().single.value,
+          ResignValue.gammon);
+      expect(find.text('Concedes the current game.'), findsNothing,
+          reason: 'the sheet closes on the choice');
+      expect(c.error, isNull);
+
+      c.disposeController();
+    });
+
+    testWidgets('the sheet yields to a modal the match is waiting on',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      final human = LocalHumanAgent();
+      // Black doubles at its first opportunity, so a cube offer lands while the
+      // Surrender sheet sits open.
+      final c = GameController(
+        white: human,
+        black: FakeAgent(doubles: true),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      expect(find.text('Concedes the current game.'), findsOneWidget);
+
+      // Play on: Black's double arrives and must own the screen.
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(t, () => human.pendingCubeRequest.value != null,
+          maxFrames: 1200);
+      expect(find.text('Double offered'), findsOneWidget);
+      expect(find.text('Concedes the current game.'), findsNothing,
+          reason: 'the surrender sheet closed rather than hiding underneath');
+
+      c.disposeController();
+    });
   });
 
   testWidgets('bottom action bar keeps a fixed 64px height across phases',
@@ -1066,19 +1308,180 @@ void main() {
     });
   });
 
-  group('pass-device overlay', () {
-    testWidgets('hot-seat: absent on the first turn, present on actor change',
+  group('auto-pass on a dance', () {
+    // Animations ON, so the hold is the real 1.2s beat.
+    Widget harness(_DanceController c,
+            {AnimationTimings timings = AnimationTimings.normal}) =>
+        MaterialApp(
+          home: GameScreen(key: ValueKey(c), controller: c, timings: timings),
+        );
+
+    testWidgets('the dance is HELD, then the turn passes itself', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      // The beat: the affordance is up and NOTHING has been committed yet, so
+      // the dice and the reason are readable.
+      expect(c.committed, isEmpty);
+      await t.pump(const Duration(milliseconds: 600));
+      expect(c.committed, isEmpty, reason: 'still being held, mid-beat');
+      expect(find.text('No moves — pass'), findsOneWidget,
+          reason: 'the manual route stays available throughout the hold');
+
+      // Past the hold: the turn passed itself, with no tap.
+      await t.pump(const Duration(milliseconds: 800));
+      expect(c.committed, hasLength(1));
+      expect(c.committed.single.checkerMoves, isEmpty, reason: 'Move.none');
+    });
+
+    testWidgets('with animations off the pass is immediate', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c, timings: AnimationTimings.off));
+      // One frame past the entry opening is enough — no deliberate pause is
+      // inserted when nothing else on screen waits either.
+      await pumpUntil(t, () => c.committed.isNotEmpty);
+      expect(c.committed.single.checkerMoves, isEmpty);
+    });
+
+    testWidgets('tapping the affordance passes sooner, and only once',
         (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      await t.tap(find.text('No moves — pass'));
+      await t.pump();
+      expect(c.committed, hasLength(1), reason: 'the tap skipped the wait');
+
+      // The scheduled auto-pass must not fire a SECOND Move.none afterwards.
+      await t.pump(const Duration(milliseconds: 1500));
+      expect(c.committed, hasLength(1));
+    });
+
+    testWidgets('hot-seat: a hand-over UNDER an open Surrender sheet can never '
+        'resign for the incoming player', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // The exact reported sequence. Hot-seat, White is dancing, and the
+      // pass-device cover is OFF (the default since round 6) — so nothing else
+      // interrupts the sheet when the turn changes hands.
+      final c = _DanceController(bothLocal: true);
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      // White opens the sheet DURING its own dance. Deliberately stepped by
+      // hand rather than pumpAndSettle: the auto-pass is a timer, and settling
+      // would run it before the sheet is even up.
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Surrender…'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Concedes the current game.'), findsOneWidget);
+      expect(find.text('Available at the start of your turn'), findsOneWidget,
+          reason: 'mid-dance is not White\'s pre-roll gate');
+
+      // The dance passes itself. The turn — and the device — is now BLACK's,
+      // and Black's pre-roll gate is open, which is exactly the state the old
+      // side-agnostic `awaitingHumanTurn` check lit the buttons on.
+      await t.pump(const Duration(milliseconds: 900));
+      expect(c.committed, hasLength(1), reason: 'the dance auto-passed');
+      expect(c.state.turn, Player.black);
+      expect(c.awaitingHumanTurn, isTrue);
+
+      expect(find.text('Concedes the current game.'), findsNothing,
+          reason: 'the sheet White opened cannot survive the hand-over');
+      expect(c.resignOffers, isEmpty);
+
+      // And nothing left behind can book a resignation against Black.
+      await t.pump(const Duration(milliseconds: 600));
+      expect(c.resignOffers, isEmpty,
+          reason: 'White\'s sheet must never resign for Black');
+    });
+
+    testWidgets('the sheet is latched to the side that opened it', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // vs-AI: the sole local human is the only side that can ever resign, so
+      // the sheet stays put across the opponent's turn and its buttons still
+      // light up at the human's own gate.
+      final c = _DanceController();
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Surrender…'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 400));
+
+      // The dance passes; the turn is the AI's, so the human's sheet survives
+      // but its values stay disabled — there is nobody else here to resign for.
+      await t.pump(const Duration(milliseconds: 900));
+      expect(c.state.turn, Player.black, reason: 'the AI is on turn');
+      expect(find.text('Concedes the current game.'), findsOneWidget,
+          reason: 'no hand-over happened — only one human is playing');
+      expect(
+          t
+              .widget<TextButton>(
+                  find.widgetWithText(TextButton, 'Single (1)'))
+              .onPressed,
+          isNull,
+          reason: 'not the human\'s turn, so nothing is offerable yet');
+      expect(c.resignOffers, isEmpty);
+    });
+    testWidgets('hot-seat: a danced turn hands over on its own', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Both sides local — the reported "when two players play, and one has no
+      // possible moves, skip the turn".
+      final c = _DanceController(bothLocal: true);
+      addTearDown(c.dispose);
+      await t.pumpWidget(harness(c));
+      await pumpUntil(t, () => find.text('No moves — pass').evaluate().isNotEmpty);
+
+      await t.pump(const Duration(milliseconds: 1400));
+      expect(c.committed, hasLength(1));
+      expect(c.committed.single.checkerMoves, isEmpty);
+    });
+  });
+
+  group('pass-device overlay', () {
+    GameController twoHumans(LocalHumanAgent white, LocalHumanAgent black) =>
+        GameController(
+          white: white,
+          black: black,
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+        );
+
+    testWidgets('hot-seat, setting ON: absent on the first turn, present on '
+        'actor change', (t) async {
       final white = LocalHumanAgent();
       final black = LocalHumanAgent();
-      final c = GameController(
-        white: white,
-        black: black,
-        matchLength: 5,
-        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
-      );
+      final c = twoHumans(white, black);
 
-      await t.pumpWidget(_harness(c));
+      await t.pumpWidget(_harness(c, showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
       // First turn of the match: no overlay.
       expect(find.text('Pass the device'), findsNothing);
@@ -1089,6 +1492,38 @@ void main() {
       // Actor changed White → Black: overlay gates the reveal.
       expect(find.text('Pass the device'), findsOneWidget);
       expect(find.textContaining("Black's turn"), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat, setting OFF (the default): the turn hands over with '
+        'no overlay at all', (t) async {
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = twoHumans(white, black);
+
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(find.text('Pass the device'), findsNothing);
+
+      white.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(find.text('Pass the device'), findsNothing,
+          reason: 'nothing to tap through — the board flip is the cue');
+      // And play is genuinely open for Black: the Roll gate is live.
+      expect(isButtonEnabled(t, find.widgetWithText(FilledButton, 'Roll')),
+          isTrue);
+
+      // A second hand-over (Black → White) is equally uncovered.
+      c.rollDice();
+      await pumpUntil(t, () => black.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      black.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.white,
+          maxFrames: 1200);
+      expect(find.text('Pass the device'), findsNothing);
 
       c.disposeController();
     });
@@ -1139,8 +1574,8 @@ void main() {
       final black = LocalHumanAgent();
       final c = hotSeat(white, black);
 
-      await t.pumpWidget(
-          _harnessOriented(c, BoardOrientationMode.followActive));
+      await t.pumpWidget(_harnessOriented(c, BoardOrientationMode.followActive,
+          showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
       // White is the active player: White at the bottom.
       expect(whiteAtBottom(t), isTrue);
@@ -1159,6 +1594,30 @@ void main() {
       c.disposeController();
     });
 
+    testWidgets('hot-seat followActive with the overlay OFF: the flip itself '
+        'is the hand-over', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = hotSeat(white, black);
+
+      await t.pumpWidget(
+          _harnessOriented(c, BoardOrientationMode.followActive));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      expect(whiteAtBottom(t), isTrue);
+
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+      expect(find.text('Pass the device'), findsNothing);
+      expect(whiteAtBottom(t), isFalse,
+          reason: 'the board flipped to Black with nothing to tap through');
+
+      c.disposeController();
+    });
+
     testWidgets('hot-seat fixedWhite (toggle off): White stays at the bottom',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
@@ -1168,8 +1627,8 @@ void main() {
       final black = LocalHumanAgent();
       final c = hotSeat(white, black);
 
-      await t.pumpWidget(
-          _harnessOriented(c, BoardOrientationMode.fixedWhite));
+      await t.pumpWidget(_harnessOriented(c, BoardOrientationMode.fixedWhite,
+          showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
       expect(whiteAtBottom(t), isTrue);
 
@@ -1221,8 +1680,8 @@ void main() {
       final black = LocalHumanAgent();
       final c = hotSeat(white, black);
 
-      await t.pumpWidget(
-          _harnessOriented(c, BoardOrientationMode.followActive));
+      await t.pumpWidget(_harnessOriented(c, BoardOrientationMode.followActive,
+          showPassDevice: true));
       await pumpUntil(t, () => white.pendingMoveRequest.value != null);
 
       // Advance to Black's turn and dismiss the overlay: Black now at bottom.
@@ -1432,6 +1891,11 @@ void main() {
       expect(painter.whiteDice, Dice(6, 1),
           reason: "the human's pair must hold their OWN last roll — never "
               "cycle with the opponent's roll");
+      // The other half of the same regression: EMPHASIS follows the roller too,
+      // so the tumbling pair is the bright one and the human's stale pair is
+      // dim — "my dice gets enabled while the opponent moves".
+      expect(painter.activeDiceSide, Player.black,
+          reason: 'the roller is lit even though the turn is already White');
 
       // Once the beat ends, Black's pair settles on the real roll and White's
       // pair is still its own opening roll.
@@ -1509,33 +1973,246 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('local human roll is instant (no beat override)', (t) async {
-      await t.binding.setSurfaceSize(_surface);
-      addTearDown(() => t.binding.setSurfaceSize(null));
+    // --- The LOCAL player's own roll beats too --------------------------------
 
+    /// A match parked at White's (the human's) pre-roll gate, with the opening
+    /// roll's own presentation already finished: Black wins the opening (6 > 1),
+    /// plays instantly, and White reaches its gate.
+    (GameController, LocalHumanAgent) atLocalGate() {
       final human = LocalHumanAgent();
       final c = GameController(
         white: human,
         black: FakeAgent(),
         matchLength: 5,
-        // Black (AI) wins the opening and moves; White (human) then rolls at its
-        // gate — its own roll must never trigger a beat.
         diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
       );
+      return (c, human);
+    }
 
-      await t.pumpWidget(_animHarness(c));
+    /// Pumps until the local player is at a QUIET pre-roll gate: the opponent's
+    /// roll presentation is over, its move has finished travelling, and the Roll
+    /// button is live.
+    Future<void> settleAtGate(WidgetTester t, GameController c) async {
       await pumpUntil(t, () => c.awaitingHumanTurn);
+      await pumpUntil(
+          t,
+          () =>
+              boardPainterOf(t).overlayChecker == null &&
+              boardPainterOf(t).activeDiceSide == null,
+          maxFrames: 4000);
+    }
+
+    /// Whether the board is currently accepting move entry.
+    bool entryOpen(WidgetTester t) => _boardViewOf(t).interactive;
+
+    testWidgets('the local player\'s own roll TUMBLES, and entry waits for it',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      await t.pumpWidget(_animHarness(c));
+      await settleAtGate(t, c);
+      expect(entryOpen(t), isFalse, reason: 'nothing to enter at the gate');
+
       await t.tap(find.widgetWithText(FilledButton, 'Roll'));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
+      // The roll has landed in the state, but the pair is TUMBLING: the painted
+      // faces are override faces, not the settled roll, and they are painted on
+      // the local player's OWN pair at full emphasis.
       final realRoll = c.state.dice;
       expect(realRoll, isNotNull);
-      // The human's own roll shows immediately: White's (the mover's) pair
-      // equals the real state dice with no override in between.
-      expect(boardPainterOf(t).whiteDice, realRoll,
-          reason: 'a local roll is instant — no beat override');
+      expect(boardPainterOf(t).whiteDice, isNot(realRoll),
+          reason: "the local player's own roll tumbles before it settles");
+      expect(boardPainterOf(t).activeDiceSide, Player.white,
+          reason: 'the roller is the live pair — bright, in its own home');
+      expect(entryOpen(t), isFalse,
+          reason: 'no hop can be staged against dice that are still tumbling');
 
-      // Let any move animation from the AI opening finish before teardown.
+      // It settles on the real roll, then (after the HALVED settle pause) entry
+      // opens with the roller still emphasised.
+      await pumpUntil(t, () => boardPainterOf(t).whiteDice == realRoll,
+          maxFrames: 2000);
+      await pumpUntil(t, () => entryOpen(t), maxFrames: 2000);
+      expect(boardPainterOf(t).activeDiceSide, Player.white,
+          reason: 'the mover keeps the live pair while entering the move');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('a dice TAP gets the same beat as the Roll button', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      await t.pumpWidget(_animHarness(c));
+      await settleAtGate(t, c);
+
+      // Tap the local player's own pair (its fixed home) instead of the button.
+      final painter = boardPainterOf(t);
+      await t.tapAt(boardRect(t).topLeft +
+          painter.geometry.diceRect(Player.white).center);
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(boardPainterOf(t).whiteDice, isNot(c.state.dice),
+          reason: 'the dice-tap route presents the roll exactly as Roll does');
+      expect(boardPainterOf(t).activeDiceSide, Player.white);
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets("the opponent's pair stays lit while their checkers travel, "
+        'then everything goes dim', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // White (human) plays; Black (AI, instant) rolls and replies, so Black's
+      // move is queued behind its dice presentation and travels after it.
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await pumpUntil(t, () => _boardViewOf(t).interactive, maxFrames: 3000);
+      human.submitMove(c.state.legalMoves.first);
+
+      // Wait for BLACK's checker specifically: White's own move was submitted
+      // through the agent (not hand-entered on the board), so it animates too,
+      // and its travel would otherwise be mistaken for the opponent's.
+      await pumpUntil(
+          t, () => boardPainterOf(t).overlayChecker?.isWhite == false,
+          maxFrames: 6000);
+      // Black's checker is travelling, so its dice presentation has already been
+      // released (the hold is what gates the travel) — only the ANIMATION can be
+      // lighting its pair here. And the turn is long since back on White.
+      expect(c.state.turn, Player.white);
+      expect(boardPainterOf(t).activeDiceSide, Player.black,
+          reason: "the mover's dice stay readable while their play is shown");
+
+      // Travel over, nobody has rolled: both pairs dim, and the human's pair has
+      // NOT re-brightened just because it is their turn.
+      await pumpUntil(t, () => boardPainterOf(t).overlayChecker == null,
+          maxFrames: 6000);
+      expect(boardPainterOf(t).activeDiceSide, isNull);
+      expect(c.awaitingHumanTurn, isTrue,
+          reason: 'the human is at their pre-roll gate with both pairs dim');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('the local pair goes DIM the moment the move is confirmed, and '
+        'stays dim until it is rolled again', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Hot-seat, so the turn passes to a side that will NOT roll on its own:
+      // the window after the confirm stays open for as long as the test needs.
+      // This is the reported bug's exact shape — "after my turn is over, my dice
+      // gets enabled while the opponent moves".
+      final white = LocalHumanAgent();
+      final black = LocalHumanAgent();
+      final c = GameController(
+        white: white,
+        black: black,
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c, timings: AnimationTimings.normal));
+      await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+      // The opening roll is White's and is presented: White is the live pair.
+      await pumpUntil(t, () => entryOpen(t), maxFrames: 3000);
+      expect(boardPainterOf(t).activeDiceSide, Player.white);
+
+      await commitFirstMove(t);
+      await _dismissPassDevice(t);
+      await t.pump(const Duration(milliseconds: 200));
+
+      // Turn over, nobody has rolled: BOTH pairs dim. White's memento pair must
+      // NOT re-brighten just because the state says it is White's turn again
+      // later, and Black's has nothing live either until Black rolls.
+      expect(boardPainterOf(t).activeDiceSide, isNull,
+          reason: 'the local pair is disabled until it is rolled again');
+      // Both rolls are still READABLE (dim, not gone).
+      expect(boardPainterOf(t).whiteDice, isNotNull);
+
+      // And it stays that way — no timer re-lights it.
+      await t.pump(const Duration(milliseconds: 1500));
+      expect(boardPainterOf(t).activeDiceSide, isNull);
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('the dice-roll animation setting OFF: no tumble, no hold',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      // Checker travel keeps the normal pacing; only the beat is off — exactly
+      // what `AppSettings.diceRollAnimation: false` produces.
+      final noBeat = AnimationTimings.normal.withoutDiceBeat();
+      await t.pumpWidget(_animHarness(c, timings: noBeat));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      // The OPPONENT's roll settled instantly — no override frame ever painted.
+      expect(boardPainterOf(t).blackDice, Dice(1, 6),
+          reason: "Black's opening roll shows settled at once");
+      expect(_boardViewOf(t).diceOverride, isNull);
+
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      // The LOCAL roll likewise: settled immediately, no override, and entry is
+      // open on the very frame the roll lands (nothing is held).
+      expect(_boardViewOf(t).diceOverride, isNull,
+          reason: 'no beat runs, so no tumbling faces are ever painted');
+      expect(boardPainterOf(t).whiteDice, c.state.dice);
+      expect(entryOpen(t), isTrue,
+          reason: 'with no beat there is no settle pause to wait through');
+      expect(boardPainterOf(t).activeDiceSide, Player.white,
+          reason: 'the mover is still the live pair — emphasis is not animation');
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets('a dice pair never MOVES between presentations (fixed homes)',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = atLocalGate();
+      await t.pumpWidget(_animHarness(c));
+      await settleAtGate(t, c);
+
+      Rect whiteHome() => boardPainterOf(t).geometry.diceRect(Player.white);
+      Rect blackHome() => boardPainterOf(t).geometry.diceRect(Player.black);
+      final white0 = whiteHome();
+      final black0 = blackHome();
+
+      // Mid-tumble of the local player's own roll — the turn, the emphasis and
+      // the painted faces have all changed since the gate.
+      await t.tap(find.widgetWithText(FilledButton, 'Roll'));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      expect(whiteHome(), white0, reason: 'the tumbling pair does not jump');
+      expect(blackHome(), black0);
+
+      // And once entry is open.
+      await pumpUntil(t, () => entryOpen(t), maxFrames: 2000);
+      expect(whiteHome(), white0);
+      expect(blackHome(), black0);
+
       await t.pumpAndSettle();
       c.disposeController();
     });
@@ -1677,7 +2354,13 @@ void main() {
           maxFrames: 2000);
 
       await t.tap(find.widgetWithText(FilledButton, 'Roll'));
-      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      // The local roll is PRESENTED first (tumble + half settle), and move-entry
+      // affordances — the Hint button among them — appear only once it settles.
+      await pumpUntil(
+          t,
+          () =>
+              find.widgetWithText(OutlinedButton, 'Hint').evaluate().isNotEmpty,
+          maxFrames: 3000);
 
       final s = c.state;
       final expected = MoveGenerator.legalMoves(s.board, s.turn, s.dice!).first;
@@ -1880,7 +2563,8 @@ void main() {
       // White's turn (the mover is White).
       expect(boardPainterOf(t).blackDice, eb);
       expect(boardPainterOf(t).whiteDice, ew);
-      expect(boardPainterOf(t).diceMover, Player.white);
+      expect(boardPainterOf(t).activeDiceSide, isNull,
+          reason: 'at the pre-roll gate no roll is live, so both pairs dim');
 
       // White rolls and enters its move: its own pair updates to the new roll,
       // while the AI's roll REMAINS on the black pair (the core fix).
@@ -2316,8 +3000,8 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('the header names the columns You / the opponent and carries '
-        'the game + match score', (t) async {
+    testWidgets('the sheet header names the columns You / the opponent and '
+        'carries NO score line of its own', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -2331,10 +3015,11 @@ void main() {
           findsOneWidget);
       expect(
           find.descendant(of: header, matching: find.text('AI')), findsOneWidget);
-      expect(
-          find.descendant(
-              of: header, matching: find.text('Game 1 · You 0–0 AI · to 5')),
-          findsOneWidget);
+      // The game/score context lives in the HEADER now, and ONLY there — the
+      // duplicate that used to sit on this sheet is gone.
+      expect(_inHud(find.text('You 0–0 AI · to 5 · Game 1')), findsOneWidget);
+      expect(find.textContaining('· Game 1'), findsOneWidget,
+          reason: 'the match context is printed exactly once on the screen');
 
       c.disposeController();
     });
@@ -2556,11 +3241,11 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      // The overflow menu holds resignations ONLY.
+      // The overflow menu holds Surrender ONLY.
       await t.tap(find.byIcon(Icons.more_vert));
       await t.pumpAndSettle();
       expect(find.text('Game record'), findsNothing);
-      expect(find.text('Resign — single'), findsOneWidget);
+      expect(find.text('Surrender…'), findsOneWidget);
       await t.tapAt(const Offset(450, 700)); // dismiss the menu
       await t.pumpAndSettle();
 
@@ -2648,7 +3333,8 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('cubeless match: cube chip and Double button are hidden',
+    testWidgets(
+        'cubeless match: cube chip, Double button AND the board cube are hidden',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -2666,11 +3352,14 @@ void main() {
           reason: 'no Double button in a cubeless match');
       expect(find.textContaining('×'), findsNothing,
           reason: 'the cube chip is hidden in a cubeless match');
+      expect(boardPainterOf(t).cube, isNull,
+          reason: 'the painter is handed no cube, so no cube glyph is drawn');
 
       c.disposeController();
     });
 
-    testWidgets('non-cubeless match (default): cube chip and Double present',
+    testWidgets(
+        'non-cubeless match (default): cube chip, Double and board cube present',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -2680,6 +3369,8 @@ void main() {
       expect(find.widgetWithText(OutlinedButton, 'Double'), findsOneWidget);
       expect(find.textContaining('×'), findsOneWidget,
           reason: 'the cube chip shows ×1');
+      expect(boardPainterOf(t).cube, isNotNull,
+          reason: 'a cubed match still paints the cube on the bar');
       c.disposeController();
     });
 
@@ -2977,7 +3668,9 @@ void main() {
           maxFrames: 1200);
       await t.tap(find.byIcon(Icons.more_vert));
       await t.pumpAndSettle();
-      await t.tap(find.text('Resign — single'));
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Single (1)'));
       await pumpUntil(t, () => c.awaitingNextGame, maxFrames: 1200);
 
       final g1 = c.game;
@@ -2992,17 +3685,13 @@ void main() {
               'assessments are discarded with its event log');
       expect(find.descendant(of: sheet, matching: find.textContaining('−0.')),
           findsNothing);
-      expect(
-          find.descendant(
-              of: find.byKey(const ValueKey('scoreSheetHeader')),
-              matching: find.text('Game 2 · You 0–1 AI · to 5')),
-          findsOneWidget,
+      expect(_inHud(find.text('You 0–1 AI · to 5 · Game 2')), findsOneWidget,
           reason: 'the header follows the match into game 2');
 
       c.disposeController();
     });
 
-    testWidgets('showScoring off leaves the sheet titled by game alone',
+    testWidgets('showScoring off leaves the HUD titled by game alone',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -3014,11 +3703,9 @@ void main() {
       ));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
-      final header = find.byKey(const ValueKey('scoreSheetHeader'));
-      expect(find.descendant(of: header, matching: find.text('Game 1')),
-          findsOneWidget);
+      expect(_inHud(find.text('Game 1')), findsOneWidget);
       expect(find.textContaining('to 5'), findsNothing,
-          reason: 'the sheet hides the score exactly as the HUD does');
+          reason: 'the score half of the context line is dropped');
 
       c.disposeController();
     });
@@ -3102,9 +3789,10 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('the header score is not truncated on a phone', (t) async {
-      // The real capture surface: a 390x844 phone in portrait, where the header
-      // has the least room (score + cube chip + Double + overflow on one row).
+    testWidgets('the header context line is not truncated on a phone',
+        (t) async {
+      // The real capture surface: a 390x844 phone in portrait, where row 1 has
+      // the least room (context + cube chip + Double + overflow).
       await t.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -3117,12 +3805,12 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      const score = 'You 0–0 AI · to 3';
-      expect(find.text(score), findsOneWidget);
-      final paragraph = t.renderObject<RenderParagraph>(find.text(score));
+      const context = 'You 0–0 AI · to 3 · Game 1';
+      expect(find.text(context), findsOneWidget);
+      final paragraph = t.renderObject<RenderParagraph>(find.text(context));
       expect(paragraph.didExceedMaxLines, isFalse,
-          reason: 'the whole score must fit — no "You 0–0 AI · t…"');
-      // Still a single line (the header is one row by design).
+          reason: 'the whole line must fit — no "You 0–0 AI · t…"');
+      // Still a single line (row 1 is one line by design).
       expect(paragraph.size.height, lessThan(30));
 
       c.disposeController();
@@ -3325,7 +4013,7 @@ void main() {
 
       final painter = boardPainterOf(t);
       final target = boardRect(t).topLeft +
-          painter.geometry.diceRect(c.state.turn, mover: c.state.turn).center;
+          painter.geometry.diceRect(c.state.turn).center;
       // No pump between the taps: BOTH hit the callback captured by the frame
       // that is already on screen, exactly as a real double-tap on the dice
       // does. The second must be swallowed, not throw out of the gesture
@@ -3379,36 +4067,43 @@ void main() {
           reason: 'the second press offered nothing');
     });
 
-    testWidgets('a resign chosen from a menu that outlived the gate is dropped',
-        (t) async {
+    testWidgets('a surrender chosen from a sheet that outlived the gate is '
+        'dropped', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
       final c = atGate();
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      // A popup menu cannot be selected twice — the first tap pops the route —
-      // so the reachable shape of this race is a menu that OUTLIVES the gate it
-      // was built for: it opens at the gate, something else closes the gate
-      // while it sits there, and the stale entry is then chosen.
+      // The sheet is opened AT the gate, so its value buttons are live; the
+      // gate is then closed underneath it before one is pressed. The button's
+      // enabled-ness is a frame old at that point, so the handler re-checks.
       await t.tap(find.byTooltip('More actions'));
       await t.pumpAndSettle();
-      expect(find.text('Resign — single'), findsOneWidget);
+      await t.tap(find.text('Surrender…'));
+      await t.pumpAndSettle();
+      expect(
+          t
+              .widget<TextButton>(
+                  find.widgetWithText(TextButton, 'Single (1)'))
+              .onPressed,
+          isNotNull);
 
-      c.rollDice(); // the gate closes underneath the open menu
+      c.rollDice(); // the gate closes underneath the open sheet
       expect(c.awaitingHumanTurn, isFalse);
 
-      await t.tap(find.text('Resign — single'));
+      await t.tap(find.text('Single (1)'));
       await t.pumpAndSettle();
 
       expect(c.error, isNull);
       expect(c.game.events.whereType<ResignOfferEvent>(), isEmpty,
-          reason: 'a resign past the gate must not be offered');
+          reason: 'a surrender past the gate must not be offered');
     });
   });
 
-  group('pip counts', () {
-    testWidgets('the line is always present and names the local side', (t) async {
+  group('header detail row (opponent + pips)', () {
+    testWidgets('the row is always present and names the local side first',
+        (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -3421,14 +4116,16 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      expect(find.byKey(const ValueKey('pipLine')), findsOneWidget);
-      // The local (White) side is "You" and the computer takes the opponent
-      // label; Black has already played its opening 6-1 by this gate.
+      expect(find.byKey(const ValueKey('hudDetailRow')), findsOneWidget);
+      expect(find.byKey(const ValueKey('pipLine')), findsNothing,
+          reason: 'the standalone pip line under the board is gone');
+      // The local (White) side comes first; Black has already played its
+      // opening 6-1 by this gate.
       final white = c.state.board.pipCount(Player.white);
       final black = c.state.board.pipCount(Player.black);
       expect(white, 167, reason: 'White has not moved yet');
       expect(black, lessThan(167), reason: 'Black opened');
-      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+      expect(_inHud(find.text('vs AI · Pips $white–$black')), findsOneWidget);
 
       c.disposeController();
     });
@@ -3449,19 +4146,42 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
-      expect(find.text('Pips: You 167 · AI 167'), findsOneWidget);
+      expect(_inHud(find.text('vs AI · Pips 167–167')), findsOneWidget);
       human.submitMove(c.state.legalMoves.first);
       await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
 
       final white = c.state.board.pipCount(Player.white);
       final black = c.state.board.pipCount(Player.black);
       expect(white, lessThan(167), reason: 'White has played a move');
-      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+      expect(_inHud(find.text('vs AI · Pips $white–$black')), findsOneWidget);
 
       c.disposeController();
     });
 
-    testWidgets('hot-seat keeps the neutral W / B naming', (t) async {
+    testWidgets('an opponent detail (the AI level) is named when supplied',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(MaterialApp(
+        home: GameScreen(
+            key: ValueKey(c), controller: c, opponentDetail: 'Easy'),
+      ));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(_inHud(find.text('vs AI · Easy · Pips 167–167')), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat names both sides neutrally', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -3472,10 +4192,89 @@ void main() {
         diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
       );
       await t.pumpWidget(_harness(c));
-      await pumpUntil(t, () => find.byKey(const ValueKey('pipLine')).evaluate().isNotEmpty);
+      await pumpUntil(
+          t,
+          () => find
+              .byKey(const ValueKey('hudDetailRow'))
+              .evaluate()
+              .isNotEmpty);
       await _dismissPassDevice(t);
 
-      expect(find.text('Pips: W 167 · B 167'), findsOneWidget);
+      expect(_inHud(find.text('White vs Black · Pips 167–167')), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('the header holds 64px, and row 2 is unscaled at text scale 1',
+        (t) async {
+      await t.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      for (final scale in [1.0, 1.3, 2.0]) {
+        // A fresh controller per scale: a GameScreen is keyed to its controller
+        // precisely so a remount starts a new match loop, and re-pumping the
+        // same one would park on a gate that has already been consumed.
+        final c = GameController(
+          white: LocalHumanAgent(),
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+        );
+        await t.pumpWidget(MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+            child: GameScreen(
+                key: ValueKey(c), controller: c, opponentDetail: 'Easy'),
+          ),
+        ));
+        await pumpUntil(t, () => c.awaitingHumanTurn);
+
+        expect(t.getSize(find.byKey(const ValueKey('hud'))).height, 64,
+            reason: 'the header budget is fixed at every text scale ($scale)');
+        expect(t.takeException(), isNull,
+            reason: 'no overflow at text scale $scale');
+
+        // Row 2's line must FIT its 18px slot rather than being clipped: the
+        // FittedBox shrinks it when the user has asked for larger text, but it
+        // is always fully painted.
+        final line = find.descendant(
+          of: find.byKey(const ValueKey('hudDetailRow')),
+          matching: find.byType(Text),
+        );
+        expect(line, findsOneWidget);
+        final box = t.renderObject<RenderBox>(line);
+        if (scale == 1.0) {
+          // The whole point of the 16 -> 18 change: at the default scale the
+          // line is laid out at its natural height, so the FittedBox is not
+          // silently shrinking every render.
+          expect(box.size.height, lessThanOrEqualTo(18),
+              reason: 'the natural line fits its slot unscaled');
+        }
+        expect(t.getSize(find.byKey(const ValueKey('hudDetailRow'))).height, 18);
+        c.disposeController();
+      }
+    });
+    testWidgets('the header is a FIXED height, both rows always present',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final before = t.getSize(find.byKey(const ValueKey('hud'))).height;
+      expect(before, 64, reason: '40 + 16 + 2*4 — the documented budget');
+
+      // Play on: the header must not resize as phases come and go.
+      c.rollDice();
+      await pumpUntil(t, () => c.state.dice != null, maxFrames: 1200);
+      expect(t.getSize(find.byKey(const ValueKey('hud'))).height, before);
 
       c.disposeController();
     });

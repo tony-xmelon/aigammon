@@ -44,11 +44,12 @@ void main() {
       board: BoardState.initial(),
       geometry: geometry,
       theme: BoardTheme.light,
-      // Both persistent pairs: White (mover, right, bright) and Black (waiting,
-      // left, dimmed) each show a roll so the two pairs are visibly distinct.
+      // Both persistent pairs: White (active, its own right-hand home, bright)
+      // and Black (not active, left home, dimmed) each show a roll so the two
+      // pairs are visibly distinct.
       whiteDice: Dice(3, 1),
       blackDice: Dice(5, 4),
-      diceMover: Player.white,
+      activeDiceSide: Player.white,
       cube: const CubeState.initial(),
     );
     await t.pumpWidget(_harness(painter));
@@ -78,10 +79,11 @@ void main() {
       board: board,
       geometry: geometry,
       theme: BoardTheme.dark,
-      // White is the mover (bright, right); Black's pair persists dimmed (left).
+      // White's roll is the live one (bright, right); Black's pair persists
+      // dimmed in its own left-hand home.
       whiteDice: Dice(6, 4),
       blackDice: Dice(2, 5),
-      diceMover: Player.white,
+      activeDiceSide: Player.white,
       cube: const CubeState(value: 2, owner: Player.black),
       // Showcases every highlight type at once: subtle source rings on the two
       // selectable sources' top checkers, uniform green destination triangles,
@@ -110,7 +112,7 @@ void main() {
       theme: BoardTheme.light,
       whiteDice: Dice(3, 1),
       blackDice: Dice(5, 4),
-      diceMover: Player.white,
+      activeDiceSide: Player.white,
       cube: const CubeState.initial(),
     );
     await t.pumpWidget(_harness(painter, _portrait));
@@ -126,7 +128,7 @@ void main() {
       BoardTheme? theme,
       Dice? whiteDice,
       Dice? blackDice,
-      Player? diceMover,
+      Player? activeDiceSide,
       CubeState? cube,
       Set<int> src = const {},
       Set<int> dst = const {},
@@ -141,7 +143,7 @@ void main() {
           theme: theme ?? BoardTheme.light,
           whiteDice: whiteDice,
           blackDice: blackDice,
-          diceMover: diceMover,
+          activeDiceSide: activeDiceSide,
           cube: cube,
           highlightedSources: src,
           highlightedDestinations: dst,
@@ -155,7 +157,7 @@ void main() {
     expect(base.shouldRepaint(make(theme: BoardTheme.dark)), isTrue);
     expect(base.shouldRepaint(make(whiteDice: Dice(2, 2))), isTrue);
     expect(base.shouldRepaint(make(blackDice: Dice(2, 2))), isTrue);
-    expect(base.shouldRepaint(make(diceMover: Player.white)), isTrue);
+    expect(base.shouldRepaint(make(activeDiceSide: Player.white)), isTrue);
     expect(
         base.shouldRepaint(make(cube: const CubeState.initial())), isTrue);
     expect(base.shouldRepaint(make(src: const {1})), isTrue);

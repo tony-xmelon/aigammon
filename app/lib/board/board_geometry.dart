@@ -238,19 +238,34 @@ class BoardGeometry {
       ));
 
   /// Bounding rectangle of [player]'s dice PAIR (the two dice plus the gap
-  /// between them), centred in the empty middle band. The [mover]'s pair sits in
-  /// the RIGHT half of the board (between the bar and the right edge, where dice
-  /// have always sat); the waiting player's pair sits in the mirrored LEFT-half
-  /// position. Orientation-aware: like the checkers, the canonical layout is
-  /// rotated with the board on a hot-seat flip.
-  Rect diceRect(Player player, {required Player mover}) {
+  /// between them), centred in the empty middle band.
+  ///
+  /// ## Anchored per PLAYER, never per mover
+  ///
+  /// Each pair has ONE home: canonically White's sits in the RIGHT half (between
+  /// the bar and the right edge, where dice have always sat) and Black's in the
+  /// mirrored LEFT-half position. Because the whole canonical layout is rotated
+  /// with the board ([_orient]), the rule a player actually sees is "the pair
+  /// belonging to the side at the BOTTOM of the screen is on the right" — stable
+  /// for the whole game.
+  ///
+  /// It used to depend on whose turn it was (the mover's pair took the right
+  /// half, the waiter's the left), which meant both pairs SWAPPED sides on every
+  /// turn change. With the dice now presented over a beat whose emphasis follows
+  /// the presentation rather than `state.turn` (see
+  /// [BoardPainter.activeDiceSide]), a turn-driven swap would have moved a pair
+  /// mid-tumble — the dice would jump across the board while they rolled. Fixed
+  /// homes make the emphasis the ONLY thing that changes, which is both calmer to
+  /// watch and much easier to reason about.
+  Rect diceRect(Player player) {
     final side = diceSide;
     final gap = side * 0.5;
     final pairWidth = side * 2 + gap;
-    // Canonical: mover to the right of the bar, waiter mirrored to the left
+    // Canonical: White to the right of the bar, Black mirrored to the left
     // (mirrored about the FIELD's centre line, which is also the board's).
     final rightCx = (_barRight + _fRight) / 2;
-    final cx = player == mover ? rightCx : _fLeft + _fRight - rightCx;
+    final cx =
+        player == Player.white ? rightCx : _fLeft + _fRight - rightCx;
     final cy = (_bandTop + _bandBottom) / 2;
     final canonical = Rect.fromCenter(
         center: Offset(cx, cy), width: pairWidth, height: side);
@@ -266,8 +281,8 @@ class BoardGeometry {
   /// quarter of a die on every side, and at least [minDiceTapTarget] across in
   /// both axes. Used by the pre-roll "tap the dice to roll" affordance, where a
   /// near miss must still roll.
-  Rect diceTapRect(Player player, {required Player mover}) {
-    final r = diceRect(player, mover: mover);
+  Rect diceTapRect(Player player) {
+    final r = diceRect(player);
     final pad = diceSide * 0.25;
     final dx = math.max(pad, (minDiceTapTarget - r.width) / 2);
     final dy = math.max(pad, (minDiceTapTarget - r.height) / 2);

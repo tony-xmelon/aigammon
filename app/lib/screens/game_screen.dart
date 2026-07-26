@@ -51,8 +51,46 @@ import 'metric_explainer.dart';
 /// [BoardOrientationMode.fixedWhite] / [BoardOrientationMode.fixedBlack] pin a
 /// side (vs-AI: the human's side stays at the bottom for the whole match).
 /// [BoardOrientationMode.followActive] (hot-seat "rotate for Black") flips the
-/// board so the active player is always at the bottom — but ONLY while the
-/// pass-device overlay hides the board, so the rotation is never seen mid-turn.
+/// board so the active player is always at the bottom. With the pass-device
+/// overlay on ([showPassDevice]) the flip happens BEHIND it, so the rotation is
+/// never seen mid-turn; with the overlay off (the default) the flip happens in
+/// the open at the hand-over, and IS the hand-over cue.
+///
+/// ## The dice presentation (this screen owns it)
+///
+/// Every roll — the opening roll, the local player's, the opponent's — is
+/// PRESENTED: the roller's pair tumbles through [AnimationTimings.diceFrames]
+/// pseudo-random faces, settles on the real roll, and is held readable for a
+/// settle pause before anything else moves. The screen owns the whole beat
+/// ([_startRollBeat]) because only it sees the [RollEvent]s; the board is a pure
+/// renderer, fed the tumbling faces as [BoardView.diceOverride] and the emphasis
+/// as [BoardView.activeDiceSide].
+///
+/// Three things are derived from ONE piece of state — [_presentingSide], the
+/// roller of the beat currently running (`null` between beats):
+///
+/// * **which pair is lit** — [_activeDiceSide]: the presenting roller while a
+///   beat runs, else the side whose move is being entered, else NOBODY (both
+///   pairs dim). Bright therefore means exactly "this roll is live", so the local
+///   pair goes dim the instant a move is confirmed and stays dim until it is
+///   rolled again — the reported "after my turn is over, my dice gets enabled
+///   while the opponent moves". It is never derived from `state.turn`, which is
+///   already back on the human while the opponent's roll is still tumbling (see
+///   [BoardPainter.activeDiceSide]).
+/// * **when the opponent's checkers may travel** — [_dicePresenting], handed to
+///   the board as [BoardView.holdMoveAnimation]: a move that lands mid-beat is
+///   queued and starts when the dice are readable.
+/// * **when the local player may start entering** — [_entryHeld]: while your own
+///   roll is still tumbling the board is not interactive and the action bar shows
+///   no move affordances, so nothing can be staged against dice that have not
+///   settled. The settle pause is HALVED for your own roll (see
+///   [_startRollBeat]): the presentation is the same beat, but you are waiting on
+///   yourself, and the full pause read as lag.
+///
+/// The presentation is disabled outright by the "Dice roll animation" setting and
+/// by animation speed "None" — both land as
+/// [AnimationTimings.diceBeatEnabled] `== false`, in which case rolls settle
+/// instantly and only the move-entry emphasis remains.
 class GameScreen extends StatefulWidget {
   const GameScreen({
     super.key,
@@ -66,6 +104,8 @@ class GameScreen extends StatefulWidget {
     this.dragHintShown = true,
     this.onDragHintShown,
     this.opponentLabel = 'AI',
+    this.opponentDetail,
+    this.showPassDevice = false,
   });
 
   final MatchController controller;
@@ -123,6 +163,20 @@ class GameScreen extends StatefulWidget {
   /// IGNORED in hot-seat, where both sides are local and neither of them is
   /// "you": that header keeps the neutral "W 2–1 B · to 5".
   final String opponentLabel;
+
+  /// An extra qualifier for the opponent on the header's second row — the AI
+  /// difficulty ("Easy", "Expert") where the caller knows it, giving "vs AI ·
+  /// Easy · Pips 129–78". Null wherever there is no such thing to say (hot-seat,
+  /// online, a bare test harness); the row keeps its reserved height regardless.
+  final String? opponentDetail;
+
+  /// Whether the hot-seat "Pass the device" cover screen gates each hand-over
+  /// (the persisted `AppSettings.showPassDevice`). DEFAULT FALSE, matching the
+  /// stored default: the reported feedback was that the cover screen is an
+  /// unwanted extra tap between two people sharing one device. With it off the
+  /// board still flips to the new actor — that rotation is the cue. Ignored
+  /// outside hot-seat, where there is nobody to pass to.
+  final bool showPassDevice;
 
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
   /// surfaces a hint button (top-5 plays), post-move assessments for EVERY move
@@ -275,7 +329,7 @@ class _GameScreenState extends State<GameScreen> {
   /// rebuilds when the affordances change.
   final BoardEntryController _entryControl = BoardEntryController();
 
-  // --- Opponent dice-roll beat -----------------------------------------------
+  // --- Dice-roll beat --------------------------------------------------------
 
   /// Event cursor for the roll-beat detector, tracked SEPARATELY from the
   /// tutor's [_lastEventCount] so the two event-growth hooks advance
@@ -300,12 +354,36 @@ class _GameScreenState extends State<GameScreen> {
   /// advance a fresher one.
   int _rollBeatSeq = 0;
 
-  /// Whether the opponent's dice are currently being PRESENTED — true from the
-  /// moment a roll beat begins until its tumble frames AND the settle pause have
-  /// elapsed. Handed to the [BoardView] as `holdMoveAnimation` so the opponent's
-  /// move animation is deferred until the dice are readable. Never true for the
-  /// local player's own (instant) roll, since no beat runs.
+  /// Whether a roll is currently being PRESENTED — true from the moment a roll
+  /// beat begins until its tumble frames AND the settle pause have elapsed.
+  /// Handed to the [BoardView] as `holdMoveAnimation` so a move that lands during
+  /// the presentation is deferred until the dice are readable.
+  ///
+  /// A [ValueNotifier] rather than plain state because the board LISTENS to it
+  /// (the queued move starts on the flip, between rebuilds). Kept exactly in step
+  /// with [_presentingSide]: `value == (_presentingSide != null)`.
   final ValueNotifier<bool> _dicePresenting = ValueNotifier<bool>(false);
+
+  /// The roller whose dice are being presented right now (the beat's tumble
+  /// frames plus its settle pause), or `null` when no presentation is running.
+  ///
+  /// The identity half of [_dicePresenting], and the state the whole presentation
+  /// is derived from — see the class doc. Taken from the [RollEvent] that started
+  /// the beat, never from `state.turn`, which may already have advanced past the
+  /// roller (see [_rollBeat]).
+  Player? _presentingSide;
+
+  /// The side whose move is currently TRAVELLING on the board (its cosmetic
+  /// animation), or `null` when nothing is animating. Reported by the
+  /// [BoardView] through [BoardView.onMoveAnimation], because the board owns
+  /// that timeline (its length depends on the hop count) and this screen must
+  /// not duplicate it.
+  ///
+  /// Keeps the mover's dice lit for as long as their play is being presented:
+  /// the roll settles, then the checkers move, and only when both are done does
+  /// the pair go dim. Only ever set for a move that ANIMATES — a hand-entered
+  /// local move is never replayed, so confirming still dims your pair at once.
+  Player? _animatingSide;
 
   @override
   void initState() {
@@ -345,6 +423,7 @@ class _GameScreenState extends State<GameScreen> {
     }
     _rollBeatTimer?.cancel();
     _tapHintTimer?.cancel();
+    _cancelDancePass();
     _observable.removeListener(_onChange);
     _dicePresenting.dispose();
     _stagedMove.dispose();
@@ -366,10 +445,83 @@ class _GameScreenState extends State<GameScreen> {
   void _onChange() {
     if (!mounted) return;
     _updatePassDevice();
+    _closeSurrenderIfOutranked();
     _syncRollBeat();
+    _syncDancePass();
     _syncTutor();
     _maybeShowDragHint();
     setState(() {});
+  }
+
+  // --- Auto-pass on a dance --------------------------------------------------
+
+  /// How long a human's dance is HELD on screen before the turn passes itself,
+  /// with animations on. Long enough to read the dice and the "No moves" line
+  /// and understand why nothing can be played — the roll's own beat has already
+  /// shown the dice by the time this starts — and short enough not to feel like
+  /// a hang. Collapses to zero with animations off (see [_dancePause]).
+  static const Duration _danceHold = Duration(milliseconds: 1200);
+
+  /// The pending auto-pass, or `null` when no dance is being held.
+  Timer? _dancePassTimer;
+
+  /// Fences a superseded hold (the position moved on) against a timer that has
+  /// already been scheduled.
+  int _dancePassSeq = 0;
+
+  /// The hold before a dance passes itself: [_danceHold] normally, ZERO with
+  /// animations off — where every other beat is instant too, and a deliberate
+  /// pause would be the only thing on screen that waits.
+  ///
+  /// Even at zero the pass goes through a timer rather than firing inline: this
+  /// runs from a controller/entry notification, and committing a move straight
+  /// back into the controller from inside its own notify is exactly the
+  /// re-entrancy the rest of this screen avoids.
+  Duration get _dancePause =>
+      widget.timings.enabled ? _danceHold : Duration.zero;
+
+  /// Passes a HUMAN's danced turn automatically after [_dancePause].
+  ///
+  /// A dance offers no choice at all, so making the player tap "No moves — pass"
+  /// was pure ceremony — and in hot-seat it was worse than ceremony: the device
+  /// changed hands for a turn with nothing in it ("when two players play, and
+  /// one has no possible moves, skip the turn"). The affordance STAYS on screen
+  /// throughout the hold, so a player who has already read the position can tap
+  /// it and skip the wait; either route commits the same [Move.none].
+  ///
+  /// The hold begins only once the mover's own roll has finished being presented
+  /// — [_entryHeld] keeps `moveSide` null until then — so the dice are always
+  /// legible before the turn goes.
+  ///
+  /// Applies wherever the danced side is locally human: vs-AI, hot-seat, and the
+  /// local side of an online match alike. An AI's dance never reaches here (it
+  /// has no pending move request).
+  void _syncDancePass() {
+    final pending = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    final moveSide = _entryHeld(pending) ? null : pending;
+    final dancing = moveSide != null && _entryControl.isDance;
+    if (!dancing) {
+      _cancelDancePass();
+      return;
+    }
+    if (_dancePassTimer != null) return; // this dance is already being held
+    final seq = ++_dancePassSeq;
+    _dancePassTimer = Timer(_dancePause, () {
+      if (!mounted || seq != _dancePassSeq) return;
+      _dancePassTimer = null;
+      // Re-check at fire time: a manual tap during the hold has already passed,
+      // and the position has moved on.
+      if (!_entryControl.isDance) return;
+      _entryControl.pass();
+    });
+  }
+
+  /// Drops any pending auto-pass (the dance ended, or the screen is going away),
+  /// fencing a timer that has already been scheduled.
+  void _cancelDancePass() {
+    _dancePassTimer?.cancel();
+    _dancePassTimer = null;
+    _dancePassSeq++;
   }
 
   // --- "That checker cannot move" hint ---------------------------------------
@@ -411,7 +563,7 @@ class _GameScreenState extends State<GameScreen> {
   /// cannot be shown during a build/rebuild, hence the post-frame deferral.
   ///
   /// The SnackBar floats [SnackBarBehavior.floating] with a bottom margin that
-  /// clears the fixed 64px bottom action bar and the pip line above it, so
+  /// clears the fixed 64px bottom action bar, so
   /// Confirm / Roll stay visible and tappable — the hint is genuinely
   /// non-blocking, not just logically so. It deliberately does NOT clear the
   /// whole score sheet: a margin tall enough for that would put the tip halfway
@@ -419,9 +571,10 @@ class _GameScreenState extends State<GameScreen> {
   void _maybeShowDragHint() {
     if (_dragHintShown || _dragHintScheduled) return;
     if (!widget.interactionOptions.enableDrag) return;
-    final humanMoving =
-        _humanSideWith((s) => _c.pendingMoveOf(s).value != null) != null;
-    if (!humanMoving) return;
+    // The affordances the hint talks about appear only once the mover's own roll
+    // has finished being presented, so the tip must not arrive a beat early.
+    final pending = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    if (pending == null || _entryHeld(pending)) return;
     _dragHintScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -450,18 +603,23 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  // --- Opponent dice-roll beat ----------------------------------------------
+  // --- Dice-roll beat -------------------------------------------------------
 
-  /// Detects a fresh [RollEvent] by a NON-local mover (AI or a remote human) and
-  /// kicks off the dice-roll animation beat before the settled roll shows. The
-  /// LOCAL player's own roll is instant (they pressed Roll themselves) and is
-  /// skipped, as is every non-roll event. A shorter event list means a new game
-  /// began: reset the cursor and cancel any live beat.
+  /// Detects a fresh roll in the event log and kicks off its presentation beat
+  /// before the settled roll shows. EVERY roll beats — the opening roll, the
+  /// local player's own, and the opponent's (AI or remote) alike: "there is no
+  /// dice animation now, not for me, not for the opponent, please add it back".
+  /// Only the settle pause differs, being halved for a local roller (see
+  /// [_startRollBeat]).
+  ///
+  /// A shorter event list means a new game began: reset the cursor and cancel any
+  /// live beat.
   ///
   /// The beat is gated on [GameScreen.timings]: with the [AnimationTimings.off]
-  /// preset (animation off — the widget-test default) no beat ever runs and the
-  /// board shows the real roll immediately. Called from [_onChange] before its
-  /// [setState], so the first override frame it sets is painted by that rebuild.
+  /// preset (animation off — the widget-test default) or the dice-roll animation
+  /// setting turned off, no beat ever runs and the board shows the real roll
+  /// immediately. Called from [_onChange] before its [setState], so the first
+  /// override frame it sets is painted by that rebuild.
   void _syncRollBeat() {
     final events = _c.game.events;
     final len = events.length;
@@ -472,12 +630,22 @@ class _GameScreenState extends State<GameScreen> {
     }
     if (len == _lastRollEventCount) return;
     for (var i = _lastRollEventCount; i < len; i++) {
-      final event = events[i];
-      if (event is! RollEvent) continue;
-      if (_c.isLocalHuman(event.player)) continue; // own roll: no beat
       // Both the roller AND the settled faces come from the EVENT — never from
-      // `_c.state` (whose turn/dice may already have moved on).
-      _startRollBeat(event.player, Dice(event.die1, event.die2));
+      // `_c.state` (whose turn/dice may already have moved on). The opening roll
+      // is one die each, and both belong to the first mover (who plays them as
+      // their opening move), exactly as `persistentDice` folds it.
+      switch (events[i]) {
+        case OpeningRollEvent(
+            :final whiteDie,
+            :final blackDie,
+            :final firstPlayer
+          ):
+          _startRollBeat(firstPlayer, Dice(whiteDie, blackDie));
+        case RollEvent(:final player, :final die1, :final die2):
+          _startRollBeat(player, Dice(die1, die2));
+        default:
+          break;
+      }
     }
     _lastRollEventCount = len;
   }
@@ -492,34 +660,61 @@ class _GameScreenState extends State<GameScreen> {
   /// animation is off. The first frame is set synchronously; the [_onChange]
   /// `setState` that follows paints it.
   ///
-  /// While the beat runs — AND for [AnimationTimings.diceSettlePause] after the
-  /// dice settle — [_dicePresenting] is held `true` so the opponent's move
-  /// animation (queued in the [BoardView]) does not start until the dice are
-  /// readable.
+  /// While the beat runs — AND for the settle pause after the dice settle —
+  /// [_presentingSide] is [roller] and [_dicePresenting] is `true`, which lights
+  /// the roller's pair ([_activeDiceSide]), holds any queued move animation, and
+  /// (for a local roller) withholds move entry ([_entryHeld]).
   ///
-  /// [roller] is the [RollEvent]'s player, carried through every frame so the
+  /// The settle pause is [AnimationTimings.diceSettlePause] for a remote/AI roll
+  /// and HALF that for a local one. The pause exists so a roll is readable before
+  /// the checkers move; when the roller is you, you already know what you rolled
+  /// and the wait is between you and your own move, where the full pause reads as
+  /// the app being slow. Same beat, half the dwell.
+  ///
+  /// [roller] is the roll event's player, carried through every frame so the
   /// tumbling faces land on the pair that actually rolled them regardless of
   /// how far the turn has advanced meanwhile (see [_rollBeat]).
   void _startRollBeat(Player roller, Dice realRoll) {
-    if (!widget.timings.enabled) return;
+    if (!widget.timings.diceBeatEnabled) return;
     _cancelRollBeat();
     final seq = ++_rollBeatSeq;
     final frameCount = widget.timings.diceFrames;
     final frameDuration = widget.timings.diceFrame;
-    _dicePresenting.value = true; // hold the move animation until dice settle
+    final settlePause = _c.isLocalHuman(roller)
+        ? widget.timings.diceSettlePause ~/ 2
+        : widget.timings.diceSettlePause;
+    _beginPresenting(roller); // hold move animation + entry until dice settle
     _rollBeat = (roller: roller, faces: _beatFace(realRoll, 0));
     var frame = 0;
     void nextFrame() {
       if (!mounted || seq != _rollBeatSeq) return;
       frame++;
       if (frame >= frameCount) {
-        // Dice settle to the real roll now; hold the move animation for one more
-        // settle pause so the roll is legible before the checker travels.
+        // Dice settle to the real roll now; keep presenting for one more settle
+        // pause so the roll is legible before anything moves.
         setState(() => _rollBeat = null);
-        _rollBeatTimer = Timer(widget.timings.diceSettlePause, () {
+        _rollBeatTimer = Timer(settlePause, () {
           if (!mounted || seq != _rollBeatSeq) return;
           _rollBeatTimer = null;
-          _dicePresenting.value = false; // release: queued move animation begins
+          // Release: a queued move animation begins, and a local roller's move
+          // entry affordances appear. A rebuild is needed for the latter (the
+          // notifier alone only wakes the board's own listener).
+          setState(_endPresenting);
+          // Entry just opened without a controller notification, so the two
+          // things that wait for exactly these affordances have to be re-offered
+          // here or they would sit out the whole move: the one-time drag/tap
+          // tip, and the dance hold.
+          //
+          // The dance hold DID already start without this call — the board's
+          // [BoardEntryController] defers its notify to the next frame, which
+          // lands back in [_onChange] — but relying on another object's
+          // scheduling for a turn to advance itself is emergent, not designed.
+          // Arming it on the same line that opens entry makes the beat start
+          // when the dice become readable, by construction. [_syncDancePass] is
+          // idempotent while a hold is already pending, so the later
+          // notification is a no-op.
+          _syncDancePass();
+          _maybeShowDragHint();
         });
         return;
       }
@@ -531,16 +726,63 @@ class _GameScreenState extends State<GameScreen> {
     _rollBeatTimer = Timer(frameDuration, nextFrame);
   }
 
+  /// Marks [roller]'s roll as being presented, keeping [_presentingSide] and
+  /// [_dicePresenting] in step (the board listens to the notifier).
+  void _beginPresenting(Player roller) {
+    _presentingSide = roller;
+    _dicePresenting.value = true;
+  }
+
+  /// Ends the presentation (no roll is live until the next one).
+  void _endPresenting() {
+    _presentingSide = null;
+    _dicePresenting.value = false;
+  }
+
   /// Cancels any live beat and clears the override (fencing pending callbacks by
-  /// bumping [_rollBeatSeq]), and releases the dice-presenting hold. Does not
-  /// call [setState]; callers are already in a rebuild path (or disposing).
+  /// bumping [_rollBeatSeq]), and ends the presentation. Does not call
+  /// [setState]; callers are already in a rebuild path (or disposing).
   void _cancelRollBeat() {
     _rollBeatTimer?.cancel();
     _rollBeatTimer = null;
     _rollBeatSeq++;
     _rollBeat = null;
-    _dicePresenting.value = false;
+    _endPresenting();
   }
+
+  /// The dice pair to light this frame, or `null` to dim BOTH — the presentation
+  /// state machine's single output (see the class doc).
+  ///
+  /// Precedence, strongest first:
+  ///
+  /// 1. the presenting roller — a roll being rolled is always the live pair;
+  /// 2. [moveSide], the local side whose move is being ENTERED — a play the user
+  ///    is making by hand outranks a replay finishing in the background, so their
+  ///    own dice (with per-die spent dimming) stay lit while they use them;
+  /// 3. [_animatingSide], the side whose checkers are travelling, so an
+  ///    opponent's roll stays readable for the whole of their play.
+  ///
+  /// With none of the three — the pre-roll gate, the moment after a confirm, a
+  /// finished turn — nothing is live and both pairs dim.
+  Player? _activeDiceSide(Player? moveSide) =>
+      _presentingSide ?? moveSide ?? _animatingSide;
+
+  /// Records the board's animation state (see [_animatingSide]).
+  ///
+  /// Reached from the board's own listener paths — including the one where
+  /// releasing the presentation hold synchronously starts a queued move — all of
+  /// which run outside a build, so a plain [setState] is safe here.
+  void _onMoveAnimation(Player? player) {
+    if (!mounted || _animatingSide == player) return;
+    setState(() => _animatingSide = player);
+  }
+
+  /// Whether move entry is WITHHELD because the local mover's own dice are still
+  /// being presented. The board is left non-interactive and the action bar shows
+  /// no move affordances until the roll settles, so no hop can be staged against
+  /// dice that are still tumbling.
+  bool _entryHeld(Player? moveSide) =>
+      moveSide != null && _presentingSide == moveSide;
 
   /// Folds the CURRENT game's event log into each player's most recent roll, so
   /// every player keeps their OWN persistent dice pair (the fix for "the
@@ -704,9 +946,16 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  /// Tracks the acting side and raises the pass-device overlay when, in a
-  /// hot-seat game, a human decision opens for a DIFFERENT actor than the last.
-  /// Skipped for the very first human decision of the match (`_lastActor` null).
+  /// Tracks the acting side and — when [GameScreen.showPassDevice] is on —
+  /// raises the pass-device overlay as a hot-seat human decision opens for a
+  /// DIFFERENT actor than the last. Skipped for the very first human decision of
+  /// the match (`_lastActor` null).
+  ///
+  /// With the setting OFF (the default), the hand-over still happens; it simply
+  /// is not gated. The board FLIPS to the new actor and play continues, which is
+  /// the whole cue the reported feedback asked for ("when playing with two
+  /// persons, do not show the pass the device screen"). The orientation update
+  /// therefore lives on both branches; only [_passDevicePending] is conditional.
   void _updatePassDevice() {
     if (!_hotSeat || !_humanDecisionActive) return;
     final actor = _c.state.turn;
@@ -714,9 +963,15 @@ class _GameScreenState extends State<GameScreen> {
       _lastActor = actor; // first turn: reveal immediately, no overlay
       _displayedWhiteAtBottom = actor == Player.white; // orient to first actor
     } else if (actor != _lastActor && !_passDevicePending) {
-      _passDevicePending = true;
-      // Flip now, while the overlay that is about to raise hides the board;
-      // the new orientation is revealed only when the user taps to continue.
+      if (widget.showPassDevice) {
+        _passDevicePending = true;
+      } else {
+        // No cover to hide behind: the flip happens in the open, and the actor
+        // is adopted at once so the next change is detected against it.
+        _lastActor = actor;
+      }
+      // Flip now. With the overlay on, this happens behind it and the new
+      // orientation is revealed only when the user taps to continue.
       _displayedWhiteAtBottom = actor == Player.white;
     }
   }
@@ -749,7 +1004,12 @@ class _GameScreenState extends State<GameScreen> {
   @override
   Widget build(BuildContext context) {
     final state = _c.state;
-    final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    final pendingSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    // The side whose move may be ENTERED right now: nobody while that side's own
+    // roll is still being presented (see [_entryHeld]). Everything downstream —
+    // the board's interactivity, the action bar's affordances — reads this, so
+    // entry appears as one piece the moment the dice settle.
+    final moveSide = _entryHeld(pendingSide) ? null : pendingSide;
     final cubeSide = _humanSideWith((s) => _c.pendingCubeOf(s).value != null);
     final resignSide =
         _humanSideWith((s) => _c.pendingResignOf(s).value != null);
@@ -772,6 +1032,8 @@ class _GameScreenState extends State<GameScreen> {
                   controller: _c,
                   showScoring: widget.showScoring,
                   opponentLabel: widget.opponentLabel,
+                  opponentDetail: widget.opponentDetail,
+                  onSurrender: _hasLocalHuman ? _openSurrender : null,
                 ),
                 Expanded(
                   // The board's slot. An error banner FLOATS at its top edge
@@ -808,12 +1070,21 @@ class _GameScreenState extends State<GameScreen> {
                         interactionOptions: widget.interactionOptions,
                         whiteDice: whiteDice,
                         blackDice: blackDice,
+                        // A cubeless match paints NO cube on the bar, exactly as
+                        // it shows no header chip and no Double button — the
+                        // three cube surfaces are suppressed together.
+                        showCube: !_c.cubeless,
                         diceOverride: _rollBeat,
+                        // Emphasis follows the PRESENTATION, never `state.turn`:
+                        // the roller while a roll is live, the mover while a move
+                        // is entered, nobody in between (both pairs dim).
+                        activeDiceSide: _activeDiceSide(moveSide),
                         // Tapping the dice is a second, on-board route to the
                         // Roll button — wired under exactly the condition that
                         // enables that button, and null otherwise so dice-area
                         // taps fall through to normal move entry.
                         onDiceTap: _canRoll(moveSide) ? _rollDice : null,
+                        onMoveAnimation: _onMoveAnimation,
                         onNoLegalSourceTap: _showNoLegalSourceHint,
                       ),
                       // Both banners are PURELY informational and float over the
@@ -847,7 +1118,6 @@ class _GameScreenState extends State<GameScreen> {
                   ),
                 ),
                 _scoreSheet(),
-                _pipLine(),
                 _bottomRegion(moveSide),
               ],
             ),
@@ -860,14 +1130,165 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   /// The single active modal layer, chosen by priority: match end, then game
-  /// end, then the pass-device gate, then the cube/resign response dialogs.
+  /// end, then the pass-device gate, then the cube/resign response dialogs, and
+  /// last the user's own Surrender sheet — which [_onChange] closes outright the
+  /// moment anything above it wants the screen, so it can never sit on top of a
+  /// decision the match is waiting for.
   List<Widget> _buildModals(Player? cubeSide, Player? resignSide) {
     if (_c.matchOver) return [_matchEndDialog()];
     if (_c.awaitingNextGame) return [_gameEndDialog()];
     if (_passDevicePending) return [_passDeviceOverlay()];
     if (cubeSide != null) return [_cubeDialog(cubeSide)];
     if (resignSide != null) return [_resignDialog(resignSide)];
+    if (_surrenderOpen) return [_surrenderDialog()];
     return const [];
+  }
+
+  // --- Surrender -------------------------------------------------------------
+
+  /// Whether the user's Surrender sheet is open.
+  bool _surrenderOpen = false;
+
+  /// The side the open sheet BELONGS to — latched when it opens, `null` when it
+  /// is closed. Every gate on the sheet is keyed to this rather than to the
+  /// side-agnostic [MatchController.awaitingHumanTurn].
+  ///
+  /// Without it, hot-seat could resign for the wrong player. `awaitingHumanTurn`
+  /// says only "some local human's gate is open", and since round 6 two things
+  /// can hand the turn over UNDER an open sheet with nothing to interrupt it: a
+  /// danced turn passing itself, and the pass-device cover being off by default.
+  /// White would open the sheet mid-dance (values disabled), the auto-pass would
+  /// advance to Black's gate, the values would light up — and White's tap booked
+  /// the resignation against BLACK.
+  ///
+  /// Latched to the side that will actually be conceding: the sole local human
+  /// where there is one (vs-AI, online — no other side is even possible there,
+  /// so the sheet survives the opponent's turn as it always did), else the side
+  /// on turn when the sheet opened (hot-seat, where "who is holding the device"
+  /// is exactly what the turn tells us).
+  Player? _surrenderFor;
+
+  /// Whether any side of this match is driven by a local human — i.e. whether
+  /// there is anybody here who COULD surrender. False only for an AI-vs-AI
+  /// harness, where the ⋮ has nothing to offer.
+  bool get _hasLocalHuman =>
+      _c.isLocalHuman(Player.white) || _c.isLocalHuman(Player.black);
+
+  /// Closes the Surrender sheet if a modal that outranks it has appeared (an
+  /// incoming double, a resignation to answer, the end of the game or match, a
+  /// hot-seat hand-over). Its own layer is last in [_buildModals], so without
+  /// this it would simply be hidden and then pop back afterwards.
+  void _closeSurrenderIfOutranked() {
+    if (!_surrenderOpen) return;
+    final outranked = _c.matchOver ||
+        _c.awaitingNextGame ||
+        _passDevicePending ||
+        _humanSideWith((s) => _c.pendingCubeOf(s).value != null) != null ||
+        _humanSideWith((s) => _c.pendingResignOf(s).value != null) != null;
+    // HOT-SEAT ONLY: the turn leaving the side that opened this sheet means the
+    // device has changed hands, so the sheet belongs to somebody who is no
+    // longer playing — it goes, rather than lingering for the new player to tap
+    // by accident. Not applied when one side is the AI or a remote opponent:
+    // the turn leaving you there is just them playing, nobody else has touched
+    // the device, and the sheet is still yours when it comes back.
+    final handedOver = _hotSeat && _c.state.turn != _surrenderFor;
+    if (outranked || handedOver) _closeSurrender();
+  }
+
+  /// Opens the sheet, latching the side it is for (see [_surrenderFor]).
+  void _openSurrender() {
+    setState(() {
+      _surrenderFor = _surrenderSide();
+      _surrenderOpen = true;
+    });
+  }
+
+  /// Closes the sheet and drops the latch. Callers already inside a rebuild path
+  /// ([_closeSurrenderIfOutranked]) do not need their own [setState]; the ones
+  /// reached from a tap wrap it.
+  void _closeSurrender() {
+    _surrenderOpen = false;
+    _surrenderFor = null;
+  }
+
+  /// Which side a sheet opened right now would belong to. See [_surrenderFor].
+  Player _surrenderSide() {
+    final localWhite = _c.isLocalHuman(Player.white);
+    final localBlack = _c.isLocalHuman(Player.black);
+    if (localWhite != localBlack) {
+      return localWhite ? Player.white : Player.black;
+    }
+    return _c.state.turn;
+  }
+
+  /// Whether the open sheet's value buttons may fire: a local gate is open AND
+  /// it is the latched side's gate. Both halves are needed — see [_surrenderFor]
+  /// for the hot-seat case the first half alone got wrong.
+  bool get _surrenderReady =>
+      _c.awaitingHumanTurn && _c.state.turn == _surrenderFor;
+
+  /// The Surrender sheet: the three concession values with what each is worth,
+  /// and one line saying what surrendering does.
+  ///
+  /// ## Why the entry point is always live but the ACTIONS are gated
+  ///
+  /// Resigning is legal only at your own pre-roll gate — both [MatchController]
+  /// implementations of [MatchController.offerResign] throw a [StateError]
+  /// otherwise (the local one has no open human-turn gate to complete; the
+  /// online one has no legal action to send). The old UI expressed that by
+  /// disabling the whole ⋮ off-gate, which made the only way to concede a game
+  /// invisible at exactly the moments a losing player reaches for it — reported
+  /// as "add surrender option", of a feature that had shipped long before.
+  ///
+  /// So the menu and this sheet are ALWAYS reachable, and the gate is expressed
+  /// where it can be explained: the three value buttons are disabled until it is
+  /// the latched side's own pre-roll gate ([_surrenderReady]), under a line
+  /// saying when they will work. The alternative — queueing the intent and
+  /// firing it at the next legal moment — was rejected as the less robust of the
+  /// two: a queued resignation has to be invalidated against every transition
+  /// that can happen while it waits (the game ending, the match ending, a new
+  /// game starting, the opponent doubling), and getting any of them wrong
+  /// concedes a game the player did not mean to concede.
+  ///
+  /// Nothing is lost by waiting: the sheet is declarative, so it rebuilds with
+  /// the controller and the buttons light up as soon as the latched side's gate
+  /// opens — during your own move or dance, that is this same turn. In hot-seat
+  /// the sheet does not wait that long, because the turn changing hands closes
+  /// it outright (see [_closeSurrenderIfOutranked]).
+  Widget _surrenderDialog() {
+    final ready = _surrenderReady;
+    return _ModalCard(
+      title: 'Surrender',
+      message: 'Concedes the current game.',
+      footnote: ready ? null : 'Available at the start of your turn',
+      actions: [
+        _CardAction(
+          label: 'Cancel',
+          onPressed: () => setState(_closeSurrender),
+        ),
+        for (final (value, label) in const [
+          (ResignValue.single, 'Single (1)'),
+          (ResignValue.gammon, 'Gammon (2)'),
+          (ResignValue.backgammon, 'Backgammon (3)'),
+        ])
+          _CardAction(
+            label: label,
+            onPressed: ready ? () => _surrender(value) : null,
+          ),
+      ],
+    );
+  }
+
+  /// Offers the resignation and closes the sheet. Re-checks [_surrenderReady] AT
+  /// INVOCATION for the same reason the header's Double re-checks its own
+  /// condition: the sheet was built a frame ago and the match moves on
+  /// underneath it. Re-checking the SIDE as well as the gate is what keeps a
+  /// stale tap from booking the resignation against whoever is on turn now.
+  void _surrender(ResignValue value) {
+    final ready = _surrenderReady;
+    setState(_closeSurrender);
+    if (!ready) return;
+    _c.offerResign(value);
   }
 
   Widget _passDeviceOverlay() {
@@ -1054,7 +1475,9 @@ class _GameScreenState extends State<GameScreen> {
   /// only the bar's *contents* swap:
   ///
   /// * entering a move → `[Undo] [Confirm]` (Confirm primary, right),
-  /// * a dance → `[No moves — pass]`,
+  /// * a dance → `[No moves — pass]` — which the turn no longer WAITS on: the
+  ///   dance passes itself after a readable beat (see [_syncDancePass]), and
+  ///   this stays tappable throughout so an impatient player can skip it,
   /// * the human pre-roll gate → `[Roll]`,
   /// * otherwise → a subtle status line (whose turn / thinking).
   ///
@@ -1174,6 +1597,10 @@ class _GameScreenState extends State<GameScreen> {
 
   /// The idle-bar status line: what the game is waiting on.
   String _statusText() {
+    // Your own roll is on screen being rolled: say so, rather than reporting
+    // whatever the engine happens to be chewing on in the background.
+    final presenting = _presentingSide;
+    if (presenting != null && _c.isLocalHuman(presenting)) return 'Rolling…';
     if (_c.isThinking) return 'Thinking…';
     if (_c.matchOver || _c.awaitingNextGame) return '';
     return "${_playerName(_c.state.turn)}'s turn";
@@ -1182,17 +1609,30 @@ class _GameScreenState extends State<GameScreen> {
   // --- Score sheet -----------------------------------------------------------
 
   /// Total height of the always-present score sheet. FIXED and unconditional,
-  /// for the same reason as [_pipLineHeight] and the action bar: the board FILLS
-  /// the slot above it, so a panel that grew with its content (or came and went)
-  /// would resize the board on every turn (F6). Budgeted as
-  /// [_sheetHeaderHeight] + a divider + ~3 visible rows; on a 390x844 phone it
-  /// leaves the board a ~556px slot (aspect ~0.70, inside the
+  /// for the same reason as the action bar: the board FILLS the slot above it,
+  /// so a panel that grew with its content (or came and went) would resize the
+  /// board on every turn (F6).
+  ///
+  /// ## The screen's fixed-height budget
+  ///
+  /// Everything outside the board's slot is a constant for a given screen, so
+  /// the board can never reflow mid-match:
+  ///
+  ///     header ([_Hud._hudHeight])       64  (40 + 18 + 2*3)
+  ///     score sheet (this)              112
+  ///     action bar                       64
+  ///     tutor advice slot (tutor only)   28
+  ///
+  /// Round 6 rebalanced it: the header grew from one row to two (+8) while the
+  /// standalone 20px pip line was deleted outright, so the board's slot GAINED
+  /// 12px. Inside the unchanged 112px sheet, dropping its duplicate context line
+  /// moved 18px from chrome to move rows (~5 rows visible, up from ~3). On a
+  /// 390x844 phone the board's slot is ~568px (aspect ~0.69, inside the
   /// [BoardView.minAspect] clamp).
   static const double _scoreSheetHeight = 112;
 
-  /// Height of the sheet's two header lines (the game/score context, then the
-  /// column labels).
-  static const double _sheetHeaderHeight = 34;
+  /// Height of the sheet's single header line (the two column labels).
+  static const double _sheetHeaderHeight = 16;
 
   /// Width of the turn-number gutter left of the two move columns, shared by the
   /// header's column labels and every row so the columns line up.
@@ -1202,7 +1642,7 @@ class _GameScreenState extends State<GameScreen> {
   static const double _sheetInset = 8;
 
   /// The ALWAYS-VISIBLE two-column score sheet, sitting between the board and
-  /// the pip line. This replaced a 32px collapsed strip that expanded into a
+  /// the action bar. This replaced a 32px collapsed strip that expanded into a
   /// scrimmed overlay sheet — a design the reported feedback rejected outright
   /// ("move history still looks like a popup"). Nothing here opens or closes:
   /// the whole game so far is on screen, scrollable, at all times.
@@ -1264,7 +1704,8 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Which side owns the sheet's LEFT column: the single locally-human side
   /// where there is one (so "You" reads first, as in the header score and the
-  /// pip line), else White — hot-seat, where both sides are local and neither is
+  /// header's pip counts), else White — hot-seat, where both sides are local
+  /// and neither is
   /// "you", and an AI-vs-AI harness with no local side at all.
   Player _sheetLeftSide() {
     final localWhite = _c.isLocalHuman(Player.white);
@@ -1275,7 +1716,7 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Names for the two columns: "You" / [GameScreen.opponentLabel] where exactly
   /// one side is local, else the neutral "W" / "B". Same rule as
-  /// [_compactScore] and [_pipLine].
+  /// [_compactScore] and the header's detail row.
   (String, String) _sheetColumnLabels(Player leftSide) {
     final localWhite = _c.isLocalHuman(Player.white);
     final localBlack = _c.isLocalHuman(Player.black);
@@ -1285,9 +1726,14 @@ class _GameScreenState extends State<GameScreen> {
     return ('You', widget.opponentLabel);
   }
 
-  /// The sheet's header: the game/score context line ("Game 2 · You 1–0 AI ·
-  /// to 3", or just "Game 2" when scoring is switched off), then the column
-  /// labels aligned over the two move columns.
+  /// The sheet's header: just the two column labels, aligned over the move
+  /// columns.
+  ///
+  /// It used to carry a game/score context line above them ("Game 2 · You 1–0
+  /// AI · to 3") — a verbatim duplicate of the header's own score, which is the
+  /// "duplicate info" the reported feedback objected to. That line is gone and
+  /// the HEADER is now the only place summary information lives; the sheet keeps
+  /// its overall height and spends the reclaimed 18px on move rows instead.
   Widget _sheetHeader(Player leftSide) {
     final scheme = Theme.of(context).colorScheme;
     final (left, right) = _sheetColumnLabels(leftSide);
@@ -1302,57 +1748,16 @@ class _GameScreenState extends State<GameScreen> {
       height: _sheetHeaderHeight,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: _sheetInset),
-        child: Column(
+        child: Row(
           children: [
-            SizedBox(
-              height: 18,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                // Scale-to-fit rather than ellipsize: an 11-point match with
-                // two-digit scores outgrows a narrow phone, and a slightly
-                // smaller line still reads (mirrors the HUD score).
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    _sheetScoreContext(),
-                    maxLines: 1,
-                    softWrap: false,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurface,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(
-              height: 15,
-              child: Row(
-                children: [
-                  const SizedBox(width: _sheetGutter),
-                  Expanded(child: Text(left, style: labelStyle)),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text(right, style: labelStyle)),
-                ],
-              ),
-            ),
+            const SizedBox(width: _sheetGutter),
+            Expanded(child: Text(left, style: labelStyle)),
+            const SizedBox(width: 6),
+            Expanded(child: Text(right, style: labelStyle)),
           ],
         ),
       ),
     );
-  }
-
-  /// The sheet's context line: "Game 2 · You 1–0 AI · to 3", reusing the header's
-  /// [_compactScore] so the two can never disagree. Drops the score half when
-  /// [GameScreen.showScoring] is off, exactly as the HUD does.
-  String _sheetScoreContext() {
-    // `gameNumber` is 0 until the first game starts; the sheet is on screen from
-    // the first frame, so show "Game 1" rather than "Game 0".
-    final number = _c.gameNumber < 1 ? 1 : _c.gameNumber;
-    if (!widget.showScoring) return 'Game $number';
-    return 'Game $number · ${_compactScore(_c, widget.opponentLabel)}';
   }
 
   /// One sheet row: a numbered two-cell turn row, or a full-width span row.
@@ -1522,58 +1927,6 @@ class _GameScreenState extends State<GameScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  /// Height of the always-present pip-count line. Like the action bar and the
-  /// advice slot it is FIXED and unconditional: the board fills the slot above
-  /// it, so a line that came and went would resize the board (F6).
-  static const double _pipLineHeight = 20;
-
-  /// The live pip counts for both sides, sitting with the tutor metrics just
-  /// under the score sheet ("missing pip count along the tutor metrics").
-  ///
-  /// Named from the local player's point of view where there is one — "Pips:
-  /// You 132 · AI 145", reusing [GameScreen.opponentLabel] so an online match
-  /// reads "Opp" — and neutrally ("W … · B …") in hot-seat, where both sides are
-  /// local and neither of them is "you". Same rule as the header score.
-  ///
-  /// Counts come from the COMMITTED board, so they step once per move rather
-  /// than flickering through a half-entered turn.
-  Widget _pipLine() {
-    final scheme = Theme.of(context).colorScheme;
-    final board = _c.state.board;
-    final white = board.pipCount(Player.white);
-    final black = board.pipCount(Player.black);
-    final localWhite = _c.isLocalHuman(Player.white);
-    final localBlack = _c.isLocalHuman(Player.black);
-    final soleLocal = localWhite != localBlack;
-    final String text;
-    if (!soleLocal) {
-      text = 'Pips: W $white · B $black';
-    } else {
-      final (mine, theirs) =
-          localWhite ? (white, black) : (black, white);
-      text = 'Pips: You $mine · ${widget.opponentLabel} $theirs';
-    }
-    return SizedBox(
-      key: const ValueKey('pipLine'),
-      height: _pipLineHeight,
-      child: Center(
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            text,
-            maxLines: 1,
-            softWrap: false,
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontSize: 12,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -1857,29 +2210,89 @@ String _compactScore(MatchController c, String opponentLabel) {
   return 'You $mine–$theirs $opponentLabel · to ${m.matchLength}';
 }
 
-/// Entries in the header overflow (⋮) menu — resignations only, and only at the
-/// human's own pre-roll gate.
+/// Entries in the header overflow (⋮) menu — one, always available wherever
+/// there is a local human at all.
 ///
-/// The old "Game record" entry is GONE: the record is now the always-visible
-/// score sheet under the board, so there is nothing here to open.
-enum _MenuAction {
-  resignSingle,
-  resignGammon,
-  resignBackgammon,
-}
+/// The three per-value Resign entries it used to hold have collapsed into a
+/// single "Surrender…" that opens a sheet where the values are named with what
+/// they are worth; see [_GameScreenState._surrenderDialog] for why the entry no
+/// longer disappears off-gate. The old "Game record" entry is GONE too: the
+/// record is now the always-visible score sheet under the board.
+enum _MenuAction { surrender }
 
-// --- HUD (single row) --------------------------------------------------------
+// --- HUD (two rows) ----------------------------------------------------------
 
-/// The single-row header: a compact score, an optional Crawford badge, the cube
-/// chip, a spacer, an optional thinking dot, then the Double button and the
-/// overflow (⋮) menu holding Resign. Keeping Double/Resign up here (rather than
-/// in the bottom bar) puts the risky actions away from where thumbs rest.
+/// The header — the SINGLE home for every piece of match summary information,
+/// in two compact rows of FIXED total height ([_hudHeight]).
+///
+/// * Row 1, the match context: "You 1–0 AI · to 3 · Game 2", an optional
+///   Crawford badge and the cube chip, then (right) the thinking dot, the Double
+///   button and the overflow (⋮) menu.
+/// * Row 2, small and muted: who you are playing and the live pip counts —
+///   "vs AI · Easy · Pips 129–78" (hot-seat "White vs Black · Pips …", online
+///   "vs Opp · Pips …").
+///
+/// ## Why everything moved up here
+///
+/// The reported "duplicate info in the header and the line under the board. best
+/// use the header for all summary info … and leave the bottom of the screen for
+/// the move history and actions". The game number and match score used to be
+/// printed a SECOND time on the score sheet's own context line, and the pip
+/// counts had a standalone 20px line of their own between the sheet and the
+/// action bar. Both are gone: the sheet is now nothing but move history (it
+/// gained the context line's height, so more turns are visible within the same
+/// 112px), and the space under the board belongs to history and actions alone.
+///
+/// ## Fixed height
+///
+/// Both rows are ALWAYS present — row 2 reserves its height even with nothing
+/// worth saying — for the same reason the action bar is pinned to 64px: the
+/// board fills the slot beneath this, so a header that grew or shrank mid-match
+/// (a Crawford badge appearing, a name getting longer) would resize the board
+/// (F6). What scales to fit is the TEXT: row 1's left group (context line +
+/// badge + chip) and row 2's line each sit in their own [FittedBox], so they
+/// shrink rather than overflow at any width or system text scale. Row 1's
+/// right-hand controls — the thinking dot, Double, ⋮ — are outside that box and
+/// keep their natural size, which is what leaves the left group its width.
+///
+/// Keeping Double/Surrender up here (rather than in the bottom bar) puts the
+/// risky actions away from where thumbs rest.
 class _Hud extends StatelessWidget {
   const _Hud({
     required this.controller,
     this.showScoring = true,
     this.opponentLabel = 'AI',
+    this.opponentDetail,
+    this.onSurrender,
   });
+
+  /// Height of row 1 (the match context plus the action controls).
+  ///
+  /// NOT the natural height of its tallest child: a [PopupMenuButton]'s
+  /// [IconButton] asks for the 48px minimum touch target, and Double (compact
+  /// density) for 32. 40 is a deliberate squeeze — the row's [BoxConstraints]
+  /// clamp the icon button's 48 down, so it renders at 40 with its hit box
+  /// filling the row rather than overflowing it. Anything less would start
+  /// clipping Double.
+  static const double _row1Height = 40;
+
+  /// Height of row 2 (the muted opponent/pips line).
+  ///
+  /// 18, not the 16 it started as: the line's natural height at fontSize 12 is
+  /// ~17, so 16 put every render through the [FittedBox] at ~94% — a permanent
+  /// silent shrink, and one that got worse rather than better as the system text
+  /// scale went up. At 18 the line renders unscaled at scale 1.0 and only starts
+  /// scaling when the user has actually asked for larger text.
+  static const double _row2Height = 18;
+
+  /// Padding above row 1 and below row 2. The 2px row 2 gained came from here,
+  /// so the header's total is unchanged (see [_hudHeight]).
+  static const double _verticalPadding = 3;
+
+  /// The header's FIXED total height — the top half of the screen's layout
+  /// budget (see [_GameScreenState._scoreSheetHeight] for the whole table).
+  static const double _hudHeight =
+      _row1Height + _row2Height + 2 * _verticalPadding;
 
   final MatchController controller;
 
@@ -1888,6 +2301,16 @@ class _Hud extends StatelessWidget {
 
   /// What the score calls the non-local side. See [GameScreen.opponentLabel].
   final String opponentLabel;
+
+  /// An extra qualifier for the opponent on row 2 — the AI difficulty ("Easy")
+  /// where the caller knows it. Null (hot-seat, online, a bare test harness)
+  /// simply drops that segment; the row keeps its height either way.
+  final String? opponentDetail;
+
+  /// Opens the Surrender sheet. Null only when NO side is locally human (an
+  /// AI-vs-AI harness), which is the one case where the ⋮ has nothing to offer
+  /// and is therefore disabled.
+  final VoidCallback? onSurrender;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
@@ -1913,7 +2336,7 @@ class _Hud extends StatelessWidget {
   /// enabled-ness was built from.
   ///
   /// Same race, and the same reason, as [_GameScreenState._rollDice]: Double and
-  /// Resign share the pre-roll gate with Roll. The enabled-ness is baked into
+  /// Surrender share the pre-roll gate with Roll. The enabled-ness is baked into
   /// the last build, so two presses inside one frame both run the callback that
   /// frame captured while the match moves on underneath them.
   ///
@@ -1930,134 +2353,193 @@ class _Hud extends StatelessWidget {
     controller.offerDouble();
   }
 
-  /// Offers a resignation of [value], re-checking the gate AT INVOCATION.
+  /// Row 1's text: the match context — "You 1–0 AI · to 3 · Game 2", or just
+  /// "Game 2" when the score is switched off.
   ///
-  /// The overflow menu makes this race reachable in a second way, without any
-  /// double-tap: the menu is built while the gate is open and then OUTLIVES it —
-  /// an AI reply or a remote opponent's event folds in while it sits open — so
-  /// the entry the user finally picks is addressing a gate that has since
-  /// closed. Dropping it is right either way: resigning is only legal at your
-  /// own pre-roll gate.
-  void _offerResign(ResignValue value) {
-    if (!controller.awaitingHumanTurn) return;
-    controller.offerResign(value);
+  /// `gameNumber` is 0 until the first game starts, and the header is on screen
+  /// from the first frame, so it reads "Game 1" rather than "Game 0".
+  String _contextLine() {
+    final number = controller.gameNumber < 1 ? 1 : controller.gameNumber;
+    if (!showScoring) return 'Game $number';
+    return '${_compactScore(controller, opponentLabel)} · Game $number';
+  }
+
+  /// Row 2's text: who is playing, and the live pip counts — "vs AI · Easy ·
+  /// Pips 129–78".
+  ///
+  /// Named from the local player's point of view where there IS one (so the
+  /// first pip count is always yours, matching the score's "You" first), and
+  /// neutrally as "White vs Black" in hot-seat — where both sides are local and
+  /// neither of them is "you" — and for a controller with no local side at all.
+  /// Same rule as [_compactScore].
+  ///
+  /// Pip counts come from the COMMITTED board, so they step once per move rather
+  /// than flickering through a half-entered turn.
+  String _detailLine() {
+    final board = controller.state.board;
+    final white = board.pipCount(Player.white);
+    final black = board.pipCount(Player.black);
+    final localWhite = controller.isLocalHuman(Player.white);
+    final localBlack = controller.isLocalHuman(Player.black);
+    final soleLocal = localWhite != localBlack;
+    final String who;
+    final int mine;
+    final int theirs;
+    if (!soleLocal) {
+      who = 'White vs Black';
+      (mine, theirs) = (white, black);
+    } else {
+      who = 'vs $opponentLabel';
+      (mine, theirs) = localWhite ? (white, black) : (black, white);
+    }
+    final detail = opponentDetail;
+    return [
+      who,
+      if (detail != null && detail.isNotEmpty) detail,
+      'Pips $mine–$theirs',
+    ].join(' · ');
   }
 
   @override
   Widget build(BuildContext context) {
     final state = controller.state;
     final cube = state.cube;
+    final scheme = Theme.of(context).colorScheme;
     // The thinking dot reflects a genuine AI await, not a human's own decision
     // (the controller keeps `isThinking` true while it awaits a human move too).
     final showThinking = controller.isThinking && !_humanDeciding;
-    // Double/Resign are only meaningful at the human's own pre-roll gate.
+    // Double is only meaningful at the human's own pre-roll gate.
     final atGate = controller.awaitingHumanTurn;
 
     return Material(
-      // Keyed so tests can scope a score assertion to the HEADER: the score
-      // string now also appears on the score sheet's own context line, so an
-      // unscoped `find.text('You 1–0 AI · to 5')` matches twice.
+      // Keyed so tests can scope an assertion to the HEADER.
       key: const ValueKey('hud'),
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: Row(
-          children: [
-            // The left group (score, Crawford badge, cube chip) takes ALL the
-            // space the right-hand controls leave. A bare `Flexible` + `Spacer`
-            // split the free space evenly instead, which truncated the longer
-            // "You 0–1 AI · to 3" score to "You 0–1 AI · t…" on a phone.
-            //
-            // The group scales to fit as ONE unit rather than flexing the score
-            // alone: a clipped score ("You 0–1 AI · t…") tells the player
-            // nothing, whereas a slightly smaller row still reads — and the
-            // badge and chip beside it are RIGID, so a flexing score could not
-            // absorb them. In a 1-point match (Crawford from the first roll)
-            // that rigid pair plus the score overflowed the row by a hair on a
-            // 390pt phone. Scaling the whole group can never overflow, at any
-            // width or system text scale, and only kicks in when the group
-            // genuinely outgrows the row — long names, two-digit scores, an
-            // 11-point match, the Crawford badge.
-            Expanded(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
+      color: scheme.surfaceContainerHighest,
+      // Pinned rather than merely implied by the rows: the header's height is
+      // half the screen's fixed layout budget, so it is stated once, here.
+      child: SizedBox(
+        height: _hudHeight,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: 12, vertical: _verticalPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                key: const ValueKey('hudContextRow'),
+                height: _row1Height,
                 child: Row(
-                  // Unbounded inside the FittedBox: measured at natural size,
-                  // then scaled — so no child here may be Flexible.
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // The score segment is hidden entirely when scoring is off;
-                    // the rest of the header (Crawford badge, cube chip, Double,
-                    // overflow) stays.
-                    if (showScoring)
-                      Text(
-                        _compactScore(controller, opponentLabel),
-                        maxLines: 1,
-                        softWrap: false,
-                        style: Theme.of(context).textTheme.titleSmall,
+                    // The left group (context line, Crawford badge, cube chip)
+                    // takes ALL the space the right-hand controls leave. A bare
+                    // `Flexible` + `Spacer` split the free space evenly instead,
+                    // which truncated the longer line to "You 0–1 AI · t…" on a
+                    // phone.
+                    //
+                    // The group scales to fit as ONE unit rather than flexing
+                    // the text alone: a clipped context line tells the player
+                    // nothing, whereas a slightly smaller row still reads — and
+                    // the badge and chip beside it are RIGID, so a flexing text
+                    // could not absorb them. In a 1-point match (Crawford from
+                    // the first roll) that rigid pair plus the line overflowed
+                    // the row by a hair on a 390pt phone. Scaling the whole
+                    // group can never overflow, at any width or text scale.
+                    Expanded(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          // Unbounded inside the FittedBox: measured at natural
+                          // size, then scaled — no child here may be Flexible.
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _contextLine(),
+                              maxLines: 1,
+                              softWrap: false,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            if (state.isCrawfordGame) ...[
+                              const SizedBox(width: 8),
+                              const _MiniBadge(
+                                  icon: Icons.star, label: 'Crawford'),
+                            ],
+                            // The cube chip is hidden in a cubeless match.
+                            if (!controller.cubeless) ...[
+                              const SizedBox(width: 8),
+                              _CubeChip(value: cube.value, owner: cube.owner),
+                            ],
+                          ],
+                        ),
                       ),
-                    if (state.isCrawfordGame) ...[
-                      if (showScoring) const SizedBox(width: 8),
-                      const _MiniBadge(icon: Icons.star, label: 'Crawford'),
-                    ],
-                    // The cube chip is hidden in a cubeless match (no cube).
-                    if (!controller.cubeless) ...[
+                    ),
+                    if (showThinking) ...[
+                      const _ThinkingDot(),
                       const SizedBox(width: 8),
-                      _CubeChip(value: cube.value, owner: cube.owner),
                     ],
+                    // The Double button is omitted entirely in a cubeless match.
+                    if (!controller.cubeless)
+                      OutlinedButton.icon(
+                        onPressed:
+                            atGate && _doublingLegal ? _offerDouble : null,
+                        icon:
+                            const Icon(Icons.control_point_duplicate, size: 16),
+                        label: const Text('Double'),
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        ),
+                      ),
+                    // ALWAYS enabled wherever a local human exists. Gating the
+                    // whole ⋮ on the pre-roll gate hid the only way to concede a
+                    // game at precisely the moments a losing player looks for
+                    // it, which read as the feature not existing ("add surrender
+                    // option" — of something that had shipped long before). The
+                    // SHEET now owns the legality question and explains it; see
+                    // [_GameScreenState._surrenderDialog].
+                    PopupMenuButton<_MenuAction>(
+                      icon: const Icon(Icons.more_vert),
+                      tooltip: 'More actions',
+                      enabled: onSurrender != null,
+                      onSelected: (action) {
+                        switch (action) {
+                          case _MenuAction.surrender:
+                            onSurrender!();
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: _MenuAction.surrender,
+                          child: Text('Surrender…'),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
-            ),
-            if (showThinking) ...[
-              const _ThinkingDot(),
-              const SizedBox(width: 8),
-            ],
-            // The Double button is omitted entirely in a cubeless match.
-            if (!controller.cubeless)
-              OutlinedButton.icon(
-                onPressed: atGate && _doublingLegal ? _offerDouble : null,
-                icon: const Icon(Icons.control_point_duplicate, size: 16),
-                label: const Text('Double'),
-                style: OutlinedButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+              SizedBox(
+                key: const ValueKey('hudDetailRow'),
+                height: _row2Height,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _detailLine(),
+                      maxLines: 1,
+                      softWrap: false,
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            // Resign is the menu's ONLY content now that "Game record" is gone
-            // (the record is the permanent score sheet under the board), and it
-            // is legal only at the human's own pre-roll gate — so away from the
-            // gate the ⋮ is DISABLED rather than removed. An itemBuilder that
-            // returned nothing would assert on open, and dropping the button
-            // outright would shuffle the header's right-hand group every turn.
-            PopupMenuButton<_MenuAction>(
-              icon: const Icon(Icons.more_vert),
-              tooltip: 'More actions',
-              enabled: atGate,
-              onSelected: (action) {
-                switch (action) {
-                  case _MenuAction.resignSingle:
-                    _offerResign(ResignValue.single);
-                  case _MenuAction.resignGammon:
-                    _offerResign(ResignValue.gammon);
-                  case _MenuAction.resignBackgammon:
-                    _offerResign(ResignValue.backgammon);
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                    value: _MenuAction.resignSingle,
-                    child: Text('Resign — single')),
-                PopupMenuItem(
-                    value: _MenuAction.resignGammon,
-                    child: Text('Resign — gammon')),
-                PopupMenuItem(
-                    value: _MenuAction.resignBackgammon,
-                    child: Text('Resign — backgammon')),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

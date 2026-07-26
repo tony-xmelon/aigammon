@@ -67,6 +67,10 @@ void main() {
     expect(s.enableDrag, isTrue, reason: 'drag-to-move is ON by default (v4)');
     expect(s.enableCombinedTaps, isTrue);
     expect(s.showScoring, isTrue);
+    expect(s.diceRollAnimation, isTrue,
+        reason: 'the v5 dice-roll animation is ON out of the box');
+    expect(s.showPassDevice, isFalse,
+        reason: 'the v5 hot-seat pass-device cover is OFF out of the box');
     expect(s.dragHintShown, isFalse,
         reason: 'the one-time drag hint has not been shown on a fresh install');
     // The Dart-side defaults mirror the seeded row.
@@ -81,6 +85,8 @@ void main() {
       enableDrag: false,
       enableCombinedTaps: false,
       showScoring: false,
+      diceRollAnimation: false,
+      showPassDevice: true,
       dragHintShown: true,
     );
     await repo.save(flipped);
@@ -90,6 +96,8 @@ void main() {
     expect(loaded.enableDrag, isFalse);
     expect(loaded.enableCombinedTaps, isFalse);
     expect(loaded.showScoring, isFalse);
+    expect(loaded.diceRollAnimation, isFalse);
+    expect(loaded.showPassDevice, isTrue);
     expect(loaded.dragHintShown, isTrue);
 
     // Each field persists independently (toggle just one back).
@@ -99,6 +107,8 @@ void main() {
     expect(again.showHighlights, isFalse, reason: 'others unchanged');
     expect(again.enableCombinedTaps, isFalse);
     expect(again.showScoring, isFalse);
+    expect(again.diceRollAnimation, isFalse);
+    expect(again.showPassDevice, isTrue);
     expect(again.dragHintShown, isTrue);
   });
 

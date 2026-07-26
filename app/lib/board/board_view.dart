@@ -308,13 +308,24 @@ class BoardInteractionOptions {
 /// recognisers are wired by hand so a gesture that never became a drag is always
 /// delivered as a tap, routed by the point the finger came DOWN on.
 ///
+/// ## Which pair is lit ([activeDiceSide])
+///
+/// Both players keep a persistent pair in a FIXED position (see
+/// [BoardGeometry.diceRect]); which one is lit is told to the board by its owner
+/// through [activeDiceSide], and means "this roll is live" — the roller while a
+/// roll is being presented, the mover while a move is being entered, and nobody
+/// (both pairs dim) at every quiet moment in between. The board never infers it
+/// from [state]`.turn`; see [BoardPainter.activeDiceSide] for the two ways that
+/// was wrong.
+///
 /// ## Played dice read as spent ([BoardPainter.usedDiceSlots])
 ///
 /// While a move is being entered, the dice the staged hops have consumed render
 /// heavily dimmed on the mover's own pair (see `dice_usage.dart` for the hop →
 /// die mapping; doubles dim progressively, since four hops share two painted
 /// dice). Undo restores the brightness, because the set is recomputed from the
-/// builder on every paint rather than latched.
+/// builder on every paint rather than latched. The spent dimming sits BENEATH the
+/// pair emphasis: it only ever applies to the [activeDiceSide]'s own pair.
 ///
 /// ## Responsive sizing ([minAspect] / [maxAspect])
 ///
@@ -328,8 +339,8 @@ class BoardInteractionOptions {
 /// the roomier middle band).
 ///
 /// The "board never reflows" invariant survives: the slot is fixed for a given
-/// screen (a fixed-height HUD above, and below it a fixed-height score sheet,
-/// pip line and action bar), so the board size is constant while the screen is —
+/// screen (a fixed-height HUD above, and below it a fixed-height score sheet and
+/// action bar), so the board size is constant while the screen is —
 /// nothing those regions do mid-turn can resize it.
 class BoardView extends StatefulWidget {
   const BoardView({
@@ -349,11 +360,14 @@ class BoardView extends StatefulWidget {
     this.whiteDice,
     this.blackDice,
     this.diceOverride,
+    this.activeDiceSide,
+    this.showCube = true,
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
     this.strongHighlightSources = const {},
     this.highlightMovingPlayer,
     this.onDiceTap,
+    this.onMoveAnimation,
     this.onNoLegalSourceTap,
     this.doubleTapWindow = const Duration(milliseconds: 300),
   });
@@ -423,6 +437,17 @@ class BoardView extends StatefulWidget {
   /// BLACK's persistent dice pair (see [whiteDice]).
   final Dice? blackDice;
 
+  /// Whether the doubling cube is PAINTED on the bar. False in a cubeless match,
+  /// where the painter is handed no [CubeState] at all so no cube glyph is drawn
+  /// — the reported "I selected game without a cube but cube is still showing".
+  ///
+  /// A display flag, not a rule: [GameState.cube] still exists (it is part of the
+  /// core state and stays at ×1, centred, for the whole match), and the cube is
+  /// suppressed at its three surfaces together — this marker, the header chip and
+  /// the Double button. Defaults to true so every other call site (analysis,
+  /// replay, the board's own tests) is unaffected.
+  final bool showCube;
+
   /// When non-null, `faces` REPLACES `roller`'s dice pair on the painted board —
   /// purely cosmetic. Used by the opponent dice-roll animation beat (see
   /// `GameScreen`), which cycles pseudo-random faces for ~840ms before the real
@@ -440,6 +465,15 @@ class BoardView extends StatefulWidget {
   /// (the "the app replays MY dice animation during the opponent's move"
   /// regression). Same failure mode, and same fix, as [AppliedMove].
   final ({Player roller, Dice faces})? diceOverride;
+
+  /// The side whose dice pair is EMPHASISED (painted at full opacity while the
+  /// other is dimmed); `null` dims both. Passed straight to
+  /// [BoardPainter.activeDiceSide] — see there for why this is stated by the
+  /// caller rather than derived from [state]`.turn`, and why the caller is the
+  /// only thing that knows it (it owns the roll beat and therefore the
+  /// presentation). Pair POSITIONS do not depend on it: each is anchored per
+  /// player (see [BoardGeometry.diceRect]).
+  final Player? activeDiceSide;
 
   /// Static SOURCE highlights to paint (point index 0..23, or [CheckerMove.bar])
   /// — a subtle ring on each location's top checker. Used by the NON-interactive
@@ -470,12 +504,23 @@ class BoardView extends StatefulWidget {
   /// other moment.
   ///
   /// When non-null a tap inside EITHER dice pair's generous hit box
-  /// ([BoardGeometry.diceTapRect]) fires this instead of running move entry, and
-  /// the mover's pair wears a quiet ring so the affordance is discoverable (the
-  /// Roll button stays put regardless). When null the dice areas behave exactly
-  /// as before — a tap there falls through to normal move-entry handling — so
-  /// this can never interfere with entering a move.
+  /// ([BoardGeometry.diceTapRect]) fires this instead of running move entry (the
+  /// Roll button stays put regardless). The affordance is deliberately NOT
+  /// painted — see the class doc. When null the dice areas behave exactly as
+  /// before — a tap there falls through to normal move-entry handling — so this
+  /// can never interfere with entering a move.
   final VoidCallback? onDiceTap;
+
+  /// Fired whenever the cosmetic move animation starts or stops: the animating
+  /// move's PLAYER while a checker is travelling, and `null` the moment it is
+  /// done (or is abandoned because a drag lifted a checker).
+  ///
+  /// The board owns the animation's timeline — its duration depends on the hop
+  /// count — so a consumer that needs to know whether one is running cannot
+  /// compute it without duplicating that timeline. The game screen needs exactly
+  /// this to keep the mover's dice pair lit for as long as their play is being
+  /// presented (see [activeDiceSide]).
+  final ValueChanged<Player?>? onMoveAnimation;
 
   /// Called when the user taps one of their OWN checkers that is not a legal
   /// source with the dice still in hand — the silent no-op behind the reported
@@ -823,6 +868,7 @@ class _BoardViewState extends State<BoardView>
   void _startAnimation(_BoardAnimation anim) {
     final seq = ++_animSeq;
     setState(() => _animation = anim);
+    widget.onMoveAnimation?.call(anim.player);
     _animController
       ..stop()
       ..duration = _totalDuration(anim.hops.length)
@@ -830,6 +876,7 @@ class _BoardViewState extends State<BoardView>
       ..forward().whenComplete(() {
         if (!mounted || seq != _animSeq) return;
         setState(() => _animation = null);
+        widget.onMoveAnimation?.call(null);
       });
   }
 
@@ -987,11 +1034,8 @@ class _BoardViewState extends State<BoardView>
   /// [BoardGeometry.diceTapRect]). Both pairs are live so the user can tap
   /// whichever dice they were looking at.
   bool _isDiceTap(BoardGeometry geometry, Offset localPosition) {
-    final mover = widget.state.turn;
     for (final player in Player.values) {
-      if (geometry.diceTapRect(player, mover: mover).contains(localPosition)) {
-        return true;
-      }
+      if (geometry.diceTapRect(player).contains(localPosition)) return true;
     }
     return false;
   }
@@ -1349,6 +1393,8 @@ class _BoardViewState extends State<BoardView>
       _selectedSource = null;
       _stagedFromExternal = false; // a manual drag makes this hand entry
     });
+    // A suspended animation is over as far as consumers are concerned.
+    widget.onMoveAnimation?.call(null);
     _disarmDoubleTap(); // a drag is not half of a double-tap
     _syncEntry();
   }
@@ -1488,8 +1534,8 @@ class _BoardViewState extends State<BoardView>
               theme: theme,
               whiteDice: whiteDice,
               blackDice: blackDice,
-              diceMover: turn,
-              cube: widget.state.cube,
+              activeDiceSide: widget.activeDiceSide,
+              cube: widget.showCube ? widget.state.cube : null,
               usedDiceSlots: playedSlots,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
@@ -1513,8 +1559,8 @@ class _BoardViewState extends State<BoardView>
               theme: theme,
               whiteDice: whiteDice,
               blackDice: blackDice,
-              diceMover: turn,
-              cube: widget.state.cube,
+              activeDiceSide: widget.activeDiceSide,
+              cube: widget.showCube ? widget.state.cube : null,
               hiddenChecker: frame.hidden,
               overlayChecker: frame.overlay,
             );
@@ -1525,8 +1571,8 @@ class _BoardViewState extends State<BoardView>
               theme: theme,
               whiteDice: whiteDice,
               blackDice: blackDice,
-              diceMover: turn,
-              cube: widget.state.cube,
+              activeDiceSide: widget.activeDiceSide,
+              cube: widget.showCube ? widget.state.cube : null,
               usedDiceSlots: playedSlots,
               // A static overlay's origins wear the STRONG ring; the live
               // builder never uses it (its pickup is [selectedCheckerLocation]).
