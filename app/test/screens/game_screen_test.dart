@@ -421,8 +421,6 @@ void main() {
 
       // The Roll button STAYS: the dice tap is a second route, not a swap.
       expect(find.widgetWithText(FilledButton, 'Roll'), findsOneWidget);
-      expect(boardPainterOf(t).diceTapHint, isTrue,
-          reason: 'the tappable pair is ringed while the gate is open');
 
       await tapDice(t, c.state.turn, c.state.turn);
       await pumpUntil(t, () => !c.awaitingHumanTurn);
@@ -444,8 +442,8 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('the hint clears once the gate closes (a move is being entered)',
-        (t) async {
+    testWidgets('once the gate closes the dice area is inert again (a move is '
+        'being entered)', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
       final human = LocalHumanAgent();
@@ -460,10 +458,14 @@ void main() {
       await t.tap(find.widgetWithText(FilledButton, 'Roll'));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
-      expect(boardPainterOf(t).diceTapHint, isFalse,
-          reason: 'no dice affordance while a move is being entered');
-      // And the board is interactive again: the dice area must not swallow taps.
+      // The board is interactive again, and a tap on the dice area is just the
+      // "nothing actionable" tap it has always been — it cannot roll again.
       expect(boardPainterOf(t).highlightedSources, isNotEmpty);
+      final before = c.state.dice;
+      await tapDice(t, c.state.turn, c.state.turn);
+      expect(c.state.dice, before, reason: 'no second roll');
+      expect(human.pendingMoveRequest.value, isNotNull,
+          reason: 'the turn is still waiting for the move to be entered');
       c.disposeController();
     });
   });

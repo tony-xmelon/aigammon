@@ -1406,17 +1406,6 @@ void main() {
       expect(rolls, 0);
     });
 
-    testWidgets('the mover pair wears the tap hint only while the tap is live',
-        (t) async {
-      await t.binding.setSurfaceSize(_size);
-      addTearDown(() => t.binding.setSurfaceSize(null));
-      await t.pumpWidget(preRoll(goldenState, () {}));
-      expect(_painterOf(t).diceTapHint, isTrue);
-
-      await t.pumpWidget(preRoll(goldenState, null));
-      expect(_painterOf(t).diceTapHint, isFalse);
-    });
-
     testWidgets('with no callback the dice area falls through to move entry',
         (t) async {
       await t.binding.setSurfaceSize(_size);

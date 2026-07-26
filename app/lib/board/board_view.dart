@@ -280,6 +280,12 @@ class BoardInteractionOptions {
 /// other moment, move entry is untouched: during the moving phase a tap on the
 /// dice area is exactly the "nothing actionable" tap it has always been.
 ///
+/// The affordance is NOT painted. A ring/glow around the pair was tried and read
+/// as an alarm rather than an invitation ("the yellow highlight around my dice is
+/// unnecessary and confusing"), so the dice look identical whether or not they
+/// are tappable; the Roll button is the discoverable control, and the dice tap is
+/// a shortcut for people who reach for them anyway.
+///
 /// ## Double-tap to play a hop ([doubleTapWindow])
 ///
 /// Tapping a checker picks it up; tapping it AGAIN within [doubleTapWindow]
@@ -1250,7 +1256,6 @@ class _BoardViewState extends State<BoardView>
   /// drops below this, however small the board's checkers are.
   static const double _minTapTolerance = 22;
 
-
   /// The selectable source whose top-checker anchor is nearest [pos] within
   /// [_tapTolerance], or `null` when none is close enough. Anchors are computed
   /// on the PREVIEW board so they match exactly where the painter draws the
@@ -1455,9 +1460,6 @@ class _BoardViewState extends State<BoardView>
           // entry but no rings or destination fills are painted (see
           // [BoardInteractionOptions.showHighlights]).
           final showHl = widget.interactionOptions.showHighlights;
-          // The "tap the dice to roll" ring shows exactly while the tap is live.
-          final diceTapHint = widget.onDiceTap != null;
-
           // Dice the staged hops have already spent, so they render disabled.
           // Purely derived from the live builder: an Undo drops a hop and the
           // die brightens again on the very next paint. Never dims the waiting
@@ -1488,7 +1490,6 @@ class _BoardViewState extends State<BoardView>
               blackDice: blackDice,
               diceMover: turn,
               cube: widget.state.cube,
-              diceTapHint: diceTapHint,
               usedDiceSlots: playedSlots,
               hiddenChecker: _dragHidden(preview),
               overlayChecker: (
@@ -1514,7 +1515,6 @@ class _BoardViewState extends State<BoardView>
               blackDice: blackDice,
               diceMover: turn,
               cube: widget.state.cube,
-              diceTapHint: diceTapHint,
               hiddenChecker: frame.hidden,
               overlayChecker: frame.overlay,
             );
@@ -1527,7 +1527,6 @@ class _BoardViewState extends State<BoardView>
               blackDice: blackDice,
               diceMover: turn,
               cube: widget.state.cube,
-              diceTapHint: diceTapHint,
               usedDiceSlots: playedSlots,
               // A static overlay's origins wear the STRONG ring; the live
               // builder never uses it (its pickup is [selectedCheckerLocation]).

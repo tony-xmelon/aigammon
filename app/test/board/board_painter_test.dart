@@ -134,7 +134,6 @@ void main() {
       int? sel,
       Player? mover,
       bool whiteAtBottom = true,
-      bool diceTapHint = false,
     }) =>
         BoardPainter(
           board: board ?? BoardState.initial(),
@@ -149,7 +148,6 @@ void main() {
           combinedDestinations: combined,
           selectedCheckerLocation: sel,
           movingPlayer: mover,
-          diceTapHint: diceTapHint,
         );
 
     final base = make();
@@ -166,7 +164,6 @@ void main() {
     expect(base.shouldRepaint(make(sel: 3)), isTrue);
     expect(base.shouldRepaint(make(mover: Player.white)), isTrue);
     expect(base.shouldRepaint(make(whiteAtBottom: false)), isTrue);
-    expect(base.shouldRepaint(make(diceTapHint: true)), isTrue);
     expect(
         base.shouldRepaint(make(
             board: BoardState(points: List.filled(24, 0)))),
