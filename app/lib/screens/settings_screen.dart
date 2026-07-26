@@ -83,6 +83,20 @@ class SettingsScreen extends ConsumerWidget {
                             save(settings.copyWith(animationSpeed: s.first)),
                       ),
                     ),
+                    // Sits directly under the speed control it qualifies: the
+                    // speed paces the CHECKERS, this decides whether a roll
+                    // tumbles at all. Disabled-looking is avoided deliberately —
+                    // at speed "None" the switch still reflects the stored
+                    // preference, it simply has no beat to run.
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Dice roll animation'),
+                      subtitle:
+                          const Text('Tumble the dice before each roll'),
+                      value: settings.diceRollAnimation,
+                      onChanged: (v) =>
+                          save(settings.copyWith(diceRollAnimation: v)),
+                    ),
                     const SizedBox(height: 24),
                     _Section(
                       label: 'Default match length',

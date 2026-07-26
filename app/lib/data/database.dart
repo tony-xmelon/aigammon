@@ -103,6 +103,14 @@ class Settings extends Table {
   /// Whether the HUD shows the running match score.
   BoolColumn get showScoring => boolean().withDefault(const Constant(true))();
 
+  /// Whether each roll tumbles before it settles (schema v5). ON by default —
+  /// the beat is the app's roll feedback, and its absence was reported as a
+  /// regression ("there is no dice animation now"). Turning it off makes every
+  /// roll appear settled immediately; checker travel is unaffected (that is
+  /// [animationSpeed]).
+  BoolColumn get diceRollAnimation =>
+      boolean().withDefault(const Constant(true))();
+
   /// Whether the one-time "you can drag OR tap checkers" discoverability hint
   /// has already been surfaced (schema v4). Flipped true the first time the hint
   /// shows, so it never appears twice. Starts false on a fresh install.
@@ -123,7 +131,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
   // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
@@ -142,17 +150,17 @@ class AppDatabase extends _$AppDatabase {
           // same upsert-if-absent covers both fresh creates and upgrades.
           if (from < 2) {
             // Fresh create of the settings table. `createTable` uses the CURRENT
-            // (v4) table definition, so it already includes every gameplay
-            // column AND `drag_hint_shown` — the version-gated `addColumn` blocks
-            // below must NOT re-add them (hence each is gated on `from == N`, not
-            // `from < N+1`).
+            // (v5) table definition, so it already includes every gameplay
+            // column, `drag_hint_shown` AND `dice_roll_animation` — the
+            // version-gated `addColumn` blocks below must NOT re-add them (hence
+            // each is gated on `from == N`, not `from < N+1`).
             await m.createTable(settings);
           }
           // v2 -> v3: add the four gameplay-option columns to the EXISTING v2
           // settings row. Each has a column default, so the pre-existing (seeded
           // or user-edited) row gains the new fields at their defaults while its
           // other values are preserved. Only runs when the table already existed
-          // at v2 (a v1 -> v4 jump created it whole above).
+          // at v2 (a v1 -> v5 jump created it whole above).
           if (from == 2) {
             await m.addColumn(settings, settings.showHighlights);
             await m.addColumn(settings, settings.enableDrag);
@@ -162,10 +170,20 @@ class AppDatabase extends _$AppDatabase {
           // v3 -> v4: add the `drag_hint_shown` column. It is absent from BOTH
           // the v2 and v3 table shapes (v2 had none of the gameplay columns; v3
           // had the four above but not this one), so add it whenever the table
-          // existed pre-v4 — i.e. any upgrade from 2 or 3. A v1 -> v4 jump created
+          // existed pre-v4 — i.e. any upgrade from 2 or 3. A v1 -> v5 jump created
           // the table whole above, so this is skipped there.
           if (from == 2 || from == 3) {
             await m.addColumn(settings, settings.dragHintShown);
+          }
+          // v4 -> v5: add the `dice_roll_animation` column. Absent from every
+          // pre-v5 table shape (v2, v3 and v4 alike), so add it whenever the
+          // table already existed — i.e. any upgrade from 2, 3 or 4. Its column
+          // default (ON) fills the migrated row, so an upgrading user gets the
+          // beat back exactly as a fresh install does. A v1 -> v5 jump created the
+          // table whole above and is therefore skipped, hence `from == N` rather
+          // than `from < 5`.
+          if (from == 2 || from == 3 || from == 4) {
+            await m.addColumn(settings, settings.diceRollAnimation);
           }
           // v3 -> v4 one-time default flip: drag-to-move becomes ON by default.
           // Applied UNCONDITIONALLY to the existing settings row (not just when

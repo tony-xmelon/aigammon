@@ -99,6 +99,26 @@ class AnimationTimings {
   /// Whether any animation runs at all (the [off] preset is fully disabled).
   bool get enabled => hop > Duration.zero;
 
+  /// Whether the dice-roll BEAT runs: there must be at least one tumbling frame
+  /// and a positive time to show it for. False for the [off] preset (so "None"
+  /// speed implies no beat) and for any preset put through [withoutDiceBeat] (the
+  /// "Dice roll animation" setting turned off), in which case rolls settle
+  /// instantly while checker travel keeps whatever pacing was chosen.
+  bool get diceBeatEnabled => diceFrames > 0 && diceFrame > Duration.zero;
+
+  /// This preset with the dice beat stripped out — no tumbling frames, no settle
+  /// pause — and the checker travel untouched. How the "Dice roll animation"
+  /// toggle is applied (see [AppSettings.timings]), so that everything downstream
+  /// keeps reading a single [AnimationTimings] and cannot disagree about whether
+  /// the beat is on.
+  AnimationTimings withoutDiceBeat() => AnimationTimings(
+        hop: hop,
+        interHop: interHop,
+        diceFrame: Duration.zero,
+        diceFrames: 0,
+        diceSettlePause: Duration.zero,
+      );
+
   @override
   bool operator ==(Object other) =>
       other is AnimationTimings &&
@@ -135,13 +155,14 @@ class AppSettings {
     this.enableDrag = true,
     this.enableCombinedTaps = true,
     this.showScoring = true,
+    this.diceRollAnimation = true,
     this.dragHintShown = false,
   });
 
   /// The out-of-the-box defaults, matching the `Settings` table's column
   /// defaults (theme: system, animation: normal, length: 5, difficulty:
-  /// medium, tutor override: none, highlights/drag/combined-taps/scoring on,
-  /// drag-hint not yet shown).
+  /// medium, tutor override: none, highlights/drag/combined-taps/scoring and the
+  /// dice-roll animation on, drag-hint not yet shown).
   static const AppSettings defaults = AppSettings(
     themeMode: ThemeMode.system,
     animationSpeed: AnimationSpeed.normal,
@@ -179,11 +200,24 @@ class AppSettings {
   /// Whether the HUD shows the running match score.
   final bool showScoring;
 
+  /// Whether each roll TUMBLES before it settles (schema v5, ON by default).
+  ///
+  /// Off means every roll — yours and the opponent's — appears settled at once:
+  /// no tumbling faces, no settle pause, and no move-entry hold behind either.
+  /// Checker travel is unaffected; that is what [animationSpeed] controls (and
+  /// [AnimationSpeed.off] implies this off too, since a preset with no frames has
+  /// no beat to run). Applied through [timings], so no consumer has to know about
+  /// this flag — see [AnimationTimings.withoutDiceBeat].
+  final bool diceRollAnimation;
+
   /// Whether the one-time drag/tap discoverability hint has already been shown.
   final bool dragHintShown;
 
-  /// The [AnimationTimings] preset for the current [animationSpeed].
-  AnimationTimings get timings => animationSpeed.timings;
+  /// The [AnimationTimings] preset for the current [animationSpeed], with the
+  /// dice beat stripped out when [diceRollAnimation] is off.
+  AnimationTimings get timings => diceRollAnimation
+      ? animationSpeed.timings
+      : animationSpeed.timings.withoutDiceBeat();
 
   AppSettings copyWith({
     ThemeMode? themeMode,
@@ -196,6 +230,7 @@ class AppSettings {
     bool? enableDrag,
     bool? enableCombinedTaps,
     bool? showScoring,
+    bool? diceRollAnimation,
     bool? dragHintShown,
   }) {
     return AppSettings(
@@ -210,6 +245,7 @@ class AppSettings {
       enableDrag: enableDrag ?? this.enableDrag,
       enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
       showScoring: showScoring ?? this.showScoring,
+      diceRollAnimation: diceRollAnimation ?? this.diceRollAnimation,
       dragHintShown: dragHintShown ?? this.dragHintShown,
     );
   }
@@ -226,6 +262,7 @@ class AppSettings {
       other.enableDrag == enableDrag &&
       other.enableCombinedTaps == enableCombinedTaps &&
       other.showScoring == showScoring &&
+      other.diceRollAnimation == diceRollAnimation &&
       other.dragHintShown == dragHintShown;
 
   @override
@@ -239,6 +276,7 @@ class AppSettings {
       enableDrag,
       enableCombinedTaps,
       showScoring,
+      diceRollAnimation,
       dragHintShown);
 
   @override
@@ -251,6 +289,7 @@ class AppSettings {
       'enableDrag: $enableDrag, '
       'enableCombinedTaps: $enableCombinedTaps, '
       'showScoring: $showScoring, '
+      'diceRollAnimation: $diceRollAnimation, '
       'dragHintShown: $dragHintShown)';
 }
 

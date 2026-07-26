@@ -1343,6 +1343,21 @@ class $SettingsTable extends Settings
     ),
     defaultValue: const Constant(true),
   );
+  static const VerificationMeta _diceRollAnimationMeta = const VerificationMeta(
+    'diceRollAnimation',
+  );
+  @override
+  late final GeneratedColumn<bool> diceRollAnimation = GeneratedColumn<bool>(
+    'dice_roll_animation',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("dice_roll_animation" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
   static const VerificationMeta _dragHintShownMeta = const VerificationMeta(
     'dragHintShown',
   );
@@ -1370,6 +1385,7 @@ class $SettingsTable extends Settings
     enableDrag,
     enableCombinedTaps,
     showScoring,
+    diceRollAnimation,
     dragHintShown,
   ];
   @override
@@ -1462,6 +1478,15 @@ class $SettingsTable extends Settings
         ),
       );
     }
+    if (data.containsKey('dice_roll_animation')) {
+      context.handle(
+        _diceRollAnimationMeta,
+        diceRollAnimation.isAcceptableOrUnknown(
+          data['dice_roll_animation']!,
+          _diceRollAnimationMeta,
+        ),
+      );
+    }
     if (data.containsKey('drag_hint_shown')) {
       context.handle(
         _dragHintShownMeta,
@@ -1520,6 +1545,10 @@ class $SettingsTable extends Settings
         DriftSqlType.bool,
         data['${effectivePrefix}show_scoring'],
       )!,
+      diceRollAnimation: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}dice_roll_animation'],
+      )!,
       dragHintShown: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}drag_hint_shown'],
@@ -1561,6 +1590,13 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
   /// Whether the HUD shows the running match score.
   final bool showScoring;
 
+  /// Whether each roll tumbles before it settles (schema v5). ON by default —
+  /// the beat is the app's roll feedback, and its absence was reported as a
+  /// regression ("there is no dice animation now"). Turning it off makes every
+  /// roll appear settled immediately; checker travel is unaffected (that is
+  /// [animationSpeed]).
+  final bool diceRollAnimation;
+
   /// Whether the one-time "you can drag OR tap checkers" discoverability hint
   /// has already been surfaced (schema v4). Flipped true the first time the hint
   /// shows, so it never appears twice. Starts false on a fresh install.
@@ -1576,6 +1612,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     required this.enableDrag,
     required this.enableCombinedTaps,
     required this.showScoring,
+    required this.diceRollAnimation,
     required this.dragHintShown,
   });
   @override
@@ -1593,6 +1630,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     map['enable_drag'] = Variable<bool>(enableDrag);
     map['enable_combined_taps'] = Variable<bool>(enableCombinedTaps);
     map['show_scoring'] = Variable<bool>(showScoring);
+    map['dice_roll_animation'] = Variable<bool>(diceRollAnimation);
     map['drag_hint_shown'] = Variable<bool>(dragHintShown);
     return map;
   }
@@ -1611,6 +1649,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       enableDrag: Value(enableDrag),
       enableCombinedTaps: Value(enableCombinedTaps),
       showScoring: Value(showScoring),
+      diceRollAnimation: Value(diceRollAnimation),
       dragHintShown: Value(dragHintShown),
     );
   }
@@ -1631,6 +1670,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       enableDrag: serializer.fromJson<bool>(json['enableDrag']),
       enableCombinedTaps: serializer.fromJson<bool>(json['enableCombinedTaps']),
       showScoring: serializer.fromJson<bool>(json['showScoring']),
+      diceRollAnimation: serializer.fromJson<bool>(json['diceRollAnimation']),
       dragHintShown: serializer.fromJson<bool>(json['dragHintShown']),
     );
   }
@@ -1648,6 +1688,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       'enableDrag': serializer.toJson<bool>(enableDrag),
       'enableCombinedTaps': serializer.toJson<bool>(enableCombinedTaps),
       'showScoring': serializer.toJson<bool>(showScoring),
+      'diceRollAnimation': serializer.toJson<bool>(diceRollAnimation),
       'dragHintShown': serializer.toJson<bool>(dragHintShown),
     };
   }
@@ -1663,6 +1704,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     bool? enableDrag,
     bool? enableCombinedTaps,
     bool? showScoring,
+    bool? diceRollAnimation,
     bool? dragHintShown,
   }) => SettingsRow(
     id: id ?? this.id,
@@ -1677,6 +1719,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     enableDrag: enableDrag ?? this.enableDrag,
     enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
     showScoring: showScoring ?? this.showScoring,
+    diceRollAnimation: diceRollAnimation ?? this.diceRollAnimation,
     dragHintShown: dragHintShown ?? this.dragHintShown,
   );
   SettingsRow copyWithCompanion(SettingsCompanion data) {
@@ -1707,6 +1750,9 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       showScoring: data.showScoring.present
           ? data.showScoring.value
           : this.showScoring,
+      diceRollAnimation: data.diceRollAnimation.present
+          ? data.diceRollAnimation.value
+          : this.diceRollAnimation,
       dragHintShown: data.dragHintShown.present
           ? data.dragHintShown.value
           : this.dragHintShown,
@@ -1726,6 +1772,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           ..write('enableDrag: $enableDrag, ')
           ..write('enableCombinedTaps: $enableCombinedTaps, ')
           ..write('showScoring: $showScoring, ')
+          ..write('diceRollAnimation: $diceRollAnimation, ')
           ..write('dragHintShown: $dragHintShown')
           ..write(')'))
         .toString();
@@ -1743,6 +1790,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     enableDrag,
     enableCombinedTaps,
     showScoring,
+    diceRollAnimation,
     dragHintShown,
   );
   @override
@@ -1759,6 +1807,7 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           other.enableDrag == this.enableDrag &&
           other.enableCombinedTaps == this.enableCombinedTaps &&
           other.showScoring == this.showScoring &&
+          other.diceRollAnimation == this.diceRollAnimation &&
           other.dragHintShown == this.dragHintShown);
 }
 
@@ -1773,6 +1822,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
   final Value<bool> enableDrag;
   final Value<bool> enableCombinedTaps;
   final Value<bool> showScoring;
+  final Value<bool> diceRollAnimation;
   final Value<bool> dragHintShown;
   const SettingsCompanion({
     this.id = const Value.absent(),
@@ -1785,6 +1835,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.enableDrag = const Value.absent(),
     this.enableCombinedTaps = const Value.absent(),
     this.showScoring = const Value.absent(),
+    this.diceRollAnimation = const Value.absent(),
     this.dragHintShown = const Value.absent(),
   });
   SettingsCompanion.insert({
@@ -1798,6 +1849,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.enableDrag = const Value.absent(),
     this.enableCombinedTaps = const Value.absent(),
     this.showScoring = const Value.absent(),
+    this.diceRollAnimation = const Value.absent(),
     this.dragHintShown = const Value.absent(),
   });
   static Insertable<SettingsRow> custom({
@@ -1811,6 +1863,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Expression<bool>? enableDrag,
     Expression<bool>? enableCombinedTaps,
     Expression<bool>? showScoring,
+    Expression<bool>? diceRollAnimation,
     Expression<bool>? dragHintShown,
   }) {
     return RawValuesInsertable({
@@ -1826,6 +1879,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
       if (enableCombinedTaps != null)
         'enable_combined_taps': enableCombinedTaps,
       if (showScoring != null) 'show_scoring': showScoring,
+      if (diceRollAnimation != null) 'dice_roll_animation': diceRollAnimation,
       if (dragHintShown != null) 'drag_hint_shown': dragHintShown,
     });
   }
@@ -1841,6 +1895,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Value<bool>? enableDrag,
     Value<bool>? enableCombinedTaps,
     Value<bool>? showScoring,
+    Value<bool>? diceRollAnimation,
     Value<bool>? dragHintShown,
   }) {
     return SettingsCompanion(
@@ -1854,6 +1909,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
       enableDrag: enableDrag ?? this.enableDrag,
       enableCombinedTaps: enableCombinedTaps ?? this.enableCombinedTaps,
       showScoring: showScoring ?? this.showScoring,
+      diceRollAnimation: diceRollAnimation ?? this.diceRollAnimation,
       dragHintShown: dragHintShown ?? this.dragHintShown,
     );
   }
@@ -1891,6 +1947,9 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     if (showScoring.present) {
       map['show_scoring'] = Variable<bool>(showScoring.value);
     }
+    if (diceRollAnimation.present) {
+      map['dice_roll_animation'] = Variable<bool>(diceRollAnimation.value);
+    }
     if (dragHintShown.present) {
       map['drag_hint_shown'] = Variable<bool>(dragHintShown.value);
     }
@@ -1910,6 +1969,7 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
           ..write('enableDrag: $enableDrag, ')
           ..write('enableCombinedTaps: $enableCombinedTaps, ')
           ..write('showScoring: $showScoring, ')
+          ..write('diceRollAnimation: $diceRollAnimation, ')
           ..write('dragHintShown: $dragHintShown')
           ..write(')'))
         .toString();
@@ -2743,6 +2803,7 @@ typedef $$SettingsTableCreateCompanionBuilder =
       Value<bool> enableDrag,
       Value<bool> enableCombinedTaps,
       Value<bool> showScoring,
+      Value<bool> diceRollAnimation,
       Value<bool> dragHintShown,
     });
 typedef $$SettingsTableUpdateCompanionBuilder =
@@ -2757,6 +2818,7 @@ typedef $$SettingsTableUpdateCompanionBuilder =
       Value<bool> enableDrag,
       Value<bool> enableCombinedTaps,
       Value<bool> showScoring,
+      Value<bool> diceRollAnimation,
       Value<bool> dragHintShown,
     });
 
@@ -2816,6 +2878,11 @@ class $$SettingsTableFilterComposer
 
   ColumnFilters<bool> get showScoring => $composableBuilder(
     column: $table.showScoring,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get diceRollAnimation => $composableBuilder(
+    column: $table.diceRollAnimation,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2884,6 +2951,11 @@ class $$SettingsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get diceRollAnimation => $composableBuilder(
+    column: $table.diceRollAnimation,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get dragHintShown => $composableBuilder(
     column: $table.dragHintShown,
     builder: (column) => ColumnOrderings(column),
@@ -2945,6 +3017,11 @@ class $$SettingsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<bool> get diceRollAnimation => $composableBuilder(
+    column: $table.diceRollAnimation,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<bool> get dragHintShown => $composableBuilder(
     column: $table.dragHintShown,
     builder: (column) => column,
@@ -2992,6 +3069,7 @@ class $$SettingsTableTableManager
                 Value<bool> enableDrag = const Value.absent(),
                 Value<bool> enableCombinedTaps = const Value.absent(),
                 Value<bool> showScoring = const Value.absent(),
+                Value<bool> diceRollAnimation = const Value.absent(),
                 Value<bool> dragHintShown = const Value.absent(),
               }) => SettingsCompanion(
                 id: id,
@@ -3004,6 +3082,7 @@ class $$SettingsTableTableManager
                 enableDrag: enableDrag,
                 enableCombinedTaps: enableCombinedTaps,
                 showScoring: showScoring,
+                diceRollAnimation: diceRollAnimation,
                 dragHintShown: dragHintShown,
               ),
           createCompanionCallback:
@@ -3018,6 +3097,7 @@ class $$SettingsTableTableManager
                 Value<bool> enableDrag = const Value.absent(),
                 Value<bool> enableCombinedTaps = const Value.absent(),
                 Value<bool> showScoring = const Value.absent(),
+                Value<bool> diceRollAnimation = const Value.absent(),
                 Value<bool> dragHintShown = const Value.absent(),
               }) => SettingsCompanion.insert(
                 id: id,
@@ -3030,6 +3110,7 @@ class $$SettingsTableTableManager
                 enableDrag: enableDrag,
                 enableCombinedTaps: enableCombinedTaps,
                 showScoring: showScoring,
+                diceRollAnimation: diceRollAnimation,
                 dragHintShown: dragHintShown,
               ),
           withReferenceMapper: (p0) => p0

@@ -56,6 +56,10 @@ void main() {
 
     expect(find.text('Theme'), findsOneWidget);
     expect(find.text('Animation speed'), findsOneWidget);
+    // The dice-roll toggle qualifies the speed control, directly beneath it.
+    expect(find.widgetWithText(SwitchListTile, 'Dice roll animation'),
+        findsOneWidget);
+    expect(find.text('Tumble the dice before each roll'), findsOneWidget);
     expect(find.text('Default match length'), findsOneWidget);
     expect(find.text('Default difficulty'), findsOneWidget);
     expect(find.text('Tutor mode default'), findsOneWidget);
@@ -115,6 +119,29 @@ void main() {
     expect((await _persisted(t)).showScoring, isFalse);
   });
 
+  testWidgets('the dice-roll animation toggle reflects settings and autosaves',
+      (t) async {
+    await t.binding.setSurfaceSize(const Size(600, 1600));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(_app());
+    _feed.add(AppSettings.defaults);
+    await t.pumpAndSettle();
+
+    final toggle = find.widgetWithText(SwitchListTile, 'Dice roll animation');
+    expect(t.widget<SwitchListTile>(toggle).value, isTrue,
+        reason: 'ON by default (schema v5)');
+
+    await t.ensureVisible(toggle);
+    await t.tap(toggle);
+    await _refresh(t);
+    final saved = await _persisted(t);
+    expect(saved.diceRollAnimation, isFalse,
+        reason: 'no save button — the switch writes on toggle');
+    // And it lands where every consumer reads it: the timings lose their beat.
+    expect(saved.timings.diceBeatEnabled, isFalse);
+    expect(t.widget<SwitchListTile>(toggle).value, isFalse);
+  });
+
   testWidgets('every selector hides the selected checkmark', (t) async {
     await t.pumpWidget(_app());
     _feed.add(AppSettings.defaults);
@@ -129,6 +156,10 @@ void main() {
   });
 
   testWidgets('each control autosaves immediately (probe the repo)', (t) async {
+    // A tall surface: the page grew a row (the dice-roll toggle), which pushed
+    // the tutor selector off an 800x600 default surface.
+    await t.binding.setSurfaceSize(const Size(600, 1600));
+    addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(_app());
     _feed.add(AppSettings.defaults);
     await t.pumpAndSettle();
