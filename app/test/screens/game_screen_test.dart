@@ -1388,6 +1388,59 @@ void main() {
       c.disposeController();
     });
 
+    testWidgets(
+        'the beat cycles the ROLLER pair even when the turn has already '
+        'advanced past them', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // The regression: with an INSTANT opponent (the real engine on device),
+      // Black's RollEvent, Black's MoveEvent and the turn advance back to White
+      // all fold inside one microtask chain, with no frame painted in between.
+      // A beat that infers its roller from `state.turn` therefore cycles the
+      // HUMAN's pair with the opponent's roll — "the app replays my dice
+      // animation during the opponent's move".
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // White (human) wins the opening (6 > 1) and plays; Black (AI) then
+        // rolls (6,5) and replies instantly.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+
+      // Wait until Black has both rolled AND moved: the beat is still running
+      // (6 × 140ms) but the turn is already back with White.
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<MoveEvent>()
+              .any((e) => e.player == Player.black));
+      expect(c.state.turn, Player.white,
+          reason: 'the turn has already advanced back to the human');
+
+      final painter = boardPainterOf(t);
+      expect(painter.blackDice, isNot(Dice(6, 5)),
+          reason: "the ROLLER's (Black's) pair must be cycling");
+      expect(painter.whiteDice, Dice(6, 1),
+          reason: "the human's pair must hold their OWN last roll — never "
+              "cycle with the opponent's roll");
+
+      // Once the beat ends, Black's pair settles on the real roll and White's
+      // pair is still its own opening roll.
+      await pumpUntil(t, () => boardPainterOf(t).blackDice == Dice(6, 5),
+          maxFrames: 2000);
+      expect(boardPainterOf(t).whiteDice, Dice(6, 1));
+
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
     testWidgets('animation off (Duration.zero): AI roll has no beat', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));

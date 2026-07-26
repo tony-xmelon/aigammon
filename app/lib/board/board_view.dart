@@ -402,13 +402,23 @@ class BoardView extends StatefulWidget {
   /// BLACK's persistent dice pair (see [whiteDice]).
   final Dice? blackDice;
 
-  /// When non-null, these cycling faces REPLACE the CURRENT ROLLER's pair on the
-  /// painted board — purely cosmetic. Used by the opponent dice-roll animation
-  /// beat (see [GameScreen]), which cycles pseudo-random faces for ~400ms before
-  /// the real roll settles (the override then clears back to `null`). Applies
-  /// ONLY to the roller ([state]'s turn); the other pair stays static with its
-  /// persisted roll. Never affects move entry or state.
-  final Dice? diceOverride;
+  /// When non-null, `faces` REPLACES `roller`'s dice pair on the painted board —
+  /// purely cosmetic. Used by the opponent dice-roll animation beat (see
+  /// `GameScreen`), which cycles pseudo-random faces for ~840ms before the real
+  /// roll settles (the override then clears back to `null`). Applies ONLY to
+  /// `roller`; the other pair stays static with its persisted roll. Never
+  /// affects move entry or state.
+  ///
+  /// The roller is carried HERE, as data, rather than inferred from
+  /// [state]`.turn`: by the time a beat runs, the turn may already have advanced
+  /// past the roller. In vs-AI play that is the normal case — the AI's
+  /// [RollEvent], its [MoveEvent] and the turn advance back to the human all
+  /// fold inside one microtask chain, with no frame painted in between, so
+  /// `state.turn` is the HUMAN while the AI's roll is still tumbling. Inferring
+  /// the roller there put the opponent's tumbling faces on the human's own pair
+  /// (the "the app replays MY dice animation during the opponent's move"
+  /// regression). Same failure mode, and same fix, as [AppliedMove].
+  final ({Player roller, Dice faces})? diceOverride;
 
   /// Static SOURCE highlights to paint (point index 0..23, or [CheckerMove.bar])
   /// — a subtle ring on each location's top checker. Used by the NON-interactive
@@ -1357,16 +1367,18 @@ class _BoardViewState extends State<BoardView>
           final dragging = dragSource != null && dragPointer != null;
 
           // The two persistent dice pairs to paint. The roll-beat override, when
-          // active, REPLACES the current roller's ([state]'s turn) pair with the
-          // cycling faces; the other pair keeps its persisted roll. Cosmetic
-          // only — never touches state or move entry.
+          // active, REPLACES its OWN ROLLER's pair with the cycling faces; the
+          // other pair keeps its persisted roll. The roller comes from the
+          // override itself, never from [state]'s turn — see
+          // [BoardView.diceOverride]. Cosmetic only — never touches state or
+          // move entry.
           final turn = widget.state.turn;
           final override = widget.diceOverride;
-          final whiteDice = (override != null && turn == Player.white)
-              ? override
+          final whiteDice = (override != null && override.roller == Player.white)
+              ? override.faces
               : widget.whiteDice;
-          final blackDice = (override != null && turn == Player.black)
-              ? override
+          final blackDice = (override != null && override.roller == Player.black)
+              ? override.faces
               : widget.blackDice;
 
           // Highlights are a pure visual layer: when off, taps/drag still drive
