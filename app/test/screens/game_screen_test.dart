@@ -421,8 +421,6 @@ void main() {
 
       // The Roll button STAYS: the dice tap is a second route, not a swap.
       expect(find.widgetWithText(FilledButton, 'Roll'), findsOneWidget);
-      expect(boardPainterOf(t).diceTapHint, isTrue,
-          reason: 'the tappable pair is ringed while the gate is open');
 
       await tapDice(t, c.state.turn, c.state.turn);
       await pumpUntil(t, () => !c.awaitingHumanTurn);
@@ -444,8 +442,8 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('the hint clears once the gate closes (a move is being entered)',
-        (t) async {
+    testWidgets('once the gate closes the dice area is inert again (a move is '
+        'being entered)', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
       final human = LocalHumanAgent();
@@ -460,10 +458,14 @@ void main() {
       await t.tap(find.widgetWithText(FilledButton, 'Roll'));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
-      expect(boardPainterOf(t).diceTapHint, isFalse,
-          reason: 'no dice affordance while a move is being entered');
-      // And the board is interactive again: the dice area must not swallow taps.
+      // The board is interactive again, and a tap on the dice area is just the
+      // "nothing actionable" tap it has always been — it cannot roll again.
       expect(boardPainterOf(t).highlightedSources, isNotEmpty);
+      final before = c.state.dice;
+      await tapDice(t, c.state.turn, c.state.turn);
+      expect(c.state.dice, before, reason: 'no second roll');
+      expect(human.pendingMoveRequest.value, isNotNull,
+          reason: 'the turn is still waiting for the move to be entered');
       c.disposeController();
     });
   });
@@ -1384,6 +1386,59 @@ void main() {
           reason: 'the beat settled to the real roll');
 
       // Let the settle-pause timer fire before teardown so no timer outlives it.
+      await t.pumpAndSettle();
+      c.disposeController();
+    });
+
+    testWidgets(
+        'the beat cycles the ROLLER pair even when the turn has already '
+        'advanced past them', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // The regression: with an INSTANT opponent (the real engine on device),
+      // Black's RollEvent, Black's MoveEvent and the turn advance back to White
+      // all fold inside one microtask chain, with no frame painted in between.
+      // A beat that infers its roller from `state.turn` therefore cycles the
+      // HUMAN's pair with the opponent's roll — "the app replays my dice
+      // animation during the opponent's move".
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // White (human) wins the opening (6 > 1) and plays; Black (AI) then
+        // rolls (6,5) and replies instantly.
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+
+      await t.pumpWidget(_animHarness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+
+      // Wait until Black has both rolled AND moved: the beat is still running
+      // (6 × 140ms) but the turn is already back with White.
+      await pumpUntil(
+          t,
+          () => c.game.events
+              .whereType<MoveEvent>()
+              .any((e) => e.player == Player.black));
+      expect(c.state.turn, Player.white,
+          reason: 'the turn has already advanced back to the human');
+
+      final painter = boardPainterOf(t);
+      expect(painter.blackDice, isNot(Dice(6, 5)),
+          reason: "the ROLLER's (Black's) pair must be cycling");
+      expect(painter.whiteDice, Dice(6, 1),
+          reason: "the human's pair must hold their OWN last roll — never "
+              "cycle with the opponent's roll");
+
+      // Once the beat ends, Black's pair settles on the real roll and White's
+      // pair is still its own opening roll.
+      await pumpUntil(t, () => boardPainterOf(t).blackDice == Dice(6, 5),
+          maxFrames: 2000);
+      expect(boardPainterOf(t).whiteDice, Dice(6, 1));
+
       await t.pumpAndSettle();
       c.disposeController();
     });

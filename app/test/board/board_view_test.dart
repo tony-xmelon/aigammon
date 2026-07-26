@@ -1090,7 +1090,8 @@ void main() {
     expect(_painterOf(t).board, goldenState.board);
   });
 
-  testWidgets('drag disabled: a pan does nothing (no lift, no hop)', (t) async {
+  testWidgets('drag disabled: a pan lifts nothing and enters no hop — it reads '
+      'as a TAP on the checker it started from', (t) async {
     await t.binding.setSurfaceSize(_size);
     addTearDown(() => t.binding.setSurfaceSize(null));
     final control = BoardEntryController();
@@ -1109,9 +1110,12 @@ void main() {
     expect(_painterOf(t).overlayChecker, isNull);
     await g.up();
     await t.pump();
-    expect(control.canUndo, isFalse);
-    expect(_painterOf(t).selectedCheckerLocation, isNull);
+    expect(control.canUndo, isFalse, reason: 'a pan can never enter a hop here');
     expect(_painterOf(t).board, goldenState.board);
+    // With no pan to claim the gesture, the tap survives its travel (see
+    // `_BoardViewState._tapDownPosition`) and picks up where the finger landed —
+    // which beats the old behaviour of dropping the press on the floor.
+    expect(_painterOf(t).selectedCheckerLocation, 7);
   });
 
   // --- Highlights toggle -----------------------------------------------------
@@ -1400,17 +1404,6 @@ void main() {
       await t.tapAt(_geometry.barRect(Player.white).center);
       await t.pump();
       expect(rolls, 0);
-    });
-
-    testWidgets('the mover pair wears the tap hint only while the tap is live',
-        (t) async {
-      await t.binding.setSurfaceSize(_size);
-      addTearDown(() => t.binding.setSurfaceSize(null));
-      await t.pumpWidget(preRoll(goldenState, () {}));
-      expect(_painterOf(t).diceTapHint, isTrue);
-
-      await t.pumpWidget(preRoll(goldenState, null));
-      expect(_painterOf(t).diceTapHint, isFalse);
     });
 
     testWidgets('with no callback the dice area falls through to move entry',

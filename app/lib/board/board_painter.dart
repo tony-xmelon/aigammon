@@ -28,7 +28,6 @@ class BoardPainter extends CustomPainter {
     this.movingPlayer,
     this.hiddenChecker,
     this.overlayChecker,
-    this.diceTapHint = false,
     this.usedDiceSlots = const {},
   });
 
@@ -102,12 +101,6 @@ class BoardPainter extends CustomPainter {
   /// A checker to draw on top of everything at [center] during a move animation
   /// (the travelling piece). `null` when idle.
   final ({Offset center, bool isWhite})? overlayChecker;
-
-  /// Whether to ring the [diceMover]'s dice pair as a "tap here to roll"
-  /// affordance. Set only while the board actually accepts a dice tap (the
-  /// local player's pre-roll gate); `false` otherwise, in which case painting is
-  /// byte-identical to the un-extended path.
-  final bool diceTapHint;
 
   /// Slots of the MOVER's dice pair already consumed by the hops staged so far
   /// (slot 0 is `dice.die1`, slot 1 is `dice.die2`), rendered heavily dimmed so
@@ -462,37 +455,8 @@ class BoardPainter extends CustomPainter {
   /// this game renders as blank dimmed outlines (no pips).
   void _paintDice(Canvas canvas) {
     final mover = diceMover ?? Player.white;
-    if (diceTapHint) _paintDiceTapHint(canvas, mover);
     _paintPlayerDice(canvas, Player.white, whiteDice, mover);
     _paintPlayerDice(canvas, Player.black, blackDice, mover);
-  }
-
-  /// The pre-roll "tap to roll" affordance: a soft glow plus a crisp rounded
-  /// ring around the MOVER's dice pair, drawn UNDER the dice themselves so it
-  /// reads as a halo rather than a frame over the pips. Deliberately quiet —
-  /// the Roll button remains the primary, discoverable control.
-  void _paintDiceTapHint(Canvas canvas, Player mover) {
-    final rect = geometry.diceRect(mover, mover: mover);
-    final pad = geometry.diceSide * 0.28;
-    final halo = RRect.fromRectXY(
-      rect.inflate(pad),
-      geometry.diceSide * 0.34,
-      geometry.diceSide * 0.34,
-    );
-    canvas.drawRRect(
-      halo,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = geometry.diceSide * 0.24
-        ..color = theme.selectedOutline.withValues(alpha: 0.22),
-    );
-    canvas.drawRRect(
-      halo,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = geometry.diceSide * 0.07
-        ..color = theme.selectedOutline.withValues(alpha: 0.85),
-    );
   }
 
   /// Alpha applied to the WAITING player's dice so the mover's pair reads as the
@@ -668,7 +632,6 @@ class BoardPainter extends CustomPainter {
         old.movingPlayer != movingPlayer ||
         old.hiddenChecker != hiddenChecker ||
         old.overlayChecker != overlayChecker ||
-        old.diceTapHint != diceTapHint ||
         !setEquals(old.usedDiceSlots, usedDiceSlots) ||
         !setEquals(old.strongHighlightLocations, strongHighlightLocations) ||
         !setEquals(old.highlightedSources, highlightedSources) ||
