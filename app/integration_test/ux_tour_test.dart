@@ -208,11 +208,11 @@ Future<void> _playMatch(
       }
     }
 
-    // The collapsed history strip only carries a score in the window between a
-    // tutor assessment landing and the next event overwriting the latest line,
-    // so grab it opportunistically the moment a mark shows.
-    if (!done.contains('strip') && _stripScored()) {
-      if (await _shot(tester, 'history_strip_scored')) done.add('strip');
+    // The permanent score sheet's cells keep their marks, so a scored sheet is
+    // reachable in every run — grab it as soon as BOTH columns have one, which
+    // is the shot that shows the whole point of the panel.
+    if (!done.contains('sheet') && _sheetMarks() >= 2) {
+      if (await _shot(tester, 'score_sheet_scored')) done.add('sheet');
     }
 
     if (c.matchOver) {
@@ -285,14 +285,8 @@ Future<void> _playMatch(
   if (!done.contains('match_end')) {
     _skipped.add('match-end dialog (match unfinished inside the time budget)');
   }
-  if (!done.contains('strip')) {
-    // Observed every run: `buildGameRecord` opens a new latest line on the
-    // opponent's RollEvent, which lands before the tutor's assessment of the
-    // human's move resolves — so the strip's mark, which only ever renders for
-    // the LATEST line, is never on screen during a vs-AI match.
-    _skipped.add('history strip with a score (the opponent rolls — and so '
-        'appends a new latest line — before the tutor assessment for the human '
-        'move lands)');
+  if (!done.contains('sheet')) {
+    _skipped.add('score sheet with marks in both columns');
   }
   if (!done.contains('dice_beat')) _skipped.add('opponent dice beat');
   if (!done.contains('cube')) _skipped.add('cube-offer dialog (AI never doubled)');
@@ -309,11 +303,14 @@ Future<void> _playMatch(
         "mover's points could play something)");
   }
   if (!done.contains('drag_hint')) _skipped.add('drag-hint SnackBar');
-  if (!done.contains('record')) _skipped.add('expanded history sheet');
+  if (!done.contains('sheet_scroll')) {
+    _skipped.add('score sheet scrolled back to an earlier turn (the game never '
+        'grew past the panel height)');
+  }
 }
 
-/// Drives one human move: the one-time hint SnackBar, the expanded record
-/// sheet, the tutor hint panel, a mid-entry selection, then the commit.
+/// Drives one human move: the one-time hint SnackBar, the score sheet scrolled
+/// back, the tutor hint panel, a mid-entry selection, then the commit.
 Future<void> _humanMove(
   WidgetTester tester,
   Set<String> done,
@@ -340,20 +337,16 @@ Future<void> _humanMove(
     }
   }
 
-  // The expanded record sheet, once a few lines (and ideally a mark) exist.
-  if (!done.contains('record') && moveNumber >= 3) {
-    final strip = find.byKey(const ValueKey('historyStrip'));
-    if (strip.evaluate().isNotEmpty) {
-      await tester.tap(strip);
-      await _beat(tester, const Duration(milliseconds: 600));
-      if (await _shot(tester, 'history_sheet_expanded')) done.add('record');
-      final close = find.byTooltip('Close');
-      if (close.evaluate().isNotEmpty) {
-        await tester.tap(close.first);
-      } else {
-        await tester.tapAt(Offset(_phone.width / 2, 60));
-      }
-      await _beat(tester, const Duration(milliseconds: 400));
+  // The score sheet dragged back to an earlier turn, once the game has outgrown
+  // the panel's fixed height. The panel auto-pins to the newest row, so this is
+  // the only way to see the manual-scroll state — and the next event re-pins it,
+  // so nothing needs undoing afterwards.
+  if (!done.contains('sheet_scroll') && moveNumber >= 6) {
+    final list = find.byKey(const ValueKey('scoreSheetList'));
+    if (list.evaluate().isNotEmpty) {
+      await tester.drag(list, const Offset(0, 40));
+      await _beat(tester, const Duration(milliseconds: 500));
+      if (await _shot(tester, 'score_sheet_scrolled')) done.add('sheet_scroll');
     }
   }
 
@@ -507,15 +500,15 @@ Future<void> _waitForEntry(WidgetTester tester) => _waitFor(
       const Duration(seconds: 20),
     );
 
-/// Whether the collapsed history strip currently shows an assessment mark.
-bool _stripScored() {
-  final strip = find.byKey(const ValueKey('historyStrip'));
-  if (strip.evaluate().isEmpty) return false;
-  for (final mark in ['Best', 'Good', 'Dubious', 'Error', 'Blunder']) {
-    final hit = find.descendant(of: strip, matching: find.textContaining(mark));
-    if (hit.evaluate().isNotEmpty) return true;
-  }
-  return false;
+/// How many assessment mark dots the score sheet is currently showing (one per
+/// assessed cell). Two or more means both columns are scored.
+int _sheetMarks() {
+  final sheet = find.byKey(const ValueKey('scoreSheet'));
+  if (sheet.evaluate().isEmpty) return 0;
+  return find
+      .descendant(of: sheet, matching: find.byIcon(Icons.circle))
+      .evaluate()
+      .length;
 }
 
 // --- Post-match screens ------------------------------------------------------
