@@ -370,10 +370,8 @@ Widget _settingsHarness(GameController c, AppSettings settings) => ProviderScope
 BoardView _boardViewOf(WidgetTester t) =>
     t.widget<BoardView>(find.byType(BoardView));
 
-/// Scopes [inner] to the HUD header row. The compact match score now appears
-/// TWICE on the screen — in the header and on the permanent score sheet's own
-/// context line ("Game 2 · You 1–0 AI · to 5") — so a header assertion has to
-/// say which one it means.
+/// Scopes [inner] to the two-row HUD header — the single home for the match
+/// score, the game number, the opponent/level and the pip counts.
 Finder _inHud(Finder inner) =>
     find.descendant(of: find.byKey(const ValueKey('hud')), matching: inner);
 
@@ -2541,8 +2539,8 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('the header names the columns You / the opponent and carries '
-        'the game + match score', (t) async {
+    testWidgets('the sheet header names the columns You / the opponent and '
+        'carries NO score line of its own', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -2556,10 +2554,11 @@ void main() {
           findsOneWidget);
       expect(
           find.descendant(of: header, matching: find.text('AI')), findsOneWidget);
-      expect(
-          find.descendant(
-              of: header, matching: find.text('Game 1 · You 0–0 AI · to 5')),
-          findsOneWidget);
+      // The game/score context lives in the HEADER now, and ONLY there — the
+      // duplicate that used to sit on this sheet is gone.
+      expect(_inHud(find.text('You 0–0 AI · to 5 · Game 1')), findsOneWidget);
+      expect(find.textContaining('· Game 1'), findsOneWidget,
+          reason: 'the match context is printed exactly once on the screen');
 
       c.disposeController();
     });
@@ -3223,17 +3222,13 @@ void main() {
               'assessments are discarded with its event log');
       expect(find.descendant(of: sheet, matching: find.textContaining('−0.')),
           findsNothing);
-      expect(
-          find.descendant(
-              of: find.byKey(const ValueKey('scoreSheetHeader')),
-              matching: find.text('Game 2 · You 0–1 AI · to 5')),
-          findsOneWidget,
+      expect(_inHud(find.text('You 0–1 AI · to 5 · Game 2')), findsOneWidget,
           reason: 'the header follows the match into game 2');
 
       c.disposeController();
     });
 
-    testWidgets('showScoring off leaves the sheet titled by game alone',
+    testWidgets('showScoring off leaves the HUD titled by game alone',
         (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
@@ -3245,11 +3240,9 @@ void main() {
       ));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
-      final header = find.byKey(const ValueKey('scoreSheetHeader'));
-      expect(find.descendant(of: header, matching: find.text('Game 1')),
-          findsOneWidget);
+      expect(_inHud(find.text('Game 1')), findsOneWidget);
       expect(find.textContaining('to 5'), findsNothing,
-          reason: 'the sheet hides the score exactly as the HUD does');
+          reason: 'the score half of the context line is dropped');
 
       c.disposeController();
     });
@@ -3333,9 +3326,10 @@ void main() {
       c.disposeController();
     });
 
-    testWidgets('the header score is not truncated on a phone', (t) async {
-      // The real capture surface: a 390x844 phone in portrait, where the header
-      // has the least room (score + cube chip + Double + overflow on one row).
+    testWidgets('the header context line is not truncated on a phone',
+        (t) async {
+      // The real capture surface: a 390x844 phone in portrait, where row 1 has
+      // the least room (context + cube chip + Double + overflow).
       await t.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -3348,12 +3342,12 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      const score = 'You 0–0 AI · to 3';
-      expect(find.text(score), findsOneWidget);
-      final paragraph = t.renderObject<RenderParagraph>(find.text(score));
+      const context = 'You 0–0 AI · to 3 · Game 1';
+      expect(find.text(context), findsOneWidget);
+      final paragraph = t.renderObject<RenderParagraph>(find.text(context));
       expect(paragraph.didExceedMaxLines, isFalse,
-          reason: 'the whole score must fit — no "You 0–0 AI · t…"');
-      // Still a single line (the header is one row by design).
+          reason: 'the whole line must fit — no "You 0–0 AI · t…"');
+      // Still a single line (row 1 is one line by design).
       expect(paragraph.size.height, lessThan(30));
 
       c.disposeController();
@@ -3638,8 +3632,9 @@ void main() {
     });
   });
 
-  group('pip counts', () {
-    testWidgets('the line is always present and names the local side', (t) async {
+  group('header detail row (opponent + pips)', () {
+    testWidgets('the row is always present and names the local side first',
+        (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -3652,14 +3647,16 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => c.awaitingHumanTurn);
 
-      expect(find.byKey(const ValueKey('pipLine')), findsOneWidget);
-      // The local (White) side is "You" and the computer takes the opponent
-      // label; Black has already played its opening 6-1 by this gate.
+      expect(find.byKey(const ValueKey('hudDetailRow')), findsOneWidget);
+      expect(find.byKey(const ValueKey('pipLine')), findsNothing,
+          reason: 'the standalone pip line under the board is gone');
+      // The local (White) side comes first; Black has already played its
+      // opening 6-1 by this gate.
       final white = c.state.board.pipCount(Player.white);
       final black = c.state.board.pipCount(Player.black);
       expect(white, 167, reason: 'White has not moved yet');
       expect(black, lessThan(167), reason: 'Black opened');
-      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+      expect(_inHud(find.text('vs AI · Pips $white–$black')), findsOneWidget);
 
       c.disposeController();
     });
@@ -3680,19 +3677,42 @@ void main() {
       await t.pumpWidget(_harness(c));
       await pumpUntil(t, () => human.pendingMoveRequest.value != null);
 
-      expect(find.text('Pips: You 167 · AI 167'), findsOneWidget);
+      expect(_inHud(find.text('vs AI · Pips 167–167')), findsOneWidget);
       human.submitMove(c.state.legalMoves.first);
       await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
 
       final white = c.state.board.pipCount(Player.white);
       final black = c.state.board.pipCount(Player.black);
       expect(white, lessThan(167), reason: 'White has played a move');
-      expect(find.text('Pips: You $white · AI $black'), findsOneWidget);
+      expect(_inHud(find.text('vs AI · Pips $white–$black')), findsOneWidget);
 
       c.disposeController();
     });
 
-    testWidgets('hot-seat keeps the neutral W / B naming', (t) async {
+    testWidgets('an opponent detail (the AI level) is named when supplied',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(MaterialApp(
+        home: GameScreen(
+            key: ValueKey(c), controller: c, opponentDetail: 'Easy'),
+      ));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      expect(_inHud(find.text('vs AI · Easy · Pips 167–167')), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('hot-seat names both sides neutrally', (t) async {
       await t.binding.setSurfaceSize(_surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -3703,10 +3723,40 @@ void main() {
         diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
       );
       await t.pumpWidget(_harness(c));
-      await pumpUntil(t, () => find.byKey(const ValueKey('pipLine')).evaluate().isNotEmpty);
+      await pumpUntil(
+          t,
+          () => find
+              .byKey(const ValueKey('hudDetailRow'))
+              .evaluate()
+              .isNotEmpty);
       await _dismissPassDevice(t);
 
-      expect(find.text('Pips: W 167 · B 167'), findsOneWidget);
+      expect(_inHud(find.text('White vs Black · Pips 167–167')), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('the header is a FIXED height, both rows always present',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final c = GameController(
+        white: LocalHumanAgent(),
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn);
+
+      final before = t.getSize(find.byKey(const ValueKey('hud'))).height;
+      expect(before, 64, reason: '40 + 16 + 2*4 — the documented budget');
+
+      // Play on: the header must not resize as phases come and go.
+      c.rollDice();
+      await pumpUntil(t, () => c.state.dice != null, maxFrames: 1200);
+      expect(t.getSize(find.byKey(const ValueKey('hud'))).height, before);
 
       c.disposeController();
     });

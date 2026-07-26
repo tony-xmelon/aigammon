@@ -229,6 +229,10 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          // The header's detail row names the level you chose ("vs AI · Easy ·
+          // Pips …"). Only meaningful against the computer.
+          opponentDetail:
+              widget.vsComputer ? _difficultyLabel(_difficulty) : null,
           persistedMatchId: matchIdFuture,
           timings: settings.timings,
           interactionOptions: BoardInteractionOptions(
@@ -323,6 +327,15 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
     return (RepositoryPersistence(repo, matchIdFuture), matchIdFuture);
   }
 }
+
+/// The display name of a difficulty, matching this screen's own segment labels
+/// so the header's "vs AI · Easy" reads back exactly what was picked here.
+String _difficultyLabel(Difficulty d) => switch (d) {
+      Difficulty.easy => 'Easy',
+      Difficulty.medium => 'Medium',
+      Difficulty.hard => 'Hard',
+      Difficulty.expert => 'Expert',
+    };
 
 /// A labelled setup row: a caption above its control.
 class _Section extends StatelessWidget {

@@ -102,6 +102,7 @@ class GameScreen extends StatefulWidget {
     this.dragHintShown = true,
     this.onDragHintShown,
     this.opponentLabel = 'AI',
+    this.opponentDetail,
   });
 
   final MatchController controller;
@@ -159,6 +160,12 @@ class GameScreen extends StatefulWidget {
   /// IGNORED in hot-seat, where both sides are local and neither of them is
   /// "you": that header keeps the neutral "W 2–1 B · to 5".
   final String opponentLabel;
+
+  /// An extra qualifier for the opponent on the header's second row — the AI
+  /// difficulty ("Easy", "Expert") where the caller knows it, giving "vs AI ·
+  /// Easy · Pips 129–78". Null wherever there is no such thing to say (hot-seat,
+  /// online, a bare test harness); the row keeps its reserved height regardless.
+  final String? opponentDetail;
 
   /// The live tutor, or `null` when tutor mode is off. When non-null the screen
   /// surfaces a hint button (top-5 plays), post-move assessments for EVERY move
@@ -471,7 +478,7 @@ class _GameScreenState extends State<GameScreen> {
   /// cannot be shown during a build/rebuild, hence the post-frame deferral.
   ///
   /// The SnackBar floats [SnackBarBehavior.floating] with a bottom margin that
-  /// clears the fixed 64px bottom action bar and the pip line above it, so
+  /// clears the fixed 64px bottom action bar, so
   /// Confirm / Roll stay visible and tappable — the hint is genuinely
   /// non-blocking, not just logically so. It deliberately does NOT clear the
   /// whole score sheet: a margin tall enough for that would put the tip halfway
@@ -916,6 +923,7 @@ class _GameScreenState extends State<GameScreen> {
                   controller: _c,
                   showScoring: widget.showScoring,
                   opponentLabel: widget.opponentLabel,
+                  opponentDetail: widget.opponentDetail,
                 ),
                 Expanded(
                   // The board's slot. An error banner FLOATS at its top edge
@@ -1000,7 +1008,6 @@ class _GameScreenState extends State<GameScreen> {
                   ),
                 ),
                 _scoreSheet(),
-                _pipLine(),
                 _bottomRegion(moveSide),
               ],
             ),
@@ -1339,17 +1346,30 @@ class _GameScreenState extends State<GameScreen> {
   // --- Score sheet -----------------------------------------------------------
 
   /// Total height of the always-present score sheet. FIXED and unconditional,
-  /// for the same reason as [_pipLineHeight] and the action bar: the board FILLS
-  /// the slot above it, so a panel that grew with its content (or came and went)
-  /// would resize the board on every turn (F6). Budgeted as
-  /// [_sheetHeaderHeight] + a divider + ~3 visible rows; on a 390x844 phone it
-  /// leaves the board a ~556px slot (aspect ~0.70, inside the
+  /// for the same reason as the action bar: the board FILLS the slot above it,
+  /// so a panel that grew with its content (or came and went) would resize the
+  /// board on every turn (F6).
+  ///
+  /// ## The screen's fixed-height budget
+  ///
+  /// Everything outside the board's slot is a constant for a given screen, so
+  /// the board can never reflow mid-match:
+  ///
+  ///     header ([_Hud._hudHeight])       64  (40 + 16 + 2*4)
+  ///     score sheet (this)              112
+  ///     action bar                       64
+  ///     tutor advice slot (tutor only)   28
+  ///
+  /// Round 6 rebalanced it: the header grew from one row to two (+8) while the
+  /// standalone 20px pip line was deleted outright, so the board's slot GAINED
+  /// 12px. Inside the unchanged 112px sheet, dropping its duplicate context line
+  /// moved 18px from chrome to move rows (~5 rows visible, up from ~3). On a
+  /// 390x844 phone the board's slot is ~568px (aspect ~0.69, inside the
   /// [BoardView.minAspect] clamp).
   static const double _scoreSheetHeight = 112;
 
-  /// Height of the sheet's two header lines (the game/score context, then the
-  /// column labels).
-  static const double _sheetHeaderHeight = 34;
+  /// Height of the sheet's single header line (the two column labels).
+  static const double _sheetHeaderHeight = 16;
 
   /// Width of the turn-number gutter left of the two move columns, shared by the
   /// header's column labels and every row so the columns line up.
@@ -1359,7 +1379,7 @@ class _GameScreenState extends State<GameScreen> {
   static const double _sheetInset = 8;
 
   /// The ALWAYS-VISIBLE two-column score sheet, sitting between the board and
-  /// the pip line. This replaced a 32px collapsed strip that expanded into a
+  /// the action bar. This replaced a 32px collapsed strip that expanded into a
   /// scrimmed overlay sheet — a design the reported feedback rejected outright
   /// ("move history still looks like a popup"). Nothing here opens or closes:
   /// the whole game so far is on screen, scrollable, at all times.
@@ -1421,7 +1441,8 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Which side owns the sheet's LEFT column: the single locally-human side
   /// where there is one (so "You" reads first, as in the header score and the
-  /// pip line), else White — hot-seat, where both sides are local and neither is
+  /// header's pip counts), else White — hot-seat, where both sides are local
+  /// and neither is
   /// "you", and an AI-vs-AI harness with no local side at all.
   Player _sheetLeftSide() {
     final localWhite = _c.isLocalHuman(Player.white);
@@ -1432,7 +1453,7 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Names for the two columns: "You" / [GameScreen.opponentLabel] where exactly
   /// one side is local, else the neutral "W" / "B". Same rule as
-  /// [_compactScore] and [_pipLine].
+  /// [_compactScore] and the header's detail row.
   (String, String) _sheetColumnLabels(Player leftSide) {
     final localWhite = _c.isLocalHuman(Player.white);
     final localBlack = _c.isLocalHuman(Player.black);
@@ -1442,9 +1463,14 @@ class _GameScreenState extends State<GameScreen> {
     return ('You', widget.opponentLabel);
   }
 
-  /// The sheet's header: the game/score context line ("Game 2 · You 1–0 AI ·
-  /// to 3", or just "Game 2" when scoring is switched off), then the column
-  /// labels aligned over the two move columns.
+  /// The sheet's header: just the two column labels, aligned over the move
+  /// columns.
+  ///
+  /// It used to carry a game/score context line above them ("Game 2 · You 1–0
+  /// AI · to 3") — a verbatim duplicate of the header's own score, which is the
+  /// "duplicate info" the reported feedback objected to. That line is gone and
+  /// the HEADER is now the only place summary information lives; the sheet keeps
+  /// its overall height and spends the reclaimed 18px on move rows instead.
   Widget _sheetHeader(Player leftSide) {
     final scheme = Theme.of(context).colorScheme;
     final (left, right) = _sheetColumnLabels(leftSide);
@@ -1459,57 +1485,16 @@ class _GameScreenState extends State<GameScreen> {
       height: _sheetHeaderHeight,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: _sheetInset),
-        child: Column(
+        child: Row(
           children: [
-            SizedBox(
-              height: 18,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                // Scale-to-fit rather than ellipsize: an 11-point match with
-                // two-digit scores outgrows a narrow phone, and a slightly
-                // smaller line still reads (mirrors the HUD score).
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    _sheetScoreContext(),
-                    maxLines: 1,
-                    softWrap: false,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurface,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(
-              height: 15,
-              child: Row(
-                children: [
-                  const SizedBox(width: _sheetGutter),
-                  Expanded(child: Text(left, style: labelStyle)),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text(right, style: labelStyle)),
-                ],
-              ),
-            ),
+            const SizedBox(width: _sheetGutter),
+            Expanded(child: Text(left, style: labelStyle)),
+            const SizedBox(width: 6),
+            Expanded(child: Text(right, style: labelStyle)),
           ],
         ),
       ),
     );
-  }
-
-  /// The sheet's context line: "Game 2 · You 1–0 AI · to 3", reusing the header's
-  /// [_compactScore] so the two can never disagree. Drops the score half when
-  /// [GameScreen.showScoring] is off, exactly as the HUD does.
-  String _sheetScoreContext() {
-    // `gameNumber` is 0 until the first game starts; the sheet is on screen from
-    // the first frame, so show "Game 1" rather than "Game 0".
-    final number = _c.gameNumber < 1 ? 1 : _c.gameNumber;
-    if (!widget.showScoring) return 'Game $number';
-    return 'Game $number · ${_compactScore(_c, widget.opponentLabel)}';
   }
 
   /// One sheet row: a numbered two-cell turn row, or a full-width span row.
@@ -1679,58 +1664,6 @@ class _GameScreenState extends State<GameScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  /// Height of the always-present pip-count line. Like the action bar and the
-  /// advice slot it is FIXED and unconditional: the board fills the slot above
-  /// it, so a line that came and went would resize the board (F6).
-  static const double _pipLineHeight = 20;
-
-  /// The live pip counts for both sides, sitting with the tutor metrics just
-  /// under the score sheet ("missing pip count along the tutor metrics").
-  ///
-  /// Named from the local player's point of view where there is one — "Pips:
-  /// You 132 · AI 145", reusing [GameScreen.opponentLabel] so an online match
-  /// reads "Opp" — and neutrally ("W … · B …") in hot-seat, where both sides are
-  /// local and neither of them is "you". Same rule as the header score.
-  ///
-  /// Counts come from the COMMITTED board, so they step once per move rather
-  /// than flickering through a half-entered turn.
-  Widget _pipLine() {
-    final scheme = Theme.of(context).colorScheme;
-    final board = _c.state.board;
-    final white = board.pipCount(Player.white);
-    final black = board.pipCount(Player.black);
-    final localWhite = _c.isLocalHuman(Player.white);
-    final localBlack = _c.isLocalHuman(Player.black);
-    final soleLocal = localWhite != localBlack;
-    final String text;
-    if (!soleLocal) {
-      text = 'Pips: W $white · B $black';
-    } else {
-      final (mine, theirs) =
-          localWhite ? (white, black) : (black, white);
-      text = 'Pips: You $mine · ${widget.opponentLabel} $theirs';
-    }
-    return SizedBox(
-      key: const ValueKey('pipLine'),
-      height: _pipLineHeight,
-      child: Center(
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            text,
-            maxLines: 1,
-            softWrap: false,
-            style: TextStyle(
-              color: scheme.onSurfaceVariant,
-              fontSize: 12,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -2025,18 +1958,62 @@ enum _MenuAction {
   resignBackgammon,
 }
 
-// --- HUD (single row) --------------------------------------------------------
+// --- HUD (two rows) ----------------------------------------------------------
 
-/// The single-row header: a compact score, an optional Crawford badge, the cube
-/// chip, a spacer, an optional thinking dot, then the Double button and the
-/// overflow (⋮) menu holding Resign. Keeping Double/Resign up here (rather than
-/// in the bottom bar) puts the risky actions away from where thumbs rest.
+/// The header — the SINGLE home for every piece of match summary information,
+/// in two compact rows of FIXED total height ([_hudHeight]).
+///
+/// * Row 1, the match context: "You 1–0 AI · to 3 · Game 2", an optional
+///   Crawford badge and the cube chip, then (right) the thinking dot, the Double
+///   button and the overflow (⋮) menu.
+/// * Row 2, small and muted: who you are playing and the live pip counts —
+///   "vs AI · Easy · Pips 129–78" (hot-seat "White vs Black · Pips …", online
+///   "vs Opp · Pips …").
+///
+/// ## Why everything moved up here
+///
+/// The reported "duplicate info in the header and the line under the board. best
+/// use the header for all summary info … and leave the bottom of the screen for
+/// the move history and actions". The game number and match score used to be
+/// printed a SECOND time on the score sheet's own context line, and the pip
+/// counts had a standalone 20px line of their own between the sheet and the
+/// action bar. Both are gone: the sheet is now nothing but move history (it
+/// gained the context line's height, so more turns are visible within the same
+/// 112px), and the space under the board belongs to history and actions alone.
+///
+/// ## Fixed height
+///
+/// Both rows are ALWAYS present — row 2 reserves its height even with nothing
+/// worth saying — for the same reason the action bar is pinned to 64px: the
+/// board fills the slot beneath this, so a header that grew or shrank mid-match
+/// (a Crawford badge appearing, a name getting longer) would resize the board
+/// (F6). Each row scales to fit as ONE unit (the [FittedBox] idiom), so no width
+/// or system text scale can overflow or clip it.
+///
+/// Keeping Double/Surrender up here (rather than in the bottom bar) puts the
+/// risky actions away from where thumbs rest.
 class _Hud extends StatelessWidget {
   const _Hud({
     required this.controller,
     this.showScoring = true,
     this.opponentLabel = 'AI',
+    this.opponentDetail,
   });
+
+  /// Height of row 1 (the match context plus the action controls). Sized for the
+  /// ⋮ button, the tallest thing in it.
+  static const double _row1Height = 40;
+
+  /// Height of row 2 (the muted opponent/pips line).
+  static const double _row2Height = 16;
+
+  /// Padding above row 1 and below row 2.
+  static const double _verticalPadding = 4;
+
+  /// The header's FIXED total height — the top half of the screen's layout
+  /// budget (see [_GameScreenState._scoreSheetHeight] for the whole table).
+  static const double _hudHeight =
+      _row1Height + _row2Height + 2 * _verticalPadding;
 
   final MatchController controller;
 
@@ -2045,6 +2022,11 @@ class _Hud extends StatelessWidget {
 
   /// What the score calls the non-local side. See [GameScreen.opponentLabel].
   final String opponentLabel;
+
+  /// An extra qualifier for the opponent on row 2 — the AI difficulty ("Easy")
+  /// where the caller knows it. Null (hot-seat, online, a bare test harness)
+  /// simply drops that segment; the row keeps its height either way.
+  final String? opponentDetail;
 
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
@@ -2070,7 +2052,7 @@ class _Hud extends StatelessWidget {
   /// enabled-ness was built from.
   ///
   /// Same race, and the same reason, as [_GameScreenState._rollDice]: Double and
-  /// Resign share the pre-roll gate with Roll. The enabled-ness is baked into
+  /// Surrender share the pre-roll gate with Roll. The enabled-ness is baked into
   /// the last build, so two presses inside one frame both run the callback that
   /// frame captured while the match moves on underneath them.
   ///
@@ -2100,121 +2082,202 @@ class _Hud extends StatelessWidget {
     controller.offerResign(value);
   }
 
+  /// Row 1's text: the match context — "You 1–0 AI · to 3 · Game 2", or just
+  /// "Game 2" when the score is switched off.
+  ///
+  /// `gameNumber` is 0 until the first game starts, and the header is on screen
+  /// from the first frame, so it reads "Game 1" rather than "Game 0".
+  String _contextLine() {
+    final number = controller.gameNumber < 1 ? 1 : controller.gameNumber;
+    if (!showScoring) return 'Game $number';
+    return '${_compactScore(controller, opponentLabel)} · Game $number';
+  }
+
+  /// Row 2's text: who is playing, and the live pip counts — "vs AI · Easy ·
+  /// Pips 129–78".
+  ///
+  /// Named from the local player's point of view where there IS one (so the
+  /// first pip count is always yours, matching the score's "You" first), and
+  /// neutrally as "White vs Black" in hot-seat — where both sides are local and
+  /// neither of them is "you" — and for a controller with no local side at all.
+  /// Same rule as [_compactScore].
+  ///
+  /// Pip counts come from the COMMITTED board, so they step once per move rather
+  /// than flickering through a half-entered turn.
+  String _detailLine() {
+    final board = controller.state.board;
+    final white = board.pipCount(Player.white);
+    final black = board.pipCount(Player.black);
+    final localWhite = controller.isLocalHuman(Player.white);
+    final localBlack = controller.isLocalHuman(Player.black);
+    final soleLocal = localWhite != localBlack;
+    final String who;
+    final int mine;
+    final int theirs;
+    if (!soleLocal) {
+      who = 'White vs Black';
+      (mine, theirs) = (white, black);
+    } else {
+      who = 'vs $opponentLabel';
+      (mine, theirs) = localWhite ? (white, black) : (black, white);
+    }
+    final detail = opponentDetail;
+    return [
+      who,
+      if (detail != null && detail.isNotEmpty) detail,
+      'Pips $mine–$theirs',
+    ].join(' · ');
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = controller.state;
     final cube = state.cube;
+    final scheme = Theme.of(context).colorScheme;
     // The thinking dot reflects a genuine AI await, not a human's own decision
     // (the controller keeps `isThinking` true while it awaits a human move too).
     final showThinking = controller.isThinking && !_humanDeciding;
-    // Double/Resign are only meaningful at the human's own pre-roll gate.
+    // Double is only meaningful at the human's own pre-roll gate.
     final atGate = controller.awaitingHumanTurn;
 
     return Material(
-      // Keyed so tests can scope a score assertion to the HEADER: the score
-      // string now also appears on the score sheet's own context line, so an
-      // unscoped `find.text('You 1–0 AI · to 5')` matches twice.
+      // Keyed so tests can scope an assertion to the HEADER.
       key: const ValueKey('hud'),
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: Row(
-          children: [
-            // The left group (score, Crawford badge, cube chip) takes ALL the
-            // space the right-hand controls leave. A bare `Flexible` + `Spacer`
-            // split the free space evenly instead, which truncated the longer
-            // "You 0–1 AI · to 3" score to "You 0–1 AI · t…" on a phone.
-            //
-            // The group scales to fit as ONE unit rather than flexing the score
-            // alone: a clipped score ("You 0–1 AI · t…") tells the player
-            // nothing, whereas a slightly smaller row still reads — and the
-            // badge and chip beside it are RIGID, so a flexing score could not
-            // absorb them. In a 1-point match (Crawford from the first roll)
-            // that rigid pair plus the score overflowed the row by a hair on a
-            // 390pt phone. Scaling the whole group can never overflow, at any
-            // width or system text scale, and only kicks in when the group
-            // genuinely outgrows the row — long names, two-digit scores, an
-            // 11-point match, the Crawford badge.
-            Expanded(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
+      color: scheme.surfaceContainerHighest,
+      // Pinned rather than merely implied by the rows: the header's height is
+      // half the screen's fixed layout budget, so it is stated once, here.
+      child: SizedBox(
+        height: _hudHeight,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: 12, vertical: _verticalPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                key: const ValueKey('hudContextRow'),
+                height: _row1Height,
                 child: Row(
-                  // Unbounded inside the FittedBox: measured at natural size,
-                  // then scaled — so no child here may be Flexible.
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // The score segment is hidden entirely when scoring is off;
-                    // the rest of the header (Crawford badge, cube chip, Double,
-                    // overflow) stays.
-                    if (showScoring)
-                      Text(
-                        _compactScore(controller, opponentLabel),
-                        maxLines: 1,
-                        softWrap: false,
-                        style: Theme.of(context).textTheme.titleSmall,
+                    // The left group (context line, Crawford badge, cube chip)
+                    // takes ALL the space the right-hand controls leave. A bare
+                    // `Flexible` + `Spacer` split the free space evenly instead,
+                    // which truncated the longer line to "You 0–1 AI · t…" on a
+                    // phone.
+                    //
+                    // The group scales to fit as ONE unit rather than flexing
+                    // the text alone: a clipped context line tells the player
+                    // nothing, whereas a slightly smaller row still reads — and
+                    // the badge and chip beside it are RIGID, so a flexing text
+                    // could not absorb them. In a 1-point match (Crawford from
+                    // the first roll) that rigid pair plus the line overflowed
+                    // the row by a hair on a 390pt phone. Scaling the whole
+                    // group can never overflow, at any width or text scale.
+                    Expanded(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          // Unbounded inside the FittedBox: measured at natural
+                          // size, then scaled — no child here may be Flexible.
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _contextLine(),
+                              maxLines: 1,
+                              softWrap: false,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            if (state.isCrawfordGame) ...[
+                              const SizedBox(width: 8),
+                              const _MiniBadge(
+                                  icon: Icons.star, label: 'Crawford'),
+                            ],
+                            // The cube chip is hidden in a cubeless match.
+                            if (!controller.cubeless) ...[
+                              const SizedBox(width: 8),
+                              _CubeChip(value: cube.value, owner: cube.owner),
+                            ],
+                          ],
+                        ),
                       ),
-                    if (state.isCrawfordGame) ...[
-                      if (showScoring) const SizedBox(width: 8),
-                      const _MiniBadge(icon: Icons.star, label: 'Crawford'),
-                    ],
-                    // The cube chip is hidden in a cubeless match (no cube).
-                    if (!controller.cubeless) ...[
+                    ),
+                    if (showThinking) ...[
+                      const _ThinkingDot(),
                       const SizedBox(width: 8),
-                      _CubeChip(value: cube.value, owner: cube.owner),
                     ],
+                    // The Double button is omitted entirely in a cubeless match.
+                    if (!controller.cubeless)
+                      OutlinedButton.icon(
+                        onPressed:
+                            atGate && _doublingLegal ? _offerDouble : null,
+                        icon:
+                            const Icon(Icons.control_point_duplicate, size: 16),
+                        label: const Text('Double'),
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        ),
+                      ),
+                    // Resign is the menu's ONLY content now that "Game record"
+                    // is gone (the record is the permanent score sheet under the
+                    // board), and it is legal only at the human's own pre-roll
+                    // gate — so away from the gate the ⋮ is DISABLED rather than
+                    // removed. An itemBuilder that returned nothing would assert
+                    // on open, and dropping the button outright would shuffle
+                    // the header's right-hand group every turn.
+                    PopupMenuButton<_MenuAction>(
+                      icon: const Icon(Icons.more_vert),
+                      tooltip: 'More actions',
+                      enabled: atGate,
+                      onSelected: (action) {
+                        switch (action) {
+                          case _MenuAction.resignSingle:
+                            _offerResign(ResignValue.single);
+                          case _MenuAction.resignGammon:
+                            _offerResign(ResignValue.gammon);
+                          case _MenuAction.resignBackgammon:
+                            _offerResign(ResignValue.backgammon);
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                            value: _MenuAction.resignSingle,
+                            child: Text('Resign — single')),
+                        PopupMenuItem(
+                            value: _MenuAction.resignGammon,
+                            child: Text('Resign — gammon')),
+                        PopupMenuItem(
+                            value: _MenuAction.resignBackgammon,
+                            child: Text('Resign — backgammon')),
+                      ],
+                    ),
                   ],
                 ),
               ),
-            ),
-            if (showThinking) ...[
-              const _ThinkingDot(),
-              const SizedBox(width: 8),
-            ],
-            // The Double button is omitted entirely in a cubeless match.
-            if (!controller.cubeless)
-              OutlinedButton.icon(
-                onPressed: atGate && _doublingLegal ? _offerDouble : null,
-                icon: const Icon(Icons.control_point_duplicate, size: 16),
-                label: const Text('Double'),
-                style: OutlinedButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+              SizedBox(
+                key: const ValueKey('hudDetailRow'),
+                height: _row2Height,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _detailLine(),
+                      maxLines: 1,
+                      softWrap: false,
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            // Resign is the menu's ONLY content now that "Game record" is gone
-            // (the record is the permanent score sheet under the board), and it
-            // is legal only at the human's own pre-roll gate — so away from the
-            // gate the ⋮ is DISABLED rather than removed. An itemBuilder that
-            // returned nothing would assert on open, and dropping the button
-            // outright would shuffle the header's right-hand group every turn.
-            PopupMenuButton<_MenuAction>(
-              icon: const Icon(Icons.more_vert),
-              tooltip: 'More actions',
-              enabled: atGate,
-              onSelected: (action) {
-                switch (action) {
-                  case _MenuAction.resignSingle:
-                    _offerResign(ResignValue.single);
-                  case _MenuAction.resignGammon:
-                    _offerResign(ResignValue.gammon);
-                  case _MenuAction.resignBackgammon:
-                    _offerResign(ResignValue.backgammon);
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                    value: _MenuAction.resignSingle,
-                    child: Text('Resign — single')),
-                PopupMenuItem(
-                    value: _MenuAction.resignGammon,
-                    child: Text('Resign — gammon')),
-                PopupMenuItem(
-                    value: _MenuAction.resignBackgammon,
-                    child: Text('Resign — backgammon')),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

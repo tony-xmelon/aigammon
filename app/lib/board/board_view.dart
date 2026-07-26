@@ -339,8 +339,8 @@ class BoardInteractionOptions {
 /// the roomier middle band).
 ///
 /// The "board never reflows" invariant survives: the slot is fixed for a given
-/// screen (a fixed-height HUD above, and below it a fixed-height score sheet,
-/// pip line and action bar), so the board size is constant while the screen is —
+/// screen (a fixed-height HUD above, and below it a fixed-height score sheet and
+/// action bar), so the board size is constant while the screen is —
 /// nothing those regions do mid-turn can resize it.
 class BoardView extends StatefulWidget {
   const BoardView({
