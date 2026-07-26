@@ -69,25 +69,23 @@ void main() {
         final barUnion = g
             .barRect(Player.white)
             .expandToInclude(g.barRect(Player.black));
-        for (final mover in Player.values) {
-          final moverRect = g.diceRect(mover, mover: mover);
-          final waiterRect = g.diceRect(mover.opponent, mover: mover);
-          for (final r in [moverRect, waiterRect]) {
-            // Inside the board bounds.
-            expect(r.left, greaterThanOrEqualTo(-0.5));
-            expect(r.right, lessThanOrEqualTo(boardSize.width + 0.5));
-            // Clear of the central bar strip.
-            expect(r.overlaps(barUnion), isFalse, reason: 'dice overlap bar');
-            // Clear of every triangle — dice live in the empty middle gap.
-            for (var i = 0; i < 24; i++) {
-              expect(r.overlaps(g.pointRect(i)), isFalse,
-                  reason: 'dice overlap point $i');
-            }
+        final whiteRect = g.diceRect(Player.white);
+        final blackRect = g.diceRect(Player.black);
+        for (final r in [whiteRect, blackRect]) {
+          // Inside the board bounds.
+          expect(r.left, greaterThanOrEqualTo(-0.5));
+          expect(r.right, lessThanOrEqualTo(boardSize.width + 0.5));
+          // Clear of the central bar strip.
+          expect(r.overlaps(barUnion), isFalse, reason: 'dice overlap bar');
+          // Clear of every triangle — dice live in the empty middle gap.
+          for (var i = 0; i < 24; i++) {
+            expect(r.overlaps(g.pointRect(i)), isFalse,
+                reason: 'dice overlap point $i');
           }
-          // The mover and waiter pairs never collide.
-          expect(moverRect.overlaps(waiterRect), isFalse,
-              reason: 'the two dice pairs overlap');
         }
+        // The two pairs never collide.
+        expect(whiteRect.overlaps(blackRect), isFalse,
+            reason: 'the two dice pairs overlap');
       });
 
       test('five checkers stack inside the point rect at full spacing', () {
@@ -191,7 +189,7 @@ void main() {
           for (final r in [
             g.barRect(player),
             g.offRect(player),
-            g.diceRect(player, mover: Player.white),
+            g.diceRect(player),
           ]) {
             expect(field.inflate(1e-6).contains(r.topLeft), isTrue);
             expect(field.inflate(1e-6).contains(r.bottomRight), isTrue);
@@ -238,26 +236,22 @@ void main() {
       });
 
       test('the dice tap target is generous and covers the pair', () {
-        for (final mover in Player.values) {
-          for (final player in Player.values) {
-            final pair = g.diceRect(player, mover: mover);
-            final target = g.diceTapRect(player, mover: mover);
-            expect(target.contains(pair.topLeft), isTrue);
-            expect(target.contains(pair.bottomRight), isTrue);
-            expect(target.width,
-                greaterThanOrEqualTo(BoardGeometry.minDiceTapTarget - 1e-6));
-            expect(target.height,
-                greaterThanOrEqualTo(BoardGeometry.minDiceTapTarget - 1e-6));
-          }
-          // The two players' targets stay disjoint, so a tap is never ambiguous
-          // about which pair it hit.
-          expect(
-            g
-                .diceTapRect(Player.white, mover: mover)
-                .overlaps(g.diceTapRect(Player.black, mover: mover)),
-            isFalse,
-          );
+        for (final player in Player.values) {
+          final pair = g.diceRect(player);
+          final target = g.diceTapRect(player);
+          expect(target.contains(pair.topLeft), isTrue);
+          expect(target.contains(pair.bottomRight), isTrue);
+          expect(target.width,
+              greaterThanOrEqualTo(BoardGeometry.minDiceTapTarget - 1e-6));
+          expect(target.height,
+              greaterThanOrEqualTo(BoardGeometry.minDiceTapTarget - 1e-6));
         }
+        // The two players' targets stay disjoint, so a tap is never ambiguous
+        // about which pair it hit.
+        expect(
+          g.diceTapRect(Player.white).overlaps(g.diceTapRect(Player.black)),
+          isFalse,
+        );
       });
 
       test('a checker fits its column and a five-stack fits its point', () {
@@ -314,20 +308,29 @@ void main() {
     expect(p12.dy, lessThan(size.height / 2));
   });
 
-  test('the mover dice sit right of the bar, the waiter left (white bottom)',
-      () {
-    final g = BoardGeometry(size, whiteAtBottom: true);
-    for (final mover in Player.values) {
-      final moverRect = g.diceRect(mover, mover: mover);
-      final waiterRect = g.diceRect(mover.opponent, mover: mover);
-      expect(moverRect.center.dx, greaterThan(size.width / 2),
-          reason: 'mover pair in the right half');
-      expect(waiterRect.center.dx, lessThan(size.width / 2),
-          reason: 'waiter pair mirrored in the left half');
-      // Vertically both sit in the empty middle band (near centre).
-      expect(moverRect.center.dy, closeTo(size.height / 2, 1e-6));
-      expect(waiterRect.center.dy, closeTo(size.height / 2, 1e-6));
-    }
+  test('each dice pair has a FIXED home: the bottom side right of the bar', () {
+    // Anchored per PLAYER, not per mover: nothing about whose turn it is can move
+    // a pair, so a pair cannot jump across the board mid-tumble.
+    final bottomWhite = BoardGeometry(size, whiteAtBottom: true);
+    expect(bottomWhite.diceRect(Player.white).center.dx,
+        greaterThan(size.width / 2),
+        reason: "the bottom player's pair sits right of the bar");
+    expect(bottomWhite.diceRect(Player.black).center.dx,
+        lessThan(size.width / 2),
+        reason: "the top player's pair is mirrored into the left half");
+    // Vertically both sit in the empty middle band (near centre).
+    expect(bottomWhite.diceRect(Player.white).center.dy,
+        closeTo(size.height / 2, 1e-6));
+    expect(bottomWhite.diceRect(Player.black).center.dy,
+        closeTo(size.height / 2, 1e-6));
+
+    // A hot-seat flip rotates the whole layout, so the rule the player SEES
+    // holds either way round: whoever is at the bottom owns the right-hand pair.
+    final bottomBlack = BoardGeometry(size, whiteAtBottom: false);
+    expect(bottomBlack.diceRect(Player.black).center.dx,
+        greaterThan(size.width / 2));
+    expect(bottomBlack.diceRect(Player.white).center.dx,
+        lessThan(size.width / 2));
   });
 
   test('the board fills the FIELD width symmetrically (no side tray)', () {
@@ -407,7 +410,7 @@ void main() {
       expect(tall.diceSide, greaterThan(tall.checkerRadius * 2.2));
       expect(tall.diceSide, lessThanOrEqualTo(tall.checkerRadius * 3.2 + 1e-9));
       // The whole PAIR clears the bar and the right edge.
-      final pair = tall.diceRect(Player.white, mover: Player.white);
+      final pair = tall.diceRect(Player.white);
       expect(pair.left, greaterThan(tall.barRect(Player.white).right));
       expect(pair.right, lessThan(portrait.width));
       // The landscape board's narrow band still binds first (unchanged look).

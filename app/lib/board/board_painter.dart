@@ -18,7 +18,7 @@ class BoardPainter extends CustomPainter {
     required this.theme,
     this.whiteDice,
     this.blackDice,
-    this.diceMover,
+    this.activeDiceSide,
     this.cube,
     this.highlightedSources = const {},
     this.highlightedDestinations = const {},
@@ -45,10 +45,33 @@ class BoardPainter extends CustomPainter {
   /// pips), or `null` when Black has not rolled yet this game.
   final Dice? blackDice;
 
-  /// The side currently to move: its pair renders in the right half at full
-  /// opacity; the waiting side's pair renders in the mirrored left half, dimmed.
-  /// Defaults to [Player.white] when `null` (a bare display board).
-  final Player? diceMover;
+  /// The side whose dice are LIVE right now — its pair paints at full opacity,
+  /// the other pair dimmed to [_waitingDiceOpacity]. `null` dims BOTH pairs: no
+  /// roll is live (nobody has rolled yet this turn, or a turn is over and the
+  /// next roll has not happened).
+  ///
+  /// This is a PRESENTATION input, deliberately not `state.turn`. It used to be
+  /// the mover, read off the state the board was painted against, which was wrong
+  /// twice over:
+  ///
+  /// * With an instant opponent (the engine on device) a whole opponent turn —
+  ///   [RollEvent], [MoveEvent] and the turn advance back to the human — folds
+  ///   inside one microtask chain, so `state.turn` is the HUMAN for the entire
+  ///   time the opponent's roll is being presented. The human's stale pair
+  ///   therefore lit up while the opponent moved ("my dice gets enabled while the
+  ///   opponent moves"), and the opponent's tumbling dice rendered in the DIMMED
+  ///   half, all but invisible.
+  /// * Even with a slow opponent, "whose turn is it" is not what the emphasis
+  ///   should mean. Bright reads as *this roll is live and in play*, so the local
+  ///   player's own pair must stay dim at their pre-roll gate and again the
+  ///   moment they confirm — until they roll again.
+  ///
+  /// The owner of the presentation (the game screen) therefore states this
+  /// explicitly: the ROLLER while a roll beat or its settle pause runs, the MOVER
+  /// while a move is being entered, and `null` at every quiet moment in between.
+  /// Positions are unaffected — each pair has a fixed home (see
+  /// [BoardGeometry.diceRect]), so only the emphasis moves.
+  final Player? activeDiceSide;
 
   final CubeState? cube;
 
@@ -450,27 +473,27 @@ class BoardPainter extends CustomPainter {
   /// Paints BOTH players' persistent dice pairs: the WHITE pair (white bodies,
   /// dark pips) and the BLACK pair (dark bodies, light pips). Each pair carries a
   /// per-player rim (the same inverted-rim rule as the checkers) so it reads on
-  /// the felt. The [diceMover]'s pair is full-opacity in the right half; the
-  /// waiting pair is dimmed in the mirrored left half. A pair with no roll yet
-  /// this game renders as blank dimmed outlines (no pips).
+  /// the felt. Each pair sits in its OWN fixed home (see
+  /// [BoardGeometry.diceRect]); the [activeDiceSide]'s pair is full-opacity and
+  /// every other pair is dimmed — with `null` meaning both are dim. A pair with no
+  /// roll yet this game renders as blank dimmed outlines (no pips).
   void _paintDice(Canvas canvas) {
-    final mover = diceMover ?? Player.white;
-    _paintPlayerDice(canvas, Player.white, whiteDice, mover);
-    _paintPlayerDice(canvas, Player.black, blackDice, mover);
+    _paintPlayerDice(canvas, Player.white, whiteDice);
+    _paintPlayerDice(canvas, Player.black, blackDice);
   }
 
-  /// Alpha applied to the WAITING player's dice so the mover's pair reads as the
-  /// live roll while the opponent's persisted roll stays legible beneath it.
+  /// Alpha applied to a pair that is NOT the [activeDiceSide]'s, so the live roll
+  /// reads as live while the other player's persisted roll stays legible beneath
+  /// it. With no active side both pairs wear this.
   static const double _waitingDiceOpacity = 0.6;
 
-  /// Alpha applied to a die of the MOVER's pair that the staged hops have
-  /// already consumed. Deliberately below [_waitingDiceOpacity]: a spent die
-  /// must read as *disabled*, not merely as "not your turn".
+  /// Alpha applied to a die of the ACTIVE pair that the staged hops have already
+  /// consumed. Deliberately below [_waitingDiceOpacity]: a spent die must read as
+  /// *disabled*, not merely as "not your turn".
   static const double _usedDiceOpacity = 0.28;
 
-  void _paintPlayerDice(
-      Canvas canvas, Player player, Dice? dice, Player mover) {
-    final rect = geometry.diceRect(player, mover: mover);
+  void _paintPlayerDice(Canvas canvas, Player player, Dice? dice) {
+    final rect = geometry.diceRect(player);
     final side = geometry.diceSide;
     final gap = side * 0.5;
     final c = rect.center;
@@ -483,10 +506,12 @@ class BoardPainter extends CustomPainter {
     final body = isWhite ? theme.whiteChecker : theme.blackChecker;
     final pip = isWhite ? theme.blackChecker : theme.whiteChecker;
     final rim = isWhite ? theme.whiteCheckerBorder : theme.blackCheckerBorder;
-    final dim = player == mover ? 1.0 : _waitingDiceOpacity;
-    // A die the mover has already played out is dimmed further still. Only the
-    // mover's own pair can carry played dice (the waiting pair is a memento).
-    double slot(int index) => (player == mover && usedDiceSlots.contains(index))
+    final active = player == activeDiceSide;
+    final dim = active ? 1.0 : _waitingDiceOpacity;
+    // A die the mover has already played out is dimmed further still, BENEATH the
+    // pair-level emphasis. Only the active pair can carry played dice (any other
+    // pair is a memento of a roll that is not in play).
+    double slot(int index) => (active && usedDiceSlots.contains(index))
         ? _usedDiceOpacity
         : dim;
     _drawDie(canvas, first, side, dice?.die1, body, pip, rim, slot(0));
@@ -626,7 +651,7 @@ class BoardPainter extends CustomPainter {
         !identical(old.theme, theme) ||
         old.whiteDice != whiteDice ||
         old.blackDice != blackDice ||
-        old.diceMover != diceMover ||
+        old.activeDiceSide != activeDiceSide ||
         old.cube != cube ||
         old.selectedCheckerLocation != selectedCheckerLocation ||
         old.movingPlayer != movingPlayer ||

@@ -137,13 +137,14 @@ void main() {
         onMoveCommitted: (_) {},
         whiteDice: Dice(3, 1),
         blackDice: Dice(6, 5),
+        activeDiceSide: Player.white,
       )));
       await _tapPoint(t, 7);
       await _tapPoint(t, 4);
-      // The slot set is the MOVER's; the painter gates the dimming on
-      // `diceMover`, so Black's memento pair keeps its own (waiting) opacity.
+      // The slot set is the MOVER's; the painter gates the dimming on the ACTIVE
+      // pair, so Black's memento pair keeps its own (waiting) opacity.
       expect(_painterOf(t).usedDiceSlots, {0});
-      expect(_painterOf(t).diceMover, Player.white);
+      expect(_painterOf(t).activeDiceSide, Player.white);
     });
   });
 
