@@ -75,8 +75,20 @@ service cloud.firestore {
       // is still 'waiting' — that IS join-by-code (a direct doc get on the
       // code the host shared). Once joined, outsiders lose read access.
       // `list` stays denied: nobody may enumerate/scan invite codes.
+      //
+      // The `resource == null` arm is what makes a MISTYPED code readable as
+      // "no such match": rules run before the document is fetched, so without
+      // it `resource.data` raises a null-value error and a typo comes back as
+      // PERMISSION_DENIED — indistinguishable from someone else's match, and
+      // useless to show a user. Allowing the read of a document that does not
+      // exist lets Firestore answer NOT_FOUND instead. It reveals only whether
+      // a code is in use, and a waiting match is world-readable by design
+      // anyway, so the only new signal is "this code belongs to a match
+      // already in progress" — worth nothing against a 32^8 code space.
       allow get: if signedIn()
-        && (isParticipant(resource.data) || resource.data.status == 'waiting');
+        && (resource == null
+            || isParticipant(resource.data)
+            || resource.data.status == 'waiting');
       allow list: if false;
 
       // CREATE. Exact shape, host is the caller, seat open, waiting state,

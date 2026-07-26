@@ -36,23 +36,29 @@ try {
 if ($rulesCode -ne 0) { throw "firestore rules suite failed ($rulesCode)" }
 Write-Host "firestore rules suite passed" -ForegroundColor Green
 
+# 2. online_client transport integration suite — the real REST transport
+#    (anonymous auth + direct Firestore documents) against firestore.rules.
+#    Needs the auth emulator too; no functions emulator exists in the
+#    serverless model.
+$onlineClient = (Resolve-Path (Join-Path $PSScriptRoot '..\packages\online_client')).Path
+$clientCommand = "cd /d `"$onlineClient`" && dart test -P emulator"
+
+Push-Location $PSScriptRoot
+try {
+  firebase emulators:exec --project demo-aigammon --only firestore,auth $clientCommand
+  $clientCode = $LASTEXITCODE
+} finally {
+  Pop-Location
+}
+if ($clientCode -ne 0) { throw "online_client emulator suite failed ($clientCode)" }
+Write-Host "online_client emulator suite passed" -ForegroundColor Green
+
 # ---------------------------------------------------------------------------
 # NOTE (Plan 16 — serverless online play, in progress)
-#   The two suites below exercise the CALLABLE-era stack (Cloud Functions +
-#   the old client transport), which the new rules deliberately no longer
-#   admit: client reads now key off hostUid/guestUid, not the functions-written
-#   `uids` array. They are therefore expected to fail between Task 1 and the
-#   transport/E2E rewrites, and are disabled until then:
-#     * Task 3 rewrites packages/online_client onto direct Firestore REST and
-#       restores its emulator suite;
-#     * Task 5 rewrites the app's two-client E2E for the serverless model;
-#     * Task 6 deletes firebase/functions/ entirely.
-#   Re-enable (in their rewritten form) as those tasks land.
+#   The app's two-client E2E still targets the CALLABLE-era stack and is
+#   disabled until Task 5 rewrites it for the serverless model (Task 6 then
+#   deletes firebase/functions/ entirely).
 # ---------------------------------------------------------------------------
-# $onlineClient = (Resolve-Path (Join-Path $PSScriptRoot '..\packages\online_client')).Path
-# $clientCommand = "cd /d `"$onlineClient`" && dart test -P emulator"
-# firebase emulators:exec --project demo-aigammon --only firestore,auth $clientCommand
-#
 # $app = (Resolve-Path (Join-Path $PSScriptRoot '..\app')).Path
 # $appCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
 #   "flutter test --tags emulator test\online\emulator_e2e_test.dart"

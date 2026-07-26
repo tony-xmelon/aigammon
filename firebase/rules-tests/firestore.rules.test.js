@@ -269,6 +269,17 @@ describe('matches: read', () => {
     await assertFails(getDoc(matchDoc(outsiderDb, 'ABCD1234')));
   });
 
+  it('lets a signed-in user read a code that does not exist', async () => {
+    // A mistyped invite code must come back as NOT_FOUND, which Firestore can
+    // only answer if the rules ALLOW the read; denying it would make a typo
+    // indistinguishable from someone else's match.
+    await assertSucceeds(getDoc(matchDoc(outsiderDb, 'NOSUCHCD')));
+  });
+
+  it('denies an unauthenticated read of a nonexistent code', async () => {
+    await assertFails(getDoc(matchDoc(anonDb, 'NOSUCHCD')));
+  });
+
   it('denies listing the matches collection (no invite-code scanning)', async () => {
     await seedMatch('ABCD1234');
     await assertFails(getDocs(collection(hostDb, 'matches')));

@@ -9,13 +9,14 @@ set -euo pipefail
 # 1. Firestore security-rules unit tests (@firebase/rules-unit-testing + mocha).
 (cd rules-tests && npm ci && npm test)
 
+# 2. online_client transport integration suite — the real REST transport
+#    (anonymous auth + direct Firestore documents) against firestore.rules.
+(cd ../packages/online_client && dart test -P emulator)
+
 # ---------------------------------------------------------------------------
 # NOTE (Plan 16 — serverless online play, in progress)
-#   The callable-era suites below are disabled: the new rules key client reads
-#   off hostUid/guestUid instead of the functions-written `uids` array, so the
-#   old transport can no longer read its own match. Task 3 restores the
-#   online_client suite on direct Firestore REST, Task 5 rewrites the app's
-#   two-client E2E, Task 6 deletes firebase/functions/.
+#   The app's two-client E2E still targets the CALLABLE-era stack and is
+#   disabled until Task 5 rewrites it for the serverless model (Task 6 then
+#   deletes firebase/functions/).
 # ---------------------------------------------------------------------------
-# (cd ../packages/online_client && dart test -P emulator)
 # (cd ../app && flutter pub get && AIGAMMON_EMULATOR=1 flutter test --tags emulator test/online/emulator_e2e_test.dart)
