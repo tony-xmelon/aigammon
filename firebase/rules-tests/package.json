@@ -1,0 +1,14 @@
+{
+  "name": "aigammon-rules-tests",
+  "description": "Firestore security-rules unit tests for AIGammon serverless online play",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "mocha --timeout 20000 firestore.rules.test.js"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.3.0",
+    "mocha": "^11.1.0"
+  }
+}

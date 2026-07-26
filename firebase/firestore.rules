@@ -1,35 +1,207 @@
 rules_version = '2';
+
+// =====================================================================
+// AIGammon serverless online play (Plan 16) — NO Cloud Functions.
+//
+// TRUST MODEL
+//   Rules enforce STRUCTURE only: ownership, document shape, field types,
+//   write-once/phase ordering, and immutability. They deliberately do NOT
+//   attempt to enforce backgammon legality (turn order, move validity,
+//   dice usage) — that is validated CLIENT-side by the honest peer, which
+//   freezes the match with a cheat error on any illegal event.
+//   Likewise, rules cannot compute sha256, so commit-reveal INTEGRITY
+//   (sha256(reveal) == commit) is verified client-side; rules only enforce
+//   the phase ordering and write-once discipline that makes the protocol
+//   binding.
+//
+// DOCUMENT-ID CONVENTION (both `events` and `rolls`)
+//   Document ids are the sequence number rendered as EXACTLY 8 decimal
+//   digits, zero-padded (`00000042`). Two properties come from this:
+//     * uniqueness of the id makes append contiguous — a create against an
+//       already-used seq fails, so two peers can never both claim a seq;
+//     * zero padding makes lexicographic id order == numeric order, so a
+//       plain listDocuments (which orders by id) yields the log in order,
+//       with no index and no orderBy.
+//   Rules bind the id to the `seq`/`n` field with:
+//       id.matches('^[0-9]{8}$') && int(id) == data.seq
+//   (`int()` on a string parses leading zeros fine — covered by a test.)
+//
+// EVENT PAYLOAD IS A JSON *STRING*, NOT A MAP
+//   `events.event` holds the backgammon_core event as a JSON-encoded
+//   string. Reason: rules can measure the length of a string but have no
+//   way to measure the byte size of a map, so the 4 KiB payload cap is
+//   only enforceable on a string. Bonus: the Firestore REST transport can
+//   write it as a single stringValue instead of hand-encoding nested
+//   mapValue/arrayValue trees. Rules treat the payload as opaque.
+// =====================================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ---------------------------------------------------------------------
-    // Write model: ALL client writes go through Cloud Functions callables
-    // (createMatch / joinMatch / rollDice / submitEvent). Functions use the
-    // Admin SDK, which BYPASSES these rules. Therefore rules only need to
-    // govern client-side READS, and they DENY every client write.
-    //
-    // This keeps the rules surface tiny: there is no need to validate seq
-    // ordering, event authorship, turn ownership, or roll-event provenance
-    // in rules — the submitEvent callable does all of that server-side.
-    //
-    // Note on join-by-code: joinMatch(code) is a callable (Admin SDK) exactly
-    // BECAUSE a joining client is not yet a participant and so — under the
-    // read rule below (uid must be in resource.data.uids) — could not query
-    // or read the target match by its code. The function looks it up and
-    // claims a seat transactionally.
-    // ---------------------------------------------------------------------
-    match /matches/{matchId} {
-      // Participants may read their own match doc.
-      allow read: if request.auth != null && request.auth.uid in resource.data.uids;
-      // Clients never write directly; the callables do (Admin SDK).
-      allow write: if false;
 
-      match /events/{eventId} {
-        // Participants may read the event log of a match they belong to.
-        allow read: if request.auth != null
-          && request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.uids;
-        // Events are appended only by the submitEvent / rollDice callables.
-        allow write: if false;
+    // ---------- helpers ----------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    // A participant of a match, given that match's data map.
+    function isParticipant(m) {
+      return signedIn() && (uid() == m.hostUid || uid() == m.guestUid);
+    }
+
+    function matchOf(code) {
+      return get(/databases/$(database)/documents/matches/$(code)).data;
+    }
+
+    // 32 raw bytes rendered lowercase hex — commit, entropy and reveal all
+    // use this exact shape.
+    function isHex64(v) {
+      return v is string && v.size() == 64 && v.matches('^[0-9a-f]{64}$');
+    }
+
+    // Document id == zero-padded 8-digit rendering of `n`.
+    function idMatchesIndex(docId, n) {
+      return docId.matches('^[0-9]{8}$') && int(docId) == n;
+    }
+
+    // ---------- matches/{code} : code IS the invite code ----------
+    match /matches/{code} {
+
+      // READ. Participants always. Everyone signed-in may read a match that
+      // is still 'waiting' — that IS join-by-code (a direct doc get on the
+      // code the host shared). Once joined, outsiders lose read access.
+      // `list` stays denied: nobody may enumerate/scan invite codes.
+      allow get: if signedIn()
+        && (isParticipant(resource.data) || resource.data.status == 'waiting');
+      allow list: if false;
+
+      // CREATE. Exact shape, host is the caller, seat open, waiting state,
+      // odd match length 1..25, server-stamped createdAt.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(
+             ['hostUid', 'guestUid', 'length', 'cubeless', 'status', 'createdAt'])
+        && request.resource.data.keys().hasAll(
+             ['hostUid', 'guestUid', 'length', 'cubeless', 'status', 'createdAt'])
+        && request.resource.data.hostUid == uid()
+        && request.resource.data.guestUid == null
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.length is int
+        && request.resource.data.length >= 1
+        && request.resource.data.length <= 25
+        && request.resource.data.length % 2 == 1
+        && request.resource.data.cubeless is bool
+        && request.resource.data.createdAt == request.time;
+
+      // UPDATE. Exactly two legal transitions, nothing else ever changes.
+      allow update: if isJoinTransition() || isCompleteTransition();
+
+      // Matches are never deleted by clients (the log is the history).
+      allow delete: if false;
+
+      // waiting -> active, guest claims the empty seat with their own uid.
+      // affectedKeys() pins the diff to those two fields: length, cubeless,
+      // hostUid and createdAt are immutable.
+      function isJoinTransition() {
+        return signedIn()
+          && resource.data.status == 'waiting'
+          && resource.data.guestUid == null
+          && request.resource.data.diff(resource.data)
+               .affectedKeys().hasOnly(['guestUid', 'status'])
+          && request.resource.data.guestUid == uid()
+          && uid() != resource.data.hostUid
+          && request.resource.data.status == 'active';
       }
+
+      // active -> complete, by either participant, status only. End-of-match
+      // bookkeeping; the authoritative result lives in the event log.
+      function isCompleteTransition() {
+        return isParticipant(resource.data)
+          && resource.data.status == 'active'
+          && request.resource.data.diff(resource.data)
+               .affectedKeys().hasOnly(['status'])
+          && request.resource.data.status == 'complete';
+      }
+    }
+
+    // ---------- matches/{code}/events/{eventId} : append-only log ----------
+    match /matches/{code}/events/{eventId} {
+
+      allow get, list: if isParticipant(matchOf(code));
+
+      // CREATE-ONLY. Shape + authorship + id/seq binding + payload cap.
+      allow create: if isParticipant(matchOf(code))
+        && request.resource.data.keys().hasOnly(['seq', 'gameNo', 'event', 'author'])
+        && request.resource.data.keys().hasAll(['seq', 'gameNo', 'event', 'author'])
+        && request.resource.data.author == uid()
+        && request.resource.data.seq is int
+        && request.resource.data.seq >= 0
+        && idMatchesIndex(eventId, request.resource.data.seq)
+        && request.resource.data.gameNo is int
+        && request.resource.data.gameNo >= 1
+        && request.resource.data.event is string
+        && request.resource.data.event.size() <= 4096;
+
+      // The log is immutable: written events are never rewritten or erased.
+      allow update, delete: if false;
+    }
+
+    // ---------- matches/{code}/rolls/{rollId} : commit-reveal dice ----------
+    // Phase order, enforced here; each field is write-once and role-bound:
+    //   1. roller  creates {n, roller, commit}      commit = sha256(secretA)
+    //   2. OTHER   adds     entropy                 entropy = secretB
+    //   3. roller  adds     reveal                  reveal  = secretA
+    // Dice = derivation over sha256(secretA || secretB); the opponent checks
+    // sha256(reveal) == commit client-side (rules cannot hash).
+    match /matches/{code}/rolls/{rollId} {
+
+      allow get, list: if isParticipant(matchOf(code));
+
+      // PHASE 1 — the roller commits.
+      allow create: if isParticipant(matchOf(code))
+        && request.resource.data.keys().hasOnly(['n', 'roller', 'commit'])
+        && request.resource.data.keys().hasAll(['n', 'roller', 'commit'])
+        && request.resource.data.roller == uid()
+        && request.resource.data.n is int
+        && request.resource.data.n >= 0
+        && idMatchesIndex(rollId, request.resource.data.n)
+        && isHex64(request.resource.data.commit);
+
+      allow update: if isEntropyPhase() || isRevealPhase();
+
+      allow delete: if false;
+
+      // PHASE 2 — the non-roller participant contributes entropy, once,
+      // before any reveal exists. Adds exactly `entropy` and nothing else.
+      function isEntropyPhase() {
+        return isParticipant(matchOf(code))
+          && uid() != resource.data.roller
+          && !('entropy' in resource.data)
+          && !('reveal' in resource.data)
+          && request.resource.data.diff(resource.data)
+               .affectedKeys().hasOnly(['entropy'])
+          && isHex64(request.resource.data.entropy);
+      }
+
+      // PHASE 3 — the roller reveals, once, and only after entropy landed
+      // (revealing first would let the roller pick entropy-dependent dice).
+      function isRevealPhase() {
+        return signedIn()
+          && uid() == resource.data.roller
+          && 'entropy' in resource.data
+          && !('reveal' in resource.data)
+          && request.resource.data.diff(resource.data)
+               .affectedKeys().hasOnly(['reveal'])
+          && isHex64(request.resource.data.reveal);
+      }
+    }
+
+    // ---------- everything else ----------
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
