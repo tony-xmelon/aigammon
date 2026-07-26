@@ -67,6 +67,11 @@ class MoveBuilder {
   /// recomputed whenever the prefix changes.
   List<CheckerMove> _nextHops = const [];
 
+  /// The board the CHOSEN prefix has reached, when the position is known — the
+  /// base for the playability filter and for the chain DFS, which carries it
+  /// forward hop by hop. `null` for the position-free constructor.
+  BoardState? _position;
+
   /// Position-free: offers exactly the decompositions listed in [legalMoves]
   /// (plus their reorderings). Prefer [MoveBuilder.forState] for live entry.
   MoveBuilder(List<Move> legalMoves)
@@ -133,7 +138,7 @@ class MoveBuilder {
   /// but callers that paint both sets may subtract [destinationsFor] defensively.
   Set<int> chainedDestinationsFor(int source) {
     final out = <int>{};
-    _collectChains(List.of(_chosen), source, const [], out);
+    _collectChains(List.of(_chosen), _position, source, const [], out);
     return out;
   }
 
@@ -144,33 +149,37 @@ class MoveBuilder {
   /// current prefix. When several routes reach [landing] (e.g. 24/23/20 vs.
   /// 24/21/20) an arbitrary but valid one is returned.
   List<CheckerMove> chainFor(int source, int landing) =>
-      _findChain(List.of(_chosen), source, landing, const []) ?? const [];
+      _findChain(List.of(_chosen), _position, source, landing, const []) ??
+      const [];
 
   /// DFS from [currentPos] (the same checker's current location) collecting the
   /// landings of every enterable chain of length ≥ 2 into [out]. [prefix] is the
-  /// hypothetical chosen sequence (real prefix + chain so far); [chain] is the
-  /// same-checker hops accumulated from [source].
-  void _collectChains(List<CheckerMove> prefix, int currentPos,
-      List<CheckerMove> chain, Set<int> out) {
-    for (final h in _computeNextHops(prefix)) {
+  /// hypothetical chosen sequence (real prefix + chain so far), [position] the
+  /// board it produces (null when the position is unknown), and [chain] the
+  /// same-checker hops accumulated from [source]. The position is carried down
+  /// one hop at a time rather than rebuilt per node.
+  void _collectChains(List<CheckerMove> prefix, BoardState? position,
+      int currentPos, List<CheckerMove> chain, Set<int> out) {
+    for (final h in _computeNextHops(prefix, position)) {
       if (h.from != currentPos) continue; // must continue the SAME checker
       final next = [...chain, h];
       if (next.length >= 2) out.add(h.to);
       if (h.to == CheckerMove.off) continue; // a borne-off checker cannot go on
-      _collectChains([...prefix, h], h.to, next, out);
+      _collectChains([...prefix, h], _advance(position, h), h.to, next, out);
     }
   }
 
   /// DFS variant returning the first enterable chain (length ≥ 2) whose final
   /// hop lands on [landing], or `null`.
-  List<CheckerMove>? _findChain(List<CheckerMove> prefix, int currentPos,
-      int landing, List<CheckerMove> chain) {
-    for (final h in _computeNextHops(prefix)) {
+  List<CheckerMove>? _findChain(List<CheckerMove> prefix, BoardState? position,
+      int currentPos, int landing, List<CheckerMove> chain) {
+    for (final h in _computeNextHops(prefix, position)) {
       if (h.from != currentPos) continue;
       final next = [...chain, h];
       if (next.length >= 2 && h.to == landing) return next;
       if (h.to == CheckerMove.off) continue;
-      final found = _findChain([...prefix, h], h.to, landing, next);
+      final found =
+          _findChain([...prefix, h], _advance(position, h), h.to, landing, next);
       if (found != null) return found;
     }
     return null;
@@ -229,9 +238,17 @@ class MoveBuilder {
     return _legal.firstWhere((m) => m.sameAs(entered));
   }
 
-  /// Recomputes the next-hop options for the current chosen prefix.
+  /// Recomputes the position the chosen prefix has reached and the next-hop
+  /// options from it. Both are cached until the prefix changes.
   void _recompute() {
-    _nextHops = _computeNextHops(_chosen);
+    var position = _board;
+    if (position != null) {
+      for (final hop in _chosen) {
+        position = _advance(position, hop);
+      }
+    }
+    _position = position;
+    _nextHops = _computeNextHops(_chosen, position);
   }
 
   /// The next-hop options for an arbitrary [prefix]: for every candidate
@@ -241,14 +258,17 @@ class MoveBuilder {
   /// the mover's at this point in the turn is skipped — a permutation may reorder
   /// a transit chain into an unplayable order.
   ///
+  /// [position] is the board [prefix] produces (`null` when this builder does not
+  /// know the position, which switches the playability filter off).
+  ///
   /// Used both for the live prefix (via [_recompute]) and for the hypothetical
   /// prefixes explored while enumerating combined-move chains, so chain hops are
   /// exactly the hops the builder would offer when they are played.
-  List<CheckerMove> _computeNextHops(List<CheckerMove> prefix) {
+  List<CheckerMove> _computeNextHops(
+      List<CheckerMove> prefix, BoardState? position) {
     final k = prefix.length;
     final result = <CheckerMove>[];
     final seen = <int>{};
-    final position = _positionAfter(prefix);
     for (final candidate in _candidates) {
       final hops = candidate.hops;
       if (k >= hops.length) continue;
@@ -267,17 +287,9 @@ class MoveBuilder {
     return result;
   }
 
-  /// The board after [prefix] is played out hop by hop, or `null` when this
-  /// builder does not know the position.
-  BoardState? _positionAfter(List<CheckerMove> prefix) {
-    var board = _board;
-    final player = _player;
-    if (board == null || player == null) return null;
-    for (final hop in prefix) {
-      board = board!.applyMove(player, Move([hop]));
-    }
-    return board;
-  }
+  /// [position] with [hop] played, or `null` when the position is unknown.
+  BoardState? _advance(BoardState? position, CheckerMove hop) =>
+      position?.applyMove(_player!, Move([hop]));
 
   /// Whether the mover actually has a checker to move for [hop] on [position]
   /// (bar first, as the rules demand). Landing legality needs no check: the
