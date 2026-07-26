@@ -166,6 +166,13 @@ class GameState {
       ? MoveGenerator.legalMoves(board, turn, dice!)
       : const [];
 
+  /// [legalMoves] with every distinct way of ENTERING each move (see
+  /// [MoveVariants]) — what hop-by-hop entry needs so the checker a user has just
+  /// moved can still play the other die. Used by `MoveBuilder.forState`.
+  List<MoveVariants> get legalVariants => phase == GamePhase.moving
+      ? MoveGenerator.legalVariants(board, turn, dice!)
+      : const [];
+
   GameState roll(Dice d) {
     _require(phase == GamePhase.awaitingRoll, 'not awaiting a roll');
     return _copy(dice: d, phase: GamePhase.moving);
