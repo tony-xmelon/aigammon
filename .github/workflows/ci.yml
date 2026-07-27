@@ -88,6 +88,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Node is here for the Firebase CLI and for the rules suite's
+      # @firebase/rules-unit-testing (firebase/rules-tests). The backend itself
+      # is rules-only — Spark plan, no Cloud Functions — so nothing is built.
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: actions/setup-java@v4
@@ -97,14 +100,11 @@ jobs:
         with: { sdk: stable }
       - uses: subosito/flutter-action@v2
         with: { channel: stable }
-      - name: Build functions
-        run: npm ci && npm run build
-        working-directory: firebase/functions
       - name: online_client unit tests
         run: dart pub get && dart test
         working-directory: packages/online_client
       - name: Emulator suites
         run: |
-          firebase emulators:exec --project demo-aigammon --only firestore,functions,auth \
+          firebase emulators:exec --project demo-aigammon --only firestore,auth \
             "bash ./ci-emulator-suites.sh"
         working-directory: firebase

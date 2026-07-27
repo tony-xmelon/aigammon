@@ -43,26 +43,32 @@ class HostOutbound {
 /// That makes the whole authority unit-testable in memory, and lets the host's
 /// own UI ride the same event stream as the guest (Task 3).
 ///
-/// ## Relationship to the online server (firebase/functions/src/turnflow.ts)
+/// ## Relationship to online play (`firebase/`, Plan 16)
 ///
-/// The rules mirrored are the same — actor must be the side on `turn`, phase
-/// gates per event type, terminal events fold into scores, Crawford bookkeeping,
-/// next game auto-started with a fresh opening roll — with two deliberate
-/// STRENGTHENINGS, both affordable here because the host runs the real rules
-/// engine while the Cloud Function is boardless:
+/// Online play is SERVERLESS: `firebase/firestore.rules` can only police
+/// document shape, authorship and write-once ordering, so the honest peer is the
+/// referee (`OnlineMatchController` re-derives every roll from the commit-reveal
+/// documents and replays every event through the rules engine, freezing the
+/// match on a violation). LAN play has the stronger arrangement — one host that
+/// owns the log and answers before anything is written:
 ///
-///  1. **Move legality is fully validated, and the play is CANONICALISED.**
+///  1. **Dice are generated, not negotiated.** The host rolls them; online, a
+///     serverless pair has no trusted roller and needs the commit-reveal
+///     handshake (`packages/online_client/lib/src/fair_dice.dart`) to make an
+///     unbiasable die out of two mutually distrusting clients.
+///  2. **Move legality is fully validated, and the play is CANONICALISED.**
 ///     A submitted [MoveEvent] is resolved through `GameState.canonicalPlay`:
 ///     it must be a legal move up to hop order, or a position-equivalent
 ///     decomposition of one, and what gets logged is the engine's own
 ///     representative — so a peer can neither play illegally nor write a false
-///     route or false hit flags into the authoritative history. The server v1
-///     accepts any well-shaped move verbatim and relies on client divergence to
-///     detect cheating.
-///  2. **Terminal results are computed, never claimed.** There is no `result`
+///     route or false hit flags into the authoritative history.
+///  3. **A refusal is an ANSWER.** An illegal submission is rejected before it
+///     enters the log; online it is already written when the honest peer sees
+///     it, which is why the only remedy there is a permanent freeze.
+///  4. **Terminal results are computed, never claimed.** There is no `result`
 ///     claim on the wire at all: the winner, the points and the outcome come out
 ///     of `GameState.result` after the event is applied, so a guest cannot
-///     invent a score. The server v1 trusts a validated client claim.
+///     invent a score.
 ///
 /// Everything the core already polices (cube ownership, no doubling in the
 /// Crawford game, resign values, phase transitions) is enforced by letting the

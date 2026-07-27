@@ -43,8 +43,8 @@ for the design and per-phase plans.
 | [`app/`](app/) | The Flutter app — UI (`CustomPaint` board), Riverpod state, `GameController`, screens (home, new match, game, history, post-game analysis), the tutor overlay (`app/lib/tutor/`), and drift persistence (`app/lib/data/`). |
 | [`packages/backgammon_core`](packages/backgammon_core) | Pure Dart rules engine — zero dependencies. `BoardState`, `GameState`, `MatchState`, move generation, event-sourced game log, gnubg Position IDs. |
 | [`packages/engine_bindings`](packages/engine_bindings) | `dart:ffi` bindings + an isolate-hosted `EngineService` over the native library: move ranking, evaluation, difficulty sampling, and match-aware cube advice (`MatchCubeAdvisor` — Janowski cubeful equities over a Kazaross-XG2 match-equity table). |
-| [`packages/online_client`](packages/online_client) | Firebase-backed online-play client — match create/join by share code, live Firestore sync, and the callable-function API for server-side dice. Runs against the emulator in tests. |
-| [`firebase/`](firebase/) | The online backend — Firestore security rules, the Cloud Functions (`functions/`, match lifecycle + server dice), emulator config, and the deploy guide ([`DEPLOY.md`](firebase/DEPLOY.md)). |
+| [`packages/online_client`](packages/online_client) | Firebase-backed online-play client — pure-Dart REST: anonymous auth, direct Firestore documents (match create/join by invite code, append-only event log, polling), and the commit-reveal fair-dice protocol. Runs against the emulator in tests. |
+| [`firebase/`](firebase/) | The online backend, which is **only** Firestore security rules (`firestore.rules`) — no Cloud Functions, free Spark plan — plus their emulator rules-test suite, emulator config, and the deploy guide ([`DEPLOY.md`](firebase/DEPLOY.md)). |
 | [`native/wildbg`](native/wildbg) | The vendored [wildbg](https://github.com/carsten-wenderdel/wildbg) engine — a **git submodule**, never edited directly. |
 | [`native/engine_shim`](native/engine_shim) | Thin C shim (`cdylib`, `aigammon_engine`) — a verbatim copy of wildbg's `wildbg-c` crate plus a `wildbg_new_with_path` constructor that loads nets from disk at runtime. Windows/Android/iOS build scripts live here. |
 | [`native/wildbg-nets`](native/wildbg-nets) | The **production** neural nets (`contact.onnx`, `race.onnx`) from wildbg's `nets` branch. The submodule itself ships only weak demo nets. |
@@ -110,7 +110,11 @@ flutter run -d windows
 
 ## Deploying online play
 
-Online play runs on **Firebase** (Firestore + Cloud Functions v2). Debug builds
+Online play runs on **Firebase's free Spark plan** — Firestore documents,
+security rules and anonymous auth, with **no Cloud Functions and no billing
+account**. There is no server: dice are agreed by a commit-reveal handshake
+between the two clients, and each client validates the other's events with the
+full rules engine, freezing the match on a proven violation. Debug builds
 default to the **local emulator suite** — no configuration needed; start it from
 `firebase/` and `flutter run`. To run the full online test matrix locally:
 
@@ -118,19 +122,20 @@ default to the **local emulator suite** — no configuration needed; start it fr
 pwsh firebase/run-emulator-tests.ps1
 ```
 
-Provisioning a real project, deploying the rules/functions (requires the Firebase
-**Blaze** billing plan), retrieving the Web API key, and building a production
-release with the online defines are documented in
+Creating the project, enabling anonymous sign-in, deploying the rules
+(`firebase deploy --only firestore:rules`), retrieving the Web API key, and
+building a production release with the online defines are documented in
 [`firebase/DEPLOY.md`](firebase/DEPLOY.md).
 
 ## Continuous integration
 
-- **`ci.yml`** (push to `master`, all PRs, Linux): runs four jobs —
-  `backgammon_core` (`dart analyze --fatal-infos` + `dart test`),
-  `engine_bindings` (builds the Rust cdylib, then `dart test` + `dart test -P
-  engine` against the real `.so`), the Flutter app (`flutter analyze` +
-  `flutter test`), and **online play** (builds the Cloud Functions, runs the
-  `online_client` unit tests, then both emulator suites — `online_client -P
+- **`ci.yml`** (push to `master`, all PRs, Linux): runs five jobs —
+  `backgammon_core` (`dart analyze --fatal-infos` + `dart test`), `lan_play`
+  (the same pair), `engine_bindings` (builds the Rust cdylib, then `dart test`
+  + `dart test -P engine` against the real `.so`), the Flutter app
+  (`flutter analyze` + `flutter test`), and **online play** (the
+  `online_client` unit tests, then the
+  three emulator suites — the `firestore.rules` unit tests, `online_client -P
   emulator` and the app's two-client E2E — inside a `firebase emulators:exec`).
 - **`android.yml`** (`workflow_dispatch`, push to `master`): cross-compiles the
   engine for the Android ABIs with `cargo-ndk`, builds a release APK, and — when

@@ -16,7 +16,7 @@ $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') +
   ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
 
 # 1. Firestore security-rules unit tests (@firebase/rules-unit-testing + mocha).
-#    Firestore-only emulator: the rules suite needs no auth/functions emulator
+#    Firestore-only emulator: the rules suite needs no auth emulator
 #    (rules-unit-testing mints its own auth contexts).
 $rulesTests = (Resolve-Path (Join-Path $PSScriptRoot 'rules-tests')).Path
 if (-not (Test-Path (Join-Path $rulesTests 'node_modules'))) {
@@ -38,8 +38,8 @@ Write-Host "firestore rules suite passed" -ForegroundColor Green
 
 # 2. online_client transport integration suite — the real REST transport
 #    (anonymous auth + direct Firestore documents) against firestore.rules.
-#    Needs the auth emulator too; no functions emulator exists in the
-#    serverless model.
+#    Needs the auth emulator too; there is no third emulator to start — the
+#    whole backend is firestore.rules.
 $onlineClient = (Resolve-Path (Join-Path $PSScriptRoot '..\packages\online_client')).Path
 $clientCommand = "cd /d `"$onlineClient`" && dart test -P emulator"
 
