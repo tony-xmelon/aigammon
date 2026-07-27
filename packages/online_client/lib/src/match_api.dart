@@ -9,6 +9,7 @@ import 'fair_dice.dart';
 import 'firestore_docs.dart';
 import 'online_config.dart';
 import 'online_exception.dart';
+import 'token_store.dart';
 
 // ---------------------------------------------------------------------------
 // Document-id convention
@@ -304,8 +305,16 @@ class MatchApi {
 
   /// Build the whole stack (auth + Firestore) for [config]. Call [signIn]
   /// before any other operation.
-  factory MatchApi.forConfig(OnlineConfig config, {Random? codeRandom}) {
-    final auth = AuthClient(config);
+  ///
+  /// Pass a [tokenStore] to make the anonymous uid survive a restart — without
+  /// one every launch is a new user, which strands both seats of a match in
+  /// progress (see `token_store.dart`).
+  factory MatchApi.forConfig(
+    OnlineConfig config, {
+    Random? codeRandom,
+    TokenStore? tokenStore,
+  }) {
+    final auth = AuthClient(config, store: tokenStore);
     return MatchApi(
       auth: auth,
       docs: FirestoreDocs(config, token: auth.validToken),

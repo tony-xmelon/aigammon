@@ -2,6 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:online_client/online_client.dart';
 
+import '../data/database.dart';
+import 'online_session_store.dart';
+
 /// The Web API key for the production Firebase project, injected at build time
 /// via `--dart-define=AIGAMMON_FIREBASE_API_KEY=...`. Empty when unset.
 const _apiKeyDefine = String.fromEnvironment('AIGAMMON_FIREBASE_API_KEY');
@@ -49,8 +52,19 @@ final matchApiProvider = FutureProvider<MatchApi>((ref) async {
     );
   }
 
-  final api = MatchApi.forConfig(config);
+  // The token store is what makes the anonymous uid survive a restart. Without
+  // it every launch is a new user, and a match in progress becomes unreadable
+  // to the player who was in it (see `online_session_store.dart`).
+  final api = MatchApi.forConfig(
+    config,
+    tokenStore: ref.watch(onlineSessionStoreProvider),
+  );
   ref.onDispose(api.close);
   await api.signIn();
   return api;
 });
+
+/// The durable half of the device's online identity: the anonymous session and
+/// the match it was last in.
+final onlineSessionStoreProvider = Provider<OnlineSessionStore>(
+    (ref) => OnlineSessionStore(ref.watch(databaseProvider)));

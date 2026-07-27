@@ -236,6 +236,105 @@ void main() {
     expect(p.guest.cubeless, isTrue);
   });
 
+  // --- the two ways a peer can abuse the roll documents ----------------------
+
+  group('roll-document abuse', () {
+    test('entropy goes ONLY to the due roll — no dice lookahead', () async {
+      // Black (us) opens and moves, so rolls 2, 4, 6 … are the HOST's turns:
+      // a predictable parity, which is what makes the attack possible. A hostile
+      // host pre-creates them and, if we answer, learns several of its coming
+      // rolls before it has to choose a move or a double. The dice stay
+      // unbiased and nothing ever folds illegally, so no other check sees it.
+      final m = backend.seedMatch();
+      seedOpening(m, whiteDie: 3, blackDie: 6);
+      final api = FakeMatchApi(backend, 'guest');
+      final c = OnlineMatchController(
+        api: api,
+        matchDoc: m.doc,
+        rng: Random(7),
+        pollInterval: const Duration(milliseconds: 1),
+      );
+      addTearDown(c.disposeController);
+      await c.playMatch();
+      await pumpUntil(() => c.isReady);
+
+      // The squat: its next roll (2) plus two it has no business preparing.
+      for (final n in [2, 4, 6]) {
+        final s = turnSecretsFor(3, 4, rng: Random(900 + n));
+        m.putRoll(n, 'host', s.commit);
+      }
+      backend.bump(m.code);
+      await settle();
+
+      // Roll 2 is the due INDEX, but it is still black's move — white is not on
+      // turn, so nothing is owed to any of them yet.
+      expect(m.rolls[2]!.entropy, isNull);
+      expect(m.rolls[4]!.entropy, isNull);
+      expect(m.rolls[6]!.entropy, isNull);
+
+      // Our move hands white the turn. NOW roll 2 is genuinely due — and it is
+      // the only one that may be answered.
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => m.rolls[2]!.entropy != null,
+          reason: 'the DUE roll must still be witnessed — no deadlock');
+
+      expect(m.rolls[4]!.entropy, isNull,
+          reason: 'a roll two turns ahead must never be answered');
+      expect(m.rolls[6]!.entropy, isNull);
+      expect(c.frozen, isFalse, reason: 'squatting is refused, not fatal');
+      // A squatted roll must not pin the fast poll open either.
+      expect(c.currentPollInterval, c.fastPollInterval,
+          reason: 'roll 2 IS in flight now');
+    });
+
+    test('an incomplete roll backs off instead of spinning the fetcher',
+        () async {
+      // A peer appends its RollEvent but never reveals. The event cannot be
+      // validated without a COMPLETE roll document, so the drain blocks — and
+      // must not re-fetch in a tight loop while it waits (every attempt is a
+      // billed read, and the loop pins the isolate).
+      final m = backend.seedMatch();
+      seedOpening(m, whiteDie: 3, blackDie: 6);
+      final api = FakeMatchApi(backend, 'guest');
+      final c = OnlineMatchController(
+        api: api,
+        matchDoc: m.doc,
+        rng: Random(7),
+        // Long enough that no backoff timer can fire during the test: whatever
+        // fetches happen are the synchronous ones.
+        pollInterval: const Duration(seconds: 30),
+      );
+      addTearDown(c.disposeController);
+      await c.playMatch();
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+
+      final before = api.calls['fetchRoll'] ?? 0;
+      // Committed and witnessed, but never revealed — then the event anyway.
+      final s = turnSecretsFor(5, 2, rng: Random(31));
+      m.putRoll(2, 'host', s.commit, entropy: s.entropy);
+      m.forgeEvent('host', 1, RollEvent(Player.white, 5, 2));
+      backend.bump(m.code);
+      await settle(400);
+
+      final fetches = (api.calls['fetchRoll'] ?? 0) - before;
+      expect(fetches, lessThanOrEqualTo(4),
+          reason: 'the blocked drain must back off, not spin (saw $fetches)');
+      // Still blocked, still healthy: the event has NOT been folded on trust.
+      expect(c.state.turn, Player.white);
+      expect(c.state.phase, GamePhase.awaitingRoll);
+      expect(c.frozen, isFalse);
+
+      // The moment the peer reveals, the poll delivers it and the event folds.
+      m.rolls[2]!.reveal = s.secret;
+      backend.bump(m.code);
+      await pumpUntil(() => c.state.phase == GamePhase.moving,
+          reason: 'a completed roll unblocks the drain');
+      expect(c.state.dice, Dice(5, 2));
+    });
+  });
+
   // --- adaptive polling ------------------------------------------------------
 
   group('adaptive polling', () {

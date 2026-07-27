@@ -552,12 +552,20 @@ void main() {
       () async {
         final m = await newMatch(length: 1);
         final code = m.doc.code;
-        await seedOpening(m.host, m.guest, code, whiteDie: 6, blackDie: 3);
+        // BLACK opens, so once the guest has moved the next roll is genuinely
+        // WHITE's — the honest witness only answers the roll that is actually
+        // due (see the lookahead leg below), so the scripted host has to be on
+        // turn for its commitment to be witnessed at all.
+        await seedOpening(m.host, m.guest, code, whiteDie: 3, blackDie: 6);
 
         // Only the guest runs a controller; the "host" is scripted by hand.
         final guest = controllerFor(m.guest, m.doc);
         await guest.playMatch();
         await guest.ready;
+        expect(guest.state.turn, Player.black);
+        guest.submitMove(Player.black, guest.state.legalMoves.first);
+        await waitFor(() => guest.isReady && guest.state.turn == Player.white,
+            reason: 'the guest never handed the turn over');
 
         // Phase 1 — a sound-looking commitment for the next roll.
         final secret = generateSecretHex();
@@ -584,6 +592,63 @@ void main() {
         expect(cheat.message, contains('tampered dice'));
         expect(guest.isThinking, isFalse);
         expect(guest.awaitingHumanTurn, isFalse);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+      skip: skipReason,
+    );
+
+    test(
+      'a peer that squats its FUTURE roll documents gets no entropy for them',
+      () async {
+        // The dice-lookahead break. Turn parity is predictable, so a hostile
+        // client can pre-create the roll documents for its own coming turns; if
+        // the honest witness answers them it can reveal to itself and know
+        // several of its future rolls before choosing a move or a double. The
+        // dice stay unbiased and nothing ever folds illegally, so no freeze and
+        // no rules violation catches it — only the honest client's refusal to
+        // answer anything but the DUE roll.
+        final m = await newMatch(length: 1);
+        final code = m.doc.code;
+        // Black (the guest, our honest client) is on move first.
+        await seedOpening(m.host, m.guest, code, whiteDie: 3, blackDie: 6);
+
+        final guest = controllerFor(m.guest, m.doc);
+        await guest.playMatch();
+        await guest.ready;
+        expect(guest.state.turn, Player.black);
+
+        // The squat: white's next roll (2) plus two it has no business
+        // preparing, all correctly shaped and correctly authored.
+        final secrets = {
+          for (final n in [2, 4, 6]) n: generateSecretHex(),
+        };
+        for (final entry in secrets.entries) {
+          await m.host.api.createRoll(
+              code: code, n: entry.key, commit: commitFor(entry.value));
+        }
+
+        // Give the honest client several poll cycles to answer them.
+        await Future<void>.delayed(_pollInterval * 6);
+        for (final n in [2, 4, 6]) {
+          expect((await m.guest.api.fetchRoll(code, n))?.entropy, isNull,
+              reason: 'roll $n is not due — it must not be witnessed while it '
+                  'is still black to move');
+        }
+
+        // Hand white the turn. Roll 2 is now genuinely due, and is the ONLY one
+        // that may be answered — proving the binding is to the due index, not a
+        // blanket refusal that would deadlock the match.
+        guest.submitMove(Player.black, guest.state.legalMoves.first);
+        await readUntil(
+          () => m.host.api.fetchRoll(code, 2),
+          (d) => d?.entropy != null,
+          reason: 'the DUE roll must still be witnessed — no deadlock',
+        );
+        for (final n in [4, 6]) {
+          expect((await m.guest.api.fetchRoll(code, n))?.entropy, isNull,
+              reason: 'roll $n is still two turns ahead');
+        }
+        expect(guest.frozen, isFalse, reason: 'squatting is refused, not fatal');
       },
       timeout: const Timeout(Duration(minutes: 3)),
       skip: skipReason,

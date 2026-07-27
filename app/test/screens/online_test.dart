@@ -16,6 +16,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:online_client/online_client.dart';
 
+import 'package:aigammon_app/online/online_session_store.dart';
+
 import '../data/test_database.dart';
 import '../online/fake_online_backend.dart';
 
@@ -267,5 +269,111 @@ void main() {
     // No poll timer outlives the cancel (advancing time triggers nothing).
     await t.pump(const Duration(seconds: 6));
     expect(find.byType(GameScreen), findsNothing);
+  });
+
+  group('rejoin after a restart', () {
+    /// A live match this device is ALREADY a participant of, plus the resume
+    /// pointer a previous launch would have left behind.
+    Future<FakeMatch> seedResumable(String code) async {
+      final m = FakeMatch(
+        code: code,
+        hostUid: 'me', // the local uid — we are the host of this one
+        guestUid: 'them',
+        length: 5,
+        cubeless: false,
+        status: 'active',
+      );
+      backend.matches[code] = m;
+      seedOpening(m, whiteDie: 6, blackDie: 3);
+      await OnlineSessionStore(db).rememberMatch(code);
+      return m;
+    }
+
+    testWidgets('the card offers the stored match and Rejoin re-enters it',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await seedResumable('RESUME12');
+      await t.pumpWidget(_app(screenApi(backend), db: db));
+      await t.pumpAndSettle();
+
+      expect(find.text('Match in progress'), findsOneWidget);
+      expect(find.textContaining('RESUME12'), findsOneWidget);
+
+      await t.tap(find.widgetWithText(FilledButton, 'Rejoin'));
+      await _pumpUntil(t, find.byType(GameScreen));
+      expect(find.byType(GameScreen), findsOneWidget);
+    });
+
+    testWidgets('no stored match means no card', (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(_app(screenApi(backend), db: db));
+      await t.pumpAndSettle();
+      expect(find.text('Match in progress'), findsNothing);
+    });
+
+    testWidgets('a finished match is dropped rather than offered as a dead door',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final m = await seedResumable('DONE1234');
+      m.status = 'complete';
+
+      await t.pumpWidget(_app(screenApi(backend), db: db));
+      await t.pumpAndSettle();
+      await t.tap(find.widgetWithText(FilledButton, 'Rejoin'));
+      await t.pump();
+      await t.pump();
+
+      expect(find.byType(GameScreen), findsNothing);
+      // The card is gone (there is nothing to rejoin) and a snackbar says why.
+      expect(find.text('Match in progress'), findsNothing);
+      expect(find.widgetWithText(SnackBar, 'That match has finished — nothing '
+          'left to rejoin.'), findsOneWidget);
+      // The pointer is gone, so the card does not come back next launch.
+      expect(await OnlineSessionStore(db).lastMatchCode(), isNull);
+    });
+
+    testWidgets('Forget this match clears the card', (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await seedResumable('RESUME12');
+      await t.pumpWidget(_app(screenApi(backend), db: db));
+      await t.pumpAndSettle();
+      expect(find.text('Match in progress'), findsOneWidget);
+
+      await t.tap(find.widgetWithText(TextButton, 'Forget this match'));
+      await t.pumpAndSettle();
+
+      expect(find.text('Match in progress'), findsNothing);
+      expect(await OnlineSessionStore(db).lastMatchCode(), isNull);
+    });
+
+    testWidgets('typing your OWN code into Join resumes instead of failing',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // Both seats are taken and one of them is ours: joinMatch refuses by
+      // design (it only ever claims an EMPTY seat), so the screen has to fall
+      // back to a read-and-resume rather than showing "the seat has been taken".
+      final api = screenApi(backend);
+      await seedResumable('RESUME12');
+      await OnlineSessionStore(db).forgetMatch(); // no card; use the field
+      await t.pumpWidget(_app(api, db: db));
+      await t.pumpAndSettle();
+
+      await t.enterText(find.byType(TextField), 'resume12');
+      await t.tap(find.widgetWithText(FilledButton, 'Join'));
+      await _pumpUntil(t, find.byType(GameScreen));
+
+      expect(find.byType(GameScreen), findsOneWidget);
+      expect(find.textContaining('seat has been taken'), findsNothing);
+    });
   });
 }

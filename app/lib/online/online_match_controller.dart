@@ -244,10 +244,11 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   bool get _diceProtocolInFlight {
     if (frozen || _match.isMatchOver) return false;
     if (_roller != null) return true;
-    for (final n in _rolls.keys) {
-      if (n > _rollCount) return true;
-    }
-    return false;
+    // ONLY the due index counts. A peer that squats the roll documents for its
+    // future turns (see [_isDueRoll]) must not be able to pin the fast cadence
+    // open for the rest of the match — that would be a read-quota drain even
+    // though the lookahead itself is refused.
+    return _rolls.containsKey(_rollCount + 1);
   }
 
   /// Injected only by tests, to make protocol secrets reproducible. NEVER
@@ -358,6 +359,14 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   /// A pump was requested while one was running; see [_pumpRolls].
   bool _pumpAgain = false;
   Timer? _rollRetry;
+
+  /// The paced re-drain armed when the inbox is blocked on a roll document that
+  /// has not completed. See [_armInboxRetry].
+  Timer? _inboxRetry;
+
+  /// The roll index a refetch has already been spent on because the opponent
+  /// held it when our turn said it was ours. See [_onContestedRoll].
+  int? _contestedRoll;
 
   // Pending-decision notifiers for the LOCAL side.
   final ValueNotifier<GameState?> _pendingMove = ValueNotifier(null);
@@ -513,6 +522,8 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     _completeReady();
     _rollRetry?.cancel();
     _rollRetry = null;
+    _inboxRetry?.cancel();
+    _inboxRetry = null;
     unawaited(_sub?.cancel());
     _sub = null;
     _pendingMove.dispose();
@@ -560,19 +571,39 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     if (!awaitingHumanTurn) throw StateError('not awaiting the human turn');
     final n = _rollCount + 1;
     if (_roller == null) {
-      if (_rolls.containsKey(n)) {
-        // Someone already claimed this index and it is not a drive of ours —
-        // our view of the log is behind. Refetch rather than fight for it.
-        _resync('roll $n was already claimed');
+      final claimed = _rolls[n];
+      if (claimed != null) {
+        _onContestedRoll(n);
         return;
       }
-      _roller = _RollerDrive(
-          n: n, opening: false, gameNo: _gameNumber, rng: rng);
+      _roller =
+          _RollerDrive(n: n, opening: false, gameNo: _gameNumber, rng: rng);
     }
     _submitting = true;
     _transientError = null;
     _notify();
     unawaited(_pumpRolls());
+  }
+
+  /// Someone else's commitment already sits at the index our turn says is ours.
+  ///
+  /// The honest reading is that our fold is behind, so the first sighting
+  /// triggers ONE refetch. If the claim survives that, the peer is out of
+  /// protocol — but the roll index is write-once, so there is nothing to seize
+  /// and nothing provably illegal to freeze on either. It stays a surfaced
+  /// waiting state rather than a silent stall (the button keeps doing nothing
+  /// visible) or a resync loop (one refetch per press, forever).
+  void _onContestedRoll(int n) {
+    _submitting = false;
+    _transientError = OnlineException(
+      'roll-contested',
+      'the other player has already claimed roll $n — waiting for them to '
+          'finish it',
+    );
+    _notify();
+    if (_contestedRoll == n) return; // already refetched for this index
+    _contestedRoll = n;
+    _resync('roll $n was claimed by the opponent');
   }
 
   @override
@@ -702,6 +733,11 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   /// opponent's dice. A targeted fetch is started and the drain resumes when it
   /// lands.
   void _drainInbox() {
+    _drainLoop();
+    _finishReplace();
+  }
+
+  void _drainLoop() {
     while (_inbox.isNotEmpty && !_disposed && !frozen) {
       // A replay that has already failed cannot be repaired by folding MORE of
       // the same log on top of the mismatch.
@@ -736,12 +772,14 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     if (_fetchingRolls.contains(n)) return;
     _fetchingRolls.add(n);
     unawaited(() async {
+      var unblocked = false;
       try {
         final doc = await api.fetchRoll(matchId, n);
         if (_disposed || frozen) return;
         if (doc != null) {
           _rolls[n] = doc;
           if (!_verifyRollDoc(doc)) return;
+          unblocked = doc.isComplete;
         }
       } catch (e) {
         if (_disposed || frozen) return;
@@ -750,7 +788,21 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
       } finally {
         _fetchingRolls.remove(n);
       }
-      if (!_disposed && !frozen) _drainInbox();
+      if (_disposed || frozen) return;
+      // Re-enter the drain ONLY when this fetch actually unblocked it.
+      //
+      // Draining unconditionally is a tight loop whenever the roll cannot
+      // complete — a peer that appends its RollEvent and never reveals leaves
+      // the drain permanently blocked, and each turn of the loop is another
+      // BILLED read (thousands a second, which also pins the isolate). The poll
+      // cycle is what legitimately delivers a document as it advances; the
+      // backoff below is only a paced backstop for a stalled poll, and it never
+      // runs faster than the poll itself.
+      if (unblocked) {
+        _drainInbox();
+      } else {
+        _armInboxRetry();
+      }
     }());
   }
 
@@ -1052,9 +1104,29 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     _inbox
       ..clear()
       ..addAll(events);
+    _contestedRoll = null;
     _replacing = true;
     _replaceFailure = null;
     _drainInbox();
+  }
+
+  /// End a full replace — but ONLY once the inbox has actually drained.
+  ///
+  /// A replay can stop part-way: a roll document that has to be fetched leaves
+  /// the trailing events queued. Clearing [_replacing] at that point would let
+  /// those events fold as if they were LIVE — re-animating history through
+  /// [lastMove], and sending a fold failure down the resync branch instead of
+  /// the replace-failed one. So the flag survives until the queue is empty (or
+  /// the replay has already failed), while the state that HAS folded is still
+  /// published so the UI can come up rather than hang on [ready].
+  void _finishReplace() {
+    if (!_replacing) return;
+    if (_inbox.isNotEmpty && _replaceFailure == null && !frozen) {
+      if (_game != null) _completeReady();
+      _refreshPending();
+      _notify();
+      return;
+    }
     _replacing = false;
     if (frozen) return;
     final failure = _replaceFailure;
@@ -1122,6 +1194,20 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     if (!_disposed && !frozen) _notify();
   }
 
+  /// One paced re-drain in flight at a time, at the poll's own cadence.
+  ///
+  /// The drain is normally woken by [_onPoll]; this only covers a poll stream
+  /// that has stalled, and it is deliberately no faster than the poll so a roll
+  /// that never completes costs a bounded trickle of reads rather than a flood.
+  void _armInboxRetry() {
+    if (_inboxRetry != null || _disposed) return;
+    _inboxRetry = Timer(currentPollInterval, () {
+      _inboxRetry = null;
+      if (_disposed || frozen) return;
+      _drainInbox();
+    });
+  }
+
   /// One retry in flight at a time. Needed because a stalled drive may produce
   /// no further document changes, so nothing else would wake it.
   void _armRollRetry() {
@@ -1133,12 +1219,50 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     });
   }
 
-  /// Contribute entropy to (and verify the reveal of) every roll that is not
-  /// ours. Fairness does not depend on WHICH rolls we witness, so this is
-  /// deliberately unconditional — refusing to answer would only deadlock the
-  /// match, and a roll made at the wrong moment is caught when its event folds.
+  /// True iff no game is currently under way, so the next roll to be made is an
+  /// opening roll (the host's by convention).
+  bool get _openingIsDue =>
+      _openingsIngested == 0 || _lastFinishedGameNo == _openingsIngested;
+
+  /// True iff [roll] is the ONE roll the log says is outstanding right now.
+  ///
+  /// Two bindings, and the FIRST is the security-critical one:
+  ///
+  ///  * **index** — a witness answers only `rolls/{_rollCount + 1}`. Answering
+  ///    any later index is the dice-LOOKAHEAD break: each peer's turn parity is
+  ///    predictable, so a hostile client pre-creates the roll documents for its
+  ///    own coming turns; if we hand them entropy it can reveal to itself and
+  ///    know several of its future rolls before choosing a move or a double. The
+  ///    dice stay unbiased and nothing ever folds illegally, so no other check
+  ///    in this class would catch it. The strict-sequential index is the same
+  ///    invariant [_validate] already enforces, so binding to it cannot
+  ///    deadlock a peer that is playing properly.
+  ///  * **turn** — the roller must be the side actually due to roll (the host
+  ///    for an opening). Defence in depth, and deliberately SKIPPED while the
+  ///    local fold is behind the log on purpose (the game-over pause buffers
+  ///    events, a replace is mid-replay): there the turn we can see is not the
+  ///    turn the roll is for, and refusing would stall a peer that has properly
+  ///    moved on. The index bound still holds in those windows.
+  bool _isDueRoll(RollDoc roll) {
+    if (roll.n != _rollCount + 1) return false;
+    if (_awaitingNextGame || _buffer.isNotEmpty || _replacing) return true;
+    final rollerSide = matchDoc.sideOf(roll.roller);
+    if (rollerSide == null) return false;
+    if (_openingIsDue) return rollerSide == MatchDoc.hostSide;
+    final g = _game;
+    if (g == null) return true; // nothing folded yet — index bound only
+    final s = g.state;
+    return s.phase == GamePhase.awaitingRoll && rollerSide == s.turn;
+  }
+
+  /// Contribute entropy to (and verify the reveal of) the opponent's DUE roll.
+  ///
+  /// Answering anything else is the dice-lookahead break — see [_isDueRoll],
+  /// which is also why this can never answer more than one document per pump.
   Future<void> _witnessSteps() async {
-    final pending = _rolls.values.where((r) => r.roller != _uid).toList()
+    final pending = _rolls.values
+        .where((r) => r.roller != _uid && _isDueRoll(r))
+        .toList()
       ..sort((a, b) => a.n.compareTo(b.n));
     for (final roll in pending) {
       if (_disposed || frozen) return;
@@ -1257,11 +1381,7 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   /// did when a Cloud Function appended them.
   void _maybeStartOpeningRoll() {
     if (_roller != null || !isHost || matchDoc.guestUid == null) return;
-    if (_match.isMatchOver || _replacing) return;
-    // A game is under way (its opening is ingested and it has not finished).
-    if (_openingsIngested != 0 && _lastFinishedGameNo != _openingsIngested) {
-      return;
-    }
+    if (_match.isMatchOver || _replacing || !_openingIsDue) return;
     final n = _rollCount + 1;
     if (_rolls.containsKey(n)) return; // already claimed (a previous session)
     _roller = _RollerDrive(
@@ -1335,6 +1455,8 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     _buffer = [];
     _rollRetry?.cancel();
     _rollRetry = null;
+    _inboxRetry?.cancel();
+    _inboxRetry = null;
     _completeReady();
     _refreshPending();
     _notify();

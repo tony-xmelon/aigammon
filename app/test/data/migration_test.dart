@@ -186,12 +186,12 @@ void main() {
     expect(settings.showScoring, isTrue);
 
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 7);
+    expect(version.read<int>('user_version'), 8);
 
     await db.close();
   });
 
-  test('1 -> 7 upgrade creates the settings table whole (v7 shape: drag ON, '
+  test('1 -> 8 upgrade creates the settings table whole (v7 shape: drag ON, '
       'drag_hint_shown + dice_roll_animation + show_pass_device + '
       'rotate_board_hot_seat present), seeds it, and preserves v1 data',
       () async {
@@ -211,8 +211,8 @@ void main() {
         "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'");
     expect(before, isEmpty, reason: 'v1 has no settings table');
 
-    // 2. Open the SAME database through AppDatabase (schemaVersion 7). drift
-    //    sees user_version 1 and runs onUpgrade(1 -> 7), then beforeOpen.
+    // 2. Open the SAME database through AppDatabase (schemaVersion 8). drift
+    //    sees user_version 1 and runs onUpgrade(1 -> 8), then beforeOpen.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
     // 3a. The settings table now exists with the single default row — including
@@ -244,7 +244,7 @@ void main() {
 
     // 3c. The schema version was bumped to 7.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 7);
+    expect(version.read<int>('user_version'), 8);
 
     // 3d. Writes still work post-migration (FK/insert into the migrated schema).
     final newId = await db.into(db.matches).insert(MatchesCompanion.insert(
@@ -260,7 +260,7 @@ void main() {
     await db.close();
   });
 
-  test('2 -> 7 upgrade adds the gameplay + drag_hint_shown + '
+  test('2 -> 8 upgrade adds the gameplay + drag_hint_shown + '
       'dice_roll_animation + show_pass_device + rotate_board_hot_seat columns, '
       'flips drag ON, and preserves the existing v2 settings row values',
       () async {
@@ -292,7 +292,7 @@ void main() {
     expect(cols, isNot(contains('rotate_board_hot_seat')),
         reason: 'nor the v7 col');
 
-    // 2. Open through AppDatabase (schemaVersion 7): drift runs onUpgrade(2 -> 7),
+    // 2. Open through AppDatabase (schemaVersion 8): drift runs onUpgrade(2 -> 8),
     //    adding the four gameplay columns + drag_hint_shown +
     //    dice_roll_animation + show_pass_device + rotate_board_hot_seat, then
     //    flipping drag.
@@ -324,13 +324,13 @@ void main() {
 
     // 3c. The schema version was bumped to 7, and still exactly one row.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 7);
+    expect(version.read<int>('user_version'), 8);
     expect(await db.select(db.settings).get(), hasLength(1));
 
     await db.close();
   });
 
-  test('3 -> 7 upgrade adds drag_hint_shown (=false) + dice_roll_animation '
+  test('3 -> 8 upgrade adds drag_hint_shown (=false) + dice_roll_animation '
       '(=true) + show_pass_device (=false) + rotate_board_hot_seat (=false) and '
       'flips a user-OFF enable_drag to ON, preserving every other v3 value',
       () async {
@@ -365,7 +365,7 @@ void main() {
     expect(cols, isNot(contains('rotate_board_hot_seat')),
         reason: 'v3 predates the hot-seat rotation column');
 
-    // 2. Open through AppDatabase (schemaVersion 7): drift runs onUpgrade(3 -> 7),
+    // 2. Open through AppDatabase (schemaVersion 8): drift runs onUpgrade(3 -> 8),
     //    which addColumn's the three later columns and UPDATEs enable_drag = 1.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
@@ -395,7 +395,7 @@ void main() {
 
     // 3c. The schema version was bumped to 7, still exactly one row.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 7);
+    expect(version.read<int>('user_version'), 8);
     expect(await db.select(db.settings).get(), hasLength(1));
 
     // 3d. Writes still work post-migration (upsert the migrated settings row).
@@ -406,7 +406,7 @@ void main() {
     await db.close();
   });
 
-  test('4 -> 7 upgrade adds dice_roll_animation (=true) + show_pass_device '
+  test('4 -> 8 upgrade adds dice_roll_animation (=true) + show_pass_device '
       '(=false) + rotate_board_hot_seat (=false) and changes nothing else — no '
       're-run of the v4 drag flip', () async {
     // 1. Build a genuine v4 database: matches/games + the v4 settings table with
@@ -436,7 +436,7 @@ void main() {
     expect(cols, isNot(contains('show_pass_device')),
         reason: 'v4 predates the pass-device column');
 
-    // 2. Open through AppDatabase (schemaVersion 7): drift runs onUpgrade(4 -> 7),
+    // 2. Open through AppDatabase (schemaVersion 8): drift runs onUpgrade(4 -> 8),
     //    which only addColumn's the two later columns.
     final db = AppDatabase(NativeDatabase.opened(raw));
 
@@ -466,7 +466,7 @@ void main() {
 
     // 3c. The schema version was bumped to 7, still exactly one row.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 7);
+    expect(version.read<int>('user_version'), 8);
     expect(await db.select(db.settings).get(), hasLength(1));
 
     // 3d. Writes still work post-migration (upsert the migrated settings row).
@@ -477,7 +477,7 @@ void main() {
 
     await db.close();
   });
-  test('5 -> 7 upgrade adds show_pass_device (=false) + rotate_board_hot_seat '
+  test('5 -> 8 upgrade adds show_pass_device (=false) + rotate_board_hot_seat '
       '(=false) and preserves every v5 value — the unreleased-but-installed '
       'shape', () async {
     // 1. Build a genuine v5 database: matches/games + the v5 settings table with
@@ -503,7 +503,7 @@ void main() {
     expect(cols, isNot(contains('show_pass_device')),
         reason: 'v5 predates the pass-device column');
 
-    // 2. Open through AppDatabase (schemaVersion 7): onUpgrade(5 -> 7).
+    // 2. Open through AppDatabase (schemaVersion 8): onUpgrade(5 -> 8).
     final db = AppDatabase(NativeDatabase.opened(raw));
 
     // 3a. The column exists at its default, so a settings SAVE no longer throws
@@ -527,7 +527,7 @@ void main() {
 
     // 3c. Version bumped, still one row, and writes go through.
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 7);
+    expect(version.read<int>('user_version'), 8);
     expect(await db.select(db.settings).get(), hasLength(1));
     await db.into(db.settings).insertOnConflictUpdate(SettingsCompanion(
         id: const Value(1), showPassDevice: const Value(true)));
@@ -536,7 +536,7 @@ void main() {
     await db.close();
   });
 
-  test('6 -> 7 upgrade adds rotate_board_hot_seat (=false) and preserves every '
+  test('6 -> 8 upgrade adds rotate_board_hot_seat (=false) and preserves every '
       'v6 value — the shape on every tester device today', () async {
     // 1. Build a genuine v6 database: matches/games + the v6 settings table with
     //    a row the user had already edited — including the pass-device cover
@@ -563,7 +563,7 @@ void main() {
     expect(cols, isNot(contains('rotate_board_hot_seat')),
         reason: 'v6 predates the hot-seat rotation column');
 
-    // 2. Open through AppDatabase (schemaVersion 7): onUpgrade(6 -> 7).
+    // 2. Open through AppDatabase (schemaVersion 8): onUpgrade(6 -> 7).
     final db = AppDatabase(NativeDatabase.opened(raw));
 
     // 3a. The column exists at its default — OFF, i.e. the tabletop layout an
@@ -583,7 +583,7 @@ void main() {
     expect(settings.tutorOverride, 'off');
     expect(settings.showHighlights, isTrue);
     expect(settings.enableDrag, isFalse,
-        reason: 'the one-time v4 drag flip must not re-run on a 6 -> 7 upgrade');
+        reason: 'the one-time v4 drag flip must not re-run on a 6 -> 8 upgrade');
     expect(settings.enableCombinedTaps, isTrue);
     expect(settings.showScoring, isFalse);
     expect(settings.diceRollAnimation, isTrue);
@@ -592,7 +592,7 @@ void main() {
     // 3c. Version bumped, still one row, and a save into the new column works
     //     (the failure mode a missing migration branch would produce).
     final version = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(version.read<int>('user_version'), 7);
+    expect(version.read<int>('user_version'), 8);
     expect(await db.select(db.settings).get(), hasLength(1));
     await db.into(db.settings).insertOnConflictUpdate(SettingsCompanion(
         id: const Value(1), rotateBoardHotSeat: const Value(true)));
@@ -600,5 +600,52 @@ void main() {
         isTrue);
 
     await db.close();
+  });
+
+  test('every upgrade path lands the v8 online_session table, seeded and empty',
+      () async {
+    // The table holds the durable anonymous identity. If a migration missed it,
+    // the first sign-in would throw "no such table" and online play would be
+    // dead for exactly the installs that already had history worth keeping — so
+    // this walks EVERY shape the upgrade can start from.
+    for (final start in <({String label, int version, List<String> ddl})>[
+      (label: 'fresh install', version: 0, ddl: []),
+      (label: 'v1', version: 1, ddl: [_v1MatchesDdl, _v1GamesDdl]),
+      (
+        label: 'v2',
+        version: 2,
+        ddl: [_v1MatchesDdl, _v1GamesDdl, _v2SettingsDdl]
+      ),
+      (
+        label: 'v6',
+        version: 6,
+        ddl: [_v1MatchesDdl, _v1GamesDdl, _v6SettingsDdl]
+      ),
+    ]) {
+      final raw = sqlite3.openInMemory();
+      for (final ddl in start.ddl) {
+        raw.execute(ddl);
+      }
+      if (start.version > 0) {
+        raw.execute('PRAGMA user_version = ${start.version}');
+      }
+      final db = AppDatabase(NativeDatabase.opened(raw));
+
+      // The row is seeded by beforeOpen and starts completely empty: no uid, no
+      // token, and nothing to rejoin.
+      final row = await db.select(db.onlineSession).getSingle();
+      expect(row.id, 1, reason: '${start.label}: the single-row invariant');
+      expect(row.uid, isNull, reason: '${start.label}: no identity yet');
+      expect(row.refreshToken, isNull, reason: start.label);
+      expect(row.matchCode, isNull, reason: start.label);
+
+      final version = await db
+          .customSelect('PRAGMA user_version')
+          .map((r) => r.read<int>('user_version'))
+          .getSingle();
+      expect(version, 8, reason: '${start.label}: upgraded all the way');
+
+      await db.close();
+    }
   });
 }

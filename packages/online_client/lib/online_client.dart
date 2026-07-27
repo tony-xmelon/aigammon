@@ -12,3 +12,4 @@ export 'src/firestore_value.dart';
 export 'src/match_api.dart';
 export 'src/online_config.dart';
 export 'src/online_exception.dart';
+export 'src/token_store.dart';

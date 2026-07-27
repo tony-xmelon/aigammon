@@ -147,14 +147,46 @@ class Settings extends Table {
   List<String> get customConstraints => const ['CHECK (id = 1)'];
 }
 
+/// The device's anonymous online identity, and the match it was last in
+/// (schema v8). A single row, like [Settings], but kept SEPARATE from it: these
+/// are bearer credentials and a resume pointer, not user preferences, and
+/// nothing in the settings UI should be able to read or write them.
+///
+/// Why it has to be durable at all: the anonymous uid is the only identity the
+/// serverless model has, and `firebase/firestore.rules` gates every match
+/// document on it. A uid that dies with the process strands BOTH seats of a
+/// match in progress — the returning player cannot read their own match, and
+/// the opponent waits forever on a peer that can never act again.
+@DataClassName('OnlineSessionRow')
+class OnlineSession extends Table {
+  /// Always 1 (enforced by [customConstraints]).
+  IntColumn get id => integer().withDefault(const Constant(1))();
+
+  /// The anonymous Firebase uid, or null before the first sign-in.
+  TextColumn get uid => text().nullable()();
+
+  /// The refresh token that mints new id tokens for [uid].
+  TextColumn get refreshToken => text().nullable()();
+
+  /// The invite code of the match this device last entered, so it can offer to
+  /// REJOIN it after a restart. Cleared when that match finishes.
+  TextColumn get matchCode => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => const ['CHECK (id = 1)'];
+}
+
 /// The app's local SQLite database (matches + event-sourced games + the
-/// single-row [Settings] preferences).
-@DriftDatabase(tables: [Matches, Games, Settings])
+/// single-row [Settings] preferences + the single-row [OnlineSession]).
+@DriftDatabase(tables: [Matches, Games, Settings, OnlineSession])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
   // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
@@ -244,6 +276,13 @@ class AppDatabase extends _$AppDatabase {
           if (from < 4) {
             await customStatement('UPDATE settings SET enable_drag = 1');
           }
+          // v7 -> v8: add the online-session table. A brand-new table rather
+          // than columns on `settings`, so no existing row is touched and the
+          // credentials stay out of the preferences object. Created whole for
+          // every upgrade that predates it; `onCreate` covers fresh installs.
+          if (from < 8) {
+            await m.createTable(onlineSession);
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -252,6 +291,10 @@ class AppDatabase extends _$AppDatabase {
           // and covers fresh onCreate databases and upgraded ones alike.
           await customStatement(
             'INSERT OR IGNORE INTO settings (id) VALUES (1)',
+          );
+          // Same idempotent seed for the online-session row.
+          await customStatement(
+            'INSERT OR IGNORE INTO online_session (id) VALUES (1)',
           );
         },
       );

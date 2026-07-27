@@ -156,4 +156,121 @@ void main() {
       expect(auth.session!.expiresAt, clock.add(const Duration(seconds: 3600)));
     });
   });
+
+  group('durable sessions (TokenStore)', () {
+    /// A signUp response body for [uid].
+    String signUpBody(String uid) => jsonEncode({
+          'idToken': 'tok-$uid',
+          'refreshToken': 'refresh-$uid',
+          'localId': uid,
+          'expiresIn': '3600',
+        });
+
+    /// A secure-token refresh response.
+    String refreshBody(String uid, {String suffix = '2'}) => jsonEncode({
+          'id_token': 'tok-$uid-$suffix',
+          'refresh_token': 'refresh-$uid-$suffix',
+          'user_id': uid,
+          'expires_in': '3600',
+        });
+
+    test('a restart REUSES the stored uid instead of minting a new one',
+        () async {
+      // The uid is the only identity the security rules know, so a new one on
+      // every launch locks the returning player out of their own match and
+      // leaves the opponent waiting on a peer that can never move again.
+      final store = InMemoryTokenStore();
+      final calls = <String>[];
+
+      http.Client clientFor(String signUpUid) => MockClient((req) async {
+            final isRefresh = req.url.path.contains('token');
+            calls.add(isRefresh ? 'refresh' : 'signUp');
+            return http.Response(
+                isRefresh ? refreshBody('uid-1') : signUpBody(signUpUid), 200);
+          });
+
+      // First launch: nothing stored, so a fresh anonymous user is signed up.
+      final first = AuthClient(OnlineConfig.emulator(),
+          inner: clientFor('uid-1'), store: store);
+      final a = await first.signInAnonymously();
+      expect(a.uid, 'uid-1');
+      expect(calls, ['signUp']);
+      expect(await store.read(),
+          const StoredSession(uid: 'uid-1', refreshToken: 'refresh-uid-1'));
+
+      // Second launch, same device: the stored refresh token is exchanged and
+      // the SAME uid comes back — no signUp at all.
+      final second = AuthClient(OnlineConfig.emulator(),
+          inner: clientFor('uid-SHOULD-NOT-BE-USED'), store: store);
+      final b = await second.signInAnonymously();
+      expect(b.uid, 'uid-1', reason: 'the seat survives the restart');
+      expect(b.idToken, 'tok-uid-1-2', reason: 'a freshly minted id token');
+      expect(calls, ['signUp', 'refresh'],
+          reason: 'a restore must never sign up');
+      // The rotated refresh token replaced the stored one.
+      expect((await store.read())!.refreshToken, 'refresh-uid-1-2');
+    });
+
+    test('a rejected refresh token falls back to a new user and is dropped',
+        () async {
+      final store = InMemoryTokenStore();
+      await store
+          .write(const StoredSession(uid: 'gone', refreshToken: 'revoked'));
+      final calls = <String>[];
+      final client = MockClient((req) async {
+        final isRefresh = req.url.path.contains('token');
+        calls.add(isRefresh ? 'refresh' : 'signUp');
+        if (isRefresh) {
+          return http.Response(
+              jsonEncode({
+                'error': {'message': 'TOKEN_EXPIRED'}
+              }),
+              400);
+        }
+        return http.Response(signUpBody('uid-new'), 200);
+      });
+
+      final auth = AuthClient(OnlineConfig.emulator(),
+          inner: client, store: store);
+      final session = await auth.signInAnonymously();
+
+      // Tried the stored token first, then fell back rather than throwing.
+      expect(calls, ['refresh', 'signUp']);
+      expect(session.uid, 'uid-new');
+      // The dead token is gone, so the next launch does not pay for it again.
+      expect((await store.read())!.uid, 'uid-new');
+    });
+
+    test('an unreadable store costs a new user, never a failed launch',
+        () async {
+      final client = MockClient((req) async =>
+          http.Response(signUpBody('uid-fresh'), 200));
+      final auth = AuthClient(OnlineConfig.emulator(),
+          inner: client, store: _BrokenStore());
+
+      final session = await auth.signInAnonymously();
+      expect(session.uid, 'uid-fresh');
+    });
+
+    test('with no store the session still works, it just does not persist',
+        () async {
+      final client = MockClient((req) async =>
+          http.Response(signUpBody('uid-x'), 200));
+      final auth = AuthClient(OnlineConfig.emulator(), inner: client);
+      expect((await auth.signInAnonymously()).uid, 'uid-x');
+    });
+  });
+}
+
+/// Every operation throws — the store equivalent of a corrupt database file.
+class _BrokenStore implements TokenStore {
+  @override
+  Future<StoredSession?> read() async => throw StateError('unreadable');
+
+  @override
+  Future<void> write(StoredSession session) async =>
+      throw StateError('unwritable');
+
+  @override
+  Future<void> clear() async => throw StateError('unclearable');
 }
