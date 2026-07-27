@@ -1,5 +1,15 @@
 # AIGammon online play — deployment & configuration
 
+**The entire backend is `firestore.rules`.** There is no server code: no Cloud
+Functions, no container, nothing to build or deploy but a rules file. Matches
+live in Firestore documents, players sign in anonymously, dice are agreed
+between the two clients by a commit-reveal handshake, and each client validates
+the other's moves with the full rules engine. That is what keeps online play on
+the **free Spark plan — no Blaze upgrade, no credit card, no billing account.**
+
+Deployment is therefore four short steps (§1–§4 below), of which only one is a
+command.
+
 The app resolves its online backend from `onlineConfigProvider`
 (`app/lib/online/online_providers.dart`):
 
@@ -16,74 +26,104 @@ Debug builds default to the emulator — no dart-define needed. Just start the
 emulator suite, then run the app in debug:
 
 ```sh
-# From firebase/ — start Auth + Firestore + Functions emulators.
+# From firebase/ — start the Firestore + Auth emulators (the only two there
+# are; firebase.json declares no others).
 firebase emulators:start
 
 # From app/ — a normal debug run picks up OnlineConfig.emulator()
-# (demo-aigammon on 127.0.0.1: Firestore 8080, Auth 9099, Functions 5001).
+# (demo-aigammon on 127.0.0.1: Firestore 8080, Auth 9099).
 flutter run
 ```
 
 Create a match on one client and join it by code from another (a second
 `flutter run`, or the two-client emulator E2E test) to exercise online play
-end to end. To run the full emulator test matrix locally (functions build +
-both suites in throwaway emulators):
+end to end. To run the full emulator test matrix locally — the `firestore.rules`
+unit tests, the `online_client` transport suite and the app's two-client E2E,
+each in a throwaway emulator:
 
 ```powershell
 pwsh firebase/run-emulator-tests.ps1
 ```
 
-CI runs the same two suites on Linux via `firebase/ci-emulator-suites.sh` inside
-a single `firebase emulators:exec` (see the `online` job in
+CI runs the same three suites on Linux via `firebase/ci-emulator-suites.sh`
+inside a single `firebase emulators:exec` (see the `online` job in
 `.github/workflows/ci.yml`).
 
 ## Production deployment
 
-### 0. Prerequisites
+### 1. Create (or verify) the `aigammon` project — Spark plan
 
-- **Firebase CLI** installed (`npm install -g firebase-tools`) and logged in as
-  an **owner/editor of the `aigammon` project**:
+In the [Firebase console](https://console.firebase.google.com/), **Add project**
+→ name it `aigammon` (Google Analytics is not needed). A new project is on the
+free **Spark** plan by default: **leave it there.** Nothing in this app requires
+Blaze, and no billing account needs to exist.
 
-  ```sh
-  firebase login
-  ```
+If the project already exists, check the plan badge at the bottom of the console
+sidebar; **Spark** is the expected value.
 
-- **Blaze (pay-as-you-go) billing plan.** The match-lifecycle backend is
-  **Cloud Functions v2**, which requires the Blaze plan — the free Spark plan
-  cannot deploy 2nd-gen functions. Upgrade the project first in the Firebase
-  console (⚙ → *Usage and billing* → *Modify plan* → *Blaze*). At this app's
-  scale (server-side dice + match writes only) the metered cost is negligible
-  and stays within the free monthly allowances in practice, but a billing
-  account must be attached for the deploy to succeed.
-- **Anonymous authentication enabled** for the project (Firebase console →
-  *Authentication* → *Sign-in method* → enable *Anonymous*). Clients sign in
-  anonymously before creating or joining a match.
+Then create the Firestore database itself: **Build → Firestore Database →
+Create database** → production mode → pick a location (any; it cannot be changed
+later). The rules deployed in §3 replace the default deny-all ruleset.
 
-### 1. Deploy Firestore rules + functions
+### 2. Enable anonymous authentication
 
-From the `firebase/` directory:
+**Build → Authentication → Get started → Sign-in method → Anonymous → Enable →
+Save.**
+
+Every client signs in anonymously before creating or joining a match; the uid it
+receives is what `firestore.rules` checks ownership against. Online play cannot
+work without this, and it is the only auth provider the app uses.
+
+### 3. Deploy the rules
+
+Install the Firebase CLI and log in as an **owner/editor of the project**:
 
 ```sh
-firebase deploy --only firestore:rules,functions --project aigammon
+npm install -g firebase-tools
+firebase login
 ```
 
-This pushes `firestore.rules` and the compiled Cloud Functions. (Firestore
-indexes are deployed too if `firestore.indexes.json` grows any; it is currently
-empty.) The functions are built from TypeScript — `firebase deploy` runs the
-`predeploy` build, but you can also `npm run build` in `firebase/functions`
-first to catch type errors locally.
+Then, from the `firebase/` directory:
 
-### 2. Retrieve the Web API key
+```sh
+firebase deploy --only firestore:rules --project aigammon
+```
 
-The production `OnlineConfig` needs the project's **Web API Key**:
+That is the whole backend deploy. (`firestore.indexes.json` is deployed by
+`--only firestore` if it ever grows an index; it is currently empty, and the
+queries the client makes — `events` by `seq`, `rolls` by `n` — are served by the
+automatic single-field indexes.)
 
-- Firebase console → ⚙ *Project settings* → **General** tab → **Web API Key**.
+Re-run this command after ANY edit to `firestore.rules`; nothing else in the
+repo needs deploying, ever.
 
-This key is not a secret in the credential sense (it identifies the project to
-Firebase's public REST/Auth endpoints and is safe to ship in a client binary);
-access is gated by Firestore security rules and App Check, not by hiding it.
+### 4. Retrieve the Web API key and set the repo Variables
 
-### 3. Build the app for production online play
+The production `OnlineConfig` needs two values:
+
+| Value | Where to find it |
+|---|---|
+| **Project ID** | `aigammon` (Firebase console → ⚙ *Project settings* → **General** → *Project ID*) |
+| **Web API Key** | Firebase console → ⚙ *Project settings* → **General** tab → **Web API Key** |
+
+If the Web API Key row is missing, the project has no web app registered yet:
+**Project settings → General → Your apps → Web (`</>`)**, register any nickname
+(no hosting), and the key appears. The app bundles no Firebase SDK, so the rest
+of the generated config snippet is irrelevant.
+
+Add both in the GitHub repo under **Settings → Secrets and variables → Actions →
+Variables → New repository variable** (Variables, not Secrets — see below):
+
+- `AIGAMMON_FIREBASE_PROJECT` → `aigammon`
+- `AIGAMMON_FIREBASE_API_KEY` → the Web API Key
+
+The Web API key is **not a secret** in the credential sense: it identifies the
+project to Firebase's public REST/Auth endpoints, ships inside every client
+binary, and grants nothing on its own — access is gated by
+`firestore.rules` (and, optionally, App Check). Storing it as a Variable keeps it
+readable in build logs, which is what makes a failed online build diagnosable.
+
+### 5. Build the app for production online play
 
 Supply both defines so `onlineConfigProvider` selects the production backend:
 
@@ -99,10 +139,39 @@ The same two defines work for any release target (`build appbundle`,
 ### Follow-up: wire the defines into `android.yml`
 
 The `android.yml` release-APK workflow currently builds without online defines,
-so its APKs have online play disabled. A later change can add
-`AIGAMMON_FIREBASE_PROJECT` as a repo **variable** and `AIGAMMON_FIREBASE_API_KEY`
-as a repo **secret**, then pass both through as `--dart-define`s in the build
-step. Not implemented here — tracked as a follow-up.
+so its APKs have online play disabled. A later change can pass the two repo
+Variables from §4 through as `--dart-define`s in the build step. Not implemented
+here — tracked as a follow-up.
+
+## Free-tier budget
+
+Spark's daily Firestore quota is **50,000 document reads, 20,000 writes and
+20,000 deletes**, and it resets every day at midnight Pacific.
+
+Reads are what this design spends: each client polls two collection queries per
+cycle, at 2s while it is idle and 500ms only while a dice handshake is
+outstanding (`OnlineMatchController.currentPollInterval`). A whole match — both
+clients, all games — costs on the order of a few thousand reads, so the quota is
+roughly **10–15 matches a day** across all users. That is a friends-and-family
+budget, and it is the deliberate price of having no server. Exceeding it makes
+reads fail until the reset (the app surfaces them as transient errors); the only
+remedies are polling less often or moving to Blaze.
+
+Writes are negligible by comparison: one document per event and three phase
+writes per roll, a few hundred per match.
+
+## What is NOT set up (and does not need to be)
+
+For the avoidance of doubt, online play needs **none** of: Cloud Functions,
+Cloud Run, a service account for gameplay, App Engine, Hosting, Cloud Storage,
+FlutterFire/`google-services.json`/`GoogleService-Info.plist`, or a billing
+account. The client talks to Firestore and Identity Toolkit over plain REST with
+the Web API key, and the only server-side artifact in this repo is
+`firebase/firestore.rules`.
+
+(`FIREBASE_SERVICE_ACCOUNT` does exist as a repo secret — it is used by the
+**App Distribution** steps in `android.yml`/`ios.yml` to upload builds to
+testers, which is unrelated to online play.)
 
 ## iOS distribution
 
