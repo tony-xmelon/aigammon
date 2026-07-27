@@ -53,15 +53,29 @@ try {
 if ($clientCode -ne 0) { throw "online_client emulator suite failed ($clientCode)" }
 Write-Host "online_client emulator suite passed" -ForegroundColor Green
 
-# ---------------------------------------------------------------------------
-# NOTE (Plan 16 — serverless online play, in progress)
-#   The app's two-client E2E still targets the CALLABLE-era stack and is
-#   disabled until Task 5 rewrites it for the serverless model (Task 6 then
-#   deletes firebase/functions/ entirely).
-# ---------------------------------------------------------------------------
-# $app = (Resolve-Path (Join-Path $PSScriptRoot '..\app')).Path
-# $appCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
-#   "flutter test --tags emulator test\online\emulator_e2e_test.dart"
-# firebase emulators:exec --project demo-aigammon --only firestore,auth $appCommand
+# 3. The app's two-client E2E — two real OnlineMatchControllers, each with its
+#    own anonymous user, playing a whole match over real documents, plus the
+#    adversarial legs (rules-blocked forgeries, illegal event, tampered reveal).
+#
+#    AIGAMMON_EMULATOR=1 is the env gate the test file reads (see
+#    app/dart_test.yaml for why an env gate rather than exclude_tags).
+#    AIGAMMON_E2E_POLL_MS turns the controllers' poll interval down from the
+#    production 2s: a roll costs ~3 poll latencies, so 2s pacing runs a whole
+#    match into MINUTES of pure waiting (measured on one game: 20-30s at 100ms
+#    against 4m50s at 2000ms). Set it to 2000 by hand to time production pacing.
+$app = (Resolve-Path (Join-Path $PSScriptRoot '..\app')).Path
+$appCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
+  "set `"AIGAMMON_E2E_POLL_MS=100`" && " +
+  "flutter test --tags emulator test\online\emulator_e2e_test.dart"
+
+Push-Location $PSScriptRoot
+try {
+  firebase emulators:exec --project demo-aigammon --only firestore,auth $appCommand
+  $appCode = $LASTEXITCODE
+} finally {
+  Pop-Location
+}
+if ($appCode -ne 0) { throw "app two-client E2E suite failed ($appCode)" }
+Write-Host "app two-client E2E suite passed" -ForegroundColor Green
 
 Write-Host "all emulator suites passed" -ForegroundColor Green

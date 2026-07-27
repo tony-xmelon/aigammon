@@ -13,10 +13,16 @@ set -euo pipefail
 #    (anonymous auth + direct Firestore documents) against firestore.rules.
 (cd ../packages/online_client && dart test -P emulator)
 
-# ---------------------------------------------------------------------------
-# NOTE (Plan 16 — serverless online play, in progress)
-#   The app's two-client E2E still targets the CALLABLE-era stack and is
-#   disabled until Task 5 rewrites it for the serverless model (Task 6 then
-#   deletes firebase/functions/).
-# ---------------------------------------------------------------------------
-# (cd ../app && flutter pub get && AIGAMMON_EMULATOR=1 flutter test --tags emulator test/online/emulator_e2e_test.dart)
+# 3. The app's two-client E2E — two real OnlineMatchControllers, each with its
+#    own anonymous user, playing a whole match over real documents, plus the
+#    adversarial legs (rules-blocked forgeries, illegal event, tampered reveal).
+#
+#    AIGAMMON_EMULATOR=1 is the env gate the test file reads (see
+#    app/dart_test.yaml for why an env gate rather than exclude_tags).
+#    AIGAMMON_E2E_POLL_MS turns the controllers' poll interval down from the
+#    production 2s: a roll costs ~3 poll latencies, so 2s pacing runs a whole
+#    match into MINUTES of pure waiting (measured on one game: 20-30s at 100ms
+#    against 4m50s at 2000ms).
+(cd ../app && flutter pub get &&
+  AIGAMMON_EMULATOR=1 AIGAMMON_E2E_POLL_MS=100 \
+  flutter test --tags emulator test/online/emulator_e2e_test.dart)
