@@ -24,12 +24,16 @@ engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
   engine to flag **blunders** and summarise cube/checker errors.
 - **Local persistence** — matches and their event logs are stored on-device with
   **drift/SQLite**; cached analysis lives alongside them.
-- **Online play** over Firebase — **create** a match to get a short **share
-  code**, or **join** an opponent's match by code. Dice are rolled
-  **server-side** by a Cloud Function (neither client can cheat the RNG), and
-  match state syncs live through Firestore. The full backend runs against the
-  **Firebase Emulator Suite** for offline development, and a two-client
-  full-match end-to-end test verifies it there. See
+- **Online play** over Firebase, **serverless** — **create** a match to get a
+  short **invite code**, or **join** an opponent's match by code; the match is
+  an append-only Firestore event log both clients fold. Dice come from a
+  **commit-reveal handshake** between the two clients, so neither can bias the
+  RNG without the other seeing it, and each client re-checks every event the
+  other writes with the full rules engine — a proven violation **freezes** the
+  match rather than being quietly accepted. The whole backend is one security
+  rules file, which runs against the **Firebase Emulator Suite** for offline
+  development; a two-client full-match end-to-end test (with adversarial legs)
+  verifies it there. See
   [**Deploying online play**](#deploying-online-play) below.
 
 See [`docs/superpowers/plans/`](docs/superpowers/plans/) and the
