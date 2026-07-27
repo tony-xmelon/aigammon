@@ -136,26 +136,39 @@ flutter build apk --release \
 The same two defines work for any release target (`build appbundle`,
 `build windows`, etc.).
 
-### Follow-up: wire the defines into `android.yml`
+### CI builds pick the defines up automatically
 
-The `android.yml` release-APK workflow currently builds without online defines,
-so its APKs have online play disabled. A later change can pass the two repo
-Variables from §4 through as `--dart-define`s in the build step. Not implemented
-here — tracked as a follow-up.
+The `android.yml` and `ios.yml` release workflows already inject both online
+defines from the repo Variables set in §4: when
+`AIGAMMON_FIREBASE_PROJECT` and `AIGAMMON_FIREBASE_API_KEY` are both present the
+build step passes them through as `--dart-define`s (online play ENABLED against
+that project); when either is unset the build omits the defines and the app
+ships with online play "not configured", exactly as a define-less local build
+does. So setting the two Variables is the ONLY action needed to turn on online
+play in distributed builds — no workflow edit.
 
 ## Free-tier budget
 
 Spark's daily Firestore quota is **50,000 document reads, 20,000 writes and
 20,000 deletes**, and it resets every day at midnight Pacific.
 
-Reads are what this design spends: each client polls two collection queries per
-cycle, at 2s while it is idle and 500ms only while a dice handshake is
-outstanding (`OnlineMatchController.currentPollInterval`). A whole match — both
-clients, all games — costs on the order of a few thousand reads, so the quota is
-roughly **10–15 matches a day** across all users. That is a friends-and-family
-budget, and it is the deliberate price of having no server. Exceeding it makes
-reads fail until the reset (the app surfaces them as transient errors); the only
-remedies are polling less often or moving to Blaze.
+Reads are what this design spends. Each client polls two collection queries per
+cycle — events and rolls — at 2s while it is idle and 500ms only while a dice
+handshake is outstanding (`OnlineMatchController.currentPollInterval`). Each of
+those queries evaluates the `matchOf(code)` participation check in
+`firestore.rules`, and a security-rule `get()` is itself **billed as a document
+read**: so a poll cycle costs roughly its two query results *plus* two more
+reads for the two rules-gets — about double the naive count. (Event and roll
+writes evaluate the same `get()` too, adding a read apiece, though writes are
+far rarer than polls.)
+
+Folding that overhead in, a whole match — both clients, every game, mostly at
+the idle cadence with brief 500ms bursts per roll — costs several thousand
+reads, so the 50K/day quota is realistically **roughly 5–10 matches a day**
+across all users. That is a friends-and-family budget, and it is the deliberate
+price of having no server. Exceeding it makes reads fail until the reset (the
+app surfaces them as transient errors); the only remedies are polling less often
+or moving to Blaze.
 
 Writes are negligible by comparison: one document per event and three phase
 writes per roll, a few hundred per match.
