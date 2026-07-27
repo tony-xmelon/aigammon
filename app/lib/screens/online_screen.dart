@@ -103,6 +103,7 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
 
   // --- Create state ----------------------------------------------------------
   int _matchLength = 5;
+  bool _cubeless = false;
   bool _creating = false;
   String? _createdCode;
   String? _createError;
@@ -132,8 +133,25 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     _pollTimer = null;
   }
 
-  String _errorText(Object e) =>
-      e is OnlineException ? e.message : 'Something went wrong. Please try again.';
+  /// User-facing copy for a transport failure.
+  ///
+  /// The typed exceptions carry developer-shaped messages (they name document
+  /// paths and statuses), so the three the user can actually hit get their own
+  /// line: a mistyped code, a seat someone else took, and a match that is not
+  /// ours to look at.
+  String _errorText(Object e) {
+    if (e is NotFoundException) {
+      return 'No match with that code. Check it and try again.';
+    }
+    if (e is FailedPreconditionException) {
+      return 'That match is no longer open — the seat has been taken.';
+    }
+    if (e is PermissionDeniedException) {
+      return 'That match is not open to you.';
+    }
+    if (e is OnlineException) return e.message;
+    return 'Something went wrong. Please try again.';
+  }
 
   // --- Create flow -----------------------------------------------------------
 
@@ -144,13 +162,16 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     });
     try {
       final api = await ref.read(matchApiProvider.future);
-      final res = await api.createMatch(_matchLength);
+      final doc = await api.createMatch(
+        length: _matchLength,
+        cubeless: _cubeless,
+      );
       if (!mounted) return;
       setState(() {
-        _createdCode = res.code;
+        _createdCode = doc.code;
         _cancelled = false;
       });
-      unawaited(_pollUntilActive(api, res.matchId));
+      unawaited(_pollUntilActive(api, doc.code));
     } catch (e) {
       if (!mounted) return;
       setState(() => _createError = _errorText(e));
@@ -159,14 +180,14 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     }
   }
 
-  /// Polls `fetchMatch` every [_pollInterval] until the match becomes active,
-  /// then launches the game as the White (creator) side. Transient fetch
-  /// failures surface inline and keep polling; cancelling stops the loop.
-  Future<void> _pollUntilActive(MatchApi api, String matchId) async {
+  /// Polls `fetchMatch` every [_pollInterval] until an opponent has taken the
+  /// guest seat, then launches the game as the White (host) side. Transient
+  /// fetch failures surface inline and keep polling; cancelling stops the loop.
+  Future<void> _pollUntilActive(MatchApi api, String code) async {
     while (mounted && !_cancelled) {
-      MatchSnapshot snap;
+      MatchDoc doc;
       try {
-        snap = await api.fetchMatch(matchId);
+        doc = await api.fetchMatch(code);
       } catch (e) {
         if (!mounted || _cancelled) return;
         setState(() => _createError = _errorText(e));
@@ -174,14 +195,8 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
         continue;
       }
       if (!mounted || _cancelled) return;
-      if (snap.status == 'active') {
-        await _launch(
-          api,
-          matchId,
-          snap,
-          localSide: Player.white,
-          orientation: BoardOrientationMode.fixedWhite,
-        );
+      if (doc.isActive) {
+        await _launch(api, doc);
         return;
       }
       await _wait();
@@ -213,16 +228,11 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     });
     try {
       final api = await ref.read(matchApiProvider.future);
-      final matchId = await api.joinMatch(code);
-      final snap = await api.fetchMatch(matchId);
+      // The join both claims the seat and returns the match as it now stands,
+      // so there is nothing to read back.
+      final doc = await api.joinMatch(code);
       if (!mounted) return;
-      await _launch(
-        api,
-        matchId,
-        snap,
-        localSide: Player.black,
-        orientation: BoardOrientationMode.fixedBlack,
-      );
+      await _launch(api, doc);
     } catch (e) {
       if (!mounted) return;
       setState(() => _joinError = _errorText(e));
@@ -236,29 +246,28 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
   /// Builds the controller, waits until it is ready, and pushes [GameScreen].
   /// If the screen is torn down (or the controller disposed) before readiness,
   /// the controller is disposed and nothing is pushed.
-  Future<void> _launch(
-    MatchApi api,
-    String matchId,
-    MatchSnapshot snapshot, {
-    required Player localSide,
-    required BoardOrientationMode orientation,
-  }) async {
+  ///
+  /// The seat is positional and comes from the match document (host plays white,
+  /// guest black), so both flows funnel through here.
+  Future<void> _launch(MatchApi api, MatchDoc doc) async {
+    final localSide = doc.sideOf(api.uid) ?? Player.white;
+    final orientation = localSide == Player.white
+        ? BoardOrientationMode.fixedWhite
+        : BoardOrientationMode.fixedBlack;
     // Create the local history row for this online match and bind persistence to
     // it. The local seat is 'human'; the opponent is 'remote'. The insert runs
     // fire-and-forget; the controller's hooks await the id before recording a
     // finished game, and the post-match "Match summary" link awaits it too.
     final repo = ref.read(matchRepositoryProvider);
     final matchIdFuture = repo.startMatch(
-      matchLength: snapshot.matchLength,
+      matchLength: doc.length,
       mode: 'online',
       whiteType: localSide == Player.white ? 'human' : 'remote',
       blackType: localSide == Player.black ? 'human' : 'remote',
     );
     final controller = OnlineMatchController(
       api: api,
-      matchId: matchId,
-      localSide: localSide,
-      initialSnapshot: snapshot,
+      matchDoc: doc,
       persistence: RepositoryPersistence(repo, matchIdFuture),
     );
     unawaited(controller.playMatch());
@@ -341,6 +350,16 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           onSelectionChanged: _creating
               ? null
               : (s) => setState(() => _matchLength = s.first),
+        ),
+        // The cube option is now the HOST's, carried in the match document, and
+        // honoured by both peers (in the callable era the cube was
+        // server-mediated and there was no online choice to make).
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Play without cube'),
+          subtitle: const Text('No doubling cube this match'),
+          value: _cubeless,
+          onChanged: _creating ? null : (v) => setState(() => _cubeless = v),
         ),
         const SizedBox(height: 16),
         FilledButton(
@@ -426,7 +445,9 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           controller: _codeController,
           enabled: !_joining,
           textCapitalization: TextCapitalization.characters,
-          maxLength: 6,
+          // The code IS the match document id: [kCodeLength] characters from
+          // [kCodeAlphabet].
+          maxLength: kCodeLength,
           decoration: const InputDecoration(
             labelText: 'Match code',
             counterText: '',

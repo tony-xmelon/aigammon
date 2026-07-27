@@ -30,11 +30,12 @@ final onlineConfigProvider = Provider<OnlineConfig?>((ref) {
 
 /// The shared [MatchApi] for the app, built once per session.
 ///
-/// Signs in an anonymous Firebase user, then wires the Firestore and Functions
-/// REST clients to that session's token. Being a plain (non-autoDispose)
-/// [FutureProvider], the resolved [MatchApi] — and its anonymous session — are
-/// cached for the app lifetime; the clients are closed when the [ProviderScope]
-/// is torn down.
+/// Signs in an anonymous Firebase user, then talks to Firestore documents
+/// DIRECTLY — there are no Cloud Functions in the serverless model, so
+/// `firebase/firestore.rules` is the only server-side logic. Being a plain
+/// (non-autoDispose) [FutureProvider], the resolved [MatchApi] — and its
+/// anonymous session — are cached for the app lifetime; the HTTP clients are
+/// closed when the [ProviderScope] is torn down.
 ///
 /// Throws an [OnlineException] `not-configured` when [onlineConfigProvider] is
 /// `null`; callers surface that as the friendly not-configured state (though the
@@ -48,16 +49,8 @@ final matchApiProvider = FutureProvider<MatchApi>((ref) async {
     );
   }
 
-  final auth = AuthClient(config);
-  await auth.signInAnonymously();
-
-  Future<String> token() => auth.validToken();
-  final firestore = FirestoreRestClient(config, token: token);
-  final functions = FunctionsClient(config, token: token);
-
-  ref.onDispose(auth.close);
-  ref.onDispose(firestore.close);
-  ref.onDispose(functions.close);
-
-  return MatchApi(auth, firestore, functions);
+  final api = MatchApi.forConfig(config);
+  ref.onDispose(api.close);
+  await api.signIn();
+  return api;
 });

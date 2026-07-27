@@ -17,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:online_client/online_client.dart';
 
 import '../data/test_database.dart';
+import '../online/fake_online_backend.dart';
 
 /// A no-native [EngineFacade] with instant, flat responses — enough for the
 /// online [TutorService] the game screen constructs (it never blocks a test).
@@ -52,100 +53,33 @@ class FakeFacade implements EngineFacade {
       );
 }
 
-/// A scriptable [MatchApi] stand-in for the online screen.
+/// A [FakeMatchApi] wired for the create/join screen: `createMatch` hands out
+/// [code], an invisible opponent takes the guest seat after [activeAfter]
+/// `fetchMatch` calls, and the match goes live with a sound opening roll already
+/// in its log (there is no second client here to make one, and the launched
+/// controller cannot become ready without it).
 ///
-/// `createMatch`/`joinMatch` return canned ids; `fetchMatch` reports `waiting`
-/// until the [activeAfter]-th call, then `active`; `fetchEventsSince` serves
-/// [log] (seed it with an opening roll so a launched controller reaches
-/// readiness); `pollEvents` is an idle stream (no timers). `joinMatch` throws
-/// [joinError] when set.
-class FakeMatchApi implements MatchApi {
-  FakeMatchApi({this.activeAfter = 1});
+/// The beat is disabled: a widget test's clock is fake, so the poll stays purely
+/// change-driven.
+FakeMatchApi screenApi(FakeBackend backend, {int activeAfter = 1}) =>
+    FakeMatchApi(backend, 'me')
+      ..nextCode = 'ABC123'
+      ..autoJoinAfterFetches = activeAfter
+      ..autoSeedOpening = true
+      ..pollBeat = null;
 
-  final int activeAfter;
-  String createdCode = 'ABC123';
-  String createdMatchId = 'm-created';
-  String joinedMatchId = 'm-joined';
-  Object? joinError;
-
-  List<RemoteEvent> log = [];
-
-  int createMatchCalls = 0;
-  int fetchMatchCalls = 0;
-  final List<String> joinCodes = [];
-  final _poll = StreamController<RemoteEvent>();
-
-  @override
-  Future<({String matchId, String code})> createMatch(int matchLength) async {
-    createMatchCalls++;
-    return (matchId: createdMatchId, code: createdCode);
-  }
-
-  @override
-  Future<String> joinMatch(String code) async {
-    joinCodes.add(code);
-    final err = joinError;
-    if (err != null) throw err;
-    return joinedMatchId;
-  }
-
-  @override
-  Future<MatchSnapshot> fetchMatch(String matchId) async {
-    fetchMatchCalls++;
-    final active = fetchMatchCalls >= activeAfter;
-    return _snap(status: active ? 'active' : 'waiting');
-  }
-
-  @override
-  Future<List<RemoteEvent>> fetchEventsSince(
-          String matchId, int afterSeq) async =>
-      [for (final e in log) if (e.seq > afterSeq) e];
-
-  @override
-  Stream<RemoteEvent> pollEvents(String matchId,
-          {Duration interval = const Duration(seconds: 2)}) =>
-      _poll.stream;
-
-  @override
-  Future<Dice> rollDice(String matchId) async => Dice(1, 2);
-
-  @override
-  Future<int> submitEvent(String matchId, GameEvent event,
-          {GameResultClaim? result}) async =>
-      1;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      super.noSuchMethod(invocation);
+/// A match sitting open under [code], for the join flow to claim.
+FakeMatch _waitingMatch(FakeBackend backend, String code) {
+  final m = FakeMatch(
+    code: code,
+    hostUid: 'their-host',
+    length: 5,
+    cubeless: false,
+    status: 'waiting',
+  );
+  backend.matches[code] = m;
+  return m;
 }
-
-MatchSnapshot _snap({required String status, int matchLength = 5}) =>
-    MatchSnapshot(
-      status: status,
-      code: 'ABC123',
-      matchLength: matchLength,
-      gameNo: 1,
-      seq: 0,
-      whiteUid: 'w',
-      blackUid: status == 'active' ? 'b' : null,
-      whiteScore: 0,
-      blackScore: 0,
-      turn: Player.white,
-      phase: GamePhase.moving,
-      isCrawford: false,
-      crawfordPlayed: false,
-      winner: null,
-    );
-
-/// An opening-roll log (white first: 6 > 3) so a launched controller folds a
-/// game and becomes ready.
-List<RemoteEvent> _openingLog() => const [
-      RemoteEvent(
-        seq: 0,
-        gameNo: 1,
-        event: OpeningRollEvent(whiteDie: 6, blackDie: 3),
-      ),
-    ];
 
 /// The online screen under test. [configured] false overrides the config to
 /// `null` (the not-configured case); otherwise the emulator config is used.
@@ -181,14 +115,20 @@ void main() {
   const surface = Size(900, 1400);
 
   late AppDatabase db;
+  late FakeBackend backend;
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized();
     db = newTestDatabase();
+    backend = FakeBackend();
   });
-  tearDown(() => db.close());
+  tearDown(() async {
+    await backend.close();
+    await db.close();
+  });
 
   testWidgets('config null shows the not-configured card, no crash', (t) async {
-    await t.pumpWidget(_app(FakeMatchApi(), configured: false, db: db));
+    await t.pumpWidget(
+        _app(screenApi(backend), configured: false, db: db));
     await t.pumpAndSettle();
 
     expect(find.byIcon(Icons.cloud_off), findsOneWidget);
@@ -204,7 +144,7 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
 
     // waiting on the first fetch, active on the second.
-    final api = FakeMatchApi(activeAfter: 2)..log = _openingLog();
+    final api = screenApi(backend, activeAfter: 2);
     await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 
@@ -219,7 +159,7 @@ void main() {
     // Poll to active, then the controller reaches readiness and the game opens.
     await _pumpUntil(t, find.byType(GameScreen));
     expect(find.byType(GameScreen), findsOneWidget);
-    expect(api.createMatchCalls, 1);
+    expect(api.calls['createMatch'], 1);
   });
 
   testWidgets('join flow: enter code → GameScreen pushed with the uppercased code',
@@ -227,7 +167,8 @@ void main() {
     await t.binding.setSurfaceSize(surface);
     addTearDown(() => t.binding.setSurfaceSize(null));
 
-    final api = FakeMatchApi(activeAfter: 1)..log = _openingLog();
+    final api = screenApi(backend);
+    _waitingMatch(backend, 'ABC123');
     await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 
@@ -245,7 +186,8 @@ void main() {
     await t.binding.setSurfaceSize(surface);
     addTearDown(() => t.binding.setSurfaceSize(null));
 
-    final api = FakeMatchApi(activeAfter: 1)..log = _openingLog();
+    final api = screenApi(backend);
+    _waitingMatch(backend, 'ABC123');
     await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 
@@ -274,8 +216,8 @@ void main() {
     await t.binding.setSurfaceSize(surface);
     addTearDown(() => t.binding.setSurfaceSize(null));
 
-    final api = FakeMatchApi(activeAfter: 1)..log = _openingLog();
-    api.joinError = const OnlineException('not-found', 'No match with that code.');
+    // Nothing seeded under ZZZZZZ, so the first join is a genuine NOT_FOUND.
+    final api = screenApi(backend);
 
     await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
@@ -285,13 +227,15 @@ void main() {
     await t.pump();
     await t.pump();
 
-    expect(find.text('No match with that code.'), findsOneWidget);
+    expect(find.text('No match with that code. Check it and try again.'),
+        findsOneWidget);
     expect(find.byType(GameScreen), findsNothing);
     // The field is still editable (not disabled).
     expect(t.widget<TextField>(find.byType(TextField)).enabled, isTrue);
 
-    // Clear the fault and retry — the same field, a real join now succeeds.
-    api.joinError = null;
+    // The match appears (the host created it a moment later) and the retry — the
+    // same field, the same code — goes through.
+    _waitingMatch(backend, 'ZZZZZZ');
     await t.tap(find.widgetWithText(FilledButton, 'Join'));
     await _pumpUntil(t, find.byType(GameScreen));
     expect(find.byType(GameScreen), findsOneWidget);
@@ -303,7 +247,7 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
 
     // Never becomes active, so the flow parks in the waiting state.
-    final api = FakeMatchApi(activeAfter: 1000)..log = _openingLog();
+    final api = screenApi(backend, activeAfter: 1000);
     await t.pumpWidget(_app(api, db: db));
     await t.pumpAndSettle();
 

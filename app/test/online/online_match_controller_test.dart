@@ -1,12 +1,13 @@
-import 'dart:async';
 import 'dart:math';
 
 import 'package:aigammon_app/data/persistence_hooks.dart';
-import 'package:aigammon_app/game/player_agent.dart';
+import 'package:aigammon_app/game/player_agent.dart' show CubeAction;
 import 'package:aigammon_app/online/online_match_controller.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:online_client/online_client.dart';
+
+import 'fake_online_backend.dart';
 
 /// A [MatchPersistence] that records every hook call, so a test can assert
 /// onGameFinished fired once per finished game (with the full event log + folded
@@ -52,687 +53,536 @@ class RecordingPersistence implements MatchPersistence {
   }
 }
 
-/// A scriptable [MatchApi] stand-in. Events reach the controller through
-/// [emit] (the poll stream); [fetchEventsSince]/[fetchMatch] serve the canned
-/// [log]/[snapshot] the divergence path refetches. Submissions and rolls are
-/// recorded; [throwsRemaining] scripts leading submit failures.
-class FakeMatchApi implements MatchApi {
-  final _poll = StreamController<RemoteEvent>();
-
-  /// The authoritative log served by [fetchEventsSince] (empty unless a test
-  /// arms the divergence rebuild).
-  List<RemoteEvent> log = [];
-
-  /// The snapshot served by [fetchMatch] (divergence rebuild).
-  MatchSnapshot? snapshot;
-
-  /// Number of leading [submitEvent] calls that should throw before succeeding.
-  int throwsRemaining = 0;
-
-  /// Number of leading [rollDice] calls that should throw before succeeding.
-  int rollDiceThrows = 0;
-
-  final List<(GameEvent, GameResultClaim?)> submissions = [];
-  final List<int> fetchSinceArgs = [];
-  int fetchMatchCalls = 0;
-  int rollDiceCalls = 0;
-  int _seq = 100;
-
-  void emit(RemoteEvent e) => _poll.add(e);
-
-  void emitError(Object e) => _poll.addError(e);
-
-  bool get hasPollListener => _poll.hasListener;
-
-  @override
-  Stream<RemoteEvent> pollEvents(String matchId,
-          {Duration interval = const Duration(seconds: 2)}) =>
-      _poll.stream;
-
-  @override
-  Future<List<RemoteEvent>> fetchEventsSince(String matchId, int afterSeq) async {
-    fetchSinceArgs.add(afterSeq);
-    return [for (final e in log) if (e.seq > afterSeq) e];
+/// Yields to the event loop [times] times, letting the fakes' async chains and
+/// any short timers run to completion.
+Future<void> settle([int times = 24]) async {
+  for (var i = 0; i < times; i++) {
+    await Future<void>.delayed(Duration.zero);
   }
-
-  @override
-  Future<MatchSnapshot> fetchMatch(String matchId) async {
-    fetchMatchCalls++;
-    return snapshot!;
-  }
-
-  @override
-  Future<int> submitEvent(String matchId, GameEvent event,
-      {GameResultClaim? result}) async {
-    submissions.add((event, result));
-    if (throwsRemaining > 0) {
-      throwsRemaining--;
-      throw const OnlineException('unavailable', 'scripted failure');
-    }
-    return ++_seq;
-  }
-
-  @override
-  Future<Dice> rollDice(String matchId) async {
-    rollDiceCalls++;
-    if (rollDiceThrows > 0) {
-      rollDiceThrows--;
-      throw const OnlineException('unavailable', 'scripted roll failure');
-    }
-    return Dice(1, 2);
-  }
-
-  @override
-  Future<({String matchId, String code})> createMatch(int matchLength) =>
-      throw UnimplementedError();
-
-  @override
-  Future<String> joinMatch(String code) => throw UnimplementedError();
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// A deterministic full game as an ordered [RemoteEvent] log, produced by
-/// random-but-seeded legal play (server dice + first/any legal move) until a
-/// checker is borne off. Mirrors how the real server would append events.
-({List<RemoteEvent> events, Game game}) playoutGame({
-  required int matchLength,
-  required Dice opening,
-  required Random rng,
-  int startSeq = 0,
-  int gameNo = 1,
-}) {
-  final events = <RemoteEvent>[];
-  var seq = startSeq;
-  final open = OpeningRollEvent(whiteDie: opening.die1, blackDie: opening.die2);
-  events.add(RemoteEvent(seq: seq++, gameNo: gameNo, event: open));
-  final isCrawford = MatchState(matchLength: matchLength).isCrawfordNext;
-  var game = Game.start(open, isCrawfordGame: isCrawford);
-
-  var guard = 0;
-  while (game.state.phase != GamePhase.gameOver) {
-    if (guard++ > 5000) {
-      throw StateError('playout did not terminate');
-    }
-    final s = game.state;
-    late GameEvent ev;
-    switch (s.phase) {
-      case GamePhase.awaitingRoll:
-        ev = RollEvent(s.turn, rng.nextInt(6) + 1, rng.nextInt(6) + 1);
-      case GamePhase.moving:
-        final legal = s.legalMoves;
-        final move = legal.isEmpty ? Move.none : legal[rng.nextInt(legal.length)];
-        ev = MoveEvent(s.turn, move);
-      case GamePhase.cubeOffered:
-      case GamePhase.resignOffered:
-      case GamePhase.gameOver:
-        throw StateError('unexpected phase in pure move playout: ${s.phase}');
-    }
-    game = game.append(ev);
-    events.add(RemoteEvent(seq: seq++, gameNo: gameNo, event: ev));
+/// Pumps the event loop until [done], failing with [reason] if it never becomes
+/// true. Everything here is real-async but zero-delay, so this converges fast.
+Future<void> pumpUntil(bool Function() done,
+    {int rounds = 4000, String reason = 'condition never became true'}) async {
+  for (var i = 0; i < rounds; i++) {
+    if (done()) return;
+    await Future<void>.delayed(Duration.zero);
   }
-  return (events: events, game: game);
+  fail(reason);
 }
-
-MatchSnapshot snap({
-  required int matchLength,
-  int whiteScore = 0,
-  int blackScore = 0,
-  bool crawfordPlayed = false,
-  bool isCrawford = false,
-  int gameNo = 1,
-  int seq = 0,
-  Player turn = Player.white,
-  GamePhase phase = GamePhase.moving,
-  String status = 'active',
-}) =>
-    MatchSnapshot(
-      status: status,
-      code: 'ABCDEF',
-      matchLength: matchLength,
-      gameNo: gameNo,
-      seq: seq,
-      whiteUid: 'w',
-      blackUid: 'b',
-      whiteScore: whiteScore,
-      blackScore: blackScore,
-      turn: turn,
-      phase: phase,
-      isCrawford: isCrawford,
-      crawfordPlayed: crawfordPlayed,
-      winner: null,
-    );
 
 void main() {
-  // Feed one poll event and let the controller's stream listener run.
-  Future<void> feed(FakeMatchApi api, RemoteEvent e) async {
-    api.emit(e);
-    await pumpEventQueue();
+  // Live matches under test, so a fake poll can be nudged with an error.
+  late FakeBackend backend;
+
+  setUp(() => backend = FakeBackend());
+  tearDown(() => backend.close());
+
+  /// The two controllers of one match, wired to the same store.
+  ({OnlineMatchController host, OnlineMatchController guest, FakeMatch match})
+      pair({
+    int length = 3,
+    bool cubeless = false,
+    MatchPersistence? hostPersistence,
+    MatchPersistence? guestPersistence,
+  }) {
+    final m = backend.seedMatch(length: length, cubeless: cubeless);
+    final host = OnlineMatchController(
+      api: FakeMatchApi(backend, 'host'),
+      matchDoc: m.doc,
+      rng: Random(101),
+      persistence: hostPersistence ?? const NoopPersistence(),
+      pollInterval: const Duration(milliseconds: 1),
+    );
+    final guest = OnlineMatchController(
+      api: FakeMatchApi(backend, 'guest'),
+      matchDoc: m.doc,
+      rng: Random(202),
+      persistence: guestPersistence ?? const NoopPersistence(),
+      pollInterval: const Duration(milliseconds: 1),
+    );
+    addTearDown(host.disposeController);
+    addTearDown(guest.disposeController);
+    return (host: host, guest: guest, match: m);
   }
 
-  test('folds a full 1-point game, driving local decisions with submissions',
+  /// One decision for [c], deduplicated by [GameState] identity so a submission
+  /// that has not been echoed back yet is never re-issued.
+  void act(
+    OnlineMatchController c,
+    Map<OnlineMatchController, GameState?> lastActed, {
+    void Function(OnlineMatchController)? onGameOver,
+  }) {
+    if (c.matchOver || c.frozen) return;
+    if (c.awaitingNextGame) {
+      onGameOver?.call(c);
+      c.continueToNextGame();
+      lastActed[c] = null;
+      return;
+    }
+    if (!c.isReady) return;
+    final GameState s;
+    try {
+      s = c.state;
+    } on StateError {
+      return;
+    }
+    if (identical(s, lastActed[c])) return;
+    final side = c.localSide;
+    if (c.pendingCubeOf(side).value != null) {
+      c.submitCubeResponse(side, CubeAction.take);
+    } else if (c.pendingResignOf(side).value != null) {
+      c.submitResignResponse(side, true);
+    } else if (c.pendingMoveOf(side).value != null) {
+      final legal = s.legalMoves;
+      c.submitMove(side, legal.isEmpty ? Move.none : legal.first);
+    } else if (c.awaitingHumanTurn) {
+      c.rollDice();
+    }
+    lastActed[c] = s;
+  }
+
+  /// Drives both controllers until the match is decided.
+  Future<void> playOut(
+    OnlineMatchController a,
+    OnlineMatchController b, {
+    void Function(OnlineMatchController)? onGameOver,
+    int maxIters = 60000,
+  }) async {
+    final lastActed = <OnlineMatchController, GameState?>{};
+    var iters = 0;
+    while (!(a.matchOver && b.matchOver)) {
+      if (a.frozen || b.frozen) {
+        fail('a controller froze mid-match: ${a.cheatError ?? b.cheatError}');
+      }
+      if (++iters > maxIters) {
+        fail('the match did not finish in $maxIters iterations '
+            '(a: over=${a.matchOver} ready=${a.isReady} err=${a.error}; '
+            'b: over=${b.matchOver} ready=${b.isReady} err=${b.error})');
+      }
+      act(a, lastActed, onGameOver: onGameOver);
+      act(b, lastActed, onGameOver: onGameOver);
+      await Future<void>.delayed(Duration.zero);
+    }
+    await settle();
+  }
+
+  // --- the happy path --------------------------------------------------------
+
+  test('two controllers play a whole match through the commit-reveal protocol',
       () async {
-    final api = FakeMatchApi();
-    // A full game so we know its winner; the local side is the winner, so the
-    // terminal (bear-off) move is a LOCAL submission carrying a result claim.
-    final opening = Dice(6, 3);
-    final play = playoutGame(
-        matchLength: 1, opening: opening, rng: Random(7), gameNo: 1);
-    final events = play.events;
-    final winner = (events.last.event as MoveEvent).player;
-    final local = winner;
-    final finalResult = play.game.state.result!;
+    final p = pair(length: 3);
+    await p.host.playMatch();
+    await p.guest.playMatch();
+    await pumpUntil(() => p.host.isReady && p.guest.isReady,
+        reason: 'the host never made the opening roll both sides could fold');
 
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm1',
-      localSide: local,
-      initialSnapshot: snap(matchLength: 1, isCrawford: true, turn: winner),
-    );
-    addTearDown(controller.disposeController);
-
-    // Track how many distinct local move-entry requests fired.
-    var pendingMoveFires = 0;
-    controller.pendingMoveOf(local).addListener(() {
-      if (controller.pendingMoveOf(local).value != null) pendingMoveFires++;
+    var pauses = 0;
+    await playOut(p.host, p.guest, onGameOver: (c) {
+      expect(c.state.phase, GamePhase.gameOver);
+      pauses++;
     });
 
-    await controller.playMatch();
+    // Both clients agree on the outcome and neither ended in a fault.
+    expect(p.host.error, isNull);
+    expect(p.guest.error, isNull);
+    expect(p.host.cheatError, isNull);
+    expect(p.guest.cheatError, isNull);
+    expect(p.host.match.winner, isNotNull);
+    expect(p.host.match.winner, p.guest.match.winner);
+    expect(p.host.match.whiteScore, p.guest.match.whiteScore);
+    expect(p.host.match.blackScore, p.guest.match.blackScore);
+    expect(p.host.localSide, Player.white, reason: 'the host plays white');
+    expect(p.guest.localSide, Player.black);
 
-    // Feed the opening (first mover starts in the moving phase with these dice).
-    await feed(api, events.first);
+    final m = p.match;
+    // The match document was closed out by (at least) one of the peers.
+    expect(m.status, 'complete');
+    expect(pauses, greaterThan(0), reason: 'a 3-point match takes >1 game');
 
-    var localRolls = 0;
-    var localMoves = 0;
-    for (final re in events.skip(1)) {
-      final ev = re.event;
-      if (ev is RollEvent) {
-        if (ev.player == local) {
-          expect(controller.awaitingHumanTurn, isTrue);
-          controller.rollDice();
-          await pumpEventQueue();
-          localRolls++;
-        }
-        await feed(api, re);
-      } else if (ev is MoveEvent) {
-        if (ev.player == local) {
-          expect(controller.pendingMoveOf(local).value, isNotNull);
-          controller.submitMove(local, ev.move);
-          await pumpEventQueue();
-          localMoves++;
-          final (subEvent, subClaim) = api.submissions.last;
-          expect(subEvent, isA<MoveEvent>());
-          expect((subEvent as MoveEvent).player, local);
-        }
-        await feed(api, re);
-      }
+    // Every roll ran the full protocol, exactly once per roll-bearing event, at
+    // contiguous indices from 1 — the counter both clients derive from the log.
+    final indices = m.rolls.keys.toList()..sort();
+    expect(indices, [for (var i = 1; i <= m.rollCount; i++) i]);
+    for (final roll in m.rolls.values) {
+      expect(roll.doc.isComplete, isTrue, reason: 'roll ${roll.n} never finished');
+      expect(commitMatches(roll.commit, roll.reveal!), isTrue);
     }
 
-    expect(controller.matchOver, isTrue);
-    expect(controller.state.phase, GamePhase.gameOver);
-    expect(controller.match.winner, winner);
-    expect(pendingMoveFires, localMoves);
-    expect(api.rollDiceCalls, localRolls);
-
-    // The terminal submission carried the correct result claim.
-    final (termEvent, termClaim) = api.submissions.last;
-    expect(termEvent, isA<MoveEvent>());
-    expect(termClaim, isNotNull);
-    expect(termClaim!.winner, finalResult.winner);
-    expect(termClaim.points, finalResult.points);
-    expect(termClaim.outcome, finalResult.outcome);
+    // Openings are ALWAYS the host's; ordinary rolls are the mover's, and every
+    // one carries exactly the dice its roll document derives.
+    var n = 0;
+    for (final re in m.events) {
+      final event = re.event;
+      if (event is! OpeningRollEvent && event is! RollEvent) continue;
+      final roll = m.rolls[++n]!.doc.completed!;
+      if (event is OpeningRollEvent) {
+        expect(re.author, 'host', reason: 'openings are the host\'s to roll');
+        expect(openingDiceMatchRoll(roll, event), isTrue);
+      } else {
+        expect(re.author, event is RollEvent && event.player == Player.white
+            ? 'host'
+            : 'guest');
+        expect(diceMatchRoll(roll, event as RollEvent), isTrue);
+      }
+    }
   });
 
-  test('ignores duplicate and out-of-order sequence numbers', () async {
-    final api = FakeMatchApi();
-    final open = const OpeningRollEvent(whiteDie: 6, blackDie: 3); // white first
-    final g0 = Game.start(open, isCrawfordGame: false);
-    final whiteMove = g0.state.legalMoves.first;
-    final g1 = g0.append(MoveEvent(Player.white, whiteMove));
-    expect(g1.state.turn, Player.black);
-    expect(g1.state.phase, GamePhase.awaitingRoll);
-
-    final ev0 = RemoteEvent(seq: 0, gameNo: 1, event: open);
-    final ev1 =
-        RemoteEvent(seq: 1, gameNo: 1, event: MoveEvent(Player.white, whiteMove));
-    final ev2 =
-        RemoteEvent(seq: 2, gameNo: 1, event: RollEvent(Player.black, 5, 2));
-
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm2',
-      localSide: Player.white,
-      initialSnapshot: snap(matchLength: 3),
-    );
-    addTearDown(controller.disposeController);
-    await controller.playMatch();
-
-    await feed(api, ev0); // opening → white moving
-
-    // seq 2 arrives before seq 1: ignored (would be an out-of-turn append and
-    // trip divergence if it were wrongly applied).
-    await feed(api, ev2);
-    await feed(api, ev2);
-    expect(controller.state.turn, Player.white);
-    expect(controller.state.phase, GamePhase.moving);
-
-    await feed(api, ev1); // the real next event
-    expect(controller.state.turn, Player.black);
-    expect(controller.state.phase, GamePhase.awaitingRoll);
-
-    await feed(api, ev2); // now in-order → applied
-    expect(controller.state.phase, GamePhase.moving);
-    expect(controller.state.dice, Dice(5, 2));
-
-    // No divergence was triggered by the stray events.
-    expect(controller.error, isNull);
-    expect(api.fetchMatchCalls, 0);
-  });
-
-  test('diverges on an illegal event: refetches, rebuilds, clears error',
+  test('cubeless travels in the match document and is honoured by both peers',
       () async {
-    final api = FakeMatchApi();
-    final open = const OpeningRollEvent(whiteDie: 6, blackDie: 3);
-    final g0 = Game.start(open, isCrawfordGame: false);
-    final whiteMove = g0.state.legalMoves.first;
-
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm3',
-      localSide: Player.white,
-      initialSnapshot: snap(matchLength: 3),
-    );
-    addTearDown(controller.disposeController);
-
-    final errors = <Object?>[];
-    controller.addListener(() => errors.add(controller.error));
-
-    await controller.playMatch();
-    await feed(api, RemoteEvent(seq: 0, gameNo: 1, event: open));
-
-    // Arm the authoritative rebuild: opening + white's real move.
-    api.log = [
-      RemoteEvent(seq: 0, gameNo: 1, event: open),
-      RemoteEvent(seq: 1, gameNo: 1, event: MoveEvent(Player.white, whiteMove)),
-    ];
-    api.snapshot = snap(
-        matchLength: 3, gameNo: 1, seq: 1, turn: Player.black);
-
-    // Inject an illegal event (a roll while white is mid-move) at the next seq.
-    await feed(api, RemoteEvent(seq: 1, gameNo: 1, event: RollEvent(Player.white, 3, 4)));
-    await pumpEventQueue();
-
-    // Refetched the whole log + a fresh snapshot exactly once.
-    expect(api.fetchMatchCalls, 1);
-    expect(api.fetchSinceArgs.where((a) => a == -1).length, 2); // catch-up + rebuild
-    // Error was set transiently, then cleared.
-    expect(errors.any((e) => e != null), isTrue);
-    expect(controller.error, isNull);
-    // Rebuilt to the authoritative state: white moved, black to roll.
-    expect(controller.state.turn, Player.black);
-    expect(controller.state.phase, GamePhase.awaitingRoll);
+    final p = pair(cubeless: true);
+    expect(p.host.cubeless, isTrue);
+    expect(p.guest.cubeless, isTrue);
   });
 
-  test('retries a failed submission once; surfaces error on double failure',
-      () async {
-    // Reach a local moving state so submitMove is valid.
-    Future<OnlineMatchController> movingController(FakeMatchApi api) async {
-      final open = const OpeningRollEvent(whiteDie: 6, blackDie: 3);
+  // --- freeze vs. self-healing ----------------------------------------------
+
+  group('cheat freeze', () {
+    /// A live guest controller whose opponent (the host) is scripted directly
+    /// into the store. [whiteDie]/[blackDie] pick who moves first.
+    Future<({OnlineMatchController c, FakeMatch m, FakeMatchApi api})> guestAt({
+      int whiteDie = 6,
+      int blackDie = 3,
+    }) async {
+      final m = backend.seedMatch();
+      seedOpening(m, whiteDie: whiteDie, blackDie: blackDie);
+      final api = FakeMatchApi(backend, 'guest');
       final c = OnlineMatchController(
         api: api,
-        matchId: 'm4',
-        localSide: Player.white,
-        initialSnapshot: snap(matchLength: 3),
+        matchDoc: m.doc,
+        rng: Random(7),
+        pollInterval: const Duration(milliseconds: 1),
       );
+      addTearDown(c.disposeController);
       await c.playMatch();
-      await feed(api, RemoteEvent(seq: 0, gameNo: 1, event: open));
-      return c;
+      await pumpUntil(() => c.isReady);
+      return (c: c, m: m, api: api);
     }
 
-    // First attempt throws, retry succeeds → exactly 2 calls, no error.
-    final api1 = FakeMatchApi()..throwsRemaining = 1;
-    final c1 = await movingController(api1);
-    addTearDown(c1.disposeController);
-    final move = c1.state.legalMoves.first;
-    c1.submitMove(Player.white, move);
-    await pumpEventQueue();
-    expect(api1.submissions.length, 2);
-    expect(c1.error, isNull);
-    expect(c1.pendingMoveOf(Player.white).value, isNotNull); // still pending
-
-    // Both attempts throw → exactly 2 calls, error surfaced, still pending.
-    final api2 = FakeMatchApi()..throwsRemaining = 5;
-    final c2 = await movingController(api2);
-    addTearDown(c2.disposeController);
-    c2.submitMove(Player.white, c2.state.legalMoves.first);
-    await pumpEventQueue();
-    expect(api2.submissions.length, 2);
-    expect(c2.error, isNotNull);
-    expect(c2.pendingMoveOf(Player.white).value, isNotNull);
-  });
-
-  test('buffers next-game events until continueToNextGame', () async {
-    final api = FakeMatchApi();
-    // 7-point match: a single game (max 3 points) never ends it, so game 2
-    // always follows.
-    final play = playoutGame(
-        matchLength: 7, opening: Dice(6, 3), rng: Random(3), gameNo: 1);
-    final events = play.events;
-    final winner = (events.last.event as MoveEvent).player;
-
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm5',
-      localSide: Player.white,
-      initialSnapshot: snap(matchLength: 7),
-    );
-    addTearDown(controller.disposeController);
-    await controller.playMatch();
-
-    for (final re in events) {
-      await feed(api, re);
-    }
-
-    expect(controller.matchOver, isFalse);
-    expect(controller.awaitingNextGame, isTrue);
-    expect(controller.state.phase, GamePhase.gameOver);
-    expect(controller.match.winner, isNull);
-    final scoreAfterG1 =
-        winner == Player.white ? controller.match.whiteScore : controller.match.blackScore;
-    expect(scoreAfterG1, greaterThan(0));
-
-    // Server appends game 2's opening (and a first move) while we're paused.
-    final nextSeq = events.last.seq + 1;
-    final open2 = const OpeningRollEvent(whiteDie: 6, blackDie: 2); // white first
-    final g2 = Game.start(open2, isCrawfordGame: false);
-    final g2move = g2.state.legalMoves.first;
-    await feed(api, RemoteEvent(seq: nextSeq, gameNo: 2, event: open2));
-    await feed(api,
-        RemoteEvent(seq: nextSeq + 1, gameNo: 2, event: MoveEvent(Player.white, g2move)));
-
-    // Buffered: still showing the finished game 1.
-    expect(controller.awaitingNextGame, isTrue);
-    expect(controller.state.phase, GamePhase.gameOver);
-
-    controller.continueToNextGame();
-
-    // Drained: now folding game 2.
-    expect(controller.awaitingNextGame, isFalse);
-    expect(controller.match.winner, isNull);
-    // Game 2 opening winner (white) has moved once, black now to roll.
-    expect(controller.state.turn, Player.black);
-    expect(controller.state.phase, GamePhase.awaitingRoll);
-  });
-
-  test('disposeController cancels polling and is idempotent', () async {
-    final api = FakeMatchApi();
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm6',
-      localSide: Player.white,
-      initialSnapshot: snap(matchLength: 3),
-    );
-    await controller.playMatch();
-    expect(api.hasPollListener, isTrue);
-
-    controller.disposeController();
-    await pumpEventQueue();
-    expect(api.hasPollListener, isFalse);
-
-    // Idempotent: a second call does nothing and does not throw.
-    controller.disposeController();
-    expect(api.hasPollListener, isFalse);
-  });
-
-  test('remote double: pending cube fires; drop submits claim to the doubler',
-      () async {
-    final api = FakeMatchApi();
-    final open = const OpeningRollEvent(whiteDie: 6, blackDie: 3); // white first
-    final g0 = Game.start(open, isCrawfordGame: false);
-    final whiteMove = g0.state.legalMoves.first;
-
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm7',
-      localSide: Player.white,
-      initialSnapshot: snap(matchLength: 7),
-    );
-    addTearDown(controller.disposeController);
-    await controller.playMatch();
-
-    await feed(api, RemoteEvent(seq: 0, gameNo: 1, event: open));
-    await feed(api,
-        RemoteEvent(seq: 1, gameNo: 1, event: MoveEvent(Player.white, whiteMove)));
-    // Black (opponent) doubles from its pre-roll; white becomes the decider.
-    await feed(api, RemoteEvent(seq: 2, gameNo: 1, event: DoubleEvent(Player.black)));
-
-    expect(controller.state.phase, GamePhase.cubeOffered);
-    expect(controller.pendingCubeOf(Player.white).value, isNotNull);
-
-    controller.submitCubeResponse(Player.white, CubeAction.drop);
-    await pumpEventQueue();
-
-    expect(api.submissions.length, 1);
-    final (event, claim) = api.submissions.single;
-    expect(event, isA<DropEvent>());
-    expect((event as DropEvent).player, Player.white);
-    expect(claim, isNotNull);
-    expect(claim!.winner, Player.black); // the doubler wins
-    expect(claim.points, 1); // pre-double cube value
-    expect(claim.outcome, GameOutcome.drop);
-  });
-
-  test('a poll error is transient: cleared by the next successful fold',
-      () async {
-    final api = FakeMatchApi();
-    final open = const OpeningRollEvent(whiteDie: 6, blackDie: 3); // white first
-    var g = Game.start(open, isCrawfordGame: false);
-    final wMove = g.state.legalMoves.first;
-    g = g.append(MoveEvent(Player.white, wMove)); // black to roll
-    g = g.append(RollEvent(Player.black, 5, 2)); // black moving
-    final bMove = g.state.legalMoves.first;
-
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm8',
-      localSide: Player.white,
-      initialSnapshot: snap(matchLength: 3),
-    );
-    addTearDown(controller.disposeController);
-    await controller.playMatch();
-
-    await feed(api, RemoteEvent(seq: 0, gameNo: 1, event: open));
-    await feed(api,
-        RemoteEvent(seq: 1, gameNo: 1, event: MoveEvent(Player.white, wMove)));
-
-    // A transient poll blip surfaces an error but must not touch turn state.
-    api.emitError(const OnlineException('unavailable', 'blip'));
-    await pumpEventQueue();
-    expect(controller.error, isNotNull);
-
-    // The next successful fold clears it.
-    await feed(api, RemoteEvent(seq: 2, gameNo: 1, event: RollEvent(Player.black, 5, 2)));
-    expect(controller.error, isNull);
-
-    // Fold on to the local pre-roll turn: the gate is open despite the earlier blip.
-    await feed(api,
-        RemoteEvent(seq: 3, gameNo: 1, event: MoveEvent(Player.black, bMove)));
-    expect(controller.state.turn, Player.white);
-    expect(controller.state.phase, GamePhase.awaitingRoll);
-    expect(controller.awaitingHumanTurn, isTrue);
-    expect(controller.error, isNull);
-  });
-
-  test('a failed rollDice keeps the pre-roll gate open and heals on retry',
-      () async {
-    final api = FakeMatchApi();
-    // Black opens (blackDie > whiteDie), so after black's move white is at its
-    // pre-roll — the state where rollDice is valid.
-    final open = const OpeningRollEvent(whiteDie: 3, blackDie: 6);
-    final g0 = Game.start(open, isCrawfordGame: false);
-    final bMove = g0.state.legalMoves.first;
-
-    final controller = OnlineMatchController(
-      api: api,
-      matchId: 'm9',
-      localSide: Player.white,
-      initialSnapshot: snap(matchLength: 3, turn: Player.black),
-    );
-    addTearDown(controller.disposeController);
-    await controller.playMatch();
-
-    await feed(api, RemoteEvent(seq: 0, gameNo: 1, event: open));
-    await feed(api,
-        RemoteEvent(seq: 1, gameNo: 1, event: MoveEvent(Player.black, bMove)));
-    expect(controller.awaitingHumanTurn, isTrue);
-
-    // rollDice double-fails: error surfaces, but the gate MUST stay open so the
-    // user can retry (a single blip must not deadlock the loop).
-    api.rollDiceThrows = 2;
-    controller.rollDice();
-    await pumpEventQueue();
-    expect(api.rollDiceCalls, 2); // one attempt + one retry
-    expect(controller.error, isNotNull);
-    expect(controller.awaitingHumanTurn, isTrue);
-
-    // A retried roll succeeds and clears the error.
-    controller.rollDice();
-    await pumpEventQueue();
-    expect(api.rollDiceCalls, 3);
-    expect(controller.error, isNull);
-    expect(controller.awaitingHumanTurn, isTrue);
-  });
-
-  group('persistence', () {
-    test('records the finished game (full events + result) and the match',
+    test('a transient poll fault self-heals; an illegal opponent event freezes',
         () async {
-      final api = FakeMatchApi();
-      final rec = RecordingPersistence();
-      // A full 1-point game decides the match after one game. Feed every event
-      // through the poll stream — folding persists regardless of who "submits".
-      final play =
-          playoutGame(matchLength: 1, opening: Dice(6, 3), rng: Random(7));
-      final events = play.events;
-      final result = play.game.state.result!;
+      final g = await guestAt(); // white (the host) moves first
+      final c = g.c;
 
-      final controller = OnlineMatchController(
-        api: api,
-        matchId: 'mp1',
-        localSide: Player.black,
-        initialSnapshot: snap(matchLength: 1, isCrawford: true),
-        persistence: rec,
-      );
-      addTearDown(controller.disposeController);
-      await controller.playMatch();
+      // 1. TRANSIENT: a poll blip is a banner, not a freeze, and the next
+      //    successful fold clears it.
+      g.api.emitPollError(const OnlineException('unavailable', 'blip'));
+      await settle();
+      expect(c.error, isNotNull);
+      expect(c.frozen, isFalse);
+      expect(c.isThinking, isTrue, reason: 'a blip must not change whose turn');
 
-      for (final re in events) {
-        await feed(api, re);
-      }
-      await pumpEventQueue();
+      final move = c.state.legalMoves.first;
+      g.m.forgeEvent('host', 1, MoveEvent(Player.white, move));
+      backend.bump(g.m.code);
+      await pumpUntil(() => c.state.turn == Player.black);
+      expect(c.error, isNull, reason: 'a good fold heals a transient fault');
 
-      expect(controller.matchOver, isTrue);
-      // onGameFinished fired exactly once, with the COMPLETE game and its result.
-      expect(rec.games.length, 1);
-      final g = rec.games.single;
-      expect(g.gameNumber, 1);
-      expect(g.isCrawford, isTrue);
-      expect(g.events.length, events.length, reason: 'the whole event log');
-      expect(g.result.winner, result.winner);
-      expect(g.result.points, result.points);
-      expect(g.result.outcome, result.outcome);
-      expect(g.matchAfter.isMatchOver, isTrue);
-      // onMatchFinished fired once, with the decided final state.
-      expect(rec.matchFinishedCalls, 1);
-      expect(rec.finalState!.winner, result.winner);
-      expect(controller.persistenceError, isNull);
+      // 2. FREEZE: the host takes a cube nobody offered — the rules engine
+      //    refuses it, so the match stops for good.
+      g.m.forgeEvent('host', 1, TakeEvent(Player.white));
+      backend.bump(g.m.code);
+      await pumpUntil(() => c.frozen);
+
+      final cheat = c.cheatError!;
+      expect(cheat.code, 'illegal-event');
+      expect(cheat.message, contains('match frozen'));
+      expect(c.error, same(cheat));
+      expect(c.awaitingHumanTurn, isFalse);
+      expect(c.isThinking, isFalse);
+      expect(c.pendingMoveOf(Player.black).value, isNull);
+
+      // Not self-healing: further (even perfectly good) traffic changes nothing.
+      backend.bump(g.m.code);
+      await settle();
+      expect(c.error, same(cheat));
     });
 
-    test('fires onGameFinished with the complete game while the next buffers',
+    test('an event claiming the other seat freezes', () async {
+      final g = await guestAt();
+      // The host writes an event for BLACK — our seat.
+      g.m.forgeEvent('host', 1, DoubleEvent(Player.black));
+      backend.bump(g.m.code);
+      await pumpUntil(() => g.c.frozen);
+      expect(g.c.cheatError!.code, 'wrong-author');
+    });
+
+    test('an event from a stranger freezes', () async {
+      final g = await guestAt();
+      g.m.forgeEvent('someone-else', 1, MoveEvent(Player.white, Move.none));
+      backend.bump(g.m.code);
+      await pumpUntil(() => g.c.frozen);
+      expect(g.c.cheatError!.code, 'not-a-participant');
+    });
+
+    test('a tampered reveal freezes before any event folds', () async {
+      final g = await guestAt();
+      // A roll whose revealed secret is NOT the pre-image of the commitment —
+      // the only way a roller could steer the dice after seeing our entropy.
+      final honest = turnSecretsFor(3, 4);
+      // A DIFFERENT seed, so the swapped secret really is a different pre-image
+      // (same-seed searches share their secret and would verify just fine).
+      final swapped = turnSecretsFor(6, 6, rng: Random(4242));
+      g.m.putRoll(2, 'host', honest.commit,
+          entropy: honest.entropy, reveal: swapped.secret);
+      backend.bump(g.m.code);
+      await pumpUntil(() => g.c.frozen);
+
+      expect(g.c.cheatError!.code, 'fair-dice');
+      expect(g.c.cheatError!.message, contains('tampered dice'));
+    });
+
+    test('a roll event whose dice differ from the roll document freezes',
         () async {
-      final api = FakeMatchApi();
-      final rec = RecordingPersistence();
-      // 7-point match: one game never ends it, so game 2 follows and its events
-      // buffer while paused — the subtlety under test.
-      final play =
-          playoutGame(matchLength: 7, opening: Dice(6, 3), rng: Random(3));
-      final events = play.events;
-      final result = play.game.state.result!;
+      // Black (us) opens and moves, so the NEXT roll is the host's.
+      final g = await guestAt(whiteDie: 3, blackDie: 6);
+      final c = g.c;
+      expect(c.state.turn, Player.black);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
 
-      final controller = OnlineMatchController(
-        api: api,
-        matchId: 'mp2',
-        localSide: Player.white,
-        initialSnapshot: snap(matchLength: 7),
-        persistence: rec,
+      // A perfectly sound roll document deriving 3-4 …
+      final s = turnSecretsFor(3, 4);
+      g.m.putRoll(2, 'host', s.commit, entropy: s.entropy, reveal: s.secret);
+      // … under an event claiming 6-6.
+      g.m.forgeEvent('host', 1, RollEvent(Player.white, 6, 6));
+      backend.bump(g.m.code);
+      await pumpUntil(() => c.frozen);
+
+      expect(c.cheatError!.code, 'dice-mismatch');
+      expect(c.cheatError!.message, contains('match frozen'));
+    });
+
+    test('an opening roll from the guest freezes (openings are the host\'s)',
+        () async {
+      final m = backend.seedMatch();
+      // The GUEST forges the opening, roll document and all.
+      final s = openingSecretsFor(6, 3);
+      m.putRoll(1, 'guest', s.commit, entropy: s.entropy, reveal: s.secret);
+      m.forgeEvent('guest', 1, const OpeningRollEvent(whiteDie: 6, blackDie: 3));
+
+      final c = OnlineMatchController(
+        api: FakeMatchApi(backend, 'host'),
+        matchDoc: m.doc,
+        rng: Random(3),
+        pollInterval: const Duration(milliseconds: 1),
       );
-      addTearDown(controller.disposeController);
-      await controller.playMatch();
+      addTearDown(c.disposeController);
+      await c.playMatch();
+      await pumpUntil(() => c.frozen);
+      expect(c.cheatError!.code, 'opening-not-host');
+    });
+  });
 
-      for (final re in events) {
-        await feed(api, re);
-      }
-      await pumpEventQueue();
+  // --- resync ---------------------------------------------------------------
 
-      // Game 1 persisted IN FULL at the applyResult moment; match not over.
-      expect(controller.awaitingNextGame, isTrue);
-      expect(controller.matchOver, isFalse);
-      expect(rec.matchFinishedCalls, 0);
-      expect(rec.games.length, 1);
-      expect(rec.games.single.gameNumber, 1);
-      expect(rec.games.single.events.length, events.length);
-      expect(rec.games.single.result.points, result.points);
+  group('resync', () {
+    test('a submission that loses the sequence race resyncs and keeps the '
+        'decision pending', () async {
+      final m = backend.seedMatch();
+      seedOpening(m, whiteDie: 3, blackDie: 6); // black (us) moves first
+      final api = FakeMatchApi(backend, 'guest');
+      final c = OnlineMatchController(
+        api: api,
+        matchDoc: m.doc,
+        rng: Random(5),
+        pollInterval: const Duration(milliseconds: 1),
+      );
+      addTearDown(c.disposeController);
+      await c.playMatch();
+      await pumpUntil(() => c.isReady);
 
-      // The server appends game 2 (opening + a move) while we are paused; these
-      // buffer and must NOT record a second (unfinished) game.
-      final nextSeq = events.last.seq + 1;
-      const open2 = OpeningRollEvent(whiteDie: 6, blackDie: 2);
-      final g2 = Game.start(open2, isCrawfordGame: false);
-      await feed(api, RemoteEvent(seq: nextSeq, gameNo: 2, event: open2));
-      await feed(
-          api,
-          RemoteEvent(
-              seq: nextSeq + 1,
-              gameNo: 2,
-              event: MoveEvent(Player.white, g2.state.legalMoves.first)));
-      await pumpEventQueue();
+      final before = api.calls['fetchEventsSince'] ?? 0;
+      api.intercept = (op) => op == 'submitEvent'
+          ? const AlreadyExistsException('events/1 already exists')
+          : null;
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => (api.calls['fetchEventsSince'] ?? 0) > before);
+      await settle();
 
-      expect(rec.games.length, 1,
-          reason: 'game 2 is unfinished — nothing new persisted');
+      // A lost race is NOT a cheat, and it is NOT retried at the same seq: the
+      // log is refetched and the decision stays pending for the user.
+      expect(c.frozen, isFalse);
+      expect(api.calls['submitEvent'], 1, reason: 'no blind retry at that seq');
+      expect(c.pendingMoveOf(Player.black).value, isNotNull);
+
+      // With the fault cleared the same decision goes through.
+      api.intercept = null;
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+      expect(c.error, isNull);
+    });
+
+    test('the roll counter survives a resync', () async {
+      final m = backend.seedMatch();
+      seedOpening(m, whiteDie: 3, blackDie: 6); // black (us) first; roll 1
+      final api = FakeMatchApi(backend, 'guest');
+      final c = OnlineMatchController(
+        api: api,
+        matchDoc: m.doc,
+        rng: Random(5),
+        pollInterval: const Duration(milliseconds: 1),
+      );
+      addTearDown(c.disposeController);
+      await c.playMatch();
+      await pumpUntil(() => c.isReady);
+
+      // Force a full rebuild by losing the sequence race once.
+      api.intercept = (op) => op == 'submitEvent'
+          ? const AlreadyExistsException('taken')
+          : null;
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await settle();
+      api.intercept = null;
+
+      // Black's move, then white's (scripted) roll 2 and its move.
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+      var mirror = Game.replay([for (final e in m.events) e.event]);
+      seedRoll(m,
+          author: 'host', player: Player.white, die1: 5, die2: 2, gameNo: 1);
+      mirror = mirror.append(RollEvent(Player.white, 5, 2));
+      m.forgeEvent('host', 1,
+          MoveEvent(Player.white, mirror.state.legalMoves.first));
+      backend.bump(m.code);
+      await pumpUntil(() => c.awaitingHumanTurn);
+
+      // Two roll-bearing events are in the log (the opening and white's roll),
+      // so OUR roll must claim index 3 — recounted from the log, not from a
+      // counter the resync could have lost.
+      expect(m.rollCount, 2);
+      c.rollDice();
+      await pumpUntil(() => m.rolls.containsKey(3));
+      expect(m.rolls[3]!.roller, 'guest');
+      expect(m.rolls.containsKey(4), isFalse);
+      expect(c.frozen, isFalse);
+    });
+
+    test('a failed roll re-opens the gate and the retry RESUMES the same roll',
+        () async {
+      final m = backend.seedMatch();
+      seedOpening(m, whiteDie: 3, blackDie: 6); // black (us) first
+      final api = FakeMatchApi(backend, 'guest');
+      final c = OnlineMatchController(
+        api: api,
+        matchDoc: m.doc,
+        rng: Random(5),
+        // Long enough that the automatic retry cannot fire during the test —
+        // the manual retry is what is under test here.
+        pollInterval: const Duration(seconds: 30),
+      );
+      addTearDown(c.disposeController);
+      await c.playMatch();
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+
+      // White is scripted through its turn so we come back to our pre-roll.
+      var mirror = Game.replay([for (final e in m.events) e.event]);
+      seedRoll(m,
+          author: 'host', player: Player.white, die1: 5, die2: 2, gameNo: 1);
+      mirror = mirror.append(RollEvent(Player.white, 5, 2));
+      m.forgeEvent('host', 1,
+          MoveEvent(Player.white, mirror.state.legalMoves.first));
+      backend.bump(m.code);
+      await pumpUntil(() => c.awaitingHumanTurn);
+
+      api.intercept = (op) =>
+          op == 'createRoll' ? const OnlineException('unavailable', 'blip') : null;
+      c.rollDice();
+      await pumpUntil(() => c.error != null);
+      expect(c.frozen, isFalse);
+      expect(c.awaitingHumanTurn, isTrue,
+          reason: 'one blip must not deadlock the pre-roll gate');
+      expect(m.rolls.containsKey(3), isFalse);
+
+      api.intercept = null;
+      c.rollDice();
+      await pumpUntil(() => m.rolls.containsKey(3));
+      // Resumed, not restarted: exactly one roll document, at the same index.
+      expect(api.calls['createRoll'], 2);
+      expect(m.rolls.keys.toList()..sort(), [1, 2, 3]);
+    });
+  });
+
+  // --- lifecycle ------------------------------------------------------------
+
+  test('disposeController cancels polling and is idempotent', () async {
+    final m = backend.seedMatch();
+    seedOpening(m, whiteDie: 6, blackDie: 3);
+    final c = OnlineMatchController(
+      api: FakeMatchApi(backend, 'guest'),
+      matchDoc: m.doc,
+      pollInterval: const Duration(milliseconds: 1),
+    );
+    await c.playMatch();
+    await pumpUntil(() => c.isReady);
+    expect(backend.changes.isBroadcast, isTrue);
+
+    c.disposeController();
+    await settle();
+    c.disposeController(); // idempotent
+
+    // Nothing folds after disposal.
+    final seq = m.events.last.seq;
+    m.forgeEvent('host', 1, MoveEvent(Player.white, Move.none));
+    backend.bump(m.code);
+    await settle();
+    expect(m.events.last.seq, seq + 1);
+  });
+
+  test('a non-participant cannot build a controller for the match', () {
+    final m = backend.seedMatch();
+    expect(
+      () => OnlineMatchController(
+          api: FakeMatchApi(backend, 'nobody'), matchDoc: m.doc),
+      throwsArgumentError,
+    );
+  });
+
+  // --- persistence ----------------------------------------------------------
+
+  group('persistence', () {
+    test('records each finished game (full events + result) and the match',
+        () async {
+      final rec = RecordingPersistence();
+      final p = pair(length: 1, hostPersistence: rec);
+      await p.host.playMatch();
+      await p.guest.playMatch();
+      await pumpUntil(() => p.host.isReady && p.guest.isReady);
+      await playOut(p.host, p.guest);
+      await settle();
+
+      expect(p.host.matchOver, isTrue);
+      expect(rec.games.length, 1, reason: 'a 1-point match is one game');
+      final g = rec.games.single;
+      expect(g.gameNumber, 1);
+      expect(g.isCrawford, isTrue, reason: 'the first game of a 1-pointer');
+      expect(g.events.first, isA<OpeningRollEvent>());
+      expect(g.events.length, p.host.game.events.length);
+      expect(g.result.winner, p.host.match.winner);
+      expect(g.matchAfter.isMatchOver, isTrue);
+      expect(rec.matchFinishedCalls, 1);
+      expect(rec.finalState!.winner, p.host.match.winner);
+      expect(p.host.persistenceError, isNull);
     });
 
     test('a persistence failure is non-fatal: sets persistenceError, folds on',
         () async {
-      final api = FakeMatchApi();
       final rec = RecordingPersistence()..throwOnGame = 1;
-      final play =
-          playoutGame(matchLength: 1, opening: Dice(6, 3), rng: Random(7));
-      final events = play.events;
+      final p = pair(length: 1, guestPersistence: rec);
+      await p.host.playMatch();
+      await p.guest.playMatch();
+      await pumpUntil(() => p.host.isReady && p.guest.isReady);
+      await playOut(p.host, p.guest);
+      await settle();
 
-      final controller = OnlineMatchController(
-        api: api,
-        matchId: 'mp3',
-        localSide: Player.black,
-        initialSnapshot: snap(matchLength: 1, isCrawford: true),
-        persistence: rec,
-      );
-      addTearDown(controller.disposeController);
-      await controller.playMatch();
-
-      for (final re in events) {
-        await feed(api, re);
-      }
-      await pumpEventQueue();
-
-      // The fold completed the match despite the onGameFinished throw.
-      expect(controller.matchOver, isTrue);
-      expect(controller.state.phase, GamePhase.gameOver);
-      expect(controller.persistenceError, isNotNull);
-      // The loop error surface is separate and stays clean.
-      expect(controller.error, isNull);
-      expect(rec.games, isEmpty, reason: 'onGameFinished threw before recording');
-      // onMatchFinished still ran (chained after the failed hook).
-      expect(rec.matchFinishedCalls, 1);
+      expect(p.guest.matchOver, isTrue);
+      expect(p.guest.persistenceError, isNotNull);
+      expect(p.guest.error, isNull, reason: 'storage never touches the loop');
+      expect(rec.games, isEmpty);
+      expect(rec.matchFinishedCalls, 1, reason: 'chained after the failed hook');
     });
   });
 }

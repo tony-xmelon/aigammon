@@ -25,7 +25,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:online_client/online_client.dart';
+import '../online/fake_online_backend.dart';
 
 import '../data/test_database.dart';
 import '../helpers/board_driving.dart';
@@ -239,64 +239,27 @@ class RealRankEngine implements EngineFacade {
       throw UnimplementedError();
 }
 
-/// A minimal scriptable [MatchApi] for driving an [OnlineMatchController] in a
-/// widget test. [initialLog] is served by [fetchEventsSince] (seed the opening
-/// roll so the controller becomes ready); [pollEvents] returns a stream fed by
-/// [push] (later remote events). [submitEvent] records the local side's event in
-/// [lastSubmitted] and is otherwise a no-op (the server would echo it back as a
-/// remote event, which the test injects via [push]).
-class ScriptedMatchApi implements MatchApi {
-  ScriptedMatchApi(this.initialLog);
-
-  final List<RemoteEvent> initialLog;
-  final StreamController<RemoteEvent> _poll = StreamController<RemoteEvent>();
-  GameEvent? lastSubmitted;
-
-  void push(RemoteEvent e) => _poll.add(e);
-  Future<void> close() => _poll.close();
-
-  @override
-  Future<List<RemoteEvent>> fetchEventsSince(String matchId, int afterSeq) async =>
-      [for (final e in initialLog) if (e.seq > afterSeq) e];
-
-  @override
-  Stream<RemoteEvent> pollEvents(String matchId,
-          {Duration interval = const Duration(seconds: 2)}) =>
-      _poll.stream;
-
-  @override
-  Future<int> submitEvent(String matchId, GameEvent event,
-      {GameResultClaim? result}) async {
-    lastSubmitted = event;
-    return 1;
-  }
-
-  @override
-  Future<Dice> rollDice(String matchId) async => Dice(1, 2);
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      super.noSuchMethod(invocation);
+/// An online match ready to play, over the in-memory serverless backend.
+///
+/// The seeded opening roll is a SOUND commit-reveal document plus the event it
+/// derives, so the controller's validation passes exactly as it would against
+/// real Firestore. The local device is the HOST (white); the opponent's events
+/// are written straight into the store by the test, the way the guest's client
+/// would write them.
+///
+/// [FakeMatchApi.pollBeat] is disabled: a widget test's clock is fake, so the
+/// poll stays change-driven (the controller subscribes before anything the test
+/// writes).
+({FakeBackend backend, FakeMatch match, FakeMatchApi api}) onlineMatch({
+  required int whiteDie,
+  required int blackDie,
+}) {
+  final backend = FakeBackend();
+  final match = backend.seedMatch(length: 5);
+  seedOpening(match, whiteDie: whiteDie, blackDie: blackDie);
+  final api = FakeMatchApi(backend, 'host')..pollBeat = null;
+  return (backend: backend, match: match, api: api);
 }
-
-/// A snapshot for a live 5-point online match (scores 0-0), enough to seed an
-/// [OnlineMatchController]; the live game state is derived from the folded log.
-MatchSnapshot _onlineSnap() => MatchSnapshot(
-      status: 'active',
-      code: 'ABC123',
-      matchLength: 5,
-      gameNo: 1,
-      seq: 0,
-      whiteUid: 'w',
-      blackUid: 'b',
-      whiteScore: 0,
-      blackScore: 0,
-      turn: Player.white,
-      phase: GamePhase.moving,
-      isCrawford: false,
-      crawfordPlayed: false,
-      winner: null,
-    );
 
 // --- Widget-test helpers -----------------------------------------------------
 
@@ -3033,20 +2996,11 @@ void main() {
       addTearDown(() => t.binding.setSurfaceSize(null));
 
       // Opening: Black (the REMOTE side) wins (6 > 3) and is on move first.
-      final log = [
-        const RemoteEvent(
-          seq: 0,
-          gameNo: 1,
-          event: OpeningRollEvent(whiteDie: 3, blackDie: 6),
-        ),
-      ];
-      final api = ScriptedMatchApi(log);
-      addTearDown(api.close);
+      final online = onlineMatch(whiteDie: 3, blackDie: 6);
+      addTearDown(online.backend.close);
       final c = OnlineMatchController(
-        api: api,
-        matchId: 'm',
-        localSide: Player.white, // the remote mover is Black
-        initialSnapshot: _onlineSnap(),
+        api: online.api, // the local seat is the host = White
+        matchDoc: online.match.doc,
       );
 
       // Bring the controller to readiness (folds the opening, subscribes the
@@ -3060,8 +3014,8 @@ void main() {
 
       // Inject Black's (remote) move — a legal play for the folded state.
       final remoteMove = c.state.legalMoves.first;
-      api.push(RemoteEvent(
-          seq: 1, gameNo: 1, event: MoveEvent(Player.black, remoteMove)));
+      online.match.forgeEvent('guest', 1, MoveEvent(Player.black, remoteMove));
+      online.backend.bump(online.match.code);
 
       await pumpUntil(t, () => boardPainterOf(t).overlayChecker != null,
           maxFrames: 800);
@@ -3081,20 +3035,11 @@ void main() {
       addTearDown(() => t.binding.setSurfaceSize(null));
 
       // Opening: White (the LOCAL side) wins (6 > 3) and is on move first.
-      final log = [
-        const RemoteEvent(
-          seq: 0,
-          gameNo: 1,
-          event: OpeningRollEvent(whiteDie: 6, blackDie: 3),
-        ),
-      ];
-      final api = ScriptedMatchApi(log);
-      addTearDown(api.close);
+      final online = onlineMatch(whiteDie: 6, blackDie: 3);
+      addTearDown(online.backend.close);
       final c = OnlineMatchController(
-        api: api,
-        matchId: 'm',
-        localSide: Player.white,
-        initialSnapshot: _onlineSnap(),
+        api: online.api,
+        matchDoc: online.match.doc,
       );
 
       await t.pumpWidget(const MaterialApp(home: SizedBox()));
@@ -3103,14 +3048,12 @@ void main() {
       await t.pumpWidget(_controllerAnimHarness(c));
       await t.pump();
 
-      // Enter White's move BY HAND and confirm; the controller submits it to the
-      // server (recorded in the fake), which then echoes it back as a remote
-      // event — the injection below mirrors that echo.
+      // Enter White's move BY HAND and confirm; the controller appends it to the
+      // log, which the poll then echoes back to it.
       await commitFirstMove(t);
-      final submitted = api.lastSubmitted;
-      expect(submitted, isA<MoveEvent>(),
+      await pumpUntil(t, () => online.api.submitted.isNotEmpty);
+      expect(online.api.submitted.last, isA<MoveEvent>(),
           reason: 'the confirmed local move was submitted');
-      api.push(RemoteEvent(seq: 1, gameNo: 1, event: submitted!));
 
       // The echoed local move folds but must NOT replay (the user just entered
       // it on the board). No overlay ever appears.
