@@ -260,6 +260,24 @@ class MatchPoll {
 }
 
 // ---------------------------------------------------------------------------
+// Polling cadence
+// ---------------------------------------------------------------------------
+
+/// How long [MatchApi.pollMatch] waits before its next cycle.
+///
+/// A function rather than a fixed [Duration] because it is asked ONCE PER
+/// CYCLE: the caller can therefore tighten the loop while it is waiting on
+/// something — the commit-reveal handshake, whose three phases are otherwise
+/// three whole poll latencies of dead time — and relax it again afterwards,
+/// without tearing the stream down. Restarting the stream would be the only
+/// alternative, and it would cost a full re-read of the tail (plus its
+/// watermarks) on every transition.
+typedef PollInterval = Duration Function();
+
+/// The production cadence: one cycle every two seconds.
+Duration defaultPollInterval() => const Duration(seconds: 2);
+
+// ---------------------------------------------------------------------------
 // MatchApi
 // ---------------------------------------------------------------------------
 
@@ -574,12 +592,12 @@ class MatchApi {
   /// and advances its watermark past the leading run of completed rolls so a
   /// finished match's rolls are not re-read forever.
   ///
-  /// Polling starts on first listen, repeats every [interval], and stops on
-  /// cancel. Transport failures are forwarded to the stream and the loop keeps
-  /// going — a poll error is transient by nature.
+  /// Polling starts on first listen, waits [interval] between cycles, and stops
+  /// on cancel. Transport failures are forwarded to the stream and the loop
+  /// keeps going — a poll error is transient by nature.
   Stream<MatchPoll> pollMatch(
     String code, {
-    Duration interval = const Duration(seconds: 2),
+    PollInterval interval = defaultPollInterval,
     int afterSeq = -1,
     int rollsFrom = 0,
     int pageSize = 100,
@@ -622,7 +640,7 @@ class MatchApi {
           if (!cancelled) controller.addError(err, st);
         }
         if (cancelled) return;
-        await Future<void>.delayed(interval);
+        await Future<void>.delayed(interval());
       }
     }
 
@@ -638,7 +656,7 @@ class MatchApi {
   /// Event-only view of [pollMatch], flattened to one [RemoteEvent] per emit.
   Stream<RemoteEvent> pollEvents(
     String code, {
-    Duration interval = const Duration(seconds: 2),
+    PollInterval interval = defaultPollInterval,
     int afterSeq = -1,
   }) =>
       pollMatch(code, interval: interval, afterSeq: afterSeq)

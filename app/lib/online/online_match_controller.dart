@@ -197,8 +197,58 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
   /// [_persist]).
   final MatchPersistence persistence;
 
-  /// How often the poll stream fetches new events and roll documents.
+  /// The RESTING cadence at which the poll stream fetches new events and roll
+  /// documents — used whenever no dice handshake is in flight. See
+  /// [currentPollInterval] for the fast window.
   final Duration pollInterval;
+
+  /// The cadence used while a commit-reveal roll is in flight.
+  ///
+  /// Capped at [pollInterval] so a caller that asks for a SLOWER-than-500ms
+  /// resting cadence is not silently sped up, and so the emulator E2E's
+  /// `AIGAMMON_E2E_POLL_MS` knob keeps overriding both intervals with one
+  /// number.
+  Duration get fastPollInterval =>
+      pollInterval < _fastPoll ? pollInterval : _fastPoll;
+
+  static const Duration _fastPoll = Duration(milliseconds: 500);
+
+  /// The interval the poll loop is using RIGHT NOW.
+  ///
+  /// A roll is three document writes that alternate between the two peers
+  /// (commit → entropy → reveal), and each peer only learns of the other's step
+  /// by polling — so at the resting 2s cadence a single roll burns about three
+  /// poll latencies, roughly six seconds of dead time per turn. Polling fast
+  /// for exactly as long as a handshake is outstanding removes that.
+  ///
+  /// READ BUDGET (the Spark free tier allows 50K document reads a day): this is
+  /// close to free, because the fast window is bounded by PROTOCOL STEPS rather
+  /// than by wall time. The peers need the same ~3 cycles to observe the same 3
+  /// phase changes whether each cycle is 500ms or 2s; polling faster mostly
+  /// shortens the window rather than adding cycles to it. The extra reads are
+  /// only the cycles a peer spends waiting on the OTHER peer's app being slow,
+  /// and those windows are seconds long — a match's daily read cost barely
+  /// moves, while every turn loses ~4.5s of staring at nothing.
+  Duration get currentPollInterval =>
+      _diceProtocolInFlight ? fastPollInterval : pollInterval;
+
+  /// True while a `rolls/{n}` handshake is outstanding for EITHER side: from
+  /// the moment a drive of ours exists (its commitment is written immediately
+  /// after) or a roll document we have not folded yet is seen, until that
+  /// roll's event folds and pushes [_rollCount] past it.
+  ///
+  /// A drive that stalls (a peer that walks away mid-handshake) therefore holds
+  /// the fast window open until the user leaves the match. That costs a few
+  /// hundred extra reads an hour at worst, which is the cheaper side of the
+  /// trade against making a live handshake feel slow.
+  bool get _diceProtocolInFlight {
+    if (frozen || _match.isMatchOver) return false;
+    if (_roller != null) return true;
+    for (final n in _rolls.keys) {
+      if (n > _rollCount) return true;
+    }
+    return false;
+  }
 
   /// Injected only by tests, to make protocol secrets reproducible. NEVER
   /// non-null in production — a predictable secret is a predictable roll, and a
@@ -441,7 +491,10 @@ class OnlineMatchController extends ChangeNotifier implements MatchController {
     _sub = api
         .pollMatch(
           matchId,
-          interval: pollInterval,
+          // Asked once per cycle, so the loop tightens the moment a dice
+          // handshake starts and relaxes when it folds — see
+          // [currentPollInterval].
+          interval: () => currentPollInterval,
           afterSeq: _lastSeq,
           // Every roll at or below the count of folded roll events is finished,
           // so the poller never needs to re-read them. Advancing the watermark

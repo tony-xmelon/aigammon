@@ -556,7 +556,7 @@ void main() {
 
       final seen = <int>[];
       final sub = api
-          .pollMatch('C', interval: const Duration(milliseconds: 1))
+          .pollMatch('C', interval: () => const Duration(milliseconds: 1))
           .listen((poll) => seen.addAll(poll.events.map((e) => e.seq)));
       while (seen.length < 2) {
         await Future<void>.delayed(const Duration(milliseconds: 2));
@@ -598,7 +598,7 @@ void main() {
 
       final seen = <FairDicePhase>[];
       final sub = api
-          .pollMatch('C', interval: const Duration(milliseconds: 1))
+          .pollMatch('C', interval: () => const Duration(milliseconds: 1))
           .listen((poll) => seen.addAll(poll.rolls.map((r) => r.phase)));
       while (rollCalls < phases.length + 1) {
         await Future<void>.delayed(const Duration(milliseconds: 2));
@@ -629,7 +629,7 @@ void main() {
       final errors = <Object>[];
       final seen = <int>[];
       final sub = api
-          .pollMatch('C', interval: const Duration(milliseconds: 1))
+          .pollMatch('C', interval: () => const Duration(milliseconds: 1))
           .listen((poll) => seen.addAll(poll.events.map((e) => e.seq)),
               onError: errors.add);
       while (seen.isEmpty) {
@@ -639,6 +639,39 @@ void main() {
 
       expect(errors.single, isA<PermissionDeniedException>());
       expect(seen, [0]);
+    });
+
+    test('asks for the interval every cycle, so it can change mid-stream',
+        () async {
+      // The adaptive-polling contract: the pacing callback is consulted once
+      // per cycle, so a caller can speed the loop up and slow it down again
+      // WITHOUT resubscribing (which would re-read the whole tail).
+      var queries = 0;
+      final api = await apiFor((req) async {
+        queries++;
+        return http.Response('[]', 200);
+      });
+
+      var interval = const Duration(milliseconds: 1);
+      var asked = 0;
+      final sub = api.pollMatch('C', interval: () {
+        asked++;
+        return interval;
+      }).listen((_) {});
+      addTearDown(sub.cancel);
+
+      while (asked < 3) {
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+      // Park the loop: only a per-cycle read of the callback can see this.
+      interval = const Duration(seconds: 1);
+      final queriesWhenParked = queries;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(asked, greaterThanOrEqualTo(3),
+          reason: 'the callback must be asked once per cycle, not once');
+      expect(queries, lessThanOrEqualTo(queriesWhenParked + 2),
+          reason: 'the new, slower interval must take effect immediately');
     });
   });
 
@@ -661,7 +694,7 @@ void main() {
       });
       final seen = <RemoteEvent>[];
       final sub = api
-          .pollEvents('C', interval: const Duration(milliseconds: 1))
+          .pollEvents('C', interval: () => const Duration(milliseconds: 1))
           .listen(seen.add);
       while (seen.length < 2) {
         await Future<void>.delayed(const Duration(milliseconds: 2));

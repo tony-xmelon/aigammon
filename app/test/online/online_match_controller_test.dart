@@ -236,6 +236,117 @@ void main() {
     expect(p.guest.cubeless, isTrue);
   });
 
+  // --- adaptive polling ------------------------------------------------------
+
+  group('adaptive polling', () {
+    const resting = Duration(seconds: 2);
+    const fast = Duration(milliseconds: 500);
+
+    /// A pair paced like PRODUCTION (the 2s default), so the resting and fast
+    /// cadences are distinguishable. Nothing actually waits: the fake poller is
+    /// change-driven and only records the pacing the real transport would use.
+    ({
+      OnlineMatchController host,
+      OnlineMatchController guest,
+      FakeMatchApi hostApi,
+      FakeMatchApi guestApi,
+      FakeMatch match
+    }) paced() {
+      final m = backend.seedMatch();
+      final hostApi = FakeMatchApi(backend, 'host');
+      final guestApi = FakeMatchApi(backend, 'guest');
+      final host = OnlineMatchController(
+          api: hostApi, matchDoc: m.doc, rng: Random(101));
+      final guest = OnlineMatchController(
+          api: guestApi, matchDoc: m.doc, rng: Random(202));
+      addTearDown(host.disposeController);
+      addTearDown(guest.disposeController);
+      return (
+        host: host,
+        guest: guest,
+        hostApi: hostApi,
+        guestApi: guestApi,
+        match: m
+      );
+    }
+
+    test('tightens the loop for a handshake and relaxes when the roll folds',
+        () async {
+      final p = paced();
+      expect(p.host.currentPollInterval, resting,
+          reason: 'nothing is in flight before the match starts');
+
+      // The host commits the opening roll immediately. With no guest client
+      // running, rolls/1 sits at the commit phase: a handshake is outstanding
+      // for both peers, and both must poll fast to see it move.
+      await p.host.playMatch();
+      await settle();
+      expect(p.match.rolls[1]?.entropy, isNull,
+          reason: 'no witness has contributed yet');
+      expect(p.host.currentPollInterval, fast);
+      expect(p.hostApi.pollPacing!(), fast,
+          reason: 'the pacing the transport itself would wait');
+
+      await p.guest.playMatch();
+      expect(p.guest.currentPollInterval, fast,
+          reason: 'a roll document it has not folded yet is a live handshake');
+
+      await pumpUntil(() => p.host.isReady && p.guest.isReady,
+          reason: 'the opening handshake never completed');
+      expect(p.host.currentPollInterval, resting);
+      expect(p.guest.currentPollInterval, resting);
+      expect(p.hostApi.pollPacing!(), resting);
+      expect(p.guestApi.pollPacing!(), resting);
+
+      // And again for an ordinary turn roll: play on until someone is back at
+      // the pre-roll gate, which is the resting state by definition.
+      final lastActed = <OnlineMatchController, GameState?>{};
+      await pumpUntil(() {
+        if (p.host.awaitingHumanTurn || p.guest.awaitingHumanTurn) return true;
+        act(p.host, lastActed);
+        act(p.guest, lastActed);
+        return false;
+      }, reason: 'neither side reached the pre-roll gate');
+
+      final mover = p.host.awaitingHumanTurn ? p.host : p.guest;
+      final witness = identical(mover, p.host) ? p.guest : p.host;
+      expect(mover.currentPollInterval, resting);
+      expect(witness.currentPollInterval, resting);
+
+      mover.rollDice();
+      expect(mover.currentPollInterval, fast,
+          reason: 'the fast window opens with the drive, before the commit '
+              'write has even landed');
+      await pumpUntil(
+          () =>
+              mover.currentPollInterval == resting &&
+              witness.currentPollInterval == resting,
+          reason: 'the fast window never closed after the roll folded');
+    });
+
+    test('a caller-supplied interval slower than 500ms caps the fast one',
+        () async {
+      final m = backend.seedMatch();
+      final quick = OnlineMatchController(
+        api: FakeMatchApi(backend, 'host'),
+        matchDoc: m.doc,
+        // What AIGAMMON_E2E_POLL_MS does: one knob has to override BOTH
+        // cadences, or the emulator E2E would still crawl through handshakes.
+        pollInterval: const Duration(milliseconds: 100),
+      );
+      addTearDown(quick.disposeController);
+      expect(quick.fastPollInterval, const Duration(milliseconds: 100));
+
+      final slow = OnlineMatchController(
+        api: FakeMatchApi(backend, 'guest'),
+        matchDoc: m.doc,
+        pollInterval: const Duration(seconds: 10),
+      );
+      addTearDown(slow.disposeController);
+      expect(slow.fastPollInterval, fast);
+    });
+  });
+
   // --- freeze vs. self-healing ----------------------------------------------
 
   group('cheat freeze', () {

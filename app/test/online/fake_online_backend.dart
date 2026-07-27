@@ -391,6 +391,11 @@ class FakeMatchApi implements MatchApi {
 
   // --- polling ---------------------------------------------------------------
 
+  /// The pacing callback the caller handed [pollMatch], kept so a test can ask
+  /// what the REAL transport would be waiting between cycles right now (the
+  /// fake itself is change-driven and ignores it — see [pollBeat]).
+  PollInterval? pollPacing;
+
   /// Change-driven rather than clock-driven, but with the SAME emission
   /// semantics as [MatchApi.pollMatch]: events once each in seq order, roll
   /// documents whenever their phase moved, and a watermark that retires the
@@ -398,11 +403,12 @@ class FakeMatchApi implements MatchApi {
   @override
   Stream<MatchPoll> pollMatch(
     String code, {
-    Duration interval = const Duration(seconds: 2),
+    PollInterval interval = defaultPollInterval,
     int afterSeq = -1,
     int rollsFrom = 0,
     int pageSize = 100,
   }) {
+    pollPacing = interval;
     var lastSeq = afterSeq;
     var watermark = rollsFrom;
     final seen = <int, FairDicePhase>{};
@@ -476,7 +482,7 @@ class FakeMatchApi implements MatchApi {
   @override
   Stream<RemoteEvent> pollEvents(
     String code, {
-    Duration interval = const Duration(seconds: 2),
+    PollInterval interval = defaultPollInterval,
     int afterSeq = -1,
   }) =>
       pollMatch(code, interval: interval, afterSeq: afterSeq)

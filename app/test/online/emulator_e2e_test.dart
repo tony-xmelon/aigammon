@@ -47,13 +47,16 @@ import 'fake_online_backend.dart' show openingSecretsFor;
 /// `firebase/run-emulator-tests.ps1` / `firebase/ci-emulator-suites.sh` inside a
 /// throwaway emulator.
 ///
-/// The controllers' poll interval defaults to 2s in production, which is far
-/// too slow here: a roll costs about three poll latencies (commit → entropy →
-/// reveal) and a move costs one more, so a whole game runs to many minutes of
-/// pure waiting — a measured single game took **4m50s** at 2000ms against
-/// 20-30s at 100ms. [_pollInterval] is therefore turned down to
-/// [_defaultPollMs] ms, overridable with `AIGAMMON_E2E_POLL_MS` — set it to
-/// 2000 to time a match at production pacing. The controller already takes the
+/// The controllers' RESTING poll interval defaults to 2s in production, which
+/// is far too slow here: a roll costs about three poll latencies (commit →
+/// entropy → reveal) and a move costs one more, so a whole game ran to minutes
+/// of pure waiting — a measured single game took **4m50s** at a flat 2000ms
+/// against 20-30s at 100ms. That measurement is what produced
+/// `OnlineMatchController.currentPollInterval`: production now polls at 500ms
+/// for exactly as long as a handshake is outstanding. [_pollInterval] is still
+/// turned down to [_defaultPollMs] ms here (overridable with
+/// `AIGAMMON_E2E_POLL_MS`), and because the fast cadence is capped at the
+/// resting one, that single knob overrides both. The controller takes the
 /// interval as a constructor parameter, so nothing production-side changes for
 /// the sake of the test.
 

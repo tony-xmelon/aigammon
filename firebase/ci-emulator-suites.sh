@@ -20,9 +20,11 @@ set -euo pipefail
 #    AIGAMMON_EMULATOR=1 is the env gate the test file reads (see
 #    app/dart_test.yaml for why an env gate rather than exclude_tags).
 #    AIGAMMON_E2E_POLL_MS turns the controllers' poll interval down from the
-#    production 2s: a roll costs ~3 poll latencies, so 2s pacing runs a whole
-#    match into MINUTES of pure waiting (measured on one game: 20-30s at 100ms
-#    against 4m50s at 2000ms).
+#    production 2s: a roll costs ~3 poll latencies, so a flat 2s pacing ran a
+#    whole match into MINUTES of pure waiting (measured on one game: 20-30s at
+#    100ms against 4m50s at 2000ms). Production answers that with adaptive
+#    polling (500ms while a handshake is in flight); the knob still overrides
+#    BOTH cadences, since the fast one is capped at the resting one.
 (cd ../app && flutter pub get &&
   AIGAMMON_EMULATOR=1 AIGAMMON_E2E_POLL_MS=100 \
   flutter test --tags emulator test/online/emulator_e2e_test.dart)

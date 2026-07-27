@@ -513,7 +513,8 @@ void main() {
       final events = <int>[];
       final phases = <(int, FairDicePhase)>[];
       final sub = host.api
-          .pollMatch(match.code, interval: const Duration(milliseconds: 50))
+          .pollMatch(match.code,
+              interval: () => const Duration(milliseconds: 50))
           .listen((poll) {
         events.addAll(poll.events.map((e) => e.seq));
         phases.addAll(poll.rolls.map((r) => (r.n, r.phase)));
