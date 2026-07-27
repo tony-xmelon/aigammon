@@ -3,69 +3,111 @@ library;
 
 import 'dart:io';
 
+import 'package:aigammon_app/data/persistence_hooks.dart';
 import 'package:aigammon_app/game/player_agent.dart' show CubeAction;
 import 'package:aigammon_app/online/online_match_controller.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:online_client/online_client.dart';
 
-/// Two-client full-MATCH end-to-end test through the REAL Firebase Emulator
-/// Suite (Auth + Firestore + Cloud Functions + firestore.rules).
-///
-/// Where [OnlineMatchController]'s unit test drives a scripted [FakeMatchApi],
-/// this test wires TWO controllers — each with its own anonymous user and its
-/// own transport stack — to a single server-authoritative match and plays it to
-/// completion. Every dice roll, every fold, and every score is produced by the
-/// deployed functions and rules; nothing here shortcuts the server.
-///
-/// ## Gating
-///
-/// This is a heavy integration test that requires the emulator to be up. It is
-/// GATED OFF unless the environment variable `AIGAMMON_EMULATOR=1` is set — a
-/// plain `flutter test` skips it with a reason (see app/dart_test.yaml for why
-/// an env gate rather than the `exclude_tags`/preset pattern used by
-/// packages/online_client). `firebase/run-emulator-tests.ps1` sets the variable
-/// and runs it inside a throwaway emulator via
-/// `flutter test --tags emulator test/online/emulator_e2e_test.dart`.
-///
-/// ## What it plays
-///
-/// A 3-point (multi-game) match with a first-legal-move policy for both seats.
-/// It also scripts exactly ONE cube sequence: from game 2 onward, white (A)
-/// offers a double at its first pre-roll opportunity while the cube is centered,
-/// and black (B) takes — so the take path and a doubled game are exercised and
-/// the cube value 2 is observed. The loop runs until BOTH controllers report
-/// `matchOver`, then asserts the two clients and the server all agree.
+import 'fake_online_backend.dart' show openingSecretsFor;
 
-/// A signed-in anonymous user with a full [MatchApi] stack over its own token.
-class _User {
-  final AuthClient auth;
-  final FirestoreRestClient firestore;
-  final FunctionsClient functions;
-  final MatchApi api;
-  final String uid;
+/// Two-client end-to-end tests through the REAL Firebase Emulator Suite (Auth +
+/// Firestore + `firestore.rules`; there is no functions emulator in the
+/// serverless model).
+///
+/// Where `online_match_controller_test.dart` drives two controllers against an
+/// in-memory [FakeBackend], this file wires two [OnlineMatchController]s — each
+/// with its own anonymous user, its own token and its own REST transport — to
+/// one real match document and plays it out. Nothing is shortcut: every roll
+/// runs the commit-reveal protocol over real `rolls/{n}` documents, every event
+/// is a real `events/{seq}` create, and every refusal below is one the deployed
+/// `firestore.rules` produced.
+///
+/// ## What it covers
+///
+///  1. **the happy path** — create → join → a COMPLETE match, with the two
+///     clients' derived state compared at every fold depth, the whole roll
+///     protocol audited afterwards, persistence hooks fired on both ends and
+///     the match document flipped to `complete`;
+///  2. **forgeries the RULES must block** — direct `FirestoreDocs` writes that
+///     bypass [MatchApi] entirely (wrong author, event rewrite, roll phase
+///     skip, match-field tamper): each must come back
+///     [PermissionDeniedException], and the two honest controllers must play on
+///     as if nothing happened;
+///  3. **a forgery the rules CANNOT block** — a well-shaped, correctly-authored
+///     but ILLEGAL event, and a reveal that does not hash to its commitment.
+///     Rules have no rules engine and cannot compute sha256, so the honest peer
+///     is the only referee: it must FREEZE, permanently.
+///
+/// ## Gating and pacing
+///
+/// Skipped unless `AIGAMMON_EMULATOR` is set (see `app/dart_test.yaml` for why
+/// an env gate rather than `exclude_tags`), and run by
+/// `firebase/run-emulator-tests.ps1` / `firebase/ci-emulator-suites.sh` inside a
+/// throwaway emulator.
+///
+/// The controllers' RESTING poll interval defaults to 2s in production, which
+/// is far too slow here: a roll costs about three poll latencies (commit →
+/// entropy → reveal) and a move costs one more, so a whole game ran to minutes
+/// of pure waiting — a measured single game took **4m50s** at a flat 2000ms
+/// against 20-30s at 100ms. That measurement is what produced
+/// `OnlineMatchController.currentPollInterval`: production now polls at 500ms
+/// for exactly as long as a handshake is outstanding. [_pollInterval] is still
+/// turned down to [_defaultPollMs] ms here (overridable with
+/// `AIGAMMON_E2E_POLL_MS`), and because the fast cadence is capped at the
+/// resting one, that single knob overrides both. The controller takes the
+/// interval as a constructor parameter, so nothing production-side changes for
+/// the sake of the test.
 
-  _User(this.auth, this.firestore, this.functions, this.api, this.uid);
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
-  void close() {
-    auth.close();
-    firestore.close();
-    functions.close();
-  }
+/// Poll interval used unless `AIGAMMON_E2E_POLL_MS` overrides it.
+///
+/// Fast enough to keep the whole emulator pipeline well under three minutes,
+/// slow enough that the two clients still exercise real polling (each cycle is
+/// two Firestore queries per client).
+const int _defaultPollMs = 100;
+
+Duration get _pollInterval {
+  final raw = Platform.environment['AIGAMMON_E2E_POLL_MS']?.trim();
+  final ms = int.tryParse(raw ?? '') ?? _defaultPollMs;
+  return Duration(milliseconds: ms);
 }
 
-Future<_User> _signIn(OnlineConfig config) async {
-  final auth = AuthClient(config);
-  final session = await auth.signInAnonymously();
-  final firestore = FirestoreRestClient(config, token: auth.validToken);
-  final functions = FunctionsClient(config, token: auth.validToken);
-  return _User(
-    auth,
-    firestore,
-    functions,
-    MatchApi(auth, firestore, functions),
-    session.uid,
-  );
+/// One anonymous user with a full transport stack of its own.
+class _Client {
+  _Client(this.api, this.uid);
+
+  final MatchApi api;
+  final String uid;
+}
+
+/// Records every persistence hook, so a test can prove both ends wrote history.
+class _RecordingPersistence implements MatchPersistence {
+  final List<({int gameNumber, GameResult result, MatchState matchAfter})>
+      games = [];
+  MatchState? finalState;
+  int matchFinishedCalls = 0;
+
+  @override
+  Future<void> onGameFinished({
+    required int gameNumber,
+    required bool isCrawford,
+    required List<GameEvent> events,
+    required GameResult result,
+    required MatchState matchAfter,
+  }) async {
+    games.add((gameNumber: gameNumber, result: result, matchAfter: matchAfter));
+  }
+
+  @override
+  Future<void> onMatchFinished(MatchState state) async {
+    matchFinishedCalls++;
+    finalState = state;
+  }
 }
 
 void main() {
@@ -81,250 +123,628 @@ void main() {
 
   final config = OnlineConfig.emulator();
 
+  // -------------------------------------------------------------------------
+  // Fixtures
+  // -------------------------------------------------------------------------
+
+  /// A signed-in anonymous user, closed at teardown.
+  Future<_Client> signIn() async {
+    final api = MatchApi.forConfig(config);
+    final uid = await api.signIn();
+    addTearDown(api.close);
+    return _Client(api, uid);
+  }
+
+  /// A created + joined match. The returned [MatchDoc] is the JOINED one, so
+  /// both controllers can be seated from it.
+  Future<({_Client host, _Client guest, MatchDoc doc})> newMatch({
+    int length = 1,
+    bool cubeless = false,
+  }) async {
+    final host = await signIn();
+    final guest = await signIn();
+    final created = await host.api.createMatch(length: length, cubeless: cubeless);
+    final joined = await guest.api.joinMatch(created.code);
+    expect(joined.sideOf(host.uid), Player.white);
+    expect(joined.sideOf(guest.uid), Player.black);
+    return (host: host, guest: guest, doc: joined);
+  }
+
+  /// Plays the OPENING roll by hand, through the real transport, so the test
+  /// decides who starts.
+  ///
+  /// Every write is one a rules-abiding client would make (host commits, guest
+  /// contributes entropy, host reveals, host appends the event); the secrets are
+  /// brute-forced by [openingSecretsFor] so the derivation really does produce
+  /// [whiteDie]/[blackDie] — the dice are AIMED, never forged, and both
+  /// controllers validate them exactly as they would their own.
+  Future<void> seedOpening(
+    _Client host,
+    _Client guest,
+    String code, {
+    required int whiteDie,
+    required int blackDie,
+  }) async {
+    final s = openingSecretsFor(whiteDie, blackDie);
+    await host.api.createRoll(code: code, n: 1, commit: s.commit);
+    await guest.api.submitEntropy(code: code, n: 1, entropy: s.entropy);
+    await host.api.submitReveal(code: code, n: 1, reveal: s.secret);
+    await host.api.submitEvent(
+      code: code,
+      seq: 0,
+      gameNo: 1,
+      event: OpeningRollEvent(whiteDie: whiteDie, blackDie: blackDie),
+    );
+  }
+
+  OnlineMatchController controllerFor(
+    _Client client,
+    MatchDoc doc, {
+    MatchPersistence persistence = const NoopPersistence(),
+  }) {
+    final c = OnlineMatchController(
+      api: client.api,
+      matchDoc: doc,
+      persistence: persistence,
+      pollInterval: _pollInterval,
+    );
+    addTearDown(c.disposeController);
+    return c;
+  }
+
+  // -------------------------------------------------------------------------
+  // Driving
+  // -------------------------------------------------------------------------
+
+  /// Waits (in real time) for [done], failing with [reason] on timeout.
+  Future<void> waitFor(
+    bool Function() done, {
+    Duration timeout = const Duration(seconds: 30),
+    String reason = 'condition never became true',
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!done()) {
+      if (DateTime.now().isAfter(deadline)) fail(reason);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  /// Re-[read]s a document until [done] accepts it, and returns it.
+  Future<T> readUntil<T>(
+    Future<T> Function() read,
+    bool Function(T) done, {
+    Duration timeout = const Duration(seconds: 30),
+    String reason = 'the document never reached the expected state',
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (true) {
+      final value = await read();
+      if (done(value)) return value;
+      if (DateTime.now().isAfter(deadline)) fail(reason);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
   test(
-    'two clients play a full 3-point match through the emulator; '
-    'clients + server stay consistent',
+    'two clients play a complete match through the emulator, and agree at '
+    'every fold',
     () async {
-      // --- setup: two users, a created + joined 3-point match ----------------
-      final a = await _signIn(config); // creator -> seat white
-      final b = await _signIn(config); // joiner  -> seat black
-      OnlineMatchController? ctrlA;
-      OnlineMatchController? ctrlB;
-      try {
-        final created = await a.api.createMatch(3); // multi-game match
-        expect(created.matchId, isNotEmpty);
-        final joinedId = await b.api.joinMatch(created.code);
-        expect(joinedId, created.matchId);
-        final matchId = created.matchId;
+      final m = await newMatch(length: 1);
+      final code = m.doc.code;
+      // White (the host) starts; the opening is aimed rather than left to the
+      // protocol so the test is reproducible from move one.
+      await seedOpening(m.host, m.guest, code, whiteDie: 6, blackDie: 3);
 
-        // Each controller is seeded from its own view of the freshly-active
-        // match (game 1's opening roll is already appended server-side).
-        final snapA = await a.api.fetchMatch(matchId);
-        final snapB = await b.api.fetchMatch(matchId);
-        expect(snapA.status, 'active');
-        expect(snapA.gameNo, 1);
+      final hostStore = _RecordingPersistence();
+      final guestStore = _RecordingPersistence();
+      final host = controllerFor(m.host, m.doc, persistence: hostStore);
+      final guest = controllerFor(m.guest, m.doc, persistence: guestStore);
 
-        ctrlA = OnlineMatchController(
-          api: a.api,
-          matchId: matchId,
-          localSide: Player.white,
-          initialSnapshot: snapA,
-          pollInterval: const Duration(milliseconds: 300),
-        );
-        ctrlB = OnlineMatchController(
-          api: b.api,
-          matchId: matchId,
-          localSide: Player.black,
-          initialSnapshot: snapB,
-          pollInterval: const Duration(milliseconds: 300),
-        );
+      final started = DateTime.now();
+      await host.playMatch();
+      await guest.playMatch();
+      await host.ready;
+      await guest.ready;
+      expect(host.isReady, isTrue);
+      expect(guest.isReady, isTrue);
+      expect(host.state.turn, Player.white,
+          reason: 'the seeded 6-3 opening puts white on move');
 
-        // Track cube-2 sightings and any transient error either controller
-        // surfaces during the run (both should be clear by the end).
-        var cubeReachedTwo = false;
-        final transientErrors = <Object>[];
-        void observe(OnlineMatchController c) {
-          if (c.error != null) transientErrors.add(c.error!);
-          if (c.isReady && !c.awaitingNextGame && !c.matchOver) {
-            try {
-              if (c.state.cube.value >= 2) cubeReachedTwo = true;
-            } on StateError {
-              // state not readable in this fold; ignore.
-            }
-          }
+      var comparisons = 0;
+      final lastActed = <OnlineMatchController, GameState?>{};
+      final deadline = DateTime.now().add(const Duration(minutes: 20));
+      while (!(host.matchOver && guest.matchOver)) {
+        if (host.frozen || guest.frozen) {
+          fail('a controller froze mid-match: ${host.cheatError ?? guest.cheatError}');
         }
-
-        ctrlA.addListener(() => observe(ctrlA!));
-        ctrlB.addListener(() => observe(ctrlB!));
-
-        await ctrlA.playMatch();
-        await ctrlB.playMatch();
-        await ctrlA.ready;
-        await ctrlB.ready;
-        expect(ctrlA.isReady, isTrue);
-        expect(ctrlB.isReady, isTrue);
-
-        // --- drive loop --------------------------------------------------------
-        // Each controller only ever acts on ITS OWN seat, so the two never race
-        // for the same decision. Actions are de-duplicated by GameState identity:
-        // a controller acts at most once per folded state, so a submit that has
-        // not yet been echoed back by the poll is never re-issued (which would
-        // otherwise double-submit a move/roll).
-        var gamesCompletedA = 0;
-        var doubledOnce = false;
-        final lastActed = <OnlineMatchController, GameState?>{};
-
-        void act(OnlineMatchController c, {required bool isA}) {
-          if (c.matchOver) return;
-          if (c.awaitingNextGame) {
-            c.continueToNextGame();
-            if (isA) gamesCompletedA++;
-            lastActed[c] = null; // force a fresh decision in the next game
-            return;
-          }
-          if (!c.isReady) return;
-          final GameState s;
-          try {
-            s = c.state;
-          } on StateError {
-            return;
-          }
-          if (identical(s, lastActed[c])) return; // already acted on this fold
-          if (s.cube.value >= 2) cubeReachedTwo = true;
-          final side = c.localSide;
-
-          if (c.pendingCubeOf(side).value != null) {
-            c.submitCubeResponse(side, CubeAction.take);
-            lastActed[c] = s;
-            return;
-          }
-          if (c.pendingResignOf(side).value != null) {
-            c.submitResignResponse(side, true);
-            lastActed[c] = s;
-            return;
-          }
-          if (c.pendingMoveOf(side).value != null) {
-            final legal = s.legalMoves;
-            c.submitMove(side, legal.isEmpty ? Move.none : legal.first);
-            lastActed[c] = s;
-            return;
-          }
-          if (c.awaitingHumanTurn) {
-            // Script: A doubles ONCE, at its FIRST centered-cube opportunity in
-            // game 1; otherwise just roll. Game 1 always exists and is never the
-            // Crawford game (scores start 0-0), and white always reaches its
-            // pre-roll gate, so this double is guaranteed to fire — regardless of
-            // how many games the match ends up taking. (An earlier version gated
-            // this on game 2, which a game-1 backgammon ending the 3-point match
-            // could skip, leaving the cube-2 assertion unreachable.)
-            final canDouble = isA &&
-                !doubledOnce &&
-                s.cube.owner == null &&
-                !s.isCrawfordGame;
-            if (canDouble) {
-              doubledOnce = true;
-              c.offerDouble();
-            } else {
-              c.rollDice();
-            }
-            lastActed[c] = s;
-            return;
-          }
-          // Opponent's turn / in flight: nothing to do; mark this fold acted so
-          // we don't spin. The next fold produces a new GameState object.
-          lastActed[c] = s;
+        if (DateTime.now().isAfter(deadline)) {
+          fail('the match did not finish in time.\n'
+              '${_diag('host', host)}\n${_diag('guest', guest)}');
         }
-
-        const maxIters = 8000; // safety net; the real bound is the test timeout
-        var iters = 0;
-        while (!(ctrlA.matchOver && ctrlB.matchOver)) {
-          iters++;
-          if (iters > maxIters) {
-            fail('match did not complete within $maxIters iterations.\n'
-                '${_diag('A', ctrlA)}\n${_diag('B', ctrlB)}\n'
-                'gamesCompletedA=$gamesCompletedA doubledOnce=$doubledOnce '
-                'cubeReachedTwo=$cubeReachedTwo');
-          }
-          act(ctrlA, isA: true);
-          act(ctrlB, isA: false);
-          await Future<void>.delayed(const Duration(milliseconds: 80));
-        }
-
-        // --- assertions --------------------------------------------------------
-        // 1. No lingering error on either controller.
-        expect(ctrlA.error, isNull, reason: 'A ended with an error');
-        expect(ctrlB.error, isNull, reason: 'B ended with an error');
-
-        // 2. The scripted cube sequence really happened.
-        expect(doubledOnce, isTrue, reason: 'A never got to double');
-        expect(cubeReachedTwo, isTrue,
-            reason: 'the cube never reached 2 (double/take did not flow)');
-
-        // 3. The two clients agree on the final match outcome.
-        expect(ctrlA.match.whiteScore, ctrlB.match.whiteScore);
-        expect(ctrlA.match.blackScore, ctrlB.match.blackScore);
-        expect(ctrlA.match.winner, ctrlB.match.winner);
-        expect(ctrlA.match.winner, isNotNull);
-
-        // 4. Both clients' last-game folded histories are identical.
-        final eventsA = ctrlA.game.events;
-        final eventsB = ctrlB.game.events;
-        expect(eventsA.length, eventsB.length,
-            reason: 'clients folded a different number of last-game events');
-        for (var i = 0; i < eventsA.length; i++) {
-          expect(eventsA[i], eventsB[i],
-              reason: 'last-game event $i differs between clients');
-        }
-
-        // 5. The server snapshot agrees with the clients.
-        final server = await a.api.fetchMatch(matchId);
-        expect(server.status, 'complete');
-        expect(server.winner, ctrlA.match.winner);
-        expect(server.whiteScore, ctrlA.match.whiteScore);
-        expect(server.blackScore, ctrlA.match.blackScore);
-
-        // 6. A full independent replay of the ENTIRE server event log folds to
-        //    the same scores/winner (validates every stored event, per game).
-        final all = await a.api.fetchEventsSince(matchId, -1);
-        final byGame = <int, List<GameEvent>>{};
-        for (final re in all) {
-          (byGame[re.gameNo] ??= <GameEvent>[]).add(re.event);
-        }
-        final gameNos = byGame.keys.toList()..sort();
-        expect(gameNos.length, greaterThanOrEqualTo(1));
-        var replayed = MatchState(matchLength: server.matchLength);
-        for (final gn in gameNos) {
-          final crawford = replayed.isCrawfordNext;
-          final g = Game.replay(byGame[gn]!, isCrawfordGame: crawford);
-          if (g.state.phase == GamePhase.gameOver) {
-            replayed = replayed.applyResult(g.state.result!);
-          }
-        }
-        expect(replayed.whiteScore, server.whiteScore,
-            reason: 'independent replay disagrees on white score');
-        expect(replayed.blackScore, server.blackScore,
-            reason: 'independent replay disagrees on black score');
-        expect(replayed.winner, server.winner,
-            reason: 'independent replay disagrees on the winner');
-        expect(replayed.isMatchOver, isTrue);
-
-        // The server's last-game event count matches the clients' last game.
-        expect(byGame[gameNos.last]!.length, eventsA.length,
-            reason: "server's last game length differs from the clients'");
-
-        // Transient poll/submit errors are tolerated mid-run, but every one must
-        // have cleared (the controllers ended clean, asserted above). This is
-        // informational: surface it if the run was bumpy.
-        if (transientErrors.isNotEmpty) {
-          // ignore: avoid_print
-          print('note: ${transientErrors.length} transient error(s) observed '
-              'during the run (all cleared by completion).');
-        }
-      } finally {
-        ctrlA?.disposeController();
-        ctrlB?.disposeController();
-        a.close();
-        b.close();
+        _act(host, lastActed);
+        _act(guest, lastActed);
+        comparisons += _expectConverged(host, guest);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
       }
+      final elapsed = DateTime.now().difference(started);
+
+      // --- the two clients agree ------------------------------------------
+      expect(host.error, isNull, reason: 'the host ended with an error');
+      expect(guest.error, isNull, reason: 'the guest ended with an error');
+      expect(host.match.winner, isNotNull);
+      expect(host.match.winner, guest.match.winner);
+      expect(host.match.whiteScore, guest.match.whiteScore);
+      expect(host.match.blackScore, guest.match.blackScore);
+      expect(comparisons, greaterThan(10),
+          reason: 'the convergence check never got to compare the two clients');
+      expect(_expectConverged(host, guest), 1,
+          reason: 'the two clients did not finish at the same fold depth');
+
+      // --- persistence fired on BOTH ends ----------------------------------
+      await waitFor(
+        () =>
+            hostStore.matchFinishedCalls == 1 &&
+            guestStore.matchFinishedCalls == 1,
+        reason: 'a persistence hook never recorded the finished match',
+      );
+      expect(hostStore.games, hasLength(1));
+      expect(guestStore.games, hasLength(1));
+      expect(hostStore.games.single.gameNumber, 1);
+      expect(hostStore.games.single.result, guestStore.games.single.result,
+          reason: 'the two ends recorded different results for the same game');
+      expect(hostStore.finalState!.whiteScore, host.match.whiteScore);
+      expect(guestStore.finalState!.blackScore, host.match.blackScore);
+
+      // --- the match document was closed out --------------------------------
+      final finalDoc = await readUntil(
+        () => m.host.api.fetchMatch(code),
+        (d) => d.status == 'complete',
+        reason: 'the match document never reached status "complete"',
+      );
+      expect(finalDoc.hostUid, m.host.uid);
+      expect(finalDoc.guestUid, m.guest.uid);
+
+      // --- every roll ran the whole protocol --------------------------------
+      final events = await m.host.api.fetchEventsSince(code, -1);
+      final rolls = await m.host.api.fetchRollsFrom(code, 1);
+      expect(events.map((e) => e.seq), [for (var i = 0; i < events.length; i++) i],
+          reason: 'the log must be contiguous from 0');
+
+      final rollEvents = events
+          .where((e) => e.event is OpeningRollEvent || e.event is RollEvent)
+          .toList();
+      expect(rolls.map((r) => r.n), [for (var i = 1; i <= rollEvents.length; i++) i],
+          reason: 'one roll document per roll-bearing event, contiguous from 1');
+
+      for (var i = 0; i < rollEvents.length; i++) {
+        final re = rollEvents[i];
+        final doc = rolls[i];
+        expect(doc.isComplete, isTrue, reason: 'roll ${doc.n} never completed');
+        expect(commitMatches(doc.commit, doc.reveal!), isTrue,
+            reason: 'roll ${doc.n} revealed a secret that is not its pre-image');
+        expect(doc.roller, re.author,
+            reason: 'roll ${doc.n} was committed by someone other than the '
+                'author of its event');
+        final completed = doc.completed!;
+        final event = re.event;
+        if (event is OpeningRollEvent) {
+          expect(re.author, m.host.uid, reason: 'openings are the host\'s');
+          expect(openingDiceMatchRoll(completed, event), isTrue,
+              reason: 'event ${re.seq} does not carry roll ${doc.n}\'s dice');
+        } else {
+          final roll = event as RollEvent;
+          expect(re.author, roll.player == Player.white ? m.host.uid : m.guest.uid,
+              reason: 'a roll event must be written by the player who rolled');
+          expect(diceMatchRoll(completed, roll), isTrue,
+              reason: 'event ${re.seq} does not carry roll ${doc.n}\'s dice');
+        }
+      }
+
+      // --- an independent replay of the stored log agrees --------------------
+      final byGame = <int, List<GameEvent>>{};
+      for (final re in events) {
+        (byGame[re.gameNo] ??= <GameEvent>[]).add(re.event);
+      }
+      var replayed = MatchState(matchLength: m.doc.length);
+      for (final gameNo in byGame.keys.toList()..sort()) {
+        final g = Game.replay(byGame[gameNo]!,
+            isCrawfordGame: replayed.isCrawfordNext);
+        if (g.state.phase == GamePhase.gameOver) {
+          replayed = replayed.applyResult(g.state.result!);
+        }
+      }
+      expect(replayed.whiteScore, host.match.whiteScore);
+      expect(replayed.blackScore, host.match.blackScore);
+      expect(replayed.winner, host.match.winner);
+
+      // Timing is the point of the interval knob — report it either way.
+      // ignore: avoid_print
+      print('E2E full match: ${elapsed.inMilliseconds / 1000}s wall-clock at a '
+          '${_pollInterval.inMilliseconds}ms poll interval '
+          '(${events.length} events, ${rolls.length} rolls, '
+          '$comparisons convergence checks).');
     },
-    timeout: const Timeout(Duration(minutes: 10)),
+    timeout: const Timeout(Duration(minutes: 25)),
     skip: skipReason,
   );
+
+  // =========================================================================
+  group('adversarial', () {
+    test(
+      'direct-write forgeries are refused by the rules and the honest clients '
+      'play on',
+      () async {
+        final m = await newMatch(length: 1);
+        final code = m.doc.code;
+        await seedOpening(m.host, m.guest, code, whiteDie: 6, blackDie: 3);
+
+        final host = controllerFor(m.host, m.doc);
+        final guest = controllerFor(m.guest, m.doc);
+        await host.playMatch();
+        await guest.playMatch();
+        await host.ready;
+        await guest.ready;
+
+        // Every forgery below bypasses MatchApi and writes documents straight
+        // at Firestore, exactly as a hacked client would.
+        final docs = m.guest.api.docs;
+
+        // 1. An event authored as the OPPONENT.
+        await expectLater(
+          docs.create('matches/$code/events/00000500', {
+            'seq': 500,
+            'gameNo': 1,
+            'event': '{"type":"double","player":"white"}',
+            'author': m.host.uid,
+          }),
+          throwsA(isA<PermissionDeniedException>()),
+          reason: 'the rules must pin author to the writer',
+        );
+
+        // 2. Rewriting an event that is already in the log.
+        await expectLater(
+          docs.patch('matches/$code/events/00000000', {'gameNo': 9},
+              updateMask: const ['gameNo']),
+          throwsA(isA<PermissionDeniedException>()),
+          reason: 'the event log is append-only',
+        );
+
+        // 3a. Rewriting a roll that has already completed (the seeded opening).
+        await expectLater(
+          docs.patch('matches/$code/rolls/00000001', {'reveal': 'c' * 64},
+              updateMask: const ['reveal']),
+          throwsA(isA<PermissionDeniedException>()),
+          reason: 'a completed roll is immutable',
+        );
+
+        // 3b. Roll PHASE SKIPS, in a second match of the same two users.
+        //
+        //     Deliberately not in the live one: the honest controllers witness
+        //     every roll they see, so a fresh commitment there would race their
+        //     entropy — and once entropy lands, a reveal is legal. The forgery
+        //     under test is the reveal that comes BEFORE any entropy, so it
+        //     needs a document no honest client is watching.
+        final second = await m.host.api.createMatch(length: 1, cubeless: false);
+        final quiet = (await m.guest.api.joinMatch(second.code)).code;
+        await docs.create('matches/$quiet/rolls/00000000',
+            {'n': 0, 'roller': m.guest.uid, 'commit': 'a' * 64});
+        await expectLater(
+          docs.patch('matches/$quiet/rolls/00000000', {'reveal': 'b' * 64},
+              updateMask: const ['reveal']),
+          throwsA(isA<PermissionDeniedException>()),
+          reason: 'revealing before entropy would let the roller pick the dice',
+        );
+        await expectLater(
+          docs.patch('matches/$quiet/rolls/00000000', {'entropy': 'b' * 64},
+              updateMask: const ['entropy']),
+          throwsA(isA<PermissionDeniedException>()),
+          reason: 'the roller may not supply its own entropy',
+        );
+
+        // 4. Tampering with the match document itself.
+        for (final tamper in <Map<String, Object?>>[
+          {'length': 25},
+          {'hostUid': m.guest.uid},
+          {'cubeless': true},
+          {'status': 'waiting'},
+        ]) {
+          await expectLater(
+            docs.patch('matches/$code', tamper,
+                updateMask: tamper.keys.toList()),
+            throwsA(isA<PermissionDeniedException>()),
+            reason: 'match fields are immutable after creation ($tamper)',
+          );
+        }
+
+        // Nothing landed.
+        final after = await m.host.api.fetchMatch(code);
+        expect(after.length, m.doc.length);
+        expect(after.hostUid, m.host.uid);
+        expect(after.cubeless, m.doc.cubeless);
+        expect(after.status, 'active');
+        final log = await m.host.api.fetchEventsSince(code, -1);
+        expect(log.every((e) => e.gameNo == 1), isTrue);
+        expect(log.first.event, isA<OpeningRollEvent>());
+
+        // And the honest pair carries on: several more exchanges, converging
+        // after each one, with no freeze and no lingering error.
+        final target = host.game.events.length + 8;
+        final lastActed = <OnlineMatchController, GameState?>{};
+        final deadline = DateTime.now().add(const Duration(minutes: 3));
+        while (host.game.events.length < target ||
+            guest.game.events.length < target) {
+          expect(host.frozen, isFalse, reason: 'the host froze: ${host.cheatError}');
+          expect(guest.frozen, isFalse,
+              reason: 'the guest froze: ${guest.cheatError}');
+          if (DateTime.now().isAfter(deadline)) {
+            fail('the honest pair stalled after the forgeries.\n'
+                '${_diag('host', host)}\n${_diag('guest', guest)}');
+          }
+          _act(host, lastActed);
+          _act(guest, lastActed);
+          _expectConverged(host, guest);
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        _expectConverged(host, guest);
+        expect(host.cheatError, isNull);
+        expect(guest.cheatError, isNull);
+      },
+      timeout: const Timeout(Duration(minutes: 6)),
+      skip: skipReason,
+    );
+
+    test(
+      'a rules-passing but ILLEGAL opponent event freezes the honest client',
+      () async {
+        final m = await newMatch(length: 1);
+        final code = m.doc.code;
+        // White (the host, our honest client) is on move.
+        await seedOpening(m.host, m.guest, code, whiteDie: 6, blackDie: 3);
+
+        final host = controllerFor(m.host, m.doc);
+        await host.playMatch();
+        await host.ready;
+        expect(host.state.turn, Player.white);
+        final foldedBefore = host.game.events.length;
+
+        // A perfectly well-formed event: right author, right seat, right shape
+        // — and completely illegal, because it is white's move and black has no
+        // dice. Nothing in firestore.rules can catch this; only the rules
+        // engine on the honest peer can.
+        await m.guest.api.submitEvent(
+          code: code,
+          seq: 1,
+          gameNo: 1,
+          event: MoveEvent(
+              Player.black, Move([const CheckerMove(13, 10)])),
+        );
+
+        await waitFor(() => host.frozen,
+            reason: 'the host never froze on an illegal opponent event');
+        final cheat = host.cheatError!;
+        expect(cheat.code, 'illegal-event');
+        expect(cheat.message, contains('frozen'));
+        expect(host.error, same(cheat),
+            reason: 'a freeze outranks any transient error');
+        expect(host.isThinking, isFalse);
+        expect(host.awaitingHumanTurn, isFalse);
+        expect(host.game.events.length, foldedBefore,
+            reason: 'the illegal event must not have folded');
+
+        // A frozen controller never folds again, however much the cheat writes.
+        await m.guest.api.submitEvent(
+          code: code,
+          seq: 2,
+          gameNo: 1,
+          event: MoveEvent(Player.black, Move([const CheckerMove(24, 21)])),
+        );
+        await Future<void>.delayed(_pollInterval * 4);
+        expect(host.game.events.length, foldedBefore);
+        expect(host.cheatError, same(cheat),
+            reason: 'the original violation must be the one reported');
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+      skip: skipReason,
+    );
+
+    test(
+      'a reveal that does not hash to its commitment freezes the witness',
+      () async {
+        final m = await newMatch(length: 1);
+        final code = m.doc.code;
+        // BLACK opens, so once the guest has moved the next roll is genuinely
+        // WHITE's — the honest witness only answers the roll that is actually
+        // due (see the lookahead leg below), so the scripted host has to be on
+        // turn for its commitment to be witnessed at all.
+        await seedOpening(m.host, m.guest, code, whiteDie: 3, blackDie: 6);
+
+        // Only the guest runs a controller; the "host" is scripted by hand.
+        final guest = controllerFor(m.guest, m.doc);
+        await guest.playMatch();
+        await guest.ready;
+        expect(guest.state.turn, Player.black);
+        guest.submitMove(Player.black, guest.state.legalMoves.first);
+        await waitFor(() => guest.isReady && guest.state.turn == Player.white,
+            reason: 'the guest never handed the turn over');
+
+        // Phase 1 — a sound-looking commitment for the next roll.
+        final secret = generateSecretHex();
+        final swapped = generateSecretHex();
+        expect(swapped, isNot(secret));
+        await m.host.api.createRoll(code: code, n: 2, commit: commitFor(secret));
+
+        // Phase 2 — the honest witness answers with entropy all by itself.
+        await readUntil(
+          () => m.host.api.fetchRoll(code, 2),
+          (d) => d?.entropy != null,
+          reason: 'the guest controller never contributed entropy',
+        );
+
+        // Phase 3 — reveal a DIFFERENT secret. The rules cannot hash, so this
+        // write is accepted; only the witness can catch it.
+        await m.host.api.submitReveal(code: code, n: 2, reveal: swapped);
+
+        await waitFor(() => guest.frozen,
+            reason: 'the guest never froze on a tampered reveal');
+        final cheat = guest.cheatError!;
+        expect(cheat.code, 'fair-dice');
+        expect(cheat.message, contains('frozen'));
+        expect(cheat.message, contains('tampered dice'));
+        expect(guest.isThinking, isFalse);
+        expect(guest.awaitingHumanTurn, isFalse);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+      skip: skipReason,
+    );
+
+    test(
+      'a peer that squats its FUTURE roll documents gets no entropy for them',
+      () async {
+        // The dice-lookahead break. Turn parity is predictable, so a hostile
+        // client can pre-create the roll documents for its own coming turns; if
+        // the honest witness answers them it can reveal to itself and know
+        // several of its future rolls before choosing a move or a double. The
+        // dice stay unbiased and nothing ever folds illegally, so no freeze and
+        // no rules violation catches it — only the honest client's refusal to
+        // answer anything but the DUE roll.
+        final m = await newMatch(length: 1);
+        final code = m.doc.code;
+        // Black (the guest, our honest client) is on move first.
+        await seedOpening(m.host, m.guest, code, whiteDie: 3, blackDie: 6);
+
+        final guest = controllerFor(m.guest, m.doc);
+        await guest.playMatch();
+        await guest.ready;
+        expect(guest.state.turn, Player.black);
+
+        // The squat: white's next roll (2) plus two it has no business
+        // preparing, all correctly shaped and correctly authored.
+        final secrets = {
+          for (final n in [2, 4, 6]) n: generateSecretHex(),
+        };
+        for (final entry in secrets.entries) {
+          await m.host.api.createRoll(
+              code: code, n: entry.key, commit: commitFor(entry.value));
+        }
+
+        // Give the honest client several poll cycles to answer them.
+        await Future<void>.delayed(_pollInterval * 6);
+        for (final n in [2, 4, 6]) {
+          expect((await m.guest.api.fetchRoll(code, n))?.entropy, isNull,
+              reason: 'roll $n is not due — it must not be witnessed while it '
+                  'is still black to move');
+        }
+
+        // Hand white the turn. Roll 2 is now genuinely due, and is the ONLY one
+        // that may be answered — proving the binding is to the due index, not a
+        // blanket refusal that would deadlock the match.
+        guest.submitMove(Player.black, guest.state.legalMoves.first);
+        await readUntil(
+          () => m.host.api.fetchRoll(code, 2),
+          (d) => d?.entropy != null,
+          reason: 'the DUE roll must still be witnessed — no deadlock',
+        );
+        for (final n in [4, 6]) {
+          expect((await m.guest.api.fetchRoll(code, n))?.entropy, isNull,
+              reason: 'roll $n is still two turns ahead');
+        }
+        expect(guest.frozen, isFalse, reason: 'squatting is refused, not fatal');
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+      skip: skipReason,
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// One decision for [c], de-duplicated by [GameState] identity so a submission
+/// that has not been echoed back by the poll yet is never re-issued.
+///
+/// Deliberately dumb: first legal move, always take, always accept. The point
+/// of the test is the transport and the protocol, not the play.
+void _act(OnlineMatchController c, Map<OnlineMatchController, GameState?> lastActed) {
+  if (c.matchOver || c.frozen) return;
+  if (c.awaitingNextGame) {
+    c.continueToNextGame();
+    lastActed[c] = null;
+    return;
+  }
+  if (!c.isReady) return;
+  final GameState s;
+  try {
+    s = c.state;
+  } on StateError {
+    return;
+  }
+  if (identical(s, lastActed[c])) return;
+  final side = c.localSide;
+  if (c.pendingCubeOf(side).value != null) {
+    c.submitCubeResponse(side, CubeAction.take);
+  } else if (c.pendingResignOf(side).value != null) {
+    c.submitResignResponse(side, true);
+  } else if (c.pendingMoveOf(side).value != null) {
+    final legal = s.legalMoves;
+    c.submitMove(side, legal.isEmpty ? Move.none : legal.first);
+  } else if (c.awaitingHumanTurn) {
+    c.rollDice();
+  }
+  lastActed[c] = s;
+}
+
+/// The two clients' derived state, or null while a client has not folded a game
+/// yet.
+///
+/// The FIRST field is the fold depth (game number + folded event count): two
+/// clients at the same depth have folded exactly the same prefix of the same
+/// log, so everything after it — board, turn, phase, dice, cube, scores — must
+/// be identical. At different depths one is simply a poll behind the other.
+String? _signature(OnlineMatchController c) {
+  if (!c.isReady) return null;
+  final GameState s;
+  final Game g;
+  try {
+    g = c.game;
+    s = g.state;
+  } on StateError {
+    return null;
+  }
+  final b = s.board;
+  final dice = s.dice;
+  return [
+    'g${c.gameNumber}/e${g.events.length}',
+    '${c.match.whiteScore}-${c.match.blackScore}',
+    s.phase.name,
+    s.turn.name,
+    'cube${s.cube.value}@${s.cube.owner?.name ?? '-'}',
+    'dice${dice == null ? '-' : '${dice.die1}${dice.die2}'}',
+    b.points.join(','),
+    '${b.whiteBar}/${b.blackBar}/${b.whiteOff}/${b.blackOff}',
+    'crawford${s.isCrawfordGame}',
+  ].join('|');
+}
+
+/// Compares the two clients when they are at the same fold depth. Returns 1 if
+/// a comparison happened, 0 if they were not comparable at this instant.
+int _expectConverged(OnlineMatchController a, OnlineMatchController b) {
+  final sa = _signature(a);
+  final sb = _signature(b);
+  if (sa == null || sb == null) return 0;
+  if (sa.split('|').first != sb.split('|').first) return 0;
+  expect(sa, sb,
+      reason: 'the two clients derived different state from the same log '
+          'prefix');
+  return 1;
 }
 
 String _diag(String label, OnlineMatchController c) {
-  final buf = StringBuffer('controller $label: matchOver=${c.matchOver} '
+  final buf = StringBuffer('$label: matchOver=${c.matchOver} '
       'awaitingNextGame=${c.awaitingNextGame} '
       'awaitingHumanTurn=${c.awaitingHumanTurn} isReady=${c.isReady} '
-      'error=${c.error}');
-  if (c.isReady && !c.awaitingNextGame && !c.matchOver) {
-    try {
-      final s = c.state;
-      buf.write(' phase=${s.phase} turn=${s.turn} cube=${s.cube.value}');
-    } on StateError {
-      // ignore
-    }
-  }
-  buf.write(' scores=${c.match.whiteScore}-${c.match.blackScore}');
+      'frozen=${c.frozen} error=${c.error}');
+  final sig = _signature(c);
+  if (sig != null) buf.write(' state=$sig');
   return buf.toString();
 }

@@ -2,6 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:online_client/online_client.dart';
 
+import '../data/database.dart';
+import 'online_session_store.dart';
+
 /// The Web API key for the production Firebase project, injected at build time
 /// via `--dart-define=AIGAMMON_FIREBASE_API_KEY=...`. Empty when unset.
 const _apiKeyDefine = String.fromEnvironment('AIGAMMON_FIREBASE_API_KEY');
@@ -30,11 +33,12 @@ final onlineConfigProvider = Provider<OnlineConfig?>((ref) {
 
 /// The shared [MatchApi] for the app, built once per session.
 ///
-/// Signs in an anonymous Firebase user, then wires the Firestore and Functions
-/// REST clients to that session's token. Being a plain (non-autoDispose)
-/// [FutureProvider], the resolved [MatchApi] — and its anonymous session — are
-/// cached for the app lifetime; the clients are closed when the [ProviderScope]
-/// is torn down.
+/// Signs in an anonymous Firebase user, then talks to Firestore documents
+/// DIRECTLY — there are no Cloud Functions in the serverless model, so
+/// `firebase/firestore.rules` is the only server-side logic. Being a plain
+/// (non-autoDispose) [FutureProvider], the resolved [MatchApi] — and its
+/// anonymous session — are cached for the app lifetime; the HTTP clients are
+/// closed when the [ProviderScope] is torn down.
 ///
 /// Throws an [OnlineException] `not-configured` when [onlineConfigProvider] is
 /// `null`; callers surface that as the friendly not-configured state (though the
@@ -48,16 +52,19 @@ final matchApiProvider = FutureProvider<MatchApi>((ref) async {
     );
   }
 
-  final auth = AuthClient(config);
-  await auth.signInAnonymously();
-
-  Future<String> token() => auth.validToken();
-  final firestore = FirestoreRestClient(config, token: token);
-  final functions = FunctionsClient(config, token: token);
-
-  ref.onDispose(auth.close);
-  ref.onDispose(firestore.close);
-  ref.onDispose(functions.close);
-
-  return MatchApi(auth, firestore, functions);
+  // The token store is what makes the anonymous uid survive a restart. Without
+  // it every launch is a new user, and a match in progress becomes unreadable
+  // to the player who was in it (see `online_session_store.dart`).
+  final api = MatchApi.forConfig(
+    config,
+    tokenStore: ref.watch(onlineSessionStoreProvider),
+  );
+  ref.onDispose(api.close);
+  await api.signIn();
+  return api;
 });
+
+/// The durable half of the device's online identity: the anonymous session and
+/// the match it was last in.
+final onlineSessionStoreProvider = Provider<OnlineSessionStore>(
+    (ref) => OnlineSessionStore(ref.watch(databaseProvider)));

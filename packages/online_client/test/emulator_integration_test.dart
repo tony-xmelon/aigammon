@@ -1,603 +1,608 @@
 @Tags(['emulator'])
 library;
 
-import 'dart:convert';
+import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
-import 'package:http/http.dart' as http;
 import 'package:online_client/online_client.dart';
 import 'package:test/test.dart';
 
-/// End-to-end integration tests that run the real REST clients (auth, Firestore,
-/// Functions) against the local Firebase Emulator Suite. They are the proof that
-/// the Cloud Functions (index.ts/turnflow.ts), the firestore.rules, and the
-/// online_client transport actually agree.
+/// Integration tests that run the real transport (anonymous auth + direct
+/// Firestore documents) against the local Firebase Emulator Suite.
+///
+/// These are the proof that `firebase/firestore.rules` and this package agree:
+/// every allow path is exercised through the public [MatchApi] surface, and
+/// every deny path is asserted to arrive as the TYPED exception the controller
+/// branches on ([PermissionDeniedException], [AlreadyExistsException],
+/// [NotFoundException], [FailedPreconditionException]).
 ///
 /// Excluded from the default `dart test` run by the `emulator` tag (see
-/// dart_test.yaml); run them with `dart test -P emulator` INSIDE a running
-/// emulator, e.g. via `firebase/run-emulator-tests.ps1`.
+/// dart_test.yaml). Run inside a running Firestore+Auth emulator:
 ///
-/// The tests assume the four callables (createMatch/joinMatch/rollDice/
-/// submitEvent) plus firestore.rules are deployed to the emulator on the default
-/// ports (Firestore 8080, Auth 9099, Functions 5001) — exactly what
-/// [OnlineConfig.emulator] targets.
+///   pwsh firebase/run-emulator-tests.ps1      (Windows dev machine)
+///   bash firebase/ci-emulator-suites.sh       (CI, emulator already up)
+///
+/// No Functions emulator is involved — there are no Cloud Functions.
 
-/// A signed-in anonymous user with a full MatchApi stack over its own token.
+/// A signed-in anonymous user with its own transport stack.
 class TestUser {
-  final AuthClient auth;
-  final FirestoreRestClient firestore;
-  final FunctionsClient functions;
   final MatchApi api;
   final String uid;
 
-  TestUser(this.auth, this.firestore, this.functions, this.api, this.uid);
+  TestUser(this.api, this.uid);
 
-  Future<String> token() => auth.validToken();
-
-  void close() {
-    auth.close();
-    firestore.close();
-    functions.close();
-  }
-}
-
-/// Sign up a fresh anonymous user and wire up its transport clients.
-Future<TestUser> signIn(OnlineConfig config) async {
-  final auth = AuthClient(config);
-  final session = await auth.signInAnonymously();
-  final firestore = FirestoreRestClient(config, token: auth.validToken);
-  final functions = FunctionsClient(config, token: auth.validToken);
-  return TestUser(
-    auth,
-    firestore,
-    functions,
-    MatchApi(auth, firestore, functions),
-    session.uid,
-  );
-}
-
-/// Fold the full event log of [matchId] into a client-side [Game]. The opening
-/// roll seeds `Game.start`; `isCrawford` comes out of band from the match doc.
-/// Returns the folded game and the seq of the last event consumed.
-Future<({Game game, int lastSeq})> foldFromStart(
-  MatchApi reader,
-  String matchId,
-  bool isCrawford,
-) async {
-  final events = await reader.fetchEventsSince(matchId, -1);
-  expect(events, isNotEmpty);
-  expect(events.first.event, isA<OpeningRollEvent>());
-  var game = Game.start(
-    events.first.event as OpeningRollEvent,
-    isCrawfordGame: isCrawford,
-  );
-  var lastSeq = events.first.seq;
-  for (final e in events.skip(1)) {
-    game = game.append(e.event);
-    lastSeq = e.seq;
-  }
-  return (game: game, lastSeq: lastSeq);
+  void close() => api.close();
 }
 
 void main() {
   final config = OnlineConfig.emulator();
+  final users = <TestUser>[];
 
-  // The match code alphabet: A-Z minus I and O, plus 2-9 (see index.ts).
-  final codePattern = RegExp(r'^[A-HJ-NP-Z2-9]{6}$');
+  /// Sign up a fresh anonymous user. Registered for teardown.
+  Future<TestUser> signIn({Random? codeRandom}) async {
+    final api = MatchApi.forConfig(config, codeRandom: codeRandom);
+    final uid = await api.signIn();
+    final user = TestUser(api, uid);
+    users.add(user);
+    return user;
+  }
 
-  late TestUser a; // creator -> seat white
-  late TestUser b; // joiner  -> seat black
-  final extras = <TestUser>[];
+  late TestUser host;
+  late TestUser guest;
 
   setUp(() async {
-    a = await signIn(config);
-    b = await signIn(config);
+    host = await signIn();
+    guest = await signIn();
   });
 
   tearDown(() {
-    a.close();
-    b.close();
-    for (final u in extras) {
+    for (final u in users) {
       u.close();
     }
-    extras.clear();
+    users.clear();
   });
 
-  /// Map a seat to the user holding it (white == creator a, black == joiner b).
-  TestUser userForSeat(Player seat) => seat == Player.white ? a : b;
+  /// A fresh active match with [host] seated white and [guest] black.
+  Future<MatchDoc> activeMatch({int length = 3, bool cubeless = false}) async {
+    final created =
+        await host.api.createMatch(length: length, cubeless: cubeless);
+    return guest.api.joinMatch(created.code);
+  }
 
-  group('lifecycle', () {
-    test('createMatch -> waiting; joinMatch -> active with opening roll',
-        () async {
-      final created = await a.api.createMatch(3);
-      expect(created.code, matches(codePattern),
-          reason: 'code must be 6 chars over the confusable-free alphabet');
-      expect(created.matchId, isNotEmpty);
-
-      // Before anyone joins: waiting, only the white seat filled, no play yet.
-      final waiting = await a.api.fetchMatch(created.matchId);
-      expect(waiting.status, 'waiting');
-      expect(waiting.code, created.code);
-      expect(waiting.matchLength, 3);
-      expect(waiting.whiteUid, a.uid);
-      expect(waiting.blackUid, isNull);
-      expect(waiting.gameNo, 0);
-      expect(waiting.seq, -1);
-      expect(waiting.turn, isNull);
-      expect(waiting.phase, isNull);
-
-      // B joins -> active, both seats filled, game 1 opening auto-appended.
-      final joinedId = await b.api.joinMatch(created.code);
-      expect(joinedId, created.matchId);
-
-      final active = await a.api.fetchMatch(created.matchId);
-      expect(active.status, 'active');
-      expect(active.whiteUid, a.uid);
-      expect(active.blackUid, b.uid);
-      expect(active.gameNo, 1);
-      expect(active.seq, 0);
-      expect(active.phase, GamePhase.moving);
-
-      // Event seq 0 is a valid, non-tie opening roll.
-      final events = await a.api.fetchEventsSince(created.matchId, -1);
-      expect(events, hasLength(1));
-      final first = events.single;
-      expect(first.seq, 0);
-      expect(first.gameNo, 1);
-      final opening = first.event as OpeningRollEvent;
-      expect(opening.whiteDie, inInclusiveRange(1, 6));
-      expect(opening.blackDie, inInclusiveRange(1, 6));
-      expect(opening.whiteDie, isNot(equals(opening.blackDie)),
-          reason: 'opening ties are re-rolled, never recorded');
-
-      // The turn belongs to the higher opening die.
-      final expectedFirst =
-          opening.whiteDie > opening.blackDie ? Player.white : Player.black;
-      expect(active.turn, expectedFirst);
-      expect(active.turn, opening.firstPlayer);
+  // =========================================================================
+  group('auth', () {
+    test('anonymous sign-up mints a usable session', () async {
+      expect(host.uid, isNotEmpty);
+      expect(guest.uid, isNot(host.uid));
+      final session = host.api.auth.session!;
+      expect(session.idToken, isNotEmpty);
+      expect(session.refreshToken, isNotEmpty);
+      expect(session.expiresAt.isAfter(DateTime.now().toUtc()), isTrue);
     });
 
-    test('joining a full match is rejected', () async {
-      final created = await a.api.createMatch(3);
-      await b.api.joinMatch(created.code);
-      final c = await signIn(config);
-      extras.add(c);
-      await expectLater(
-        c.api.joinMatch(created.code),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'FAILED_PRECONDITION')),
-      );
+    test('an expiring token is exchanged at the secure-token endpoint',
+        () async {
+      // Drive the clock past the refresh window so validToken() must call
+      // securetoken.googleapis.com/v1/token for real.
+      var clock = DateTime.now().toUtc();
+      final auth = AuthClient(config, now: () => clock);
+      addTearDown(auth.close);
+      final session = await auth.signInAnonymously();
+      final first = session.idToken;
+
+      clock = clock.add(const Duration(minutes: 58));
+      final refreshed = await auth.validToken();
+
+      expect(refreshed, isNotEmpty);
+      expect(auth.session!.uid, session.uid);
+      expect(auth.session!.expiresAt.isAfter(clock), isTrue);
+
+      // The refreshed credential really works against Firestore.
+      final docs = FirestoreDocs(config, token: () async => refreshed);
+      addTearDown(docs.close);
+      expect(await docs.get('matches/NOSUCHXX'), isNull);
+      expect(first, isNotEmpty);
     });
   });
 
-  group('full game', () {
-    test('plays game 1 to completion; server + local fold stay consistent',
+  // =========================================================================
+  group('match creation', () {
+    test('create stamps createdAt server-side and leaves the seat open',
         () async {
-      final created = await a.api.createMatch(3);
-      await b.api.joinMatch(created.code);
+      final before = DateTime.now().toUtc();
+      final created = await host.api.createMatch(length: 5, cubeless: true);
 
-      final start = await a.api.fetchMatch(created.matchId);
-      final folded = await foldFromStart(a.api, created.matchId, start.isCrawford);
-      var game = folded.game;
-      var lastSeq = folded.lastSeq;
+      expect(created.code, hasLength(kCodeLength));
+      expect(created.hostUid, host.uid);
 
-      // Drive game 1 with a first-legal-move policy. Each half-move is one
-      // server action followed by a fetch that must round-trip exactly what we
-      // just caused. Bounded to keep the suite quick.
-      var guard = 0;
-      while (game.state.phase != GamePhase.gameOver && guard < 400) {
-        guard++;
-        final seat = game.state.turn;
-        final actor = userForSeat(seat);
-
-        if (game.state.phase == GamePhase.awaitingRoll) {
-          final dice = await actor.api.rollDice(created.matchId);
-          final fresh = await actor.api.fetchEventsSince(created.matchId, lastSeq);
-          expect(fresh, hasLength(1));
-          expect(fresh.single.seq, greaterThan(lastSeq));
-          expect(fresh.single.event, RollEvent(seat, dice.die1, dice.die2),
-              reason: 'the appended roll must equal the callable result');
-          game = game.append(fresh.single.event);
-          lastSeq = fresh.single.seq;
-          continue;
-        }
-
-        // moving: submit the first legal move (empty == a forced pass). If it
-        // ends the game, compute the result locally FIRST and submit the claim.
-        final legal = game.state.legalMoves;
-        final move = legal.isEmpty ? Move.none : legal.first;
-        final moveEvent = MoveEvent(seat, move);
-        final localNext = game.append(moveEvent);
-        GameResultClaim? claim;
-        if (localNext.state.phase == GamePhase.gameOver) {
-          final r = localNext.state.result!;
-          claim = GameResultClaim(
-              winner: r.winner, points: r.points, outcome: r.outcome);
-        }
-
-        await actor.api.submitEvent(created.matchId, moveEvent, result: claim);
-        final fresh = await actor.api.fetchEventsSince(created.matchId, lastSeq);
-        expect(fresh, isNotEmpty);
-        expect(fresh.first.seq, greaterThan(lastSeq));
-        expect(fresh.first.event, moveEvent,
-            reason: 'the stored move must round-trip to what we submitted');
-        game = game.append(fresh.first.event);
-        lastSeq = fresh.first.seq;
-
-        if (claim != null) {
-          // Terminal move. If the match continues, the server auto-appends the
-          // next game's opening roll as an additional event.
-          final after = await actor.api.fetchMatch(created.matchId);
-          if (after.status == 'active') {
-            expect(fresh, hasLength(2));
-            expect(fresh[1].seq, greaterThan(fresh.first.seq));
-            expect(fresh[1].event, isA<OpeningRollEvent>());
-            expect(fresh[1].gameNo, 2);
-            lastSeq = fresh[1].seq;
-          } else {
-            expect(after.status, 'complete');
-            expect(fresh, hasLength(1));
-          }
-        } else {
-          expect(fresh, hasLength(1));
-        }
-      }
-
-      expect(game.state.phase, GamePhase.gameOver,
-          reason: 'game 1 must finish within the iteration bound');
-
-      // The local game-1 result must match the server's folded scores.
-      final result = game.state.result!;
-      final summary = await a.api.fetchMatch(created.matchId);
-      final expectedWhite =
-          result.winner == Player.white ? result.points : 0;
-      final expectedBlack =
-          result.winner == Player.black ? result.points : 0;
-      expect(summary.whiteScore, expectedWhite);
-      expect(summary.blackScore, expectedBlack);
-
-      if (summary.status == 'complete') {
-        // A backgammon (3 pts) in game 1 ends the 3-point match outright.
-        expect(summary.winner, result.winner);
-        expect(summary.phase, GamePhase.gameOver);
-      } else {
-        expect(summary.status, 'active');
-        expect(summary.gameNo, 2);
-        expect(summary.phase, GamePhase.moving,
-            reason: 'the next game is seeded and awaiting the first move');
-      }
-    }, timeout: const Timeout(Duration(minutes: 3)));
-  });
-
-  group('turn + author enforcement', () {
-    late String matchId;
-    late Player onTurn;
-
-    setUp(() async {
-      final created = await a.api.createMatch(3);
-      matchId = created.matchId;
-      await b.api.joinMatch(created.code);
-      final snap = await a.api.fetchMatch(matchId);
-      onTurn = snap.turn!;
+      // The rules require createdAt == request.time, which only the
+      // updateTransforms REQUEST_TIME path can satisfy; read it back to prove
+      // the transform landed rather than the create being rejected.
+      final fetched = await host.api.fetchMatch(created.code);
+      expect(fetched.status, 'waiting');
+      expect(fetched.guestUid, isNull);
+      expect(fetched.length, 5);
+      expect(fetched.cubeless, isTrue);
+      expect(fetched.createdAt, isNotNull);
+      expect(
+        fetched.createdAt!.difference(before).abs(),
+        lessThan(const Duration(minutes: 5)),
+        reason: 'createdAt must be the server clock, not a client value',
+      );
     });
 
-    test('off-turn move is rejected (permission denied)', () async {
-      final offTurn = onTurn.opponent;
-      // Author check passes (player == own seat); the turn check rejects it.
+    test('a waiting match is readable by anyone (join-by-code)', () async {
+      final created = await host.api.createMatch(length: 3, cubeless: false);
+      final outsider = await signIn();
+      final seen = await outsider.api.fetchMatch(created.code);
+      expect(seen.hostUid, host.uid);
+      expect(seen.isWaiting, isTrue);
+    });
+
+    test('an invite-code collision is retried onto a free code', () async {
+      // Two users drawing from identically seeded generators pick the same
+      // first code; the second create must lose the exists:false precondition
+      // and fall through to the next code.
+      final a = await signIn(codeRandom: Random(20260727));
+      final b = await signIn(codeRandom: Random(20260727));
+
+      final first = await a.api.createMatch(length: 3, cubeless: false);
+      final second = await b.api.createMatch(length: 3, cubeless: false);
+
+      expect(second.code, isNot(first.code));
+      expect((await a.api.fetchMatch(first.code)).hostUid, a.uid,
+          reason: 'the loser must not have clobbered the winner');
+      expect((await b.api.fetchMatch(second.code)).hostUid, b.uid);
+    });
+
+    test('claiming an occupied document id is AlreadyExists', () async {
+      final created = await host.api.createMatch(length: 3, cubeless: false);
       await expectLater(
-        userForSeat(offTurn)
-            .api
-            .submitEvent(matchId, MoveEvent(offTurn, Move.none)),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'PERMISSION_DENIED')),
-      );
-    });
-
-    test('event stamped with the wrong seat is rejected', () async {
-      // The on-turn user submits an event authored as the opponent -> rejected
-      // by the author check BEFORE the turn flow even runs.
-      await expectLater(
-        userForSeat(onTurn)
-            .api
-            .submitEvent(matchId, MoveEvent(onTurn.opponent, Move.none)),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'PERMISSION_DENIED')),
-      );
-    });
-
-    test('off-turn roll is rejected (permission denied, actor checked first)',
-        () async {
-      await expectLater(
-        userForSeat(onTurn.opponent).api.rollDice(matchId),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'PERMISSION_DENIED')),
-      );
-    });
-
-    test('on-turn roll in the moving phase is rejected (failed precondition)',
-        () async {
-      // After the opening the on-turn player must MOVE, not roll: the phase
-      // guard fires (this is the failed-precondition path for rollDice).
-      await expectLater(
-        userForSeat(onTurn).api.rollDice(matchId),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'FAILED_PRECONDITION')),
-      );
-    });
-  });
-
-  group('rules enforcement', () {
-    late String matchId;
-
-    setUp(() async {
-      final created = await a.api.createMatch(3);
-      matchId = created.matchId;
-      await b.api.joinMatch(created.code);
-    });
-
-    test('a participant cannot write the match doc directly (rules deny)',
-        () async {
-      // Raw Firestore REST PATCH with A's real ID token — a client write, which
-      // firestore.rules deny unconditionally (`allow write: if false`).
-      final url = Uri.parse(
-        '${config.firestoreDocumentsBase}/matches/$matchId'
-        '?updateMask.fieldPaths=status',
-      );
-      final client = http.Client();
-      try {
-        final res = await client.patch(
-          url,
-          headers: {
-            'Authorization': 'Bearer ${await a.token()}',
-            'Content-Type': 'application/json',
+        host.api.docs.create(
+          'matches/${created.code}',
+          {
+            'hostUid': host.uid,
+            'guestUid': null,
+            'length': 3,
+            'cubeless': false,
+            'status': 'waiting',
           },
-          body: jsonEncode({
-            'fields': {
-              'status': {'stringValue': 'HACKED'}
-            }
-          }),
+          serverTimestamps: ['createdAt'],
+        ),
+        throwsA(isA<AlreadyExistsException>()),
+      );
+    });
+  });
+
+  // =========================================================================
+  group('join', () {
+    test('the guest takes the seat and both sides agree on the seating',
+        () async {
+      final created = await host.api.createMatch(length: 3, cubeless: false);
+      final joined = await guest.api.joinMatch(created.code);
+
+      expect(joined.guestUid, guest.uid);
+      expect(joined.status, 'active');
+      expect(joined.sideOf(host.uid), Player.white);
+      expect(joined.sideOf(guest.uid), Player.black);
+
+      final asHost = await host.api.fetchMatch(created.code);
+      expect(asHost.status, 'active');
+      expect(asHost.guestUid, guest.uid);
+    });
+
+    test('an unknown code is NotFound', () async {
+      await expectLater(
+        guest.api.joinMatch('ZZZZZZZZ'),
+        throwsA(isA<NotFoundException>()),
+      );
+    });
+
+    test('a second join is refused', () async {
+      final created = await host.api.createMatch(length: 3, cubeless: false);
+      await guest.api.joinMatch(created.code);
+      final outsider = await signIn();
+      await expectLater(
+        outsider.api.joinMatch(created.code),
+        // The joined match is no longer readable by outsiders at all, so the
+        // refusal arrives on the read.
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      expect((await host.api.fetchMatch(created.code)).guestUid, guest.uid);
+    });
+
+    test('the host cannot join their own match', () async {
+      final created = await host.api.createMatch(length: 3, cubeless: false);
+      await expectLater(
+        host.api.joinMatch(created.code),
+        throwsA(isA<FailedPreconditionException>()),
+      );
+    });
+
+    test('the rules refuse a seat claim that is not the caller', () async {
+      final created = await host.api.createMatch(length: 3, cubeless: false);
+      final outsider = await signIn();
+      await expectLater(
+        guest.api.docs.patch(
+          'matches/${created.code}',
+          {'guestUid': outsider.uid, 'status': 'active'},
+          updateMask: const ['guestUid', 'status'],
+        ),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
+
+    test('a guest that read the seat open but lost the race is refused',
+        () async {
+      // Both guests see `waiting`; only one write can satisfy the transition's
+      // `guestUid == null` pre-state, and the loser must not overwrite it.
+      final created = await host.api.createMatch(length: 3, cubeless: false);
+      final other = await signIn();
+      final seenOpen = await other.api.fetchMatch(created.code);
+      expect(seenOpen.isWaiting, isTrue);
+
+      await guest.api.joinMatch(created.code);
+      await expectLater(
+        other.api.docs.patch(
+          'matches/${created.code}',
+          {'guestUid': other.uid, 'status': 'active'},
+          updateMask: const ['guestUid', 'status'],
+        ),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      expect((await host.api.fetchMatch(created.code)).guestUid, guest.uid);
+    });
+
+    test('a patch never creates the document it was meant to amend', () async {
+      await expectLater(
+        host.api.docs.patch(
+          'matches/NOSUCHXX',
+          {'status': 'complete'},
+          updateMask: const ['status'],
+        ),
+        throwsA(isA<OnlineException>()),
+      );
+      expect(await host.api.docs.get('matches/NOSUCHXX'), isNull);
+    });
+
+    test('either participant may complete an active match', () async {
+      final match = await activeMatch();
+      await guest.api.completeMatch(match.code);
+      expect((await host.api.fetchMatch(match.code)).status, 'complete');
+    });
+  });
+
+  // =========================================================================
+  group('event log', () {
+    test('both sides append and read back a contiguous log', () async {
+      final match = await activeMatch();
+      const opening = OpeningRollEvent(whiteDie: 6, blackDie: 3);
+      final move = MoveEvent(
+        Player.white,
+        Move([const CheckerMove(24, 18), const CheckerMove(13, 10)]),
+      );
+
+      await host.api
+          .submitEvent(code: match.code, seq: 0, gameNo: 1, event: opening);
+      await host.api
+          .submitEvent(code: match.code, seq: 1, gameNo: 1, event: move);
+      await guest.api.submitEvent(
+          code: match.code, seq: 2, gameNo: 1, event: DoubleEvent(Player.black));
+
+      final log = await host.api.fetchEventsSince(match.code, -1);
+      expect(log.map((e) => e.seq), [0, 1, 2]);
+      expect(log[0].event, opening);
+      expect(log[1].event, move,
+          reason: 'nested move hops survive the JSON-string payload');
+      expect(log[1].author, host.uid);
+      expect(log[2].event, DoubleEvent(Player.black));
+      expect(log[2].author, guest.uid);
+
+      // Incremental fetch skips what the caller already has.
+      final tail = await host.api.fetchEventsSince(match.code, 1);
+      expect(tail.map((e) => e.seq), [2]);
+    });
+
+    test('a seq already claimed is AlreadyExists, and the log is unchanged',
+        () async {
+      final match = await activeMatch();
+      await host.api.submitEvent(
+          code: match.code,
+          seq: 0,
+          gameNo: 1,
+          event: const OpeningRollEvent(whiteDie: 5, blackDie: 1));
+      await expectLater(
+        guest.api.submitEvent(
+            code: match.code,
+            seq: 0,
+            gameNo: 1,
+            event: DoubleEvent(Player.black)),
+        throwsA(isA<AlreadyExistsException>()),
+      );
+      final log = await guest.api.fetchEventsSince(match.code, -1);
+      expect(log, hasLength(1));
+      expect(log.single.event, const OpeningRollEvent(whiteDie: 5, blackDie: 1));
+    });
+
+    test('the log paginates in seq order across several pages', () async {
+      final match = await activeMatch();
+      await host.api.submitEvent(
+          code: match.code,
+          seq: 0,
+          gameNo: 1,
+          event: const OpeningRollEvent(whiteDie: 4, blackDie: 2));
+      for (var seq = 1; seq <= 6; seq++) {
+        await host.api.submitEvent(
+          code: match.code,
+          seq: seq,
+          gameNo: 1,
+          event: RollEvent(Player.white, (seq % 6) + 1, ((seq + 2) % 6) + 1),
         );
-        expect(res.statusCode, 403,
-            reason: 'client writes must be denied by the rules');
-        expect(res.body, contains('PERMISSION_DENIED'));
-      } finally {
-        client.close();
       }
-
-      // And the write really did not land.
-      final after = await a.api.fetchMatch(matchId);
-      expect(after.status, 'active');
+      // pageSize 2 over 7 documents: four round trips, still one ordered log.
+      final log = await host.api.fetchEventsSince(match.code, -1, pageSize: 2);
+      expect(log.map((e) => e.seq), [0, 1, 2, 3, 4, 5, 6]);
+      expect(log.first.event, const OpeningRollEvent(whiteDie: 4, blackDie: 2));
+      expect(log.last.event, RollEvent(Player.white, 1, 3));
     });
 
-    test('a non-participant cannot read the match doc', () async {
-      final c = await signIn(config);
-      extras.add(c);
+    test('an event may not be rewritten or deleted', () async {
+      final match = await activeMatch();
+      await host.api.submitEvent(
+          code: match.code, seq: 0, gameNo: 1, event: DoubleEvent(Player.white));
       await expectLater(
-        c.api.fetchMatch(matchId),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'PERMISSION_DENIED')),
+        host.api.docs.patch(
+          'matches/${match.code}/events/00000000',
+          {'gameNo': 9},
+          updateMask: const ['gameNo'],
+        ),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
+
+    test('an oversized payload is refused by the rules', () async {
+      final match = await activeMatch();
+      await expectLater(
+        host.api.docs.create('matches/${match.code}/events/00000000', {
+          'seq': 0,
+          'gameNo': 1,
+          'event': 'x' * 4097,
+          'author': host.uid,
+        }),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
+
+    test('an event authored as the opponent is refused', () async {
+      final match = await activeMatch();
+      await expectLater(
+        host.api.docs.create('matches/${match.code}/events/00000000', {
+          'seq': 0,
+          'gameNo': 1,
+          'event': '{}',
+          'author': guest.uid,
+        }),
+        throwsA(isA<PermissionDeniedException>()),
       );
     });
   });
 
-  group('cube path', () {
-    test('double -> take flows through the turn phases', () async {
-      final created = await a.api.createMatch(3);
-      await b.api.joinMatch(created.code);
-      final start = await a.api.fetchMatch(created.matchId);
-      final folded =
-          await foldFromStart(a.api, created.matchId, start.isCrawford);
-      var game = folded.game;
+  // =========================================================================
+  group('commit-reveal rolls', () {
+    test('the full dance runs and both peers derive the same dice', () async {
+      final match = await activeMatch();
+      final roller = RollerSession(rollIndex: 0);
+      final witness = WitnessSession(rollIndex: 0);
 
-      // The opening winner makes one legal move so the opponent reaches
-      // awaitingRoll and may double.
-      final mover = game.state.turn;
-      final move = game.state.legalMoves.first;
-      await userForSeat(mover)
-          .api
-          .submitEvent(created.matchId, MoveEvent(mover, move));
-      game = game.append(MoveEvent(mover, move));
+      // Phase 1 — the host commits.
+      final commit = roller.makeCommit();
+      await host.api.createRoll(code: match.code, n: 0, commit: commit);
 
-      // Opponent doubles.
-      final doubler = game.state.turn;
-      await userForSeat(doubler)
-          .api
-          .submitEvent(created.matchId, DoubleEvent(doubler));
-      game = game.append(DoubleEvent(doubler));
+      // The witness sees the commit through the transport, not out of band.
+      final seen = (await guest.api.fetchRoll(match.code, 0))!;
+      expect(seen.roller, host.uid);
+      expect(seen.phase, FairDicePhase.committed);
+      witness.seeCommit(seen.commit);
 
-      var snap = await a.api.fetchMatch(created.matchId);
-      expect(snap.phase, GamePhase.cubeOffered);
-      expect(snap.turn, doubler.opponent, reason: 'turn flips to the decider');
+      // Phase 2 — the guest contributes entropy.
+      await guest.api.submitEntropy(
+          code: match.code, n: 0, entropy: witness.contributeEntropy());
+      final withEntropy = (await host.api.fetchRoll(match.code, 0))!;
+      expect(withEntropy.phase, FairDicePhase.entropy);
+      roller.acceptEntropy(withEntropy.entropy!);
 
-      // Decider takes.
-      final decider = game.state.turn;
-      await userForSeat(decider)
-          .api
-          .submitEvent(created.matchId, TakeEvent(decider));
-      game = game.append(TakeEvent(decider));
+      // Phase 3 — the host reveals.
+      await host.api
+          .submitReveal(code: match.code, n: 0, reveal: roller.reveal());
+      final done = (await guest.api.fetchRoll(match.code, 0))!;
+      expect(done.isComplete, isTrue);
+      witness.verifyReveal(done.reveal!);
 
-      snap = await a.api.fetchMatch(created.matchId);
-      expect(snap.phase, GamePhase.awaitingRoll);
-      expect(snap.turn, doubler, reason: 'after a take the doubler is on roll');
+      final completed = done.completed!;
+      completed.verifyCommit();
+      expect(roller.dice, witness.dice);
+      expect(completed.dice, roller.dice);
+      expect(roller.dice.die1, inInclusiveRange(1, 6));
+      expect(roller.dice.die2, inInclusiveRange(1, 6));
     });
 
-    test('double -> drop ends a 1-point match with a result claim', () async {
-      final created = await a.api.createMatch(1);
-      await b.api.joinMatch(created.code);
-      final start = await a.api.fetchMatch(created.matchId);
-      // A 1-point match's only game IS the Crawford game.
-      expect(start.isCrawford, isTrue);
-      final folded =
-          await foldFromStart(a.api, created.matchId, start.isCrawford);
-      var game = folded.game;
+    test('revealing before entropy exists is denied (phase skip)', () async {
+      final match = await activeMatch();
+      final roller = RollerSession();
+      await host.api
+          .createRoll(code: match.code, n: 1, commit: roller.makeCommit());
+      await expectLater(
+        host.api.submitReveal(
+            code: match.code, n: 1, reveal: 'd' * 64),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      expect((await host.api.fetchRoll(match.code, 1))!.reveal, isNull);
+    });
 
-      // Opening winner moves -> opponent reaches awaitingRoll.
-      final mover = game.state.turn;
-      final move = game.state.legalMoves.first;
-      await userForSeat(mover)
-          .api
-          .submitEvent(created.matchId, MoveEvent(mover, move));
-      game = game.append(MoveEvent(mover, move));
+    test('the roller may not supply its own entropy', () async {
+      final match = await activeMatch();
+      await host.api
+          .createRoll(code: match.code, n: 0, commit: 'a' * 64);
+      await expectLater(
+        host.api.submitEntropy(code: match.code, n: 0, entropy: 'b' * 64),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
 
-      // The server's turn-flow mirror does NOT enforce Crawford (that is a
-      // client rule), so a double is accepted at the transport level even here.
-      // We therefore build the cube events directly rather than folding them
-      // through GameState (which would reject a Crawford double).
-      final doubler = game.state.turn; // opponent, now on roll
-      final decider = doubler.opponent;
+    test('the witness may not reveal', () async {
+      final match = await activeMatch();
+      await host.api.createRoll(code: match.code, n: 0, commit: 'a' * 64);
+      await guest.api.submitEntropy(code: match.code, n: 0, entropy: 'b' * 64);
+      await expectLater(
+        guest.api.submitReveal(code: match.code, n: 0, reveal: 'c' * 64),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
 
-      await userForSeat(doubler)
-          .api
-          .submitEvent(created.matchId, DoubleEvent(doubler));
-      var snap = await a.api.fetchMatch(created.matchId);
-      expect(snap.phase, GamePhase.cubeOffered);
-      expect(snap.turn, decider);
+    test('each protocol field is write-once', () async {
+      final match = await activeMatch();
+      await host.api.createRoll(code: match.code, n: 0, commit: 'a' * 64);
+      await guest.api.submitEntropy(code: match.code, n: 0, entropy: 'b' * 64);
+      await expectLater(
+        guest.api.submitEntropy(code: match.code, n: 0, entropy: 'c' * 64),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      await host.api.submitReveal(code: match.code, n: 0, reveal: 'c' * 64);
+      await expectLater(
+        host.api.submitReveal(code: match.code, n: 0, reveal: 'd' * 64),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
 
-      // Decider drops: the doubler wins the pre-double cube value (1).
-      await userForSeat(decider).api.submitEvent(
-            created.matchId,
-            DropEvent(decider),
-            result: GameResultClaim(
-              winner: doubler,
-              points: 1,
-              outcome: GameOutcome.drop,
-            ),
-          );
+    test('a non-hex commit is refused', () async {
+      final match = await activeMatch();
+      await expectLater(
+        host.api.createRoll(code: match.code, n: 0, commit: 'not-hex'),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+    });
 
-      snap = await a.api.fetchMatch(created.matchId);
-      expect(snap.status, 'complete');
-      expect(snap.phase, GamePhase.gameOver);
-      expect(snap.winner, doubler);
-      final winnerScore =
-          doubler == Player.white ? snap.whiteScore : snap.blackScore;
-      expect(winnerScore, 1, reason: 'reaching matchLength completes the match');
+    test('both peers racing to commit the same roll: one AlreadyExists',
+        () async {
+      final match = await activeMatch();
+      await host.api.createRoll(code: match.code, n: 3, commit: 'a' * 64);
+      await expectLater(
+        guest.api.createRoll(code: match.code, n: 3, commit: 'b' * 64),
+        throwsA(isA<AlreadyExistsException>()),
+      );
+      expect((await guest.api.fetchRoll(match.code, 3))!.roller, host.uid);
+    });
+
+    test('rolls are listed in order and an absent roll reads as null',
+        () async {
+      final match = await activeMatch();
+      for (var n = 0; n < 3; n++) {
+        await host.api.createRoll(code: match.code, n: n, commit: 'a' * 64);
+      }
+      final rolls = await host.api.fetchRollsFrom(match.code, 0, pageSize: 2);
+      expect(rolls.map((r) => r.n), [0, 1, 2]);
+      expect(await host.api.fetchRollsFrom(match.code, 2), hasLength(1));
+      expect(await host.api.fetchRoll(match.code, 9), isNull);
     });
   });
 
-  group('adversarial negative coverage', () {
-    late String matchId;
-    late String code;
-    late Player onTurn;
+  // =========================================================================
+  group('polling', () {
+    test('picks up the opponent\'s events and roll phases', () async {
+      final match = await activeMatch();
+      final events = <int>[];
+      final phases = <(int, FairDicePhase)>[];
+      final sub = host.api
+          .pollMatch(match.code,
+              interval: () => const Duration(milliseconds: 50))
+          .listen((poll) {
+        events.addAll(poll.events.map((e) => e.seq));
+        phases.addAll(poll.rolls.map((r) => (r.n, r.phase)));
+      });
+      addTearDown(sub.cancel);
+
+      await guest.api.submitEvent(
+          code: match.code,
+          seq: 0,
+          gameNo: 1,
+          event: const OpeningRollEvent(whiteDie: 3, blackDie: 6));
+      await guest.api.createRoll(code: match.code, n: 0, commit: 'a' * 64);
+
+      // Wait for both to surface.
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while ((events.isEmpty || phases.isEmpty) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(events, [0]);
+      expect(phases, contains((0, FairDicePhase.committed)));
+
+      // The host answers with entropy; the phase change must be re-emitted.
+      await host.api.submitEntropy(code: match.code, n: 0, entropy: 'b' * 64);
+      while (!phases.contains((0, FairDicePhase.entropy)) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(phases, contains((0, FairDicePhase.entropy)));
+      expect(events, [0], reason: 'events are emitted exactly once');
+    }, timeout: const Timeout(Duration(seconds: 30)));
+  });
+
+  // =========================================================================
+  group('non-participant access', () {
+    late MatchDoc match;
+    late TestUser outsider;
 
     setUp(() async {
-      final created = await a.api.createMatch(3);
-      matchId = created.matchId;
-      code = created.code;
-      await b.api.joinMatch(code);
-      onTurn = (await a.api.fetchMatch(matchId)).turn!;
+      match = await activeMatch();
+      outsider = await signIn();
     });
 
-    test('a server-only event type is rejected', () async {
-      // `roll` is generated by the rollDice callable and is NOT in the
-      // submittable whitelist — a client may not forge one. Sent raw because the
-      // typed MatchApi cannot construct a non-submittable event.
+    test('cannot read the match', () async {
       await expectLater(
-        a.functions.call('submitEvent', {
-          'matchId': matchId,
-          'event': {
-            'type': 'roll',
-            'player': onTurn.name,
-            'die1': 3,
-            'die2': 4,
-          },
-        }),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'INVALID_ARGUMENT')),
+        outsider.api.fetchMatch(match.code),
+        throwsA(isA<PermissionDeniedException>()),
       );
     });
 
-    test('a non-participant cannot roll or submit', () async {
-      final c = await signIn(config);
-      extras.add(c);
+    test('cannot read or append to the event log', () async {
+      await host.api.submitEvent(
+          code: match.code, seq: 0, gameNo: 1, event: DoubleEvent(Player.white));
       await expectLater(
-        c.api.rollDice(matchId),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'PERMISSION_DENIED')),
+        outsider.api.fetchEventsSince(match.code, -1),
+        throwsA(isA<PermissionDeniedException>()),
       );
       await expectLater(
-        c.api.submitEvent(matchId, MoveEvent(onTurn, Move.none)),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'PERMISSION_DENIED')),
-      );
-    });
-
-    test('a result claim on a no-result event type is rejected', () async {
-      // resignOffer never carries a result (resultRule `none`); attaching one is
-      // invalid regardless of its contents.
-      await expectLater(
-        userForSeat(onTurn).api.submitEvent(
-              matchId,
-              ResignOfferEvent(onTurn, ResignValue.single),
-              result: GameResultClaim(
-                winner: onTurn,
-                points: 1,
-                outcome: GameOutcome.resignation,
-              ),
-            ),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'INVALID_ARGUMENT')),
+        outsider.api.submitEvent(
+            code: match.code, seq: 1, gameNo: 1, event: TakeEvent(Player.black)),
+        throwsA(isA<PermissionDeniedException>()),
       );
     });
 
-    test('a terminal event missing its required result claim is rejected',
-        () async {
-      // Offer a resignation (on-turn, moving phase); the opponent becomes the
-      // decider and accepts — but WITHOUT the mandatory result claim.
-      await userForSeat(onTurn)
-          .api
-          .submitEvent(matchId, ResignOfferEvent(onTurn, ResignValue.single));
-      final decider = onTurn.opponent;
+    test('cannot touch the roll protocol', () async {
+      await host.api.createRoll(code: match.code, n: 0, commit: 'a' * 64);
       await expectLater(
-        userForSeat(decider)
-            .api
-            .submitEvent(matchId, ResignAcceptEvent(decider)),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'INVALID_ARGUMENT')),
+        outsider.api.fetchRoll(match.code, 0),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      await expectLater(
+        outsider.api.fetchRollsFrom(match.code, 0),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      await expectLater(
+        outsider.api.submitEntropy(code: match.code, n: 0, entropy: 'b' * 64),
+        throwsA(isA<PermissionDeniedException>()),
+      );
+      await expectLater(
+        outsider.api.createRoll(code: match.code, n: 1, commit: 'b' * 64),
+        throwsA(isA<PermissionDeniedException>()),
       );
     });
 
-    test('joining your own match is rejected', () async {
+    test('cannot complete or reopen the match', () async {
       await expectLater(
-        a.api.joinMatch(code),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'FAILED_PRECONDITION')),
-      );
-    });
-
-    test('a result claim with the wrong winner is rejected', () async {
-      // A `move` claim is trusted as terminal, but the winner is derived
-      // server-side: for a move it MUST be the mover. Claiming the opponent won
-      // is rejected (pins the F1 server-side winner-derivation guard). The
-      // rejecting transaction rolls back, so nothing is persisted.
-      await expectLater(
-        userForSeat(onTurn).api.submitEvent(
-              matchId,
-              MoveEvent(onTurn, Move.none),
-              result: GameResultClaim(
-                winner: onTurn.opponent,
-                points: 1,
-                outcome: GameOutcome.single,
-              ),
-            ),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'FAILED_PRECONDITION')),
-      );
-    });
-
-    test('an oversized event payload is rejected', () async {
-      // A move padded to hundreds of hops blows past the 2 KiB event cap. Sent
-      // raw so the encoding cannot shrink it. All keys are allowed, so the size
-      // guard (not the key whitelist) is what fires.
-      final bigMove = [
-        for (var i = 0; i < 200; i++) {'from': 1, 'to': 2, 'hit': false},
-      ];
-      await expectLater(
-        a.functions.call('submitEvent', {
-          'matchId': matchId,
-          'event': {'type': 'move', 'player': onTurn.name, 'move': bigMove},
-        }),
-        throwsA(isA<OnlineException>()
-            .having((e) => e.code, 'code', 'INVALID_ARGUMENT')),
+        outsider.api.completeMatch(match.code),
+        throwsA(isA<PermissionDeniedException>()),
       );
     });
   });

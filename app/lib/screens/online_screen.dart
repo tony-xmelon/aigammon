@@ -103,6 +103,7 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
 
   // --- Create state ----------------------------------------------------------
   int _matchLength = 5;
+  bool _cubeless = false;
   bool _creating = false;
   String? _createdCode;
   String? _createError;
@@ -112,15 +113,37 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
   bool _joining = false;
   String? _joinError;
 
+  // --- Rejoin state ----------------------------------------------------------
+  /// The match this device was last in, if any — the resume pointer the online
+  /// session store kept across the restart.
+  String? _resumeCode;
+  bool _rejoining = false;
+  String? _rejoinError;
+
   // --- Polling / lifecycle ---------------------------------------------------
   bool _cancelled = false;
   Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadResume());
+  }
 
   @override
   void dispose() {
     _cancelWaiting();
     _codeController.dispose();
     super.dispose();
+  }
+
+  /// Read the resume pointer written by the last launch. Absent on a fresh
+  /// install and after a match finishes, which is the common case — the card
+  /// only appears when there really is something to go back to.
+  Future<void> _loadResume() async {
+    final code = await ref.read(onlineSessionStoreProvider).lastMatchCode();
+    if (!mounted || code == null) return;
+    setState(() => _resumeCode = code);
   }
 
   /// Stops the create-flow polling (a pending wait timer is cancelled so no
@@ -132,8 +155,76 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     _pollTimer = null;
   }
 
-  String _errorText(Object e) =>
-      e is OnlineException ? e.message : 'Something went wrong. Please try again.';
+  /// User-facing copy for a transport failure.
+  ///
+  /// The typed exceptions carry developer-shaped messages (they name document
+  /// paths and statuses), so the three the user can actually hit get their own
+  /// line: a mistyped code, a seat someone else took, and a match that is not
+  /// ours to look at.
+  String _errorText(Object e) {
+    if (e is NotFoundException) {
+      return 'No match with that code. Check it and try again.';
+    }
+    if (e is FailedPreconditionException) {
+      return 'That match is no longer open — the seat has been taken.';
+    }
+    if (e is PermissionDeniedException) {
+      return 'That match is not open to you.';
+    }
+    if (e is OnlineException) return e.message;
+    return 'Something went wrong. Please try again.';
+  }
+
+  // --- Rejoin flow -----------------------------------------------------------
+
+  /// Re-enter a match this device is already a participant of.
+  ///
+  /// This is the OTHER half of making the uid durable: restoring the identity
+  /// is what makes the match readable again, and this is what gets the player
+  /// back into it. [MatchApi.joinMatch] deliberately refuses a participant (it
+  /// claims the empty seat), so the rejoin path is a plain read plus the seat
+  /// the match document already records for us.
+  Future<void> _rejoin(String code) async {
+    setState(() {
+      _rejoining = true;
+      _rejoinError = null;
+    });
+    try {
+      final api = await ref.read(matchApiProvider.future);
+      final doc = await api.fetchMatch(code);
+      if (doc.sideOf(api.uid) == null || doc.isComplete) {
+        // Not ours any more (the match ended while we were away, or the stored
+        // identity was replaced). Drop the pointer rather than offering a dead
+        // door — which takes the whole card with it, so the explanation has to
+        // outlive it as a snackbar.
+        await _forgetResume();
+        _say('That match has finished — nothing left to rejoin.');
+        return;
+      }
+      if (!mounted) return;
+      await _launch(api, doc);
+    } catch (e) {
+      if (e is NotFoundException) await _forgetResume();
+      if (!mounted) return;
+      setState(() => _rejoinError = _errorText(e));
+    } finally {
+      if (mounted) setState(() => _rejoining = false);
+    }
+  }
+
+  /// A transient message for something the user asked for whose UI has just
+  /// gone away (see [_rejoin]).
+  void _say(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _forgetResume() async {
+    await ref.read(onlineSessionStoreProvider).forgetMatch();
+    if (!mounted) return;
+    setState(() => _resumeCode = null);
+  }
 
   // --- Create flow -----------------------------------------------------------
 
@@ -144,13 +235,16 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     });
     try {
       final api = await ref.read(matchApiProvider.future);
-      final res = await api.createMatch(_matchLength);
+      final doc = await api.createMatch(
+        length: _matchLength,
+        cubeless: _cubeless,
+      );
       if (!mounted) return;
       setState(() {
-        _createdCode = res.code;
+        _createdCode = doc.code;
         _cancelled = false;
       });
-      unawaited(_pollUntilActive(api, res.matchId));
+      unawaited(_pollUntilActive(api, doc.code));
     } catch (e) {
       if (!mounted) return;
       setState(() => _createError = _errorText(e));
@@ -159,14 +253,14 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     }
   }
 
-  /// Polls `fetchMatch` every [_pollInterval] until the match becomes active,
-  /// then launches the game as the White (creator) side. Transient fetch
-  /// failures surface inline and keep polling; cancelling stops the loop.
-  Future<void> _pollUntilActive(MatchApi api, String matchId) async {
+  /// Polls `fetchMatch` every [_pollInterval] until an opponent has taken the
+  /// guest seat, then launches the game as the White (host) side. Transient
+  /// fetch failures surface inline and keep polling; cancelling stops the loop.
+  Future<void> _pollUntilActive(MatchApi api, String code) async {
     while (mounted && !_cancelled) {
-      MatchSnapshot snap;
+      MatchDoc doc;
       try {
-        snap = await api.fetchMatch(matchId);
+        doc = await api.fetchMatch(code);
       } catch (e) {
         if (!mounted || _cancelled) return;
         setState(() => _createError = _errorText(e));
@@ -174,14 +268,8 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
         continue;
       }
       if (!mounted || _cancelled) return;
-      if (snap.status == 'active') {
-        await _launch(
-          api,
-          matchId,
-          snap,
-          localSide: Player.white,
-          orientation: BoardOrientationMode.fixedWhite,
-        );
+      if (doc.isActive) {
+        await _launch(api, doc);
         return;
       }
       await _wait();
@@ -213,16 +301,22 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     });
     try {
       final api = await ref.read(matchApiProvider.future);
-      final matchId = await api.joinMatch(code);
-      final snap = await api.fetchMatch(matchId);
+      // The join both claims the seat and returns the match as it now stands,
+      // so there is nothing to read back.
+      MatchDoc doc;
+      try {
+        doc = await api.joinMatch(code);
+      } on FailedPreconditionException {
+        // Both seats are taken — which includes the case where one of them is
+        // OURS (joinMatch only ever claims the empty seat). Typing your own
+        // code back in is a perfectly reasonable way to ask to resume, so read
+        // the match and re-enter it if it turns out we are already in it.
+        final existing = await api.fetchMatch(code);
+        if (existing.sideOf(api.uid) == null || existing.isComplete) rethrow;
+        doc = existing;
+      }
       if (!mounted) return;
-      await _launch(
-        api,
-        matchId,
-        snap,
-        localSide: Player.black,
-        orientation: BoardOrientationMode.fixedBlack,
-      );
+      await _launch(api, doc);
     } catch (e) {
       if (!mounted) return;
       setState(() => _joinError = _errorText(e));
@@ -236,31 +330,36 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
   /// Builds the controller, waits until it is ready, and pushes [GameScreen].
   /// If the screen is torn down (or the controller disposed) before readiness,
   /// the controller is disposed and nothing is pushed.
-  Future<void> _launch(
-    MatchApi api,
-    String matchId,
-    MatchSnapshot snapshot, {
-    required Player localSide,
-    required BoardOrientationMode orientation,
-  }) async {
+  ///
+  /// The seat is positional and comes from the match document (host plays white,
+  /// guest black), so both flows funnel through here.
+  Future<void> _launch(MatchApi api, MatchDoc doc) async {
+    final localSide = doc.sideOf(api.uid) ?? Player.white;
+    final orientation = localSide == Player.white
+        ? BoardOrientationMode.fixedWhite
+        : BoardOrientationMode.fixedBlack;
     // Create the local history row for this online match and bind persistence to
     // it. The local seat is 'human'; the opponent is 'remote'. The insert runs
     // fire-and-forget; the controller's hooks await the id before recording a
     // finished game, and the post-match "Match summary" link awaits it too.
     final repo = ref.read(matchRepositoryProvider);
     final matchIdFuture = repo.startMatch(
-      matchLength: snapshot.matchLength,
+      matchLength: doc.length,
       mode: 'online',
       whiteType: localSide == Player.white ? 'human' : 'remote',
       blackType: localSide == Player.black ? 'human' : 'remote',
     );
     final controller = OnlineMatchController(
       api: api,
-      matchId: matchId,
-      localSide: localSide,
-      initialSnapshot: snapshot,
+      matchDoc: doc,
       persistence: RepositoryPersistence(repo, matchIdFuture),
     );
+    // Remember the match BEFORE playing it: the point of the pointer is to
+    // survive a crash or a kill mid-match, which is exactly when nothing later
+    // in this method gets to run.
+    final store = ref.read(onlineSessionStoreProvider);
+    await store.rememberMatch(doc.code);
+    if (mounted) setState(() => _resumeCode = doc.code);
     unawaited(controller.playMatch());
     await controller.ready;
     if (!mounted || _cancelled || !controller.isReady) {
@@ -298,11 +397,17 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
         ),
       ),
     );
-    // Returned from the game: reset to a fresh create/join view.
+    // Returned from the game. A decided match is nothing to come back to, so
+    // the resume pointer goes with it; an unfinished one is left standing so
+    // the Rejoin card can offer it.
+    final finished = controller.matchOver;
+    if (finished) await store.forgetMatch();
     if (mounted) {
       setState(() {
         _createdCode = null;
         _createError = null;
+        _rejoinError = null;
+        if (finished) _resumeCode = null;
       });
     }
   }
@@ -311,12 +416,48 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
 
   @override
   Widget build(BuildContext context) {
+    final resume = _resumeCode;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (resume != null) ...[
+          _rejoinCard(resume),
+          const SizedBox(height: 24),
+        ],
         _createCard(),
         const SizedBox(height: 24),
         _joinCard(),
+      ],
+    );
+  }
+
+  /// Offered only when this device is still carrying a match pointer. The uid
+  /// behind it is durable now, so the seat named in that match is still ours.
+  Widget _rejoinCard(String code) {
+    final theme = Theme.of(context);
+    return _SectionCard(
+      title: 'Match in progress',
+      children: [
+        Text('You were playing match $code.',
+            style: theme.textTheme.bodyMedium, textAlign: TextAlign.center),
+        const SizedBox(height: 16),
+        FilledButton(
+          onPressed: _rejoining ? null : () => _rejoin(code),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+          child: _rejoining
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Rejoin'),
+        ),
+        TextButton(
+          onPressed: _rejoining ? null : _forgetResume,
+          child: const Text('Forget this match'),
+        ),
+        if (_rejoinError != null) _errorRow(_rejoinError!),
       ],
     );
   }
@@ -341,6 +482,16 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           onSelectionChanged: _creating
               ? null
               : (s) => setState(() => _matchLength = s.first),
+        ),
+        // The cube option is now the HOST's, carried in the match document, and
+        // honoured by both peers (in the callable era the cube was
+        // server-mediated and there was no online choice to make).
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Play without cube'),
+          subtitle: const Text('No doubling cube this match'),
+          value: _cubeless,
+          onChanged: _creating ? null : (v) => setState(() => _cubeless = v),
         ),
         const SizedBox(height: 16),
         FilledButton(
@@ -426,7 +577,9 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           controller: _codeController,
           enabled: !_joining,
           textCapitalization: TextCapitalization.characters,
-          maxLength: 6,
+          // The code IS the match document id: [kCodeLength] characters from
+          // [kCodeAlphabet].
+          maxLength: kCodeLength,
           decoration: const InputDecoration(
             labelText: 'Match code',
             counterText: '',

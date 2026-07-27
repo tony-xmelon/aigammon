@@ -56,8 +56,9 @@ abstract interface class MatchController implements Listenable {
   /// The last error that stopped the loop, or `null` when healthy.
   Object? get error;
 
-  /// The last non-fatal persistence failure, or `null`. Always `null` for an
-  /// online controller (no local persistence layer).
+  /// The last non-fatal persistence failure, or `null`. Every implementation
+  /// records finished games through a [MatchPersistence] seam, so a storage
+  /// fault surfaces here rather than interrupting play.
   Object? get persistenceError;
 
   /// True once the match has been decided.
@@ -65,8 +66,8 @@ abstract interface class MatchController implements Listenable {
 
   /// Whether this match is played WITHOUT the doubling cube. When true, doubling
   /// is never legal (no AI double prompts, [offerDouble] throws) and the UI hides
-  /// the cube chip / Double button. Always `false` for an online match (the cube
-  /// is server-mediated there).
+  /// the cube chip / Double button. Online and on the LAN it is the host's
+  /// choice, carried in the match document / welcome and honoured by both peers.
   bool get cubeless;
 
   /// True while paused between games waiting for [continueToNextGame].

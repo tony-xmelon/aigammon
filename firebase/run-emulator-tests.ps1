@@ -1,5 +1,4 @@
-# Builds the Cloud Functions, then runs the online_client emulator integration
-# suite inside a throwaway emulator started by `firebase emulators:exec`.
+# Runs the Firebase emulator suites for AIGammon online play.
 #
 # Usage (from anywhere):
 #   pwsh firebase/run-emulator-tests.ps1
@@ -7,63 +6,78 @@
 # CWD handling — the important bit:
 #   `firebase emulators:exec <cmd>` runs <cmd> through the system shell (cmd.exe
 #   on Windows) with the working directory set to the Firebase project dir, i.e.
-#   this script's own folder (firebase/). The Dart suite must instead run in
-#   packages/online_client, so <cmd> first `cd /d`s there (via an ABSOLUTE path
-#   with no spaces) and then invokes `dart test -P emulator`. `cd /d && ...`
-#   works because emulators:exec already wraps the command in `cmd /s /c`.
+#   this script's own folder (firebase/). A suite that must run elsewhere first
+#   `cd /d`s there (via an ABSOLUTE path) and then invokes its runner; `cd /d &&
+#   ...` works because emulators:exec already wraps the command in `cmd /s /c`.
 $ErrorActionPreference = 'Stop'
 
 # Make node / firebase / dart resolvable even from a bare shell.
 $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') +
   ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
 
-# 1. Build the functions (tsc) so the emulator loads fresh JS.
-Push-Location (Join-Path $PSScriptRoot 'functions')
+# 1. Firestore security-rules unit tests (@firebase/rules-unit-testing + mocha).
+#    Firestore-only emulator: the rules suite needs no auth emulator
+#    (rules-unit-testing mints its own auth contexts).
+$rulesTests = (Resolve-Path (Join-Path $PSScriptRoot 'rules-tests')).Path
+if (-not (Test-Path (Join-Path $rulesTests 'node_modules'))) {
+  Push-Location $rulesTests
+  try { npm install; if ($LASTEXITCODE -ne 0) { throw "rules-tests npm install failed" } }
+  finally { Pop-Location }
+}
+$rulesCommand = "cd /d `"$rulesTests`" && npm test"
+
+Push-Location $PSScriptRoot
 try {
-  npm run build
-  if ($LASTEXITCODE -ne 0) { throw "functions build failed ($LASTEXITCODE)" }
+  firebase emulators:exec --project demo-aigammon --only firestore $rulesCommand
+  $rulesCode = $LASTEXITCODE
 } finally {
   Pop-Location
 }
+if ($rulesCode -ne 0) { throw "firestore rules suite failed ($rulesCode)" }
+Write-Host "firestore rules suite passed" -ForegroundColor Green
 
-# 2. Run the online_client suite inside a throwaway emulator. Resolve the
-#    package dir to an absolute path here (where $PSScriptRoot is known) and hand
-#    cmd.exe a `cd && dart`.
+# 2. online_client transport integration suite — the real REST transport
+#    (anonymous auth + direct Firestore documents) against firestore.rules.
+#    Needs the auth emulator too; there is no third emulator to start — the
+#    whole backend is firestore.rules.
 $onlineClient = (Resolve-Path (Join-Path $PSScriptRoot '..\packages\online_client')).Path
 $clientCommand = "cd /d `"$onlineClient`" && dart test -P emulator"
 
 Push-Location $PSScriptRoot
 try {
-  firebase emulators:exec --project demo-aigammon --only firestore,functions,auth $clientCommand
-  $code = $LASTEXITCODE
+  firebase emulators:exec --project demo-aigammon --only firestore,auth $clientCommand
+  $clientCode = $LASTEXITCODE
 } finally {
   Pop-Location
 }
-
-if ($code -ne 0) { throw "online_client emulator suite failed ($code)" }
+if ($clientCode -ne 0) { throw "online_client emulator suite failed ($clientCode)" }
 Write-Host "online_client emulator suite passed" -ForegroundColor Green
 
-# 3. Run the app's two-client full-match E2E in a SECOND throwaway emulator, so
-#    each suite gets a clean, isolated Firestore/Auth state. Unlike the Dart
-#    suite, `flutter test` supports neither `-P` presets nor re-including a
-#    config-excluded tag, so the E2E is gated by the AIGAMMON_EMULATOR env var
-#    instead (see app/dart_test.yaml); `set VAR=1 && ...` sets it for the cmd.exe
-#    line that emulators:exec runs, and `--tags emulator` narrows the run to just
-#    the tagged test.
+# 3. The app's two-client E2E — two real OnlineMatchControllers, each with its
+#    own anonymous user, playing a whole match over real documents, plus the
+#    adversarial legs (rules-blocked forgeries, illegal event, tampered reveal).
+#
+#    AIGAMMON_EMULATOR=1 is the env gate the test file reads (see
+#    app/dart_test.yaml for why an env gate rather than exclude_tags).
+#    AIGAMMON_E2E_POLL_MS turns the controllers' poll interval down from the
+#    production 2s: a roll costs ~3 poll latencies, so a flat 2s pacing ran a
+#    whole match into MINUTES of pure waiting (measured on one game: 20-30s at
+#    100ms against 4m50s at 2000ms). Production answers that with adaptive
+#    polling (500ms while a handshake is in flight); the knob still overrides
+#    BOTH cadences, since the fast one is capped at the resting one.
 $app = (Resolve-Path (Join-Path $PSScriptRoot '..\app')).Path
-# `set "VAR=1"` (quoted) avoids cmd.exe capturing the trailing space before `&&`
-# into the value; the test also trims defensively.
 $appCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
+  "set `"AIGAMMON_E2E_POLL_MS=100`" && " +
   "flutter test --tags emulator test\online\emulator_e2e_test.dart"
 
 Push-Location $PSScriptRoot
 try {
-  firebase emulators:exec --project demo-aigammon --only firestore,functions,auth $appCommand
+  firebase emulators:exec --project demo-aigammon --only firestore,auth $appCommand
   $appCode = $LASTEXITCODE
 } finally {
   Pop-Location
 }
+if ($appCode -ne 0) { throw "app two-client E2E suite failed ($appCode)" }
+Write-Host "app two-client E2E suite passed" -ForegroundColor Green
 
-if ($appCode -ne 0) { throw "app two-client E2E failed ($appCode)" }
-Write-Host "app two-client E2E passed" -ForegroundColor Green
 Write-Host "all emulator suites passed" -ForegroundColor Green

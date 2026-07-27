@@ -9,6 +9,7 @@ environment:
 dependencies:
   backgammon_core:
     path: ../backgammon_core
+  crypto: ^3.0.3
   http: ^1.2.0
 
 dev_dependencies:

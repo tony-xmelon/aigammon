@@ -2103,12 +2103,324 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
   }
 }
 
+class $OnlineSessionTable extends OnlineSession
+    with TableInfo<$OnlineSessionTable, OnlineSessionRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $OnlineSessionTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  static const VerificationMeta _uidMeta = const VerificationMeta('uid');
+  @override
+  late final GeneratedColumn<String> uid = GeneratedColumn<String>(
+    'uid',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _refreshTokenMeta = const VerificationMeta(
+    'refreshToken',
+  );
+  @override
+  late final GeneratedColumn<String> refreshToken = GeneratedColumn<String>(
+    'refresh_token',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _matchCodeMeta = const VerificationMeta(
+    'matchCode',
+  );
+  @override
+  late final GeneratedColumn<String> matchCode = GeneratedColumn<String>(
+    'match_code',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, uid, refreshToken, matchCode];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'online_session';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<OnlineSessionRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('uid')) {
+      context.handle(
+        _uidMeta,
+        uid.isAcceptableOrUnknown(data['uid']!, _uidMeta),
+      );
+    }
+    if (data.containsKey('refresh_token')) {
+      context.handle(
+        _refreshTokenMeta,
+        refreshToken.isAcceptableOrUnknown(
+          data['refresh_token']!,
+          _refreshTokenMeta,
+        ),
+      );
+    }
+    if (data.containsKey('match_code')) {
+      context.handle(
+        _matchCodeMeta,
+        matchCode.isAcceptableOrUnknown(data['match_code']!, _matchCodeMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  OnlineSessionRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return OnlineSessionRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      uid: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}uid'],
+      ),
+      refreshToken: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}refresh_token'],
+      ),
+      matchCode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}match_code'],
+      ),
+    );
+  }
+
+  @override
+  $OnlineSessionTable createAlias(String alias) {
+    return $OnlineSessionTable(attachedDatabase, alias);
+  }
+}
+
+class OnlineSessionRow extends DataClass
+    implements Insertable<OnlineSessionRow> {
+  /// Always 1 (enforced by [customConstraints]).
+  final int id;
+
+  /// The anonymous Firebase uid, or null before the first sign-in.
+  final String? uid;
+
+  /// The refresh token that mints new id tokens for [uid].
+  final String? refreshToken;
+
+  /// The invite code of the match this device last entered, so it can offer to
+  /// REJOIN it after a restart. Cleared when that match finishes.
+  final String? matchCode;
+  const OnlineSessionRow({
+    required this.id,
+    this.uid,
+    this.refreshToken,
+    this.matchCode,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    if (!nullToAbsent || uid != null) {
+      map['uid'] = Variable<String>(uid);
+    }
+    if (!nullToAbsent || refreshToken != null) {
+      map['refresh_token'] = Variable<String>(refreshToken);
+    }
+    if (!nullToAbsent || matchCode != null) {
+      map['match_code'] = Variable<String>(matchCode);
+    }
+    return map;
+  }
+
+  OnlineSessionCompanion toCompanion(bool nullToAbsent) {
+    return OnlineSessionCompanion(
+      id: Value(id),
+      uid: uid == null && nullToAbsent ? const Value.absent() : Value(uid),
+      refreshToken: refreshToken == null && nullToAbsent
+          ? const Value.absent()
+          : Value(refreshToken),
+      matchCode: matchCode == null && nullToAbsent
+          ? const Value.absent()
+          : Value(matchCode),
+    );
+  }
+
+  factory OnlineSessionRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return OnlineSessionRow(
+      id: serializer.fromJson<int>(json['id']),
+      uid: serializer.fromJson<String?>(json['uid']),
+      refreshToken: serializer.fromJson<String?>(json['refreshToken']),
+      matchCode: serializer.fromJson<String?>(json['matchCode']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'uid': serializer.toJson<String?>(uid),
+      'refreshToken': serializer.toJson<String?>(refreshToken),
+      'matchCode': serializer.toJson<String?>(matchCode),
+    };
+  }
+
+  OnlineSessionRow copyWith({
+    int? id,
+    Value<String?> uid = const Value.absent(),
+    Value<String?> refreshToken = const Value.absent(),
+    Value<String?> matchCode = const Value.absent(),
+  }) => OnlineSessionRow(
+    id: id ?? this.id,
+    uid: uid.present ? uid.value : this.uid,
+    refreshToken: refreshToken.present ? refreshToken.value : this.refreshToken,
+    matchCode: matchCode.present ? matchCode.value : this.matchCode,
+  );
+  OnlineSessionRow copyWithCompanion(OnlineSessionCompanion data) {
+    return OnlineSessionRow(
+      id: data.id.present ? data.id.value : this.id,
+      uid: data.uid.present ? data.uid.value : this.uid,
+      refreshToken: data.refreshToken.present
+          ? data.refreshToken.value
+          : this.refreshToken,
+      matchCode: data.matchCode.present ? data.matchCode.value : this.matchCode,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('OnlineSessionRow(')
+          ..write('id: $id, ')
+          ..write('uid: $uid, ')
+          ..write('refreshToken: $refreshToken, ')
+          ..write('matchCode: $matchCode')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, uid, refreshToken, matchCode);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is OnlineSessionRow &&
+          other.id == this.id &&
+          other.uid == this.uid &&
+          other.refreshToken == this.refreshToken &&
+          other.matchCode == this.matchCode);
+}
+
+class OnlineSessionCompanion extends UpdateCompanion<OnlineSessionRow> {
+  final Value<int> id;
+  final Value<String?> uid;
+  final Value<String?> refreshToken;
+  final Value<String?> matchCode;
+  const OnlineSessionCompanion({
+    this.id = const Value.absent(),
+    this.uid = const Value.absent(),
+    this.refreshToken = const Value.absent(),
+    this.matchCode = const Value.absent(),
+  });
+  OnlineSessionCompanion.insert({
+    this.id = const Value.absent(),
+    this.uid = const Value.absent(),
+    this.refreshToken = const Value.absent(),
+    this.matchCode = const Value.absent(),
+  });
+  static Insertable<OnlineSessionRow> custom({
+    Expression<int>? id,
+    Expression<String>? uid,
+    Expression<String>? refreshToken,
+    Expression<String>? matchCode,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (uid != null) 'uid': uid,
+      if (refreshToken != null) 'refresh_token': refreshToken,
+      if (matchCode != null) 'match_code': matchCode,
+    });
+  }
+
+  OnlineSessionCompanion copyWith({
+    Value<int>? id,
+    Value<String?>? uid,
+    Value<String?>? refreshToken,
+    Value<String?>? matchCode,
+  }) {
+    return OnlineSessionCompanion(
+      id: id ?? this.id,
+      uid: uid ?? this.uid,
+      refreshToken: refreshToken ?? this.refreshToken,
+      matchCode: matchCode ?? this.matchCode,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (uid.present) {
+      map['uid'] = Variable<String>(uid.value);
+    }
+    if (refreshToken.present) {
+      map['refresh_token'] = Variable<String>(refreshToken.value);
+    }
+    if (matchCode.present) {
+      map['match_code'] = Variable<String>(matchCode.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('OnlineSessionCompanion(')
+          ..write('id: $id, ')
+          ..write('uid: $uid, ')
+          ..write('refreshToken: $refreshToken, ')
+          ..write('matchCode: $matchCode')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $MatchesTable matches = $MatchesTable(this);
   late final $GamesTable games = $GamesTable(this);
   late final $SettingsTable settings = $SettingsTable(this);
+  late final $OnlineSessionTable onlineSession = $OnlineSessionTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2117,6 +2429,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     matches,
     games,
     settings,
+    onlineSession,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -3304,6 +3617,187 @@ typedef $$SettingsTableProcessedTableManager =
       SettingsRow,
       PrefetchHooks Function()
     >;
+typedef $$OnlineSessionTableCreateCompanionBuilder =
+    OnlineSessionCompanion Function({
+      Value<int> id,
+      Value<String?> uid,
+      Value<String?> refreshToken,
+      Value<String?> matchCode,
+    });
+typedef $$OnlineSessionTableUpdateCompanionBuilder =
+    OnlineSessionCompanion Function({
+      Value<int> id,
+      Value<String?> uid,
+      Value<String?> refreshToken,
+      Value<String?> matchCode,
+    });
+
+class $$OnlineSessionTableFilterComposer
+    extends Composer<_$AppDatabase, $OnlineSessionTable> {
+  $$OnlineSessionTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get uid => $composableBuilder(
+    column: $table.uid,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get refreshToken => $composableBuilder(
+    column: $table.refreshToken,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get matchCode => $composableBuilder(
+    column: $table.matchCode,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$OnlineSessionTableOrderingComposer
+    extends Composer<_$AppDatabase, $OnlineSessionTable> {
+  $$OnlineSessionTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get uid => $composableBuilder(
+    column: $table.uid,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get refreshToken => $composableBuilder(
+    column: $table.refreshToken,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get matchCode => $composableBuilder(
+    column: $table.matchCode,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$OnlineSessionTableAnnotationComposer
+    extends Composer<_$AppDatabase, $OnlineSessionTable> {
+  $$OnlineSessionTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get uid =>
+      $composableBuilder(column: $table.uid, builder: (column) => column);
+
+  GeneratedColumn<String> get refreshToken => $composableBuilder(
+    column: $table.refreshToken,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get matchCode =>
+      $composableBuilder(column: $table.matchCode, builder: (column) => column);
+}
+
+class $$OnlineSessionTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $OnlineSessionTable,
+          OnlineSessionRow,
+          $$OnlineSessionTableFilterComposer,
+          $$OnlineSessionTableOrderingComposer,
+          $$OnlineSessionTableAnnotationComposer,
+          $$OnlineSessionTableCreateCompanionBuilder,
+          $$OnlineSessionTableUpdateCompanionBuilder,
+          (
+            OnlineSessionRow,
+            BaseReferences<
+              _$AppDatabase,
+              $OnlineSessionTable,
+              OnlineSessionRow
+            >,
+          ),
+          OnlineSessionRow,
+          PrefetchHooks Function()
+        > {
+  $$OnlineSessionTableTableManager(_$AppDatabase db, $OnlineSessionTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$OnlineSessionTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$OnlineSessionTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$OnlineSessionTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String?> uid = const Value.absent(),
+                Value<String?> refreshToken = const Value.absent(),
+                Value<String?> matchCode = const Value.absent(),
+              }) => OnlineSessionCompanion(
+                id: id,
+                uid: uid,
+                refreshToken: refreshToken,
+                matchCode: matchCode,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String?> uid = const Value.absent(),
+                Value<String?> refreshToken = const Value.absent(),
+                Value<String?> matchCode = const Value.absent(),
+              }) => OnlineSessionCompanion.insert(
+                id: id,
+                uid: uid,
+                refreshToken: refreshToken,
+                matchCode: matchCode,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$OnlineSessionTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $OnlineSessionTable,
+      OnlineSessionRow,
+      $$OnlineSessionTableFilterComposer,
+      $$OnlineSessionTableOrderingComposer,
+      $$OnlineSessionTableAnnotationComposer,
+      $$OnlineSessionTableCreateCompanionBuilder,
+      $$OnlineSessionTableUpdateCompanionBuilder,
+      (
+        OnlineSessionRow,
+        BaseReferences<_$AppDatabase, $OnlineSessionTable, OnlineSessionRow>,
+      ),
+      OnlineSessionRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3314,4 +3808,6 @@ class $AppDatabaseManager {
       $$GamesTableTableManager(_db, _db.games);
   $$SettingsTableTableManager get settings =>
       $$SettingsTableTableManager(_db, _db.settings);
+  $$OnlineSessionTableTableManager get onlineSession =>
+      $$OnlineSessionTableTableManager(_db, _db.onlineSession);
 }
