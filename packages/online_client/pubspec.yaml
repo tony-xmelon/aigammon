@@ -11,6 +11,8 @@ dependencies:
     path: ../backgammon_core
   crypto: ^3.0.3
   http: ^1.2.0
+  match_transport:
+    path: ../match_transport
 
 dev_dependencies:
   lints: ^4.0.0

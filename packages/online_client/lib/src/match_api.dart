@@ -3,9 +3,10 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
+import 'package:match_transport/match_transport.dart'
+    show CompletedRoll, FairDicePhase;
 
 import 'auth_client.dart';
-import 'fair_dice.dart';
 import 'firestore_docs.dart';
 import 'online_config.dart';
 import 'online_exception.dart';
