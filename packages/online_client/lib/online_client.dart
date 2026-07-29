@@ -3,6 +3,10 @@
 /// Serverless (Plan 16): anonymous Identity-Toolkit auth plus direct Firestore
 /// document operations, with `firebase/firestore.rules` as the only
 /// server-side logic. No Cloud Functions.
+///
+/// Plan 17 adds [FirestoreTransport], this package's `MatchTransport`
+/// implementation — the seam the unified match controller drives, over the very
+/// same document model.
 library;
 
 /// The commit-reveal fair-dice protocol now lives in `package:match_transport`
@@ -34,6 +38,7 @@ export 'package:match_transport/match_transport.dart'
 
 export 'src/auth_client.dart';
 export 'src/firestore_docs.dart';
+export 'src/firestore_transport.dart';
 export 'src/firestore_value.dart';
 export 'src/match_api.dart';
 export 'src/online_config.dart';

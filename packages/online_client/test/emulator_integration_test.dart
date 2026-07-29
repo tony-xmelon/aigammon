@@ -4,6 +4,7 @@ library;
 import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
+import 'package:match_transport/match_transport.dart';
 import 'package:online_client/online_client.dart';
 import 'package:test/test.dart';
 
@@ -61,6 +62,19 @@ void main() {
     }
     users.clear();
   });
+
+  /// Waits (in real time) for [done], failing with [reason] on timeout.
+  Future<void> waitFor(
+    bool Function() done, {
+    Duration timeout = const Duration(seconds: 20),
+    String reason = 'condition never became true',
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!done()) {
+      if (DateTime.now().isAfter(deadline)) fail(reason);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
 
   /// A fresh active match with [host] seated white and [guest] black.
   Future<MatchDoc> activeMatch({int length = 3, bool cubeless = false}) async {
@@ -507,45 +521,173 @@ void main() {
   });
 
   // =========================================================================
-  group('polling', () {
-    test('picks up the opponent\'s events and roll phases', () async {
+  group('FirestoreTransport', () {
+    /// A connected transport for [user] over [match], polling fast.
+    Future<FirestoreTransport> transportFor(TestUser user, MatchDoc match,
+        {MatchDoc? seed}) async {
+      final t = FirestoreTransport(
+        api: user.api,
+        code: match.code,
+        match: seed ?? match,
+        pollInterval: const Duration(milliseconds: 50),
+      );
+      addTearDown(t.dispose);
+      await t.connect();
+      return t;
+    }
+
+    test('both peers connect, are seated, and share one match identity',
+        () async {
+      final match = await activeMatch(length: 5, cubeless: true);
+      final hostT = await transportFor(host, match);
+      final guestT = await transportFor(guest, match);
+      final hs = await hostT.connect();
+      final gs = await guestT.connect();
+
+      expect(hs.assignedSide, Player.white);
+      expect(gs.assignedSide, Player.black);
+      expect(hs.hostAuthor, host.uid);
+      expect(hs.guestAuthor, guest.uid);
+      expect(gs.sideOf(host.uid), Player.white);
+      expect(hs.config, const MatchConfig(length: 5, cubeless: true));
+      expect(hs.resumeToken, gs.resumeToken,
+          reason: 'both peers name the SAME match identity');
+      expect(hostT.opponentPresent, isTrue);
+      expect(hostT.capabilities.durable, isTrue);
+      expect(hostT.capabilities.rejoinable, isTrue);
+    });
+
+    test('the host waits for the guest seat before it is connected', () async {
+      final created = await host.api.createMatch(length: 1, cubeless: false);
+      final t = FirestoreTransport(
+        api: host.api,
+        code: created.code,
+        pollInterval: const Duration(milliseconds: 50),
+      );
+      addTearDown(t.dispose);
+      var connected = false;
+      final pending = t.connect().then((_) => connected = true);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(connected, isFalse, reason: 'nobody has joined yet');
+      expect(t.opponentPresent, isFalse);
+
+      await guest.api.joinMatch(created.code);
+      await pending;
+      expect((await t.connect()).guestAuthor, guest.uid);
+      expect(t.opponentPresent, isTrue);
+    });
+
+    test('a non-participant is rejected by connect', () async {
       final match = await activeMatch();
-      final events = <int>[];
-      final phases = <(int, FairDicePhase)>[];
-      final sub = host.api
-          .pollMatch(match.code,
-              interval: () => const Duration(milliseconds: 50))
-          .listen((poll) {
-        events.addAll(poll.events.map((e) => e.seq));
-        phases.addAll(poll.rolls.map((r) => (r.n, r.phase)));
-      });
-      addTearDown(sub.cancel);
+      final outsider = await signIn();
+      final t = FirestoreTransport(api: outsider.api, code: match.code);
+      addTearDown(t.dispose);
+      await expectLater(t.connect(), throwsA(isA<TransportRejected>()));
+    });
 
-      await guest.api.submitEvent(
-          code: match.code,
-          seq: 0,
-          gameNo: 1,
-          event: const OpeningRollEvent(whiteDie: 3, blackDie: 6));
-      await guest.api.createRoll(code: match.code, n: 0, commit: 'a' * 64);
+    test('an event written at contract seq 1 lands in events/00000000',
+        () async {
+      // The 0-based↔1-based bridge, against real document ids.
+      final match = await activeMatch();
+      final t = await transportFor(host, match);
+      await t.sendEvent(
+        seq: 1,
+        gameNo: 1,
+        event: const OpeningRollEvent(whiteDie: 6, blackDie: 3),
+      );
+      final raw = await host.api.fetchEventsSince(match.code, -1);
+      expect(raw.single.seq, 0, reason: 'the document is numbered from 0');
+      final frames = await t.eventsSince(0);
+      expect(frames.single.seq, 1, reason: 'the contract numbers from 1');
+      expect(frames.single.author, host.uid);
+      expect(frames.single.event, isA<OpeningRollEvent>());
+      expect(await t.eventsSince(1), isEmpty,
+          reason: 'eventsSince is exclusive of its argument');
+    });
 
-      // Wait for both to surface.
-      final deadline = DateTime.now().add(const Duration(seconds: 10));
-      while ((events.isEmpty || phases.isEmpty) &&
-          DateTime.now().isBefore(deadline)) {
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+    test('inbound carries the opponent\'s events and every roll phase',
+        () async {
+      final match = await activeMatch();
+      final hostT = await transportFor(host, match);
+      final guestT = await transportFor(guest, match);
+
+      final seen = <InboundFrame>[];
+      hostT.inbound.listen(seen.add);
+
+      await guestT.sendEvent(
+          seq: 1, gameNo: 1, event: const OpeningRollEvent(whiteDie: 3, blackDie: 6));
+      await guestT.createRoll(2, 'a' * 64);
+      await waitFor(
+        () =>
+            seen.whereType<EventFrame>().isNotEmpty &&
+            seen.whereType<RollFrame>().isNotEmpty,
+        reason: 'the event and the roll never arrived',
+      );
+      expect(seen.whereType<EventFrame>().single.seq, 1);
+      expect(seen.whereType<EventFrame>().single.author, guest.uid);
+      expect(seen.whereType<RollFrame>().last.phase, FairDicePhase.committed);
+
+      // The host answers with entropy; the phase change must be re-emitted, and
+      // the completed roll must arrive on the guest's stream too.
+      await hostT.sendEntropy(2, 'b' * 64);
+      await waitFor(
+        () => seen
+            .whereType<RollFrame>()
+            .any((r) => r.phase == FairDicePhase.entropy),
+        reason: 'the entropy phase was never re-emitted',
+      );
+      expect(seen.whereType<EventFrame>(), hasLength(1),
+          reason: 'events are delivered once, not once per cycle');
+    });
+
+    test('rollsSince and fetchRoll answer exactly, and null for an absent roll',
+        () async {
+      final match = await activeMatch();
+      final t = await transportFor(host, match);
+      for (final n in [1, 2, 3]) {
+        await t.createRoll(n, 'a' * 64);
       }
-      expect(events, [0]);
-      expect(phases, contains((0, FairDicePhase.committed)));
+      expect((await t.rollsSince(1)).map((r) => r.n), [1, 2, 3]);
+      expect((await t.rollsSince(3)).map((r) => r.n), [3]);
+      expect((await t.fetchRoll(2))!.commit, 'a' * 64);
+      expect(await t.fetchRoll(9), isNull);
+    });
 
-      // The host answers with entropy; the phase change must be re-emitted.
-      await host.api.submitEntropy(code: match.code, n: 0, entropy: 'b' * 64);
-      while (!phases.contains((0, FairDicePhase.entropy)) &&
-          DateTime.now().isBefore(deadline)) {
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      }
-      expect(phases, contains((0, FairDicePhase.entropy)));
-      expect(events, [0], reason: 'events are emitted exactly once');
-    }, timeout: const Timeout(Duration(seconds: 30)));
+    test('a taken seq comes back CONTESTED, a rules refusal REJECTED',
+        () async {
+      final match = await activeMatch();
+      final hostT = await transportFor(host, match);
+      final guestT = await transportFor(guest, match);
+      await hostT.sendEvent(
+          seq: 1, gameNo: 1, event: const OpeningRollEvent(whiteDie: 6, blackDie: 3));
+
+      // The guest races for the same index and loses.
+      await expectLater(
+        guestT.sendEvent(seq: 1, gameNo: 1, event: DoubleEvent(Player.black)),
+        throwsA(isA<TransportContested>()
+            .having((e) => e.peerLastSeq, 'peerLastSeq', 1)),
+      );
+
+      // A phase skip: reveal before any entropy exists. The rules refuse it, and
+      // an identical retry always would.
+      await hostT.createRoll(2, 'a' * 64);
+      await expectLater(
+        hostT.sendReveal(2, 'd' * 64),
+        throwsA(isA<TransportRejected>()),
+      );
+      // ... and so does entropy on one's OWN roll.
+      await expectLater(
+        hostT.sendEntropy(2, 'b' * 64),
+        throwsA(isA<TransportRejected>()),
+      );
+    });
+
+    test('complete flips the match document', () async {
+      final match = await activeMatch();
+      final t = await transportFor(guest, match);
+      await t.complete();
+      expect((await host.api.fetchMatch(match.code)).isComplete, isTrue);
+    });
   });
 
   // =========================================================================

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -249,45 +248,21 @@ class RollDoc {
   }
 }
 
-/// One polling cycle's worth of change: newly appended events and roll
-/// documents that appeared or advanced a phase since the previous cycle.
-class MatchPoll {
-  final List<RemoteEvent> events;
-  final List<RollDoc> rolls;
-
-  const MatchPoll({this.events = const [], this.rolls = const []});
-
-  bool get isEmpty => events.isEmpty && rolls.isEmpty;
-  bool get isNotEmpty => !isEmpty;
-}
-
-// ---------------------------------------------------------------------------
-// Polling cadence
-// ---------------------------------------------------------------------------
-
-/// How long [MatchApi.pollMatch] waits before its next cycle.
-///
-/// A function rather than a fixed [Duration] because it is asked ONCE PER
-/// CYCLE: the caller can therefore tighten the loop while it is waiting on
-/// something — the commit-reveal handshake, whose three phases are otherwise
-/// three whole poll latencies of dead time — and relax it again afterwards,
-/// without tearing the stream down. Restarting the stream would be the only
-/// alternative, and it would cost a full re-read of the tail (plus its
-/// watermarks) on every transition.
-typedef PollInterval = Duration Function();
-
-/// The production cadence: one cycle every two seconds.
-Duration defaultPollInterval() => const Duration(seconds: 2);
-
 // ---------------------------------------------------------------------------
 // MatchApi
 // ---------------------------------------------------------------------------
 
-/// The whole online transport: anonymous auth plus direct Firestore document
-/// operations. There is no server-side code — every rule the model has is in
-/// `firebase/firestore.rules`, and everything else is agreed between the two
-/// clients (see `fair_dice.dart` for the dice, and the controller for game
-/// legality).
+/// The LOW-LEVEL online layer: anonymous auth plus direct Firestore document
+/// operations, one method per document operation the model has. There is no
+/// server-side code — every rule the model has is in `firebase/firestore.rules`,
+/// and everything else is agreed between the two clients (see `fair_dice.dart`
+/// for the dice, and the controller for game legality).
+///
+/// One [MatchApi] serves the whole app run (it holds the anonymous session and
+/// the HTTP clients). The per-match `MatchTransport` the controller drives is
+/// [FirestoreTransport], which is a thin view over this class and adds the parts
+/// that are per-match rather than per-app: the poll loop, the read-budget
+/// watermarks, the 0-based↔1-based seq bridge and the typed-error mapping.
 ///
 /// Errors are typed (see `online_exception.dart`). The three the caller must
 /// handle by name:
@@ -590,85 +565,4 @@ class MatchApi {
       if (page.length < pageSize) return out;
     }
   }
-
-  // --- polling ---------------------------------------------------------------
-
-  /// Poll a match for change, emitting one [MatchPoll] per cycle that saw any.
-  ///
-  /// Events are emitted once each, in strictly increasing seq order, starting
-  /// after [afterSeq]. Roll documents are different in kind — they MUTATE as
-  /// the protocol advances — so the poller re-reads every roll from `rollsFrom`
-  /// onwards, emits one whenever its phase has moved since the last emission,
-  /// and advances its watermark past the leading run of completed rolls so a
-  /// finished match's rolls are not re-read forever.
-  ///
-  /// Polling starts on first listen, waits [interval] between cycles, and stops
-  /// on cancel. Transport failures are forwarded to the stream and the loop
-  /// keeps going — a poll error is transient by nature.
-  Stream<MatchPoll> pollMatch(
-    String code, {
-    PollInterval interval = defaultPollInterval,
-    int afterSeq = -1,
-    int rollsFrom = 0,
-    int pageSize = 100,
-  }) {
-    late StreamController<MatchPoll> controller;
-    var cancelled = false;
-    var lastSeq = afterSeq;
-    var rollWatermark = rollsFrom;
-    final seenPhase = <int, FairDicePhase>{};
-
-    Future<void> loop() async {
-      while (!cancelled) {
-        try {
-          final events =
-              await fetchEventsSince(code, lastSeq, pageSize: pageSize);
-          if (cancelled) return;
-          if (events.isNotEmpty) lastSeq = events.last.seq;
-
-          final rolls =
-              await fetchRollsFrom(code, rollWatermark, pageSize: pageSize);
-          if (cancelled) return;
-          final changed = <RollDoc>[];
-          for (final roll in rolls) {
-            if (seenPhase[roll.n] != roll.phase) {
-              seenPhase[roll.n] = roll.phase;
-              changed.add(roll);
-            }
-          }
-          // Retire the leading run of finished rolls: once roll k is complete
-          // and every roll below it is too, it can never change again.
-          for (final roll in rolls) {
-            if (roll.n != rollWatermark || !roll.isComplete) break;
-            rollWatermark = roll.n + 1;
-            seenPhase.remove(roll.n);
-          }
-
-          final poll = MatchPoll(events: events, rolls: changed);
-          if (poll.isNotEmpty) controller.add(poll);
-        } catch (err, st) {
-          if (!cancelled) controller.addError(err, st);
-        }
-        if (cancelled) return;
-        await Future<void>.delayed(interval());
-      }
-    }
-
-    controller = StreamController<MatchPoll>(
-      onListen: loop,
-      onCancel: () {
-        cancelled = true;
-      },
-    );
-    return controller.stream;
-  }
-
-  /// Event-only view of [pollMatch], flattened to one [RemoteEvent] per emit.
-  Stream<RemoteEvent> pollEvents(
-    String code, {
-    PollInterval interval = defaultPollInterval,
-    int afterSeq = -1,
-  }) =>
-      pollMatch(code, interval: interval, afterSeq: afterSeq)
-          .expand((poll) => poll.events);
 }
