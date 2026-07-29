@@ -358,6 +358,11 @@ class _GuestSocketTransport implements SocketTransport {
     _states = client.states.listen(_onState);
     _statusValue = _map(client.state.status);
     _statusReason = client.state.reason;
+    // A client that was welcomed BEFORE this view existed (the "Play Nearby"
+    // screen connects first and opens the board second) already holds the log it
+    // was handed; adopt it rather than starting from an empty mirror.
+    final welcomed = client.lastWelcome;
+    if (welcomed != null) _adopt(welcomed);
   }
 
   /// The link. NOT owned: [dispose] leaves it connected (see the class doc).
@@ -608,6 +613,16 @@ class _GuestSocketTransport implements SocketTransport {
 
   /// A welcome is the WHOLE truth: adopt it and tell the controller to replay.
   void _onWelcome(WelcomeMessage welcome) {
+    _adopt(welcome);
+    _publish(ResetFrame(
+      resumeToken: welcome.resume,
+      reason: 'the match log was replayed',
+    ));
+  }
+
+  /// Replace the mirror with what a welcome carries, and stand the resync loop
+  /// down.
+  void _adopt(WelcomeMessage welcome) {
     _needResync = false;
     _resyncTimer?.cancel();
     _resyncTimer = null;
@@ -618,10 +633,6 @@ class _GuestSocketTransport implements SocketTransport {
       ..clear()
       ..addEntries(welcome.rolls.map((r) => MapEntry(r.n, r)));
     _setOpponentPresent(true);
-    _publish(ResetFrame(
-      resumeToken: welcome.resume,
-      reason: 'the match log was replayed',
-    ));
   }
 
   void _onEvent(EventFrame entry) {
@@ -653,7 +664,7 @@ class _GuestSocketTransport implements SocketTransport {
     client.resync();
     if (_resyncTimer != null) return;
     _resyncTimer = Timer.periodic(_timings.helloMinInterval, (t) {
-      if (_disposed || !_needResync) {
+      if (_disposed || !_needResync || client.isDisposed) {
         t.cancel();
         _resyncTimer = null;
         return;

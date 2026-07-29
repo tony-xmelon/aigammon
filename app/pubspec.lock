@@ -390,7 +390,7 @@ packages:
       path: "../packages/lan_play"
       relative: true
     source: path
-    version: "0.1.0"
+    version: "0.2.0"
   leak_tracker:
     dependency: transitive
     description:

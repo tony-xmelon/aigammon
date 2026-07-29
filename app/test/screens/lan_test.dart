@@ -8,8 +8,8 @@ import 'package:aigammon_app/data/persistence_hooks.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
-import 'package:aigammon_app/lan/lan_match_controller.dart';
 import 'package:aigammon_app/lan/lan_transport.dart';
+import 'package:aigammon_app/net/net_match_controller.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:aigammon_app/screens/lan_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lan_play/lan_play.dart';
+import 'package:match_transport/match_transport.dart';
 
 import '../data/test_database.dart';
 
@@ -57,10 +58,10 @@ class FakeFacade implements EngineFacade {
 
 /// The screen's whole view of the network, scripted.
 ///
-/// Nothing here binds a socket: hosting hands back a REAL [HostAuthority] (so
-/// the host controller folds a real log and the game screen gets a real match)
-/// with the presence signal under the test's thumb, and joining hands back a
-/// session whose states and welcome the test drives by hand.
+/// Nothing here binds a socket: hosting hands back a REAL [InMemoryBackend] (so
+/// the host's [NetMatchController] folds a real log and the game screen gets a
+/// real match) with the presence signal under the test's thumb, and joining hands
+/// back a session whose states and welcome the test drives by hand.
 class FakeTransport implements NearbyTransport {
   @override
   String deviceName = 'TestPhone';
@@ -113,19 +114,20 @@ class FakeTransport implements NearbyTransport {
   Future<String?> localAddress() async => address;
 }
 
-/// A hosting session over a real authority, with the guest arriving on cue.
+/// A hosting session over an in-memory backend, with the guest arriving on cue.
 class FakeHostSession implements HostSession {
   FakeHostSession(this.config)
-      : authority = HostAuthority(
+      : backend = InMemoryBackend(
           config: config,
-          dice: ScriptedDiceRoller(const []),
+          matchCode: '4271',
           resumeToken: 'TESTTOKEN',
+          capabilities: const Capabilities(durable: false, rejoinable: false),
         );
 
   @override
   final MatchConfig config;
 
-  final HostAuthority authority;
+  final InMemoryBackend backend;
 
   @override
   String roomCode = '4271';
@@ -134,7 +136,7 @@ class FakeHostSession implements HostSession {
   int port = 47780;
 
   @override
-  Player get localSide => authority.hostSide;
+  Player get localSide => TransportSession.hostSide;
 
   @override
   final ValueNotifier<bool> guestConnected = ValueNotifier<bool>(false);
@@ -144,27 +146,31 @@ class FakeHostSession implements HostSession {
 
   bool stopped = false;
 
+  InMemoryTransport? _peer;
+
   @override
-  LanMatchController controller({
+  NetMatchController controller({
     MatchPersistence persistence = const NoopPersistence(),
   }) =>
-      LanMatchController.host(
-        authority: authority,
-        guestConnected: guestConnected,
+      NetMatchController(
+        transport: InMemoryTransport.host(backend),
         persistence: persistence,
       );
 
   @override
   Future<void> stop() async {
     stopped = true;
-    authority.close();
+    await _peer?.dispose();
+    _peer = null;
   }
 
-  /// A guest presents the code: the authority starts game 1, then presence
-  /// flips — the same order the real server uses.
+  /// A guest presents the code: its endpoint attaches (which is what makes the
+  /// host's `opponentPresent` true), game 1 opens with a SOUND commit-reveal
+  /// roll, then presence flips — the same order the real relay uses.
   void guestArrives({String name = 'Bo'}) {
     guestName = name;
-    authority.onGuestMessage(HelloMessage(name: name));
+    _peer ??= InMemoryTransport.guest(backend);
+    backend.seedOpening(whiteDie: 6, blackDie: 1);
     guestConnected.value = true;
   }
 }
@@ -197,7 +203,7 @@ class FakeGuestSession implements GuestSession {
   MatchConfig get config => const MatchConfig(length: 5);
 
   @override
-  LanMatchController controller({
+  NetMatchController controller({
     MatchPersistence persistence = const NoopPersistence(),
   }) =>
       throw UnimplementedError('the join tests stop before the board');
@@ -311,7 +317,7 @@ void main() {
       await pumpUntil(t, find.byType(GameScreen));
 
       expect(find.byType(GameScreen), findsOneWidget);
-      // A real match, folded from the authority's own log.
+      // A real match, folded from the relay's own log.
       expect(find.textContaining('Game 1'), findsWidgets);
     });
 

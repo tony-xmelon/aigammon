@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lan_play/lan_play.dart';
+import 'package:match_transport/match_transport.dart';
 
 import '../board/board_view.dart';
 import '../data/app_settings.dart';
@@ -13,8 +14,8 @@ import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
 import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
-import '../lan/lan_match_controller.dart';
 import '../lan/lan_transport.dart';
+import '../net/net_match_controller.dart';
 import '../tutor/tutor_service.dart';
 import 'game_screen.dart';
 
@@ -29,16 +30,20 @@ const Duration _probeTimeout = Duration(seconds: 2);
 ///
 /// HOST sets the match up, binds the server, shows a four-digit room code and
 /// waits. JOIN finds hosts by UDP probe (or takes an address typed by hand) and
-/// presents the code. Both tabs end the same way: a [LanMatchController] and a
-/// [GameScreen], with the local side pinned to the bottom of the board.
+/// presents the code. Both tabs end the same way: a [NetMatchController] — the
+/// same one online play uses — and a [GameScreen], with the local side pinned to
+/// the bottom of the board.
 ///
 /// ## Who owns what
 ///
-/// This screen owns the whole transport lifecycle. A [HostSession] or
-/// [GuestSession] is created here, handed to the controller, and torn down here
-/// — on "Stop hosting", on a failed join, when the game screen is popped, and in
-/// `dispose`. Nothing below this screen closes a socket, and the controller
-/// explicitly does not (see [LanMatchController]).
+/// This screen owns the LINK: a [HostSession] (server + beacon + match log) or a
+/// [GuestSession] (one socket) is created here and torn down here — on "Stop
+/// hosting", on a failed join, when the game screen is popped, and in `dispose`.
+///
+/// It does NOT own the transport. `session.controller()` builds a
+/// [SocketTransport] over the link and hands it to the controller, which disposes
+/// it; this screen only ever disposes the controller and then stops the session,
+/// in that order. See `lan_transport.dart` for the three-owner split.
 ///
 /// ## The room code is the only secret
 ///
@@ -135,7 +140,7 @@ class _HostTabState extends ConsumerState<_HostTab> {
 
   @override
   void dispose() {
-    // Leaving the screen releases the port, the beacon and the authority. The
+    // Leaving the screen releases the port, the beacon and the match log. The
     // future is deliberately unawaited: dispose cannot wait, and stop() is
     // self-contained.
     unawaited(_session?.stop());
@@ -232,8 +237,9 @@ class _HostTabState extends ConsumerState<_HostTab> {
       matchIdFuture: matchIdFuture,
       opponentLabel: _shortName(session.guestName),
     );
-    // Back from the game: the match is over (or abandoned), so the port, the
-    // beacon and the authority go with it and the tab resets to its form.
+    // Back from the game: the controller goes first (and takes its transport
+    // with it), then the port, the beacon and the match log; the tab resets to
+    // its form.
     controller.disposeController();
     await _stopHosting();
   }
@@ -912,7 +918,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
 Future<void> _openGame({
   required BuildContext context,
   required WidgetRef ref,
-  required LanMatchController controller,
+  required NetMatchController controller,
   required Future<int> matchIdFuture,
   required String opponentLabel,
 }) async {

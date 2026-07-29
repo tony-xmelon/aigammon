@@ -219,6 +219,11 @@ class GuestClient {
   /// True while the link is up and welcomed.
   bool get isConnected => _state.isConnected;
 
+  /// True once [dispose] has run: the link is gone for good and nothing on it
+  /// will ever answer again. A view built over this client (see
+  /// `SocketTransport.guest`) reads it to stop its own retry loops.
+  bool get isDisposed => _disposed;
+
   /// Queue [message] for the relay. Returns false when there is no live socket
   /// (the frame is dropped — after a reconnect the fresh welcome resyncs, so a
   /// stale write must not be replayed).
