@@ -3,11 +3,25 @@ import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
+import 'package:match_transport/match_transport.dart';
 import 'package:test/test.dart';
 
-/// A hostile LAN peer must not be able to crash the host: [Envelope.decode] is
-/// TOTAL (every input yields DecodeOk or DecodeFailure) and
-/// [HostAuthority.onGuestRaw] never throws whatever it is fed.
+import 'socket_harness.dart';
+
+/// A hostile LAN peer must not be able to crash its opponent: [Envelope.decode]
+/// is TOTAL (every input yields DecodeOk or DecodeFailure), and nothing a peer can
+/// send moves the [MatchRelay] except a well-formed, correctly-ordered write.
+///
+/// ## What moved when the referee went away
+///
+/// The old version of this suite fuzzed `HostAuthority`, including a "deep
+/// validation path" case that fed adversarial MOVES into `canonicalPlay`. There
+/// is no such path here on purpose: the relay does not know the rules, so an
+/// illegal move is not its business — it is written to the log and the opponent's
+/// controller FREEZES on it (`app/test/net/net_cheat_freeze_test.dart` owns those
+/// cases, on both transports). What this suite still owns is that a hostile frame
+/// cannot make the relay throw, mis-order the log, or answer with anything
+/// unbounded.
 void main() {
   const cases = 200;
 
@@ -25,11 +39,11 @@ void main() {
         return '[' * depth + ']' * depth;
       case 3: // deep nesting inside a well-formed envelope
         final depth = 1 + r.nextInt(500);
-        return '{"v":1,"type":"submit","payload":{"event":'
+        return '{"v":$protocolVersion,"type":"w_event","payload":{"event":'
             '${'[' * depth}${']' * depth}}}';
       case 4: // huge strings
         return jsonEncode({
-          'v': 1,
+          'v': protocolVersion,
           'type': 'hello',
           'payload': {'name': 'x' * (1 << r.nextInt(16))},
         });
@@ -39,21 +53,29 @@ void main() {
         return jsonEncode({
           'v': pick(),
           'type': pick(),
-          'seq': pick(),
           'payload': {
+            'id': pick(),
             'name': pick(),
             'side': pick(),
+            'seq': pick(),
             'gameNo': pick(),
+            'n': pick(),
+            'commit': pick(),
+            'status': pick(),
             'log': pick(),
+            'rolls': pick(),
             'matchConfig': pick(),
             'event': {'type': pick(), 'player': pick(), 'move': pick()},
           },
         });
       case 6: // a plausible move event with nonsense hops
         return jsonEncode({
-          'v': 1,
-          'type': 'submit',
+          'v': protocolVersion,
+          'type': 'w_event',
           'payload': {
+            'id': 1,
+            'seq': 1 + r.nextInt(4),
+            'gameNo': 1,
             'event': {
               'type': 'move',
               'player': r.nextBool() ? 'white' : 'black',
@@ -69,7 +91,7 @@ void main() {
           },
         });
       default: // random unicode soup, sometimes JSON-ish
-        final buf = StringBuffer(r.nextBool() ? '{"v":1,' : '');
+        final buf = StringBuffer(r.nextBool() ? '{"v":2,' : '');
         for (var i = 0; i < r.nextInt(80); i++) {
           buf.writeCharCode(r.nextInt(0x2000));
         }
@@ -96,114 +118,94 @@ void main() {
     // values) do decode. Both branches must be exercised for the test to mean
     // anything.
     expect(ok, greaterThan(0), reason: 'corpus never produced a valid frame');
-    expect(ok, lessThan(cases), reason: 'corpus never produced an invalid frame');
+    expect(ok, lessThan(cases),
+        reason: 'corpus never produced an invalid frame');
   });
 
-  test('the authority survives $cases hostile frames and stays consistent', () {
+  test('the relay survives $cases hostile frames over a real socket', () async {
+    final f = await ServerFixture.start();
+    addTearDown(f.dispose);
+    seedOpening(f.relay, whiteDie: 6, blackDie: 1);
+    final guest = await RawGuest.connect(f.server, autoPong: true);
+    addTearDown(guest.close);
+    guest.hello();
+    await waitFor(() => guest.gotWelcome, what: 'a welcome');
+
     final r = Random(4242);
-    final host = HostAuthority(
-      config: const MatchConfig(length: 3),
-      dice: ScriptedDiceRoller([Dice(6, 1)]),
-    );
-    final seen = <HostOutbound>[];
-    host.outbound.listen(seen.add);
-    host.onGuestMessage(const HelloMessage(name: 'peer'));
-
     for (var i = 0; i < cases; i++) {
-      expect(() => host.onGuestRaw(nasty(r)), returnsNormally);
+      guest.sendRaw(nasty(r));
     }
-    // Nothing hostile advanced the game: still game 1, opening roll only.
-    expect(host.lastSeq, 1);
-    expect(host.log.single.event, const OpeningRollEvent(whiteDie: 6, blackDie: 1));
-    expect(host.state!.turn, Player.white);
-    host.close();
-  });
+    await settle(200);
 
-  test('the DEEP validation path survives hostile frames with the guest on turn',
-      () async {
-    // The other authority fuzz test never gets past the turn guard (its guest
-    // is not on turn), so move legality is never reached. Here the host plays
-    // Black and the opening roll hands White — the GUEST — the first move, so
-    // every frame below lands squarely in canonicalPlay.
-    final host = HostAuthority(
-      config: const MatchConfig(length: 3),
-      hostSide: Player.black,
-      dice: ScriptedDiceRoller([Dice(6, 1)]),
-    );
-    final seen = <HostOutbound>[];
-    host.outbound.listen(seen.add);
-    host.onGuestMessage(const HelloMessage(name: 'peer'));
-    await Future<void>.delayed(Duration.zero);
-    expect(host.guestSide, Player.white);
-    expect(host.state!.turn, Player.white, reason: 'the guest is on turn');
-    expect(host.state!.phase, GamePhase.moving);
-    final board = host.state!.board;
-
-    String moveFrame(String hops) => '{"v":1,"type":"submit","payload":'
-        '{"event":{"type":"move","player":"white","move":$hops}}}';
-
-    // Targeted adversarial plays: out-of-range hops, bar/off sentinels abused,
-    // non-representable numbers, the wrong number of hops, a pass while moves
-    // exist, and a hop onto a blocked point.
-    final adversarial = <String>[
-      moveFrame('[[-100,-100,false],[5,3,false]]'),
-      moveFrame('[[500,-7,false],[5,3,false]]'),
-      moveFrame('[[24,-1,false],[24,-1,false]]'),
-      moveFrame('[[1e300,6,false],[7,6,false]]'),
-      moveFrame('[[-1e300,-1e300,false],[7,6,false]]'),
-      moveFrame('[[12,6,false],[7,6,false],[5,4,false],[4,3,false]]'),
-      moveFrame('[]'),
-      moveFrame('[[23,17,false],[12,11,false]]'), // lands on a made Black point
-      moveFrame('[[23,17,false],[12,6,false]]'), // two 6s on a 6-1
-    ];
-    var mark = seen.length;
-    for (final frame in adversarial) {
-      host.onGuestRaw(frame);
+    // Seq 1 is taken and every generated write claims 1..4 with no roll behind
+    // it, so nothing in the corpus is BOTH decodable and correctly ordered
+    // except an append at the next free seq — and even that only ever lands
+    // once, because the seq then moves on.
+    expect(f.relay.lastSeq, lessThanOrEqualTo(2),
+        reason: 'a hostile burst cannot pump the log');
+    expect(f.relay.events.map((e) => e.seq),
+        [for (var i = 1; i <= f.relay.lastSeq; i++) i],
+        reason: 'the log stayed contiguous');
+    // Every answer is bounded: no welcome was replayed for a garbage frame, and
+    // nothing large came back.
+    expect(guest.of<WelcomeMessage>(), hasLength(1),
+        reason: 'only the handshake replayed the log');
+    for (final raw in guest.raw) {
+      expect(raw.length, lessThan(4096),
+          reason: 'a hostile frame drew an unbounded answer');
     }
-    await Future<void>.delayed(Duration.zero);
-
-    // Every targeted frame drew exactly one rejection.
-    final replies = seen.sublist(mark);
-    expect(replies, hasLength(adversarial.length));
-    expect(replies.every((o) => o.message is RejectMessage), isTrue,
-        reason: 'a hostile frame produced something other than a rejection');
-    expect(replies.every((o) => o.to == HostDestination.guest), isTrue);
-
-    // Then the generic corpus, on the same open turn. (Some of those frames
-    // are valid hellos or pings, so the replies are not all rejections — what
-    // matters is that NONE of them appended an event.)
-    mark = seen.length;
-    final r = Random(99);
-    for (var i = 0; i < cases; i++) {
-      expect(() => host.onGuestRaw(nasty(r)), returnsNormally);
-    }
-    await Future<void>.delayed(Duration.zero);
-    expect(seen.sublist(mark).where((o) => o.message is EventMessage), isEmpty,
-        reason: 'a hostile frame moved the game');
-
-    expect(host.lastSeq, 1);
-    expect(host.state!.board, board, reason: 'the board never moved');
-    expect(host.state!.turn, Player.white);
-    expect(host.state!.phase, GamePhase.moving);
-    // And a LEGAL move still works afterwards: nothing was left wedged.
-    host.onGuestMessage(
-        SubmitMessage(MoveEvent(Player.white, host.state!.legalMoves.first)));
-    await Future<void>.delayed(Duration.zero);
-    expect(host.lastSeq, 2);
-    expect(host.state!.turn, Player.black);
-    host.close();
   });
 
   test('an oversized frame is dropped without a large reply', () async {
-    final host = HostAuthority(config: const MatchConfig(length: 1));
-    final seen = <HostOutbound>[];
-    host.outbound.listen(seen.add);
-    host.onGuestRaw('x' * (maxMessageLength + 1));
-    await Future<void>.delayed(Duration.zero);
-    // A 512 KB hostile frame must not pull anything sizeable back out of the
-    // host: the answer is a constant-size rejection.
-    final reject = seen.single.message as RejectMessage;
-    expect(reject.encode().length, lessThan(150));
-    host.close();
+    final f = await ServerFixture.start();
+    addTearDown(f.dispose);
+    final guest = await RawGuest.connect(f.server);
+    addTearDown(guest.close);
+    guest.hello();
+    await waitFor(() => guest.gotWelcome, what: 'a welcome');
+    final before = guest.answers;
+
+    // A 512 KB hostile frame must not pull anything sizeable back out: it is
+    // dropped before the parser, with no answer at all.
+    guest.sendRaw('x' * (maxMessageLength + 1));
+    await settle(80);
+    expect(guest.answers, before);
+    expect(guest.closed, isFalse);
+  });
+
+  test('a malformed frame draws a constant-size refusal', () {
+    // The relay-side refusal is built by HostServer; its SHAPE is what bounds
+    // the amplification, so assert on the frame itself.
+    final reject =
+        const RejectMessage(reason: 'not valid JSON', lastSeq: 4).encode();
+    expect(reject.length, lessThan(150));
+    expect(jsonDecode(reject), isNot(contains('log')));
+  });
+
+  test('a hostile write cannot forge its authorship', () async {
+    final f = await ServerFixture.start();
+    addTearDown(f.dispose);
+    final guest = await RawGuest.connect(f.server);
+    addTearDown(guest.close);
+    guest.hello();
+    await waitFor(() => guest.gotWelcome, what: 'a welcome');
+
+    // There is no author field on a write frame at all — the relay stamps it —
+    // so the best a hostile peer can do is add one and have it ignored.
+    guest.sendRaw(jsonEncode({
+      'v': protocolVersion,
+      'type': 'w_event',
+      'payload': {
+        'id': 1,
+        'seq': 1,
+        'gameNo': 1,
+        'author': MatchRelay.hostAuthor,
+        'event': const OpeningRollEvent(whiteDie: 6, blackDie: 5).toJson(),
+      },
+    }));
+    await waitFor(() => f.relay.lastSeq == 1, what: 'the write to land');
+    expect(f.relay.events.single.author, MatchRelay.guestAuthor,
+        reason: 'authorship comes from the connection, never from the wire');
+    expect(MatchRelay.sideOf(f.relay.events.single.author), Player.black);
   });
 }

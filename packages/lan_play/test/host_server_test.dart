@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
+import 'package:match_transport/match_transport.dart';
 import 'package:test/test.dart';
 
 import 'socket_harness.dart';
@@ -11,11 +12,23 @@ import 'socket_harness.dart';
 /// The standard 6-1 opening play for White: 13/7, 8/7.
 final opening61 = Move([const CheckerMove(12, 6), const CheckerMove(7, 6)]);
 
+/// Append one host-authored event straight into the relay — the in-process half
+/// of the link, exactly what `SocketTransport.host` does for its own writes.
+void hostAppends(ServerFixture f, GameEvent event, {int gameNo = 1}) =>
+    f.relay.appendEvent(
+      author: MatchRelay.hostAuthor,
+      seq: f.relay.nextSeq,
+      gameNo: gameNo,
+      event: event,
+    );
+
 void main() {
   group('handshake', () {
-    test('a hello with the room code is welcomed with the match', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+    test('a hello with the room code is welcomed with the whole relay state',
+        () async {
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server);
       addTearDown(guest.close);
 
@@ -25,30 +38,49 @@ void main() {
       final welcome = guest.lastOf<WelcomeMessage>()!;
       expect(welcome.config, const MatchConfig(length: 3, cubeless: false));
       expect(welcome.side, Player.black, reason: 'the host keeps white');
-      expect(welcome.resume, 'TESTTOKEN');
-      expect(welcome.log, isEmpty);
+      expect(welcome.resume, testToken);
+      // Everything the relay holds, in one frame: the log AND the roll document
+      // behind it, so the joiner can validate the dice it is being told about.
+      expect(welcome.log.map((e) => e.seq), [1]);
+      expect(welcome.log.single.author, MatchRelay.hostAuthor);
+      expect(welcome.log.single.event,
+          const OpeningRollEvent(whiteDie: 6, blackDie: 1));
+      expect(welcome.rolls.map((r) => r.n), [1]);
+      expect(welcome.rolls.single.isComplete, isTrue);
 
-      // The opening roll follows as an ordinary event.
-      await waitFor(() => guest.of<EventMessage>().isNotEmpty, what: 'events');
-      final entry = guest.of<EventMessage>().first.entry;
-      expect(entry.seq, 1);
-      expect(entry.event, const OpeningRollEvent(whiteDie: 6, blackDie: 1));
-
-      expect(f.authority.started, isTrue);
       expect(f.server.hasGuest, isTrue);
       expect(f.server.guestName, 'Bo');
     });
 
-    test('a wrong code is refused and closed, leaking nothing', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+    test('a later host event is relayed as an ordinary event frame', () async {
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
+      final guest = await RawGuest.connect(f.server);
+      addTearDown(guest.close);
+      guest.hello();
+      await waitFor(() => guest.gotWelcome, what: 'a welcome');
+
+      hostAppends(f, MoveEvent(Player.white, opening61));
+      await waitFor(() => guest.of<EventMessage>().isNotEmpty,
+          what: 'the relayed event');
+      final entry = guest.of<EventMessage>().single.entry;
+      expect(entry.seq, 2);
+      expect(entry.author, MatchRelay.hostAuthor);
+      expect(entry.event, MoveEvent(Player.white, opening61));
+    });
+
+    test('a wrong code is refused and closed, leaking nothing', () async {
+      final f = await ServerFixture.start();
+      addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
 
       // A real guest first, so there IS a log to leak.
       final first = await RawGuest.connect(f.server);
       first.hello();
       await waitFor(() => first.gotWelcome, what: 'the first welcome');
-      f.authority.localSubmit(MoveEvent(Player.white, opening61));
-      await waitFor(() => f.authority.lastSeq == 2, what: 'the opening move');
+      hostAppends(f, MoveEvent(Player.white, opening61));
+      await waitFor(() => f.relay.lastSeq == 2, what: 'the opening move');
       await first.close();
       await waitFor(() => !f.server.hasGuest, what: 'the slot to free');
 
@@ -59,11 +91,12 @@ void main() {
 
       expect(intruder.gotWelcome, isFalse);
       expect(intruder.of<EventMessage>(), isEmpty);
+      expect(intruder.of<RollMessage>(), isEmpty);
       final reject = intruder.lastOf<RejectMessage>()!;
       expect(reject.reason, 'bad code');
       expect(reject.lastSeq, 0,
           reason: 'an unauthenticated peer learns nothing about the match');
-      expect(f.authority.lastSeq, 2, reason: 'the match is untouched');
+      expect(f.relay.lastSeq, 2, reason: 'the match is untouched');
     });
 
     test('a hello without a code is refused', () async {
@@ -76,7 +109,6 @@ void main() {
       await waitFor(() => guest.closed, what: 'the connection to close');
       expect(guest.gotWelcome, isFalse);
       expect(guest.lastOf<RejectMessage>()!.reason, 'bad code');
-      expect(f.authority.started, isFalse);
     });
 
     test('a first frame that is not a hello is refused', () async {
@@ -85,13 +117,26 @@ void main() {
       final guest = await RawGuest.connect(f.server);
       addTearDown(guest.close);
 
-      guest.send(const RollRequestMessage());
+      guest.send(const PingMessage());
       await waitFor(() => guest.closed, what: 'the connection to close');
       expect(guest.lastOf<RejectMessage>()!.reason, 'handshake required');
-      expect(f.authority.started, isFalse);
+      expect(f.relay.lastSeq, 0);
     });
 
-    test('a garbage first frame is refused without reaching the authority',
+    test('a write before the handshake is refused and never reaches the relay',
+        () async {
+      final f = await ServerFixture.start();
+      addTearDown(f.dispose);
+      final guest = await RawGuest.connect(f.server);
+      addTearDown(guest.close);
+
+      guest.writeEvent(const TakeEvent(Player.black), seq: 1);
+      await waitFor(() => guest.closed, what: 'the connection to close');
+      expect(guest.of<AckMessage>(), isEmpty);
+      expect(f.relay.lastSeq, 0, reason: 'nothing unauthenticated may write');
+    });
+
+    test('a garbage first frame is refused without reaching the relay',
         () async {
       final f = await ServerFixture.start();
       addTearDown(f.dispose);
@@ -101,17 +146,16 @@ void main() {
       guest.sendRaw('}{not json');
       await waitFor(() => guest.closed, what: 'the connection to close');
       expect(guest.gotWelcome, isFalse);
-      expect(f.authority.started, isFalse);
+      expect(f.relay.lastSeq, 0);
     });
 
     test('a silent connection is dropped by the handshake timeout', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
       final idler = await RawGuest.connect(f.server);
       addTearDown(idler.close);
 
       await waitFor(() => idler.closed, what: 'the handshake timeout');
-      expect(f.authority.started, isFalse);
       await waitFor(() => f.server.pendingConnections == 0,
           what: 'the pending slot to be released');
 
@@ -122,7 +166,7 @@ void main() {
     });
 
     test('an unauthenticated socket does NOT hold the playing slot', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
 
       // Someone who does not know the code just holds a socket open.
@@ -178,8 +222,9 @@ void main() {
   group('single-guest policy', () {
     test('a second guest is told busy and closed; the first plays on',
         () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final first = await RawGuest.connect(f.server);
       addTearDown(first.close);
       first.hello(name: 'Bo');
@@ -194,7 +239,7 @@ void main() {
 
       // The incumbent is undisturbed.
       final before = first.of<EventMessage>().length;
-      f.authority.localSubmit(MoveEvent(Player.white, opening61));
+      hostAppends(f, MoveEvent(Player.white, opening61));
       await waitFor(() => first.of<EventMessage>().length > before,
           what: 'the incumbent to keep receiving events');
       expect(f.server.guestName, 'Bo');
@@ -202,33 +247,36 @@ void main() {
 
     test('a reconnecting guest becomes the active guest and gets the full log',
         () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final first = await RawGuest.connect(f.server);
       first.hello();
       await waitFor(() => first.gotWelcome, what: 'the first welcome');
-      f.authority.localSubmit(MoveEvent(Player.white, opening61));
-      await waitFor(() => f.authority.lastSeq == 2, what: 'the opening move');
+      hostAppends(f, MoveEvent(Player.white, opening61));
+      await waitFor(() => f.relay.lastSeq == 2, what: 'the opening move');
 
       await first.close();
       await waitFor(() => !f.server.hasGuest, what: 'the slot to free');
 
       final again = await RawGuest.connect(f.server);
       addTearDown(again.close);
-      again.hello(resume: 'TESTTOKEN');
+      again.hello(resume: testToken);
       await waitFor(() => again.gotWelcome, what: 'the resync welcome');
 
       final welcome = again.lastOf<WelcomeMessage>()!;
       expect(welcome.log.map((e) => e.seq), [1, 2]);
       expect(welcome.log.last.event, MoveEvent(Player.white, opening61));
-      expect(f.authority.lastSeq, 2, reason: 'a resync appends nothing');
+      expect(welcome.rolls, hasLength(1));
+      expect(f.relay.lastSeq, 2, reason: 'a resync appends nothing');
       expect(f.server.hasGuest, isTrue);
     });
 
     test('two valid hellos racing: one wins the slot, the other is busy',
         () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final a = await RawGuest.connect(f.server);
       final b = await RawGuest.connect(f.server);
       addTearDown(a.close);
@@ -240,20 +288,25 @@ void main() {
       a.hello(name: 'Ana');
       b.hello(name: 'Bo');
       await waitFor(() => a.gotWelcome || b.gotWelcome, what: 'a winner');
-      await waitFor(() => a.of<BusyMessage>().isNotEmpty || b.of<BusyMessage>().isNotEmpty,
+      await waitFor(
+          () =>
+              a.of<BusyMessage>().isNotEmpty || b.of<BusyMessage>().isNotEmpty,
           what: 'a loser');
 
-      final welcomes = a.of<WelcomeMessage>().length + b.of<WelcomeMessage>().length;
-      final busies = a.of<BusyMessage>().length + b.of<BusyMessage>().length;
+      final welcomes =
+          a.of<WelcomeMessage>().length + b.of<WelcomeMessage>().length;
+      final busies =
+          a.of<BusyMessage>().length + b.of<BusyMessage>().length;
       expect(welcomes, 1, reason: 'exactly one guest is admitted');
       expect(busies, 1, reason: 'and the other is told so');
       expect(f.server.hasGuest, isTrue);
-      expect(f.authority.lastSeq, 1, reason: 'one match, started once');
+      expect(f.relay.lastSeq, 1, reason: 'a hello never appends');
     });
 
     test('the host can drop the guest without disturbing the match', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server);
       addTearDown(guest.close);
       guest.hello();
@@ -262,15 +315,16 @@ void main() {
       await f.server.disconnectGuest();
       await waitFor(() => guest.closed, what: 'the guest to be dropped');
       expect(f.server.hasGuest, isFalse);
-      expect(f.authority.started, isTrue);
-      expect(f.authority.lastSeq, 1);
+      expect(f.relay.lastSeq, 1, reason: 'the log survives');
+      expect(f.relay.rollFrames, hasLength(1));
     });
   });
 
   group('liveness', () {
     test('the host pings, and drops a guest that goes silent', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server);
       addTearDown(guest.close);
       guest.hello();
@@ -280,11 +334,11 @@ void main() {
           what: 'a heartbeat ping');
       await waitFor(() => guest.closed, what: 'the silent guest to be dropped');
       expect(f.server.hasGuest, isFalse);
-      expect(f.authority.started, isTrue, reason: 'the match survives');
+      expect(f.relay.lastSeq, 1, reason: 'the match survives');
     });
 
     test('a guest that answers the pings is kept', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
       final guest = await RawGuest.connect(f.server, autoPong: true);
       addTearDown(guest.close);
@@ -297,12 +351,26 @@ void main() {
       expect(f.server.hasGuest, isTrue);
       expect(guest.of<PingMessage>().length, greaterThan(2));
     });
+
+    test('a guest ping is answered with a pong', () async {
+      final f = await ServerFixture.start();
+      addTearDown(f.dispose);
+      final guest = await RawGuest.connect(f.server);
+      addTearDown(guest.close);
+      guest.hello();
+      await waitFor(() => guest.gotWelcome, what: 'a welcome');
+
+      await settle(20);
+      guest.send(const PingMessage());
+      await waitFor(() => guest.of<PongMessage>().isNotEmpty, what: 'a pong');
+    });
   });
 
   group('rate limits', () {
     test('rapid hellos do not each replay the log', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server, autoPong: true);
       addTearDown(guest.close);
 
@@ -322,30 +390,32 @@ void main() {
     });
 
     test('a burst of ordinary frames is throttled, not answered', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server);
       addTearDown(guest.close);
       guest.hello();
       await waitFor(() => guest.gotWelcome, what: 'a welcome');
 
-      // White (the host) is on turn, so every one of these earns a reject —
-      // unless the limiter drops it first.
+      // Seq 1 is taken, so every one of these earns a `contested` ack — unless
+      // the limiter drops it first.
       for (var i = 0; i < 12; i++) {
-        guest.send(const RollRequestMessage());
+        guest.writeEvent(const TakeEvent(Player.black), seq: 1);
       }
       await settle(80);
-      expect(guest.of<RejectMessage>().length, lessThan(4),
+      expect(guest.of<AckMessage>().length, lessThan(4),
           reason: 'the burst is dropped, not answered one for one');
       expect(guest.closed, isFalse);
-      expect(f.authority.lastSeq, 1, reason: 'nothing illegitimate applied');
+      expect(f.relay.lastSeq, 1, reason: 'nothing illegitimate applied');
     });
   });
 
   group('hostile input', () {
     test('a malformed frame is refused and the connection survives', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server);
       addTearDown(guest.close);
       guest.hello();
@@ -354,19 +424,23 @@ void main() {
       guest.sendRaw('not json at all');
       await waitFor(() => guest.of<RejectMessage>().isNotEmpty,
           what: 'a bounded reject');
+      // The refusal quotes OUR seq, so a guest that has drifted can tell the
+      // difference between "you are behind" and "that frame was nonsense".
+      expect(guest.lastOf<RejectMessage>()!.lastSeq, 1);
       expect(guest.closed, isFalse);
 
       // And the link still works.
       await settle(20);
-      f.authority.localSubmit(MoveEvent(Player.white, opening61));
-      await waitFor(() => f.authority.lastSeq == 2, what: 'the next event');
-      await waitFor(() => guest.of<EventMessage>().length == 2,
+      hostAppends(f, MoveEvent(Player.white, opening61));
+      await waitFor(() => f.relay.lastSeq == 2, what: 'the next event');
+      await waitFor(() => guest.of<EventMessage>().length == 1,
           what: 'the event to reach the guest');
     });
 
     test('an over-cap frame is dropped before the parser', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server, autoPong: true);
       addTearDown(guest.close);
       guest.hello();
@@ -375,23 +449,24 @@ void main() {
 
       guest.sendRaw(jsonEncode({
         'v': protocolVersion,
-        'type': 'submit',
+        'type': 'w_event',
         'payload': {'pad': 'x' * (maxMessageLength + 1024)},
       }));
       await settle(80);
       expect(guest.answers, before,
           reason: 'dropped silently — not even a reject to amplify with');
       expect(guest.closed, isFalse);
-      expect(f.authority.lastSeq, 1);
+      expect(f.relay.lastSeq, 1);
 
-      f.authority.localSubmit(MoveEvent(Player.white, opening61));
-      await waitFor(() => guest.of<EventMessage>().length == 2,
+      hostAppends(f, MoveEvent(Player.white, opening61));
+      await waitFor(() => guest.of<EventMessage>().length == 1,
           what: 'the link to still work');
     });
 
     test('a binary frame and an unknown type are ignored', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server, autoPong: true);
       addTearDown(guest.close);
       guest.hello();
@@ -406,7 +481,33 @@ void main() {
 
       expect(guest.answers, before, reason: 'no answer to either');
       expect(guest.closed, isFalse);
-      expect(f.authority.lastSeq, 1);
+      expect(f.relay.lastSeq, 1);
+    });
+
+    test('a relay-authored frame FROM a guest is refused, never applied',
+        () async {
+      final f = await ServerFixture.start();
+      addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
+      final guest = await RawGuest.connect(f.server);
+      addTearDown(guest.close);
+      guest.hello();
+      await waitFor(() => guest.gotWelcome, what: 'a welcome');
+
+      // A guest that tries to author a LOG ENTRY directly — the one shape that
+      // would let it claim to be the host — is refused outright, so the relay's
+      // authorship stamping cannot be bypassed.
+      guest.send(EventMessage(const EventFrame(
+        seq: 2,
+        gameNo: 1,
+        author: MatchRelay.hostAuthor,
+        event: RollEvent(Player.white, 3, 1),
+      )));
+      await waitFor(() => guest.of<RejectMessage>().isNotEmpty,
+          what: 'the refusal');
+      expect(guest.lastOf<RejectMessage>()!.reason, contains('relay-only'));
+      expect(f.relay.lastSeq, 1, reason: 'the log did not move');
+      expect(guest.closed, isFalse);
     });
 
     test('a repeated wrong code locks the address out before the upgrade',
@@ -425,7 +526,7 @@ void main() {
         RawGuest.connect(f.server),
         throwsA(isA<WebSocketException>()),
       );
-      expect(f.authority.started, isFalse);
+      expect(f.relay.lastSeq, 0);
     });
   });
 
@@ -437,7 +538,8 @@ void main() {
       addTearDown(client.close);
       final base = 'http://${InternetAddress.loopbackIPv4.address}:${f.port}';
 
-      final wrongPath = await (await client.getUrl(Uri.parse('$base/'))).close();
+      final wrongPath =
+          await (await client.getUrl(Uri.parse('$base/'))).close();
       expect(wrongPath.statusCode, HttpStatus.notFound);
       await wrongPath.drain<void>();
 
@@ -448,7 +550,7 @@ void main() {
     });
 
     test('stop closes the guest and the port', () async {
-      final f = await ServerFixture.start(dice: [Dice(6, 1)]);
+      final f = await ServerFixture.start();
       final guest = await RawGuest.connect(f.server);
       addTearDown(guest.close);
       guest.hello();
@@ -464,7 +566,7 @@ void main() {
             'ws://${InternetAddress.loopbackIPv4.address}:$port$matchPath'),
         throwsA(isA<SocketException>()),
       );
-      f.authority.close();
+      await f.dispose();
     });
   });
 
@@ -479,20 +581,13 @@ void main() {
 
     test('an unusable room code is refused at start, not at the handshake',
         () async {
-      final authority = HostAuthority(
-          config: const MatchConfig(length: 3), dice: ScriptedDiceRoller([]));
-      addTearDown(authority.close);
-
       await expectLater(
         HostServer.start(
-            authority: authority,
-            roomCode: '',
-            bindAddress: InternetAddress.loopbackIPv4),
+            roomCode: '', bindAddress: InternetAddress.loopbackIPv4),
         throwsA(isA<ArgumentError>()),
       );
       await expectLater(
         HostServer.start(
-            authority: authority,
             roomCode: 'x' * (maxCodeLength + 1),
             bindAddress: InternetAddress.loopbackIPv4),
         throwsA(isA<ArgumentError>()),
@@ -502,8 +597,8 @@ void main() {
 
   test('the throttle forgets addresses once their window passes', () async {
     final f = await ServerFixture.start(
-      timings: LanTimings.test.copyWith(
-          throttleWindow: const Duration(milliseconds: 50)),
+      timings: LanTimings.test
+          .copyWith(throttleWindow: const Duration(milliseconds: 50)),
     );
     addTearDown(f.dispose);
 

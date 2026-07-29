@@ -3,9 +3,13 @@ import 'dart:io';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
+import 'package:match_transport/match_transport.dart';
 
 /// The room code every socket test uses unless it is testing the code itself.
 const String testCode = '4271';
+
+/// The resume token the fixtures mint, so a test can assert on it.
+const String testToken = 'TESTTOKEN';
 
 /// Poll until [condition] holds, or fail loudly. Sockets and timers make the
 /// exact instant unpredictable, so every socket assertion goes through here
@@ -28,35 +32,34 @@ Future<void> waitFor(
 Future<void> settle([int ms = 60]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
 
-/// A [HostAuthority] + [HostServer] pair bound to loopback on an OS-chosen
-/// port. Loopback deliberately, not `anyIPv4`: a test run must never raise a
-/// firewall prompt.
+/// A [MatchRelay] + [HostServer] + host-side [SocketTransport], bound to loopback
+/// on an OS-chosen port.
+///
+/// Loopback deliberately, not `anyIPv4`: a test run must never raise a firewall
+/// prompt.
 class ServerFixture {
-  ServerFixture(this.authority, this.server);
+  ServerFixture(this.relay, this.server, this.transport);
 
   static Future<ServerFixture> start({
     int port = 0,
     int length = 3,
     bool cubeless = false,
-    Player hostSide = Player.white,
-    List<Dice> dice = const [],
     String roomCode = testCode,
     LanTimings timings = LanTimings.test,
   }) async {
-    final authority = HostAuthority(
+    final relay = MatchRelay(
       config: MatchConfig(length: length, cubeless: cubeless),
-      hostSide: hostSide,
-      dice: ScriptedDiceRoller(dice),
-      resumeToken: 'TESTTOKEN',
+      resumeToken: testToken,
     );
     final server = await HostServer.start(
       port: port,
-      authority: authority,
       roomCode: roomCode,
       timings: timings,
       bindAddress: InternetAddress.loopbackIPv4,
+      lastSeq: () => relay.lastSeq,
     );
-    return ServerFixture(authority, server);
+    return ServerFixture(
+        relay, server, SocketTransport.host(server: server, relay: relay));
   }
 
   /// Serve on an already-bound [http] server — the deterministic way to make a
@@ -66,38 +69,91 @@ class ServerFixture {
     HttpServer http, {
     int length = 3,
     bool cubeless = false,
-    Player hostSide = Player.white,
-    List<Dice> dice = const [],
     String roomCode = testCode,
     LanTimings timings = LanTimings.test,
   }) {
-    final authority = HostAuthority(
+    final relay = MatchRelay(
       config: MatchConfig(length: length, cubeless: cubeless),
-      hostSide: hostSide,
-      dice: ScriptedDiceRoller(dice),
-      resumeToken: 'TESTTOKEN',
+      resumeToken: testToken,
     );
+    final server = HostServer.attach(http,
+        roomCode: roomCode, timings: timings, lastSeq: () => relay.lastSeq);
     return ServerFixture(
-      authority,
-      HostServer.attach(http,
-          authority: authority, roomCode: roomCode, timings: timings),
-    );
+        relay, server, SocketTransport.host(server: server, relay: relay));
   }
 
-  final HostAuthority authority;
+  final MatchRelay relay;
   final HostServer server;
+
+  /// The bound peer's transport. Already wired to [relay] and [server]; call
+  /// [connect] to open it.
+  final SocketTransport transport;
 
   int get port => server.port;
 
+  Future<TransportSession> connect() => transport.connect();
+
+  /// Innermost first: the transport owns nothing, so it goes first, then the
+  /// socket, then the log.
   Future<void> dispose() async {
+    await transport.dispose();
     await server.stop();
-    authority.close();
+    await relay.close();
   }
 }
 
-/// A hand-driven guest: a bare WebSocket that records what the host sends and
-/// sends exactly what a test tells it to — including frames no real client
-/// would ever produce.
+/// Seed a SOUND opening roll straight into [relay]: a complete `rolls/{n}` plus
+/// the [OpeningRollEvent] it derives, authored by the host. Everything a
+/// controller would validate holds.
+void seedOpening(MatchRelay relay,
+    {required int whiteDie, required int blackDie, int gameNo = 1}) {
+  final n = _rollCount(relay) + 1;
+  final s = openingSecretsFor(whiteDie, blackDie);
+  relay.createRoll(author: MatchRelay.hostAuthor, n: n, commit: s.commit);
+  relay.addEntropy(
+      author: MatchRelay.guestAuthor, n: n, entropy: s.entropy);
+  relay.addReveal(author: MatchRelay.hostAuthor, n: n, reveal: s.secret);
+  relay.appendEvent(
+    author: MatchRelay.hostAuthor,
+    seq: relay.nextSeq,
+    gameNo: gameNo,
+    event: OpeningRollEvent(whiteDie: whiteDie, blackDie: blackDie),
+  );
+}
+
+/// Seed a SOUND ordinary roll for [author] (playing [player]) plus its
+/// [RollEvent], aiming exactly [die1]/[die2].
+void seedRoll(
+  MatchRelay relay, {
+  required String author,
+  required Player player,
+  required int die1,
+  required int die2,
+  int gameNo = 1,
+}) {
+  final n = _rollCount(relay) + 1;
+  final witness = author == MatchRelay.hostAuthor
+      ? MatchRelay.guestAuthor
+      : MatchRelay.hostAuthor;
+  final s = turnSecretsFor(die1, die2);
+  relay.createRoll(author: author, n: n, commit: s.commit);
+  relay.addEntropy(author: witness, n: n, entropy: s.entropy);
+  relay.addReveal(author: author, n: n, reveal: s.secret);
+  relay.appendEvent(
+    author: author,
+    seq: relay.nextSeq,
+    gameNo: gameNo,
+    event: RollEvent(player, die1, die2),
+  );
+}
+
+int _rollCount(MatchRelay relay) => relay.events
+    .where((e) => e.event is OpeningRollEvent || e.event is RollEvent)
+    .length;
+
+/// A hand-driven guest: a bare WebSocket that records what the relay sends and
+/// sends exactly what a test tells it to — including frames no real client would
+/// ever produce.
 class RawGuest {
   RawGuest._(this.socket, {required bool autoPong}) : _autoPong = autoPong {
     socket.listen(
@@ -131,16 +187,17 @@ class RawGuest {
   final WebSocket socket;
   final bool _autoPong;
 
-  /// Every decodable frame the host sent, oldest first.
+  /// Every decodable frame the relay sent, oldest first.
   final List<Envelope> received = [];
 
   /// Every text frame verbatim.
   final List<String> raw = [];
 
-  /// Anything non-text the host sent (nothing, in a correct implementation).
+  /// Anything non-text the relay sent (nothing, in a correct implementation).
   final List<Object?> binary = [];
 
   bool closed = false;
+  int _writeId = 0;
 
   void send(Envelope message) => sendRaw(message.encode());
 
@@ -148,12 +205,21 @@ class RawGuest {
     try {
       socket.add(frame);
     } catch (_) {
-      // The host may have closed already; tests assert on `closed`.
+      // The relay may have closed already; tests assert on `closed`.
     }
   }
 
   void hello({String name = 'Bo', String? code = testCode, String? resume}) =>
       send(HelloMessage(name: name, code: code, resume: resume));
+
+  /// The next write id, so a test can correlate its own acks.
+  int nextId() => ++_writeId;
+
+  int writeEvent(GameEvent event, {required int seq, int gameNo = 1}) {
+    final id = nextId();
+    send(WriteEventMessage(id: id, seq: seq, gameNo: gameNo, event: event));
+    return id;
+  }
 
   List<T> of<T extends Envelope>() => received.whereType<T>().toList();
 
@@ -162,10 +228,13 @@ class RawGuest {
     return all.isEmpty ? null : all.last;
   }
 
+  AckMessage? ack(int id) =>
+      of<AckMessage>().where((a) => a.id == id).firstOrNull;
+
   bool get gotWelcome => of<WelcomeMessage>().isNotEmpty;
 
-  /// Everything the host sent that is not a heartbeat — i.e. everything the
-  /// host said IN ANSWER to something.
+  /// Everything the relay sent that is not a heartbeat — i.e. everything it said
+  /// IN ANSWER to something.
   int get answers => received.where((m) => m is! PingMessage).length;
 
   Future<void> close() async {
@@ -175,37 +244,4 @@ class RawGuest {
       // already gone
     }
   }
-}
-
-/// Drive whichever side is on turn through ONE authoritative event, waiting for
-/// it to land in the log. [guest] is null when the host plays both roles.
-///
-/// Move choice reads the authority's own state (this is a transport test, not a
-/// controller test — the guest-side fold arrives in Task 3), but every guest
-/// action still travels over the real socket.
-Future<void> advance(ServerFixture fixture, {GuestClient? guest}) async {
-  final authority = fixture.authority;
-  final state = authority.state!;
-  final before = authority.lastSeq;
-  final side = state.turn;
-  final isHost = side == authority.hostSide;
-
-  if (state.phase == GamePhase.awaitingRoll) {
-    if (isHost) {
-      authority.localRoll();
-    } else {
-      guest!.requestRoll();
-    }
-  } else {
-    final legal = state.legalMoves;
-    final move = legal.isEmpty ? Move.none : legal.first;
-    final event = MoveEvent(side, move);
-    if (isHost) {
-      authority.localSubmit(event);
-    } else {
-      guest!.submit(event);
-    }
-  }
-  await waitFor(() => authority.lastSeq > before,
-      what: 'seq to advance past $before (${side.name}, ${state.phase.name})');
 }

@@ -1,6 +1,8 @@
 name: lan_play
-description: Pure-Dart wire protocol and host authority for AIGammon nearby (LAN) play.
-version: 0.1.0
+description: >-
+  Pure-Dart wire protocol, bidirectional relay and MatchTransport for AIGammon
+  nearby (LAN) play.
+version: 0.2.0
 publish_to: none
 
 environment:
@@ -9,6 +11,8 @@ environment:
 dependencies:
   backgammon_core:
     path: ../backgammon_core
+  match_transport:
+    path: ../match_transport
 
 dev_dependencies:
   lints: ^4.0.0

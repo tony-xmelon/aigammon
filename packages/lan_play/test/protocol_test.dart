@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
+import 'package:match_transport/match_transport.dart';
 import 'package:test/test.dart';
 
 /// Decode helper: expects success and returns the envelope.
@@ -18,7 +19,14 @@ ProtocolError bad(String raw) {
   return (r as DecodeFailure).error;
 }
 
+/// A valid commit-reveal value: 64 lowercase hex characters.
+String hex(int fill) => fill.toRadixString(16).padLeft(kHexLength, '0');
+
 void main() {
+  final commit = hex(0xabc);
+  final entropy = hex(0xdef);
+  final reveal = hex(0x123);
+
   group('envelope round-trips', () {
     test('hello with and without a resume token', () {
       final a = ok(const HelloMessage(name: 'Ana').encode()) as HelloMessage;
@@ -41,7 +49,7 @@ void main() {
       // An oversized code is a bad field, not a truncation.
       expect(
         bad(jsonEncode({
-          'v': 1,
+          'v': protocolVersion,
           'type': 'hello',
           'payload': {'name': 'Bo', 'code': 'x' * (maxCodeLength + 1)},
         })).kind,
@@ -49,7 +57,7 @@ void main() {
       );
       expect(
         bad(jsonEncode({
-          'v': 1,
+          'v': protocolVersion,
           'type': 'hello',
           'payload': {'name': 'Bo', 'code': 421},
         })).kind,
@@ -57,22 +65,33 @@ void main() {
       );
     });
 
-    test('welcome carries config, side and the seq-numbered log', () {
+    test('welcome carries config, side, the log AND the roll documents', () {
       final msg = WelcomeMessage(
         config: const MatchConfig(length: 5, cubeless: true),
         side: Player.black,
         resume: 'tok-9',
         log: [
-          const LogEntry(
+          const EventFrame(
               seq: 1,
               gameNo: 1,
+              author: 'host',
               event: OpeningRollEvent(whiteDie: 6, blackDie: 3)),
-          LogEntry(
+          EventFrame(
             seq: 2,
             gameNo: 1,
+            author: 'host',
             event: MoveEvent(
                 Player.white, Move([const CheckerMove(23, 20, isHit: true)])),
           ),
+        ],
+        rolls: [
+          RollFrame(
+              n: 1,
+              roller: 'host',
+              commit: commit,
+              entropy: entropy,
+              reveal: reveal),
+          RollFrame(n: 2, roller: 'guest', commit: commit),
         ],
       );
       final back = ok(msg.encode()) as WelcomeMessage;
@@ -82,11 +101,22 @@ void main() {
       expect(back.resume, 'tok-9');
       expect(back.log.map((e) => e.seq), [1, 2]);
       expect(back.log.map((e) => e.gameNo), [1, 1]);
-      expect(back.log.first.event, const OpeningRollEvent(whiteDie: 6, blackDie: 3));
+      expect(back.log.map((e) => e.author), ['host', 'host'],
+          reason: 'the relay\'s own attribution travels with the entry');
+      expect(back.log.first.event,
+          const OpeningRollEvent(whiteDie: 6, blackDie: 3));
       final move = back.log[1].event as MoveEvent;
       expect(move.player, Player.white);
       expect(move.move.checkerMoves.single,
           const CheckerMove(23, 20, isHit: true));
+
+      expect(back.rolls.map((r) => r.n), [1, 2]);
+      expect(back.rolls.first.isComplete, isTrue);
+      expect(back.rolls.first.phase, FairDicePhase.revealed);
+      expect(back.rolls.first.entropy, entropy);
+      expect(back.rolls.first.reveal, reveal);
+      expect(back.rolls.last.phase, FairDicePhase.committed);
+      expect(back.rolls.last.roller, 'guest');
     });
 
     test('every GameEvent variant survives the envelope', () {
@@ -108,28 +138,101 @@ void main() {
         const ResignDeclineEvent(Player.black),
       ];
       for (final e in events) {
-        final back = ok(SubmitMessage(e).encode()) as SubmitMessage;
+        final back = ok(WriteEventMessage(id: 1, seq: 3, gameNo: 1, event: e)
+            .encode()) as WriteEventMessage;
         expect(back.event, e, reason: 'round-trip failed for ${e.toJson()}');
+        expect(back.id, 1);
+        expect(back.seq, 3);
       }
     });
 
-    test('event message exposes seq at the envelope level', () {
-      final raw = EventMessage(const LogEntry(
-              seq: 7, gameNo: 2, event: RollEvent(Player.white, 3, 1)))
+    test('an event frame carries seq, gameNo, author and the event', () {
+      final raw = EventMessage(const EventFrame(
+              seq: 7,
+              gameNo: 2,
+              author: 'guest',
+              event: RollEvent(Player.white, 3, 1)))
           .encode();
-      expect(jsonDecode(raw), containsPair('seq', 7));
       final back = ok(raw) as EventMessage;
       expect(back.entry.seq, 7);
       expect(back.entry.gameNo, 2);
+      expect(back.entry.author, 'guest');
       expect(back.entry.event, const RollEvent(Player.white, 3, 1));
-      expect(back.seq, 7);
     });
 
-    test('reject carries a reason and the host lastSeq, never a log', () {
+    test('a roll frame round-trips at each phase', () {
+      for (final roll in [
+        RollFrame(n: 4, roller: 'host', commit: commit),
+        RollFrame(n: 4, roller: 'host', commit: commit, entropy: entropy),
+        RollFrame(
+            n: 4,
+            roller: 'host',
+            commit: commit,
+            entropy: entropy,
+            reveal: reveal),
+      ]) {
+        final back = ok(RollMessage(roll).encode()) as RollMessage;
+        expect(back.roll.n, 4);
+        expect(back.roll.roller, 'host');
+        expect(back.roll.commit, commit);
+        expect(back.roll.entropy, roll.entropy);
+        expect(back.roll.reveal, roll.reveal);
+        expect(back.roll.phase, roll.phase);
+      }
+    });
+
+    test('the three roll writes round-trip', () {
+      final r = ok(WriteRollMessage(id: 2, n: 1, commit: commit).encode())
+          as WriteRollMessage;
+      expect((r.id, r.n, r.commit), (2, 1, commit));
+      final e = ok(WriteEntropyMessage(id: 3, n: 1, entropy: entropy).encode())
+          as WriteEntropyMessage;
+      expect((e.id, e.n, e.entropy), (3, 1, entropy));
+      final v = ok(WriteRevealMessage(id: 4, n: 1, reveal: reveal).encode())
+          as WriteRevealMessage;
+      expect((v.id, v.n, v.reveal), (4, 1, reveal));
+    });
+
+    test('ack quotes the write id, the status and the relay seq', () {
+      for (final status in AckStatus.values) {
+        final raw = AckMessage(
+                id: 9, status: status, lastSeq: 12, reason: 'because')
+            .encode();
+        final back = ok(raw) as AckMessage;
+        expect(back.id, 9);
+        expect(back.status, status);
+        expect(back.lastSeq, 12);
+        expect(back.reason, 'because');
+        // Constant-size, whatever happened: an ack is never an amplifier.
+        expect(raw.length, lessThan(150));
+        expect((jsonDecode(raw) as Map)['payload'], isNot(contains('log')));
+      }
+      expect(
+          (ok(const AckMessage(id: 1, status: AckStatus.ok, lastSeq: 0).encode())
+                  as AckMessage)
+              .reason,
+          isNull);
+      expect(
+          bad(jsonEncode({
+            'v': protocolVersion,
+            'type': 'ack',
+            'payload': {'id': 1, 'status': 'maybe', 'lastSeq': 0}
+          })).kind,
+          ProtocolErrorKind.badField);
+      expect(
+          bad(jsonEncode({
+            'v': protocolVersion,
+            'type': 'ack',
+            'payload': {'id': 0, 'status': 'ok', 'lastSeq': 0}
+          })).kind,
+          ProtocolErrorKind.badField);
+    });
+
+    test('reject carries a reason and the relay lastSeq, never a log', () {
       final raw =
-          const RejectMessage(reason: 'not your turn', lastSeq: 12).encode();
+          const RejectMessage(reason: 'bad code', lastSeq: 12).encode();
       final back = ok(raw) as RejectMessage;
-      expect(back.reason, 'not your turn');
+      expect(back.reason, 'bad code');
       expect(back.lastSeq, 12);
       // The whole point of the shape: a rejection is constant-size.
       expect(jsonDecode(raw), isNot(contains('log')));
@@ -137,19 +240,21 @@ void main() {
       expect(raw.length, lessThan(120));
 
       // lastSeq is 0 before any event, and required.
-      expect((ok(const RejectMessage(reason: 'x', lastSeq: 0).encode())
-              as RejectMessage)
-          .lastSeq, 0);
+      expect(
+          (ok(const RejectMessage(reason: 'x', lastSeq: 0).encode())
+                  as RejectMessage)
+              .lastSeq,
+          0);
       expect(
           bad(jsonEncode({
-            'v': 1,
+            'v': protocolVersion,
             'type': 'reject',
             'payload': {'reason': 'x'}
           })).kind,
           ProtocolErrorKind.badField);
       expect(
           bad(jsonEncode({
-            'v': 1,
+            'v': protocolVersion,
             'type': 'reject',
             'payload': {'reason': 'x', 'lastSeq': -1}
           })).kind,
@@ -157,7 +262,6 @@ void main() {
     });
 
     test('control frames', () {
-      expect(ok(const RollRequestMessage().encode()), isA<RollRequestMessage>());
       expect(ok(const BusyMessage().encode()), isA<BusyMessage>());
       expect(ok(const PingMessage().encode()), isA<PingMessage>());
       expect(ok(const PongMessage().encode()), isA<PongMessage>());
@@ -167,7 +271,8 @@ void main() {
       for (final m in <Envelope>[
         const HelloMessage(name: 'x'),
         const PingMessage(),
-        SubmitMessage(const TakeEvent(Player.white)),
+        WriteEventMessage(
+            id: 1, seq: 1, gameNo: 1, event: const TakeEvent(Player.white)),
       ]) {
         expect(jsonDecode(m.encode()), containsPair('v', protocolVersion));
       }
@@ -177,7 +282,7 @@ void main() {
   group('strict decoding', () {
     test('unknown FIELDS are ignored (forward compatibility)', () {
       final raw = jsonEncode({
-        'v': 1,
+        'v': protocolVersion,
         'type': 'hello',
         'unknownTop': [1, 2, 3],
         'payload': {'name': 'Ana', 'futureFlag': true},
@@ -185,31 +290,54 @@ void main() {
       expect((ok(raw) as HelloMessage).name, 'Ana');
     });
 
-    test('a future protocol version is refused', () {
+    test('the PREVIOUS protocol version is refused', () {
+      // v1 spoke `submit`/`roll_request` to a host authority that no longer
+      // exists; letting such a peer in would be a silent stall.
       final e = bad(jsonEncode({
-        'v': 2,
+        'v': 1,
         'type': 'hello',
         'payload': {'name': 'Ana'},
       }));
       expect(e.kind, ProtocolErrorKind.unsupportedVersion);
-      expect(e.message, contains('2'));
+      expect(e.message, contains('1'));
+    });
+
+    test('a future protocol version is refused', () {
+      final e = bad(jsonEncode({
+        'v': protocolVersion + 1,
+        'type': 'hello',
+        'payload': {'name': 'Ana'},
+      }));
+      expect(e.kind, ProtocolErrorKind.unsupportedVersion);
     });
 
     test('a missing or non-integer version is refused', () {
       expect(bad(jsonEncode({'type': 'ping'})).kind,
           ProtocolErrorKind.unsupportedVersion);
-      expect(bad(jsonEncode({'v': '1', 'type': 'ping'})).kind,
+      expect(bad(jsonEncode({'v': '2', 'type': 'ping'})).kind,
           ProtocolErrorKind.unsupportedVersion);
     });
 
     test('an unknown message type is refused', () {
-      final e = bad(jsonEncode({'v': 1, 'type': 'nuke', 'payload': {}}));
+      final e = bad(
+          jsonEncode({'v': protocolVersion, 'type': 'nuke', 'payload': {}}));
       expect(e.kind, ProtocolErrorKind.unknownType);
     });
 
+    test('the retired v1 types are simply unknown now', () {
+      for (final type in ['submit', 'roll_request']) {
+        expect(
+            bad(jsonEncode(
+                    {'v': protocolVersion, 'type': type, 'payload': {}}))
+                .kind,
+            ProtocolErrorKind.unknownType);
+      }
+    });
+
     test('a missing/non-string type is refused', () {
-      expect(bad(jsonEncode({'v': 1})).kind, ProtocolErrorKind.badField);
-      expect(bad(jsonEncode({'v': 1, 'type': 42})).kind,
+      expect(bad(jsonEncode({'v': protocolVersion})).kind,
+          ProtocolErrorKind.badField);
+      expect(bad(jsonEncode({'v': protocolVersion, 'type': 42})).kind,
           ProtocolErrorKind.badField);
     });
 
@@ -222,7 +350,7 @@ void main() {
         'null',
         '[]',
         '"hi"',
-        '{"v":1,,}',
+        '{"v":2,,}',
       ]) {
         expect(bad(raw).kind,
             anyOf(ProtocolErrorKind.malformed, ProtocolErrorKind.badField));
@@ -231,7 +359,7 @@ void main() {
 
     test('an oversized frame is refused before parsing', () {
       final raw = jsonEncode({
-        'v': 1,
+        'v': protocolVersion,
         'type': 'hello',
         'payload': {'name': 'a' * (maxMessageLength + 10)},
       });
@@ -240,27 +368,32 @@ void main() {
 
     test('a payload of the wrong shape is refused', () {
       expect(
-          bad(jsonEncode({'v': 1, 'type': 'hello', 'payload': 'Ana'})).kind,
+          bad(jsonEncode(
+                  {'v': protocolVersion, 'type': 'hello', 'payload': 'Ana'}))
+              .kind,
           ProtocolErrorKind.badField);
-      expect(bad(jsonEncode({'v': 1, 'type': 'hello', 'payload': {}})).kind,
+      expect(
+          bad(jsonEncode(
+                  {'v': protocolVersion, 'type': 'hello', 'payload': {}}))
+              .kind,
           ProtocolErrorKind.badField);
       expect(
           bad(jsonEncode({
-            'v': 1,
+            'v': protocolVersion,
             'type': 'hello',
             'payload': {'name': 7}
           })).kind,
           ProtocolErrorKind.badField);
       expect(
           bad(jsonEncode({
-            'v': 1,
+            'v': protocolVersion,
             'type': 'hello',
             'payload': {'name': 'x' * (maxNameLength + 1)}
           })).kind,
           ProtocolErrorKind.badField);
     });
 
-    test('a submit with a malformed game event is refused', () {
+    test('a write with a malformed game event is refused', () {
       for (final ev in <Object>[
         {'type': 'nope'},
         {'type': 'move', 'player': 'green', 'move': <Object>[]},
@@ -280,9 +413,9 @@ void main() {
       ]) {
         expect(
             bad(jsonEncode({
-              'v': 1,
-              'type': 'submit',
-              'payload': {'event': ev}
+              'v': protocolVersion,
+              'type': 'w_event',
+              'payload': {'id': 1, 'seq': 1, 'gameNo': 1, 'event': ev}
             })).kind,
             ProtocolErrorKind.badField,
             reason: 'accepted a malformed event: $ev');
@@ -290,21 +423,48 @@ void main() {
     });
 
     test('a move with too many hops is refused', () {
-      final hops = [for (var i = 0; i < 9; i++) [5, 3, false]];
+      final hops = [
+        for (var i = 0; i < 9; i++) [5, 3, false]
+      ];
       expect(
           bad(jsonEncode({
-            'v': 1,
-            'type': 'submit',
+            'v': protocolVersion,
+            'type': 'w_event',
             'payload': {
+              'id': 1,
+              'seq': 1,
+              'gameNo': 1,
               'event': {'type': 'move', 'player': 'white', 'move': hops}
             }
           })).kind,
           ProtocolErrorKind.badField);
     });
 
+    test('a protocol value that is not 64 lowercase hex is refused', () {
+      String frame(Object? value) => jsonEncode({
+            'v': protocolVersion,
+            'type': 'w_roll',
+            'payload': {'id': 1, 'n': 1, 'commit': value},
+          });
+      for (final v in <Object?>[
+        null,
+        7,
+        '',
+        'abc',
+        commit.toUpperCase(),
+        '${commit}0',
+        commit.substring(1),
+        'z' * kHexLength,
+      ]) {
+        expect(bad(frame(v)).kind, ProtocolErrorKind.badField,
+            reason: 'accepted $v as a commitment');
+      }
+      expect((ok(frame(commit)) as WriteRollMessage).commit, commit);
+    });
+
     test('welcome payload validation', () {
       Object base(Map<String, Object?> over) => {
-            'v': 1,
+            'v': protocolVersion,
             'type': 'welcome',
             'payload': {
               'matchConfig': {'length': 5, 'cubeless': false},
@@ -327,30 +487,66 @@ void main() {
           ProtocolErrorKind.badField);
       expect(bad(jsonEncode(base({'log': 'none'}))).kind,
           ProtocolErrorKind.badField);
+      // seq must be >= 1, gameNo must be present, author must be present.
       expect(
           bad(jsonEncode(base({
             'log': [
-              {'seq': 0, 'gameNo': 1, 'event': {'type': 'take', 'player': 'white'}}
+              {
+                'seq': 0,
+                'gameNo': 1,
+                'author': 'host',
+                'event': {'type': 'take', 'player': 'white'}
+              }
             ]
           }))).kind,
           ProtocolErrorKind.badField);
       expect(
           bad(jsonEncode(base({
             'log': [
-              {'gameNo': 1, 'event': {'type': 'take', 'player': 'white'}}
+              {
+                'gameNo': 1,
+                'author': 'host',
+                'event': {'type': 'take', 'player': 'white'}
+              }
             ]
           }))).kind,
           ProtocolErrorKind.badField);
+      expect(
+          bad(jsonEncode(base({
+            'log': [
+              {
+                'seq': 1,
+                'gameNo': 1,
+                'event': {'type': 'take', 'player': 'white'}
+              }
+            ]
+          }))).kind,
+          ProtocolErrorKind.badField);
+      // A malformed roll document is refused too.
+      expect(
+          bad(jsonEncode(base({
+            'rolls': [
+              {'n': 1, 'roller': 'host', 'commit': 'nope'}
+            ]
+          }))).kind,
+          ProtocolErrorKind.badField);
+      expect(bad(jsonEncode(base({'rolls': 'none'}))).kind,
+          ProtocolErrorKind.badField);
+      // Missing rolls entirely is fine — an old-shaped welcome has no rolls.
+      expect((ok(jsonEncode(base({}))) as WelcomeMessage).rolls, isEmpty);
     });
 
-    test('event message requires a positive seq', () {
+    test('an event frame requires a positive seq', () {
       Object frame(Object? seq) => {
-            'v': 1,
+            'v': protocolVersion,
             'type': 'event',
-            if (seq != null) 'seq': seq,
             'payload': {
-              'gameNo': 1,
-              'event': {'type': 'take', 'player': 'white'}
+              'entry': {
+                if (seq != null) 'seq': seq,
+                'gameNo': 1,
+                'author': 'host',
+                'event': {'type': 'take', 'player': 'white'}
+              }
             },
           };
       expect(bad(jsonEncode(frame(null))).kind, ProtocolErrorKind.badField);
@@ -365,8 +561,10 @@ void main() {
       // Both (1e300).toInt() and (2^63).toInt() silently yield
       // 9223372036854775807, so an unbounded decoder would turn nonsense into a
       // plausible seq. Every one of these must be refused instead.
-      String frame(String seq) => '{"v":1,"type":"event","seq":$seq,'
-          '"payload":{"gameNo":1,"event":{"type":"take","player":"white"}}}';
+      String frame(String seq) =>
+          '{"v":$protocolVersion,"type":"event","payload":{"entry":'
+          '{"seq":$seq,"gameNo":1,"author":"host",'
+          '"event":{"type":"take","player":"white"}}}}';
       for (final n in [
         '1e300',
         '-1e300',
@@ -377,14 +575,18 @@ void main() {
         expect(bad(frame(n)).kind, ProtocolErrorKind.badField,
             reason: 'accepted $n as a seq');
       }
-      expect((ok(frame('$maxIntValue')) as EventMessage).entry.seq, maxIntValue);
+      expect(
+          (ok(frame('$maxIntValue')) as EventMessage).entry.seq, maxIntValue);
 
       // The same bound applies to hops, match length and gameNo.
       expect(
           bad(jsonEncode({
-            'v': 1,
-            'type': 'submit',
+            'v': protocolVersion,
+            'type': 'w_event',
             'payload': {
+              'id': 1,
+              'seq': 1,
+              'gameNo': 1,
               'event': {
                 'type': 'move',
                 'player': 'white',
@@ -401,12 +603,20 @@ void main() {
 
     test('numbers that are integral doubles are accepted', () {
       final raw = jsonEncode({
-        'v': 1,
+        'v': protocolVersion,
         'type': 'event',
-        'seq': 3.0,
         'payload': {
-          'gameNo': 1.0,
-          'event': {'type': 'roll', 'player': 'white', 'die1': 3.0, 'die2': 2.0}
+          'entry': {
+            'seq': 3.0,
+            'gameNo': 1.0,
+            'author': 'host',
+            'event': {
+              'type': 'roll',
+              'player': 'white',
+              'die1': 3.0,
+              'die2': 2.0
+            }
+          }
         },
       });
       expect((ok(raw) as EventMessage).entry.seq, 3);
@@ -414,9 +624,9 @@ void main() {
 
     test('deeply nested text is refused without being parsed', () {
       final bomb = jsonEncode({
-        'v': 1,
-        'type': 'submit',
-        'payload': {'event': _nest(200)},
+        'v': protocolVersion,
+        'type': 'w_event',
+        'payload': {'id': 1, 'seq': 1, 'gameNo': 1, 'event': _nest(200)},
       });
       expect(bad(bomb).kind, ProtocolErrorKind.malformed);
       expect(bad('[' * 100000).kind, ProtocolErrorKind.malformed);
@@ -432,14 +642,15 @@ void main() {
           r'esc\"[[[[');
     });
 
-    test('a whole match log fits in one welcome frame', () {
-      // ~300 entries is a realistic 3-point match (see the full-match test in
-      // host_authority_test.dart); it must survive the size cap intact.
+    test('a whole match log AND its rolls fit in one welcome frame', () {
+      // ~300 entries plus ~150 rolls is a realistic 3-point match; it must
+      // survive the size cap intact.
       final log = [
         for (var i = 1; i <= 400; i++)
-          LogEntry(
+          EventFrame(
             seq: i,
             gameNo: 1 + i ~/ 120,
+            author: i.isEven ? 'host' : 'guest',
             event: MoveEvent(
                 i.isEven ? Player.white : Player.black,
                 Move([
@@ -448,11 +659,25 @@ void main() {
                 ])),
           ),
       ];
+      final rolls = [
+        for (var n = 1; n <= 200; n++)
+          RollFrame(
+              n: n,
+              roller: n.isEven ? 'host' : 'guest',
+              commit: commit,
+              entropy: entropy,
+              reveal: reveal),
+      ];
       final raw = WelcomeMessage(
-              config: const MatchConfig(length: 7), side: Player.black, log: log)
+              config: const MatchConfig(length: 7),
+              side: Player.black,
+              log: log,
+              rolls: rolls)
           .encode();
       expect(raw.length, lessThan(maxMessageLength));
-      expect((ok(raw) as WelcomeMessage).log, hasLength(400));
+      final back = ok(raw) as WelcomeMessage;
+      expect(back.log, hasLength(400));
+      expect(back.rolls, hasLength(200));
     });
 
     test('ProtocolError has a readable toString', () {
