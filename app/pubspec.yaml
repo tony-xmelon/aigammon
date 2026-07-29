@@ -19,6 +19,8 @@ dependencies:
     path: ../packages/backgammon_core
   engine_bindings:
     path: ../packages/engine_bindings
+  match_transport:
+    path: ../packages/match_transport
   online_client:
     path: ../packages/online_client
   lan_play:
