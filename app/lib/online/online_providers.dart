@@ -33,6 +33,12 @@ final onlineConfigProvider = Provider<OnlineConfig?>((ref) {
 
 /// The shared [MatchApi] for the app, built once per session.
 ///
+/// This is the APP-lifetime half of online play: the anonymous session and the
+/// HTTP clients. The PER-MATCH half is a [FirestoreTransport] over it, built by
+/// `online_screen.dart` when a match is entered and owned by the
+/// `NetMatchController` it is handed to — so nothing here is per-match, and
+/// nothing here is disposed when a match ends.
+///
 /// Signs in an anonymous Firebase user, then talks to Firestore documents
 /// DIRECTLY — there are no Cloud Functions in the serverless model, so
 /// `firebase/firestore.rules` is the only server-side logic. Being a plain

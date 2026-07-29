@@ -154,7 +154,8 @@ Spark's daily Firestore quota is **50,000 document reads, 20,000 writes and
 
 Reads are what this design spends. Each client polls two collection queries per
 cycle — events and rolls — at 2s while it is idle and 500ms only while a dice
-handshake is outstanding (`OnlineMatchController.currentPollInterval`). Each of
+handshake is outstanding (`FirestoreTransport.fastPollInterval`, switched by the
+controller's pace hint). Each of
 those queries evaluates the `matchOf(code)` participation check in
 `firestore.rules`, and a security-rule `get()` is itself **billed as a document
 read**: so a poll cycle costs roughly its two query results *plus* two more

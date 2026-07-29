@@ -5,7 +5,8 @@ import 'applied_move.dart';
 import 'player_agent.dart';
 
 /// The surface [GameScreen] needs to run a match, implemented by the local
-/// [GameController] and the online `OnlineMatchController`.
+/// [GameController] and the networked `NetMatchController` (LAN and online
+/// alike).
 ///
 /// The screen observes this as a [Listenable] and drives all interaction
 /// through the members below. Instead of exposing the [PlayerAgent] pair

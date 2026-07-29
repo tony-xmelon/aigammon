@@ -12,7 +12,7 @@ import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
 import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
-import '../online/online_match_controller.dart';
+import '../net/net_match_controller.dart';
 import '../online/online_providers.dart';
 import '../tutor/tutor_service.dart';
 import 'game_screen.dart';
@@ -23,11 +23,12 @@ import 'game_screen.dart';
 /// When [onlineConfigProvider] is `null` the whole feature is unavailable and a
 /// friendly not-configured card is shown instead of the create/join cards.
 ///
-/// Both flows end by constructing an [OnlineMatchController], awaiting its
-/// [OnlineMatchController.ready] (so [GameScreen] never reads game state before
-/// the first opening roll has folded), and pushing [GameScreen]. The board is
-/// pinned to the local side: White at the bottom for the creator, Black at the
-/// bottom for the joiner.
+/// Both flows end by building a [FirestoreTransport] over the seated match and
+/// handing it to the ONE unified [NetMatchController] (the same controller LAN
+/// play drives over a socket), awaiting its [NetMatchController.ready] — so
+/// [GameScreen] never reads game state before the first opening roll has folded —
+/// and pushing [GameScreen]. The board is pinned to the local side: White at the
+/// bottom for the creator, Black at the bottom for the joiner.
 class OnlineScreen extends ConsumerWidget {
   const OnlineScreen({super.key});
 
@@ -327,12 +328,23 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
 
   // --- Launch ----------------------------------------------------------------
 
-  /// Builds the controller, waits until it is ready, and pushes [GameScreen].
-  /// If the screen is torn down (or the controller disposed) before readiness,
-  /// the controller is disposed and nothing is pushed.
+  /// Builds the transport + controller, waits until it is ready, and pushes
+  /// [GameScreen]. If the screen is torn down (or the controller disposed) before
+  /// readiness, the controller is disposed and nothing is pushed.
   ///
   /// The seat is positional and comes from the match document (host plays white,
   /// guest black), so both flows funnel through here.
+  ///
+  /// ## Who stops what
+  ///
+  /// The [FirestoreTransport] belongs to the CONTROLLER
+  /// ([NetMatchController.disposeController] disposes it), so this screen never
+  /// tears a transport down — that is the one ownership rule the controller's doc
+  /// calls out. [api] belongs to the APP: [matchApiProvider] holds the anonymous
+  /// session and the HTTP clients for the whole run and closes them with the
+  /// provider scope, so nothing here closes it either. What IS this screen's is
+  /// the lobby: the create-flow poll timer and the resume pointer in
+  /// [onlineSessionStoreProvider].
   Future<void> _launch(MatchApi api, MatchDoc doc) async {
     final localSide = doc.sideOf(api.uid) ?? Player.white;
     final orientation = localSide == Player.white
@@ -349,10 +361,16 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       whiteType: localSide == Player.white ? 'human' : 'remote',
       blackType: localSide == Player.black ? 'human' : 'remote',
     );
-    final controller = OnlineMatchController(
-      api: api,
-      matchDoc: doc,
+    // The match document has both seats by now (the create flow waited for the
+    // join, the join flow just claimed one), so it is handed to the transport as
+    // a seed and connect() costs no extra read.
+    final transport = FirestoreTransport(api: api, code: doc.code, match: doc);
+    final controller = NetMatchController(
+      transport: transport,
       persistence: RepositoryPersistence(repo, matchIdFuture),
+      // A committed write still has to come back through a poll cycle before the
+      // fold advances, so the submitting gate must outlast several of them.
+      gateTimeout: transport.suggestedGateTimeout,
     );
     // Remember the match BEFORE playing it: the point of the pointer is to
     // survive a crash or a kill mid-match, which is exactly when nothing later

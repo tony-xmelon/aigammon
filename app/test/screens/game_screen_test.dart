@@ -13,7 +13,7 @@ import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/game_record.dart';
 import 'package:aigammon_app/game/match_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
-import 'package:aigammon_app/online/online_match_controller.dart';
+import 'package:aigammon_app/net/net_match_controller.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:aigammon_app/screens/history_screen.dart';
 import 'package:aigammon_app/screens/metric_explainer.dart';
@@ -25,7 +25,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import '../online/fake_online_backend.dart';
+import 'package:match_transport/match_transport.dart';
 
 import '../data/test_database.dart';
 import '../helpers/board_driving.dart';
@@ -239,26 +239,28 @@ class RealRankEngine implements EngineFacade {
       throw UnimplementedError();
 }
 
-/// An online match ready to play, over the in-memory serverless backend.
+/// A NETWORKED match ready to play, over the in-process transport pair.
 ///
 /// The seeded opening roll is a SOUND commit-reveal document plus the event it
-/// derives, so the controller's validation passes exactly as it would against
-/// real Firestore. The local device is the HOST (white); the opponent's events
-/// are written straight into the store by the test, the way the guest's client
-/// would write them.
-///
-/// [FakeMatchApi.pollBeat] is disabled: a widget test's clock is fake, so the
-/// poll stays change-driven (the controller subscribes before anything the test
-/// writes).
-({FakeBackend backend, FakeMatch match, FakeMatchApi api}) onlineMatch({
+/// derives, so the controller's validation passes exactly as it would against a
+/// real backend (Firestore or a socket relay). The local device is the HOST
+/// (white); the opponent's events are written straight into the store by the
+/// test, the way the guest's client would write them.
+({InMemoryBackend backend, NetMatchController controller}) netMatch({
   required int whiteDie,
   required int blackDie,
 }) {
-  final backend = FakeBackend();
-  final match = backend.seedMatch(length: 5);
-  seedOpening(match, whiteDie: whiteDie, blackDie: blackDie);
-  final api = FakeMatchApi(backend, 'host')..pollBeat = null;
-  return (backend: backend, match: match, api: api);
+  final backend = InMemoryBackend(config: const MatchConfig(length: 5));
+  backend.seedOpening(whiteDie: whiteDie, blackDie: blackDie);
+  // The joiner's endpoint: never folded, but its attachment is what a real uid /
+  // socket signals as presence.
+  final peer = InMemoryTransport.guest(backend);
+  addTearDown(peer.dispose);
+  final controller = NetMatchController(
+    transport: InMemoryTransport.host(backend),
+    rng: Random(7),
+  );
+  return (backend: backend, controller: controller);
 }
 
 // --- Widget-test helpers -----------------------------------------------------
@@ -2996,12 +2998,8 @@ void main() {
       addTearDown(() => t.binding.setSurfaceSize(null));
 
       // Opening: Black (the REMOTE side) wins (6 > 3) and is on move first.
-      final online = onlineMatch(whiteDie: 3, blackDie: 6);
-      addTearDown(online.backend.close);
-      final c = OnlineMatchController(
-        api: online.api, // the local seat is the host = White
-        matchDoc: online.match.doc,
-      );
+      final net = netMatch(whiteDie: 3, blackDie: 6);
+      final c = net.controller; // the local seat is the host = White
 
       // Bring the controller to readiness (folds the opening, subscribes the
       // poll) BEFORE mounting the screen (whose initState reads `state`). Pumping
@@ -3014,8 +3012,12 @@ void main() {
 
       // Inject Black's (remote) move — a legal play for the folded state.
       final remoteMove = c.state.legalMoves.first;
-      online.match.forgeEvent('guest', 1, MoveEvent(Player.black, remoteMove));
-      online.backend.bump(online.match.code);
+      net.backend.appendEvent(
+        author: net.backend.guestAuthor,
+        seq: net.backend.nextSeq,
+        gameNo: 1,
+        event: MoveEvent(Player.black, remoteMove),
+      );
 
       await pumpUntil(t, () => boardPainterOf(t).overlayChecker != null,
           maxFrames: 800);
@@ -3035,12 +3037,8 @@ void main() {
       addTearDown(() => t.binding.setSurfaceSize(null));
 
       // Opening: White (the LOCAL side) wins (6 > 3) and is on move first.
-      final online = onlineMatch(whiteDie: 6, blackDie: 3);
-      addTearDown(online.backend.close);
-      final c = OnlineMatchController(
-        api: online.api,
-        matchDoc: online.match.doc,
-      );
+      final net = netMatch(whiteDie: 6, blackDie: 3);
+      final c = net.controller;
 
       await t.pumpWidget(const MaterialApp(home: SizedBox()));
       unawaited(c.playMatch());
@@ -3049,10 +3047,11 @@ void main() {
       await t.pump();
 
       // Enter White's move BY HAND and confirm; the controller appends it to the
-      // log, which the poll then echoes back to it.
+      // log, which the transport then echoes back to it.
+      final seqBefore = net.backend.events.length;
       await commitFirstMove(t);
-      await pumpUntil(t, () => online.api.submitted.isNotEmpty);
-      expect(online.api.submitted.last, isA<MoveEvent>(),
+      await pumpUntil(t, () => net.backend.events.length > seqBefore);
+      expect(net.backend.events.last.event, isA<MoveEvent>(),
           reason: 'the confirmed local move was submitted');
 
       // The echoed local move folds but must NOT replay (the user just entered

@@ -19,7 +19,7 @@ import 'package:online_client/online_client.dart';
 import 'package:aigammon_app/online/online_session_store.dart';
 
 import '../data/test_database.dart';
-import '../online/fake_online_backend.dart';
+import '../online/fake_match_api.dart';
 
 /// A no-native [EngineFacade] with instant, flat responses — enough for the
 /// online [TutorService] the game screen constructs (it never blocks a test).
@@ -56,19 +56,15 @@ class FakeFacade implements EngineFacade {
 }
 
 /// A [FakeMatchApi] wired for the create/join screen: `createMatch` hands out
-/// [code], an invisible opponent takes the guest seat after [activeAfter]
+/// `ABC123`, an invisible opponent takes the guest seat after [activeAfter]
 /// `fetchMatch` calls, and the match goes live with a sound opening roll already
-/// in its log (there is no second client here to make one, and the launched
-/// controller cannot become ready without it).
-///
-/// The beat is disabled: a widget test's clock is fake, so the poll stays purely
-/// change-driven.
+/// in its log (there is no second client here to make one, and the
+/// [NetMatchController] the screen launches cannot become ready without it).
 FakeMatchApi screenApi(FakeBackend backend, {int activeAfter = 1}) =>
     FakeMatchApi(backend, 'me')
       ..nextCode = 'ABC123'
       ..autoJoinAfterFetches = activeAfter
-      ..autoSeedOpening = true
-      ..pollBeat = null;
+      ..autoSeedOpening = true;
 
 /// A match sitting open under [code], for the join flow to claim.
 FakeMatch _waitingMatch(FakeBackend backend, String code) {
@@ -124,7 +120,6 @@ void main() {
     backend = FakeBackend();
   });
   tearDown(() async {
-    await backend.close();
     await db.close();
   });
 

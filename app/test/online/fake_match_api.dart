@@ -2,34 +2,26 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
+import 'package:match_transport/match_transport.dart';
 import 'package:online_client/online_client.dart';
 
-/// An in-memory stand-in for the WHOLE serverless backend: match documents,
-/// their event logs and their commit-reveal roll documents.
+/// An in-memory stand-in for the serverless backend's DOCUMENTS: match
+/// documents, their event logs and their commit-reveal roll documents.
 ///
-/// The point of modelling the store rather than the API surface is that two
-/// [FakeMatchApi] views (one per uid) can share it, so a test can run two real
-/// [OnlineMatchController]s against each other exactly as two devices would —
-/// including the roll protocol, which needs both peers to write to the same
-/// document.
+/// This is the LOBBY's test double, not the match controller's: the online
+/// screen's create / join / rejoin flows talk to a [MatchApi], and this is a
+/// [MatchApi] whose store a widget test can inspect and pre-seed. (The match
+/// itself is exercised by `app/test/net/` over `InMemoryTransport`, and by the
+/// emulator E2E over real Firestore — a [FirestoreTransport] built on this fake
+/// carries the screen tests from the lobby into a ready [NetMatchController]
+/// without a network.)
 ///
 /// It deliberately enforces NOTHING that `firebase/firestore.rules` enforces
-/// except document-id uniqueness (the [AlreadyExistsException] the controller
+/// except document-id uniqueness (the [AlreadyExistsException] a racing append
 /// has to survive) and the write-once roll phases. Rules coverage lives in
-/// `firebase/`; what the app must survive is a peer that gets past them, which
-/// is why [forgeEvent] and [putRoll] exist.
+/// `firebase/`.
 class FakeBackend {
   final Map<String, FakeMatch> matches = {};
-  final _changes = StreamController<String>.broadcast();
-
-  /// Fires the code of every match whose documents changed.
-  Stream<String> get changes => _changes.stream;
-
-  void bump(String code) {
-    if (!_changes.isClosed) _changes.add(code);
-  }
-
-  Future<void> close() => _changes.close();
 
   FakeMatch require(String code) {
     final m = matches[code];
@@ -141,8 +133,8 @@ class FakeRoll {
       n: n, roller: roller, commit: commit, entropy: entropy, reveal: reveal);
 }
 
-/// One signed-in user's view of a [FakeBackend] — the seam
-/// [OnlineMatchController] and the online screens consume.
+/// One signed-in user's view of a [FakeBackend] — the seam the online screens
+/// (and the [FirestoreTransport] they build) consume.
 ///
 /// [intercept] is the fault-injection hook: return (or throw) an object for a
 /// named operation and that call fails with it. Operation names are the method
@@ -177,17 +169,6 @@ class FakeMatchApi implements MatchApi {
   int autoJoinAfterFetches = -1;
   String autoJoinUid = 'guest';
 
-  /// How fast the poll re-reads the store, INDEPENDENTLY of the `interval` the
-  /// caller asks for (which only paces the real transport).
-  ///
-  /// [Duration.zero] — one beat per event-loop turn — is what plain `test()`
-  /// cases want. WIDGET tests must set it to `null`: their clock is fake, so a
-  /// zero-duration self-rescheduling timer is always due and would spin forever
-  /// inside a single `pump`. With no beat the poll is purely change-driven,
-  /// which is enough whenever the controller subscribes before the writes it has
-  /// to see (every widget test here does).
-  Duration? pollBeat = Duration.zero;
-
   /// Seed a sound opening roll the first time a match goes active, standing in
   /// for the host client that no widget test has running.
   bool autoSeedOpening = false;
@@ -197,16 +178,6 @@ class FakeMatchApi implements MatchApi {
   void _maybeSeedOpening(FakeMatch m) {
     if (!autoSeedOpening || m.events.isNotEmpty || m.guestUid == null) return;
     seedOpening(m, whiteDie: openingWhiteDie, blackDie: openingBlackDie);
-  }
-
-  /// Live [pollMatch] controllers, so a test can push a transport blip into the
-  /// poll stream the way a real fetch failure would arrive.
-  final List<StreamController<MatchPoll>> _polls = [];
-
-  void emitPollError(Object error) {
-    for (final c in _polls) {
-      if (!c.isClosed) c.addError(error);
-    }
   }
 
   void _tick(String op) {
@@ -232,7 +203,6 @@ class FakeMatchApi implements MatchApi {
       status: 'waiting',
     );
     backend.matches[m.code] = m;
-    backend.bump(m.code);
     return m.doc;
   }
 
@@ -246,7 +216,6 @@ class FakeMatchApi implements MatchApi {
       m.guestUid = autoJoinUid;
       m.status = 'active';
       _maybeSeedOpening(m);
-      backend.bump(code);
     }
     return m.doc;
   }
@@ -265,7 +234,6 @@ class FakeMatchApi implements MatchApi {
     m.guestUid = uid;
     m.status = 'active';
     _maybeSeedOpening(m);
-    backend.bump(code);
     return m.doc;
   }
 
@@ -273,7 +241,6 @@ class FakeMatchApi implements MatchApi {
   Future<void> completeMatch(String code) async {
     _tick('completeMatch');
     backend.require(code).status = 'complete';
-    backend.bump(code);
   }
 
   // --- events ----------------------------------------------------------------
@@ -293,7 +260,6 @@ class FakeMatchApi implements MatchApi {
     m.events.add(
         RemoteEvent(seq: seq, gameNo: gameNo, event: event, author: uid));
     submitted.add(event);
-    backend.bump(code);
   }
 
   @override
@@ -324,7 +290,6 @@ class FakeMatchApi implements MatchApi {
       throw AlreadyExistsException('rolls/$n already exists');
     }
     m.rolls[n] = FakeRoll(n: n, roller: uid, commit: commit);
-    backend.bump(code);
   }
 
   @override
@@ -343,7 +308,6 @@ class FakeMatchApi implements MatchApi {
       throw const PermissionDeniedException('entropy is write-once');
     }
     roll.entropy = entropy;
-    backend.bump(code);
   }
 
   @override
@@ -365,7 +329,6 @@ class FakeMatchApi implements MatchApi {
       throw const PermissionDeniedException('reveal is write-once');
     }
     roll.reveal = reveal;
-    backend.bump(code);
   }
 
   @override
@@ -389,105 +352,6 @@ class FakeMatchApi implements MatchApi {
     return out;
   }
 
-  // --- polling ---------------------------------------------------------------
-
-  /// The pacing callback the caller handed [pollMatch], kept so a test can ask
-  /// what the REAL transport would be waiting between cycles right now (the
-  /// fake itself is change-driven and ignores it — see [pollBeat]).
-  PollInterval? pollPacing;
-
-  /// Change-driven rather than clock-driven, but with the SAME emission
-  /// semantics as [MatchApi.pollMatch]: events once each in seq order, roll
-  /// documents whenever their phase moved, and a watermark that retires the
-  /// leading run of finished rolls.
-  @override
-  Stream<MatchPoll> pollMatch(
-    String code, {
-    PollInterval interval = defaultPollInterval,
-    int afterSeq = -1,
-    int rollsFrom = 0,
-    int pageSize = 100,
-  }) {
-    pollPacing = interval;
-    var lastSeq = afterSeq;
-    var watermark = rollsFrom;
-    final seen = <int, FairDicePhase>{};
-    late StreamController<MatchPoll> controller;
-    StreamSubscription<String>? sub;
-    Timer? beat;
-
-    void tick() {
-      if (controller.isClosed) return;
-      final m = backend.matches[code];
-      if (m == null) return;
-      final events = [
-        for (final e in m.events)
-          if (e.seq > lastSeq) e,
-      ]..sort((a, b) => a.seq.compareTo(b.seq));
-      if (events.isNotEmpty) lastSeq = events.last.seq;
-
-      final rolls = [
-        for (final r in m.rolls.values)
-          if (r.n >= watermark) r.doc,
-      ]..sort((a, b) => a.n.compareTo(b.n));
-      final changed = <RollDoc>[];
-      for (final roll in rolls) {
-        if (seen[roll.n] != roll.phase) {
-          seen[roll.n] = roll.phase;
-          changed.add(roll);
-        }
-      }
-      for (final roll in rolls) {
-        if (roll.n != watermark || !roll.isComplete) break;
-        watermark = roll.n + 1;
-        seen.remove(roll.n);
-      }
-      final poll = MatchPoll(events: events, rolls: changed);
-      if (poll.isNotEmpty) controller.add(poll);
-    }
-
-    controller = StreamController<MatchPoll>(
-      onListen: () {
-        _polls.add(controller);
-        // A real poller re-reads the whole tail EVERY cycle, so it can never
-        // miss a write that landed before it subscribed. Reproduce that (a
-        // purely change-driven fake drops exactly those writes) with a beat as
-        // fast as the event loop turns — [interval] is the real transport's
-        // concern, and pacing the fake by it would only make tests wait.
-        final period = pollBeat;
-        void beatLoop() {
-          if (controller.isClosed || period == null) return;
-          tick();
-          beat = Timer(period, beatLoop);
-        }
-
-        sub = backend.changes.where((c) => c == code).listen((_) => tick());
-        if (period == null) {
-          scheduleMicrotask(tick);
-        } else {
-          beat = Timer(period, beatLoop);
-        }
-      },
-      onCancel: () async {
-        _polls.remove(controller);
-        beat?.cancel();
-        beat = null;
-        await sub?.cancel();
-        sub = null;
-      },
-    );
-    return controller.stream;
-  }
-
-  @override
-  Stream<RemoteEvent> pollEvents(
-    String code, {
-    PollInterval interval = defaultPollInterval,
-    int afterSeq = -1,
-  }) =>
-      pollMatch(code, interval: interval, afterSeq: afterSeq)
-          .expand((poll) => poll.events);
-
   @override
   Future<String> signIn() async => uid;
 
@@ -499,43 +363,8 @@ class FakeMatchApi implements MatchApi {
 }
 
 // ---------------------------------------------------------------------------
-// Protocol helpers
+// Seeding helpers
 // ---------------------------------------------------------------------------
-
-/// A commit-reveal secret pair whose derivation gives exactly the dice a test
-/// asked for.
-typedef Secrets = ({String secret, String entropy, String commit});
-
-Secrets _search(bool Function(String a, String b) matches, Random rng) {
-  final secret = generateSecretHex(rng: rng);
-  for (var i = 0; i < 20000; i++) {
-    final entropy = generateSecretHex(rng: rng);
-    if (matches(secret, entropy)) {
-      return (secret: secret, entropy: entropy, commit: commitFor(secret));
-    }
-  }
-  throw StateError('no entropy produced the requested dice in 20000 tries');
-}
-
-/// Secrets whose OPENING derivation is exactly [white]/[black]. Brute-forced
-/// over the witness's entropy (about 30 tries on average — the derivation is a
-/// hash, so this is the only way to aim it, and it is what lets a test seed a
-/// specific opening WITHOUT forging an unverifiable roll).
-Secrets openingSecretsFor(int white, int black, {Random? rng}) {
-  if (white == black) {
-    throw ArgumentError('an opening roll cannot be a tie');
-  }
-  return _search((a, b) {
-    final d = openingDiceFrom(a, b);
-    return d.die1 == white && d.die2 == black;
-  }, rng ?? Random(20260727));
-}
-
-/// Secrets whose ordinary derivation is exactly [die1]/[die2].
-Secrets turnSecretsFor(int die1, int die2, {Random? rng}) => _search((a, b) {
-      final d = diceFrom(a, b);
-      return d.die1 == die1 && d.die2 == die2;
-    }, rng ?? Random(20260727));
 
 /// Seed a match with a SOUND opening roll: a complete `rolls/1` document plus
 /// the [OpeningRollEvent] it derives, authored by the host.
@@ -555,21 +384,4 @@ void seedOpening(
       entropy: s.entropy, reveal: s.secret);
   match.forgeEvent(match.hostUid, gameNo,
       OpeningRollEvent(whiteDie: whiteDie, blackDie: blackDie));
-}
-
-/// Seed a SOUND ordinary roll for [player] (whose uid must be [author]) plus its
-/// [RollEvent].
-void seedRoll(
-  FakeMatch match, {
-  required String author,
-  required Player player,
-  required int die1,
-  required int die2,
-  int gameNo = 1,
-  Random? rng,
-}) {
-  final n = match.rollCount + 1;
-  final s = turnSecretsFor(die1, die2, rng: rng);
-  match.putRoll(n, author, s.commit, entropy: s.entropy, reveal: s.secret);
-  match.forgeEvent(author, gameNo, RollEvent(player, die1, die2));
 }

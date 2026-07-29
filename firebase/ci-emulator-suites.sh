@@ -13,13 +13,15 @@ set -euo pipefail
 #    (anonymous auth + direct Firestore documents) against firestore.rules.
 (cd ../packages/online_client && dart test -P emulator)
 
-# 3. The app's two-client E2E — two real OnlineMatchControllers, each with its
-#    own anonymous user, playing a whole match over real documents, plus the
-#    adversarial legs (rules-blocked forgeries, illegal event, tampered reveal).
+# 3. The app's two-client E2E — two real NetMatchControllers (the unified
+#    controller), each over its own FirestoreTransport and anonymous user,
+#    playing a whole match over real documents, plus the adversarial legs
+#    (rules-blocked forgeries, illegal event, cube-in-cubeless, tampered reveal,
+#    lookahead squat).
 #
 #    AIGAMMON_EMULATOR=1 is the env gate the test file reads (see
 #    app/dart_test.yaml for why an env gate rather than exclude_tags).
-#    AIGAMMON_E2E_POLL_MS turns the controllers' poll interval down from the
+#    AIGAMMON_E2E_POLL_MS turns the transports' poll interval down from the
 #    production 2s: a roll costs ~3 poll latencies, so a flat 2s pacing ran a
 #    whole match into MINUTES of pure waiting (measured on one game: 20-30s at
 #    100ms against 4m50s at 2000ms). Production answers that with adaptive

@@ -5,24 +5,27 @@ import 'dart:io';
 
 import 'package:aigammon_app/data/persistence_hooks.dart';
 import 'package:aigammon_app/game/player_agent.dart' show CubeAction;
-import 'package:aigammon_app/online/online_match_controller.dart';
+import 'package:aigammon_app/net/net_match_controller.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:match_transport/match_transport.dart';
 import 'package:online_client/online_client.dart';
-
-import 'fake_online_backend.dart' show openingSecretsFor;
 
 /// Two-client end-to-end tests through the REAL Firebase Emulator Suite (Auth +
 /// Firestore + `firestore.rules`; there is no functions emulator in the
 /// serverless model).
 ///
-/// Where `online_match_controller_test.dart` drives two controllers against an
-/// in-memory [FakeBackend], this file wires two [OnlineMatchController]s — each
-/// with its own anonymous user, its own token and its own REST transport — to
-/// one real match document and plays it out. Nothing is shortcut: every roll
-/// runs the commit-reveal protocol over real `rolls/{n}` documents, every event
-/// is a real `events/{seq}` create, and every refusal below is one the deployed
+/// Where `app/test/net/` drives two [NetMatchController]s against an in-process
+/// `InMemoryTransport`, this file wires two of them over two [FirestoreTransport]s
+/// — each with its own anonymous user, its own token and its own REST stack — to
+/// one real match document and plays it out. Nothing is shortcut: every roll runs
+/// the commit-reveal protocol over real `rolls/{n}` documents, every event is a
+/// real `events/{seq}` create, and every refusal below is one the deployed
 /// `firestore.rules` produced.
+///
+/// This is therefore also the proof that the UNIFIED controller (the one LAN play
+/// drives over a socket) keeps every security property the shipped online
+/// controller had, on the substrate that has a hostile peer in it.
 ///
 /// ## What it covers
 ///
@@ -35,10 +38,13 @@ import 'fake_online_backend.dart' show openingSecretsFor;
 ///     skip, match-field tamper): each must come back
 ///     [PermissionDeniedException], and the two honest controllers must play on
 ///     as if nothing happened;
-///  3. **a forgery the rules CANNOT block** — a well-shaped, correctly-authored
-///     but ILLEGAL event, and a reveal that does not hash to its commitment.
-///     Rules have no rules engine and cannot compute sha256, so the honest peer
-///     is the only referee: it must FREEZE, permanently.
+///  3. **forgeries the rules CANNOT block** — a well-shaped, correctly-authored
+///     but ILLEGAL event; a double in a CUBELESS match; a reveal that does not
+///     hash to its commitment. Rules have no rules engine and cannot compute
+///     sha256, so the honest peer is the only referee: it must FREEZE,
+///     permanently;
+///  4. **the dice-lookahead defence** — a peer squatting its future roll
+///     documents gets no entropy for them, and the DUE roll still does.
 ///
 /// ## Gating and pacing
 ///
@@ -47,18 +53,17 @@ import 'fake_online_backend.dart' show openingSecretsFor;
 /// `firebase/run-emulator-tests.ps1` / `firebase/ci-emulator-suites.sh` inside a
 /// throwaway emulator.
 ///
-/// The controllers' RESTING poll interval defaults to 2s in production, which
-/// is far too slow here: a roll costs about three poll latencies (commit →
-/// entropy → reveal) and a move costs one more, so a whole game ran to minutes
-/// of pure waiting — a measured single game took **4m50s** at a flat 2000ms
-/// against 20-30s at 100ms. That measurement is what produced
-/// `OnlineMatchController.currentPollInterval`: production now polls at 500ms
-/// for exactly as long as a handshake is outstanding. [_pollInterval] is still
-/// turned down to [_defaultPollMs] ms here (overridable with
-/// `AIGAMMON_E2E_POLL_MS`), and because the fast cadence is capped at the
-/// resting one, that single knob overrides both. The controller takes the
-/// interval as a constructor parameter, so nothing production-side changes for
-/// the sake of the test.
+/// The RESTING poll interval defaults to 2s in production, which is far too slow
+/// here: a roll costs about three poll latencies (commit → entropy → reveal) and
+/// a move costs one more, so a whole game ran to minutes of pure waiting — a
+/// measured single game took **4m50s** at a flat 2000ms against 20-30s at 100ms.
+/// That measurement is what produced [FirestoreTransport.fastPollInterval]:
+/// production now polls at 500ms for exactly as long as a handshake is
+/// outstanding. [_pollInterval] is still turned down to [_defaultPollMs] ms here
+/// (overridable with `AIGAMMON_E2E_POLL_MS`), and because the fast cadence is
+/// capped at the resting one, that single knob overrides both. The transport
+/// takes the interval as a constructor parameter, so nothing production-side
+/// changes for the sake of the test.
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -77,7 +82,7 @@ Duration get _pollInterval {
   return Duration(milliseconds: ms);
 }
 
-/// One anonymous user with a full transport stack of its own.
+/// One anonymous user with a full REST stack of its own.
 class _Client {
   _Client(this.api, this.uid);
 
@@ -150,7 +155,7 @@ void main() {
     return (host: host, guest: guest, doc: joined);
   }
 
-  /// Plays the OPENING roll by hand, through the real transport, so the test
+  /// Plays the OPENING roll by hand, through the real REST stack, so the test
   /// decides who starts.
   ///
   /// Every write is one a rules-abiding client would make (host commits, guest
@@ -158,6 +163,9 @@ void main() {
   /// brute-forced by [openingSecretsFor] so the derivation really does produce
   /// [whiteDie]/[blackDie] — the dice are AIMED, never forged, and both
   /// controllers validate them exactly as they would their own.
+  ///
+  /// The event goes in at DOCUMENT seq 0 — the log's native numbering, which the
+  /// transport presents to the controllers as contract seq 1.
   Future<void> seedOpening(
     _Client host,
     _Client guest,
@@ -177,17 +185,26 @@ void main() {
     );
   }
 
-  OnlineMatchController controllerFor(
+  /// A controller over its own [FirestoreTransport] — the production wiring.
+  NetMatchController controllerFor(
     _Client client,
     MatchDoc doc, {
     MatchPersistence persistence = const NoopPersistence(),
   }) {
-    final c = OnlineMatchController(
+    final transport = FirestoreTransport(
       api: client.api,
-      matchDoc: doc,
-      persistence: persistence,
+      code: doc.code,
+      match: doc,
       pollInterval: _pollInterval,
     );
+    final c = NetMatchController(
+      transport: transport,
+      persistence: persistence,
+      // A committed write still has to come back through a poll cycle; the same
+      // sizing production uses.
+      gateTimeout: transport.suggestedGateTimeout,
+    );
+    // The controller OWNS the transport, so disposing it is the whole teardown.
     addTearDown(c.disposeController);
     return c;
   }
@@ -247,11 +264,13 @@ void main() {
       await guest.ready;
       expect(host.isReady, isTrue);
       expect(guest.isReady, isTrue);
+      expect(host.localSide, Player.white, reason: 'the host holds white');
+      expect(guest.localSide, Player.black);
       expect(host.state.turn, Player.white,
           reason: 'the seeded 6-3 opening puts white on move');
 
       var comparisons = 0;
-      final lastActed = <OnlineMatchController, GameState?>{};
+      final lastActed = <NetMatchController, GameState?>{};
       final deadline = DateTime.now().add(const Duration(minutes: 20));
       while (!(host.matchOver && guest.matchOver)) {
         if (host.frozen || guest.frozen) {
@@ -469,7 +488,7 @@ void main() {
         // And the honest pair carries on: several more exchanges, converging
         // after each one, with no freeze and no lingering error.
         final target = host.game.events.length + 8;
-        final lastActed = <OnlineMatchController, GameState?>{};
+        final lastActed = <NetMatchController, GameState?>{};
         final deadline = DateTime.now().add(const Duration(minutes: 3));
         while (host.game.events.length < target ||
             guest.game.events.length < target) {
@@ -510,7 +529,7 @@ void main() {
         // A perfectly well-formed event: right author, right seat, right shape
         // — and completely illegal, because it is white's move and black has no
         // dice. Nothing in firestore.rules can catch this; only the rules
-        // engine on the honest peer can.
+        // engine on the honest peer can. (Document seq 1 = contract seq 2.)
         await m.guest.api.submitEvent(
           code: code,
           seq: 1,
@@ -542,6 +561,42 @@ void main() {
         expect(host.game.events.length, foldedBefore);
         expect(host.cheatError, same(cheat),
             reason: 'the original violation must be the one reported');
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+      skip: skipReason,
+    );
+
+    test(
+      'a DOUBLE in a cubeless match freezes the honest client',
+      () async {
+        // The cube option travels in the match document, and `firestore.rules`
+        // has no idea what a cube is — so a peer that ignores `cubeless: true`
+        // writes a perfectly well-formed, correctly-authored DoubleEvent that
+        // the rules accept. Only the honest peer, which knows the match config,
+        // can refuse it. (New in the unified controller: `cube-in-cubeless`.)
+        final m = await newMatch(length: 1, cubeless: true);
+        final code = m.doc.code;
+        await seedOpening(m.host, m.guest, code, whiteDie: 3, blackDie: 6);
+
+        final host = controllerFor(m.host, m.doc);
+        await host.playMatch();
+        await host.ready;
+        expect(host.cubeless, isTrue);
+        expect(host.state.turn, Player.black, reason: 'a 3-6 opening is black\'s');
+        final foldedBefore = host.game.events.length;
+
+        await m.guest.api.submitEvent(
+          code: code,
+          seq: 1,
+          gameNo: 1,
+          event: DoubleEvent(Player.black),
+        );
+
+        await waitFor(() => host.frozen,
+            reason: 'the host never froze on a cube offer in a cubeless match');
+        expect(host.cheatError!.code, 'cube-in-cubeless');
+        expect(host.game.events.length, foldedBefore,
+            reason: 'the cube event must not have folded');
       },
       timeout: const Timeout(Duration(minutes: 3)),
       skip: skipReason,
@@ -665,7 +720,7 @@ void main() {
 ///
 /// Deliberately dumb: first legal move, always take, always accept. The point
 /// of the test is the transport and the protocol, not the play.
-void _act(OnlineMatchController c, Map<OnlineMatchController, GameState?> lastActed) {
+void _act(NetMatchController c, Map<NetMatchController, GameState?> lastActed) {
   if (c.matchOver || c.frozen) return;
   if (c.awaitingNextGame) {
     c.continueToNextGame();
@@ -701,7 +756,7 @@ void _act(OnlineMatchController c, Map<OnlineMatchController, GameState?> lastAc
 /// clients at the same depth have folded exactly the same prefix of the same
 /// log, so everything after it — board, turn, phase, dice, cube, scores — must
 /// be identical. At different depths one is simply a poll behind the other.
-String? _signature(OnlineMatchController c) {
+String? _signature(NetMatchController c) {
   if (!c.isReady) return null;
   final GameState s;
   final Game g;
@@ -728,7 +783,7 @@ String? _signature(OnlineMatchController c) {
 
 /// Compares the two clients when they are at the same fold depth. Returns 1 if
 /// a comparison happened, 0 if they were not comparable at this instant.
-int _expectConverged(OnlineMatchController a, OnlineMatchController b) {
+int _expectConverged(NetMatchController a, NetMatchController b) {
   final sa = _signature(a);
   final sb = _signature(b);
   if (sa == null || sb == null) return 0;
@@ -739,7 +794,7 @@ int _expectConverged(OnlineMatchController a, OnlineMatchController b) {
   return 1;
 }
 
-String _diag(String label, OnlineMatchController c) {
+String _diag(String label, NetMatchController c) {
   final buf = StringBuffer('$label: matchOver=${c.matchOver} '
       'awaitingNextGame=${c.awaitingNextGame} '
       'awaitingHumanTurn=${c.awaitingHumanTurn} isReady=${c.isReady} '
