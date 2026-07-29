@@ -40,8 +40,8 @@ class MatchCheatException implements Exception {
       "Opponent's client sent tampered dice — match frozen.";
 
   /// A stable machine code: `not-a-participant`, `wrong-author`,
-  /// `opening-not-host`, `roll-author`, `dice-mismatch`, `fair-dice`,
-  /// `malformed-roll`, `illegal-event`.
+  /// `cube-in-cubeless`, `opening-not-host`, `roll-author`, `dice-mismatch`,
+  /// `fair-dice`, `malformed-roll`, `illegal-event`.
   final String code;
 
   /// What exactly was violated, appended to [headline].
@@ -1038,6 +1038,18 @@ class NetMatchController extends ChangeNotifier implements MatchController {
           'wrong-author',
           'event ${ef.seq} claims to be $actor\'s but was written by the '
               '$authorSide player.');
+    }
+    // The ONE match-configuration rule the rules engine cannot see: a [Game]
+    // knows nothing about the cubeless flag, which lives in the session's
+    // [MatchConfig]. `HostAuthority` used to refuse this submission before it
+    // entered the log; with no referee left, the honest peer refuses it on the
+    // fold instead — otherwise a hostile client could double in a match both
+    // players agreed to play without a cube.
+    if (event is DoubleEvent && cubeless) {
+      return MatchCheatException(
+          'cube-in-cubeless',
+          'event ${ef.seq} offers the doubling cube in a match agreed to be '
+              'played without it.');
     }
     if (event is OpeningRollEvent && ef.author != session.hostAuthor) {
       return MatchCheatException('opening-not-host',

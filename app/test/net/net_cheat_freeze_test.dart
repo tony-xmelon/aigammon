@@ -68,6 +68,36 @@ void main() {
       expect(rig.controller.cheatError!.message, contains('frozen'));
     });
 
+    test('a double in a CUBELESS match freezes, however legal it looks',
+        () async {
+      // The one rule the rules engine cannot see: [Game] knows nothing about the
+      // cubeless flag, which is a MatchConfig fact. `HostAuthority` refused this
+      // submission before it entered the log; the honest peer now refuses it on
+      // the fold, which is what keeps the check from being lost with the referee.
+      //
+      // Deliberately staged at a moment where the cube WOULD otherwise be legal:
+      // we are the host (White), we play the opening move, and the joiner is then
+      // on turn awaiting its roll — the exact spot a double belongs.
+      final rig = await ScriptedRig.host(
+          cubeless: true, openingWhiteDie: 6, openingBlackDie: 3);
+      final c = rig.controller;
+      await pumpUntil(() => c.isReady);
+      expect(c.cubeless, isTrue);
+      expect(c.state.turn, Player.white);
+
+      c.submitMove(Player.white, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.black);
+      expect(c.state.phase, GamePhase.awaitingRoll,
+          reason: 'the joiner is on turn, so a double would be legal here');
+
+      rig.forge(const DoubleEvent(Player.black));
+      await pumpUntil(() => c.frozen);
+      expect(c.cheatError!.code, 'cube-in-cubeless');
+      expect(c.cheatError!.message, contains('without it'));
+      // And the fold did NOT take it: the cube stays where it was.
+      expect(c.state.cube.value, 1);
+    });
+
     test('an event from a stranger freezes', () async {
       final rig =
           await ScriptedRig.guest(openingWhiteDie: 6, openingBlackDie: 3);
