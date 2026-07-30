@@ -120,6 +120,13 @@ class GuestHandshakeException implements Exception {
 /// authentication) squat it until the handshake timeout, so the retry that
 /// replaced it would be answered with `busy`.
 ///
+/// The HANDSHAKE has its own deadline on top of the connect's, because the two
+/// fail differently: a connect that never lands raises, while a `hello` that is
+/// never answered is perfectly quiet — and a host that has accepted the socket is
+/// already sending heartbeats, so the liveness rule below never fires. Without
+/// that deadline an unanswered handshake pinned this client in
+/// [GuestConnectionStatus.connecting] for good. See [LanTimings.handshakeTimeout].
+///
 /// `busy` is NOT terminal: it is retried on [LanTimings.busyRetryDelay] and
 /// surfaced as [GuestConnectionStatus.busy], because the commonest cause is a
 /// host still holding a half-open socket from this very guest. Only a `reject`
@@ -175,6 +182,7 @@ class GuestClient {
   StreamSubscription<dynamic>? _sub;
   Timer? _retry;
   Timer? _liveness;
+  Timer? _handshake;
   Timer? _pacer;
   DateTime? _lastSendAt;
   DateTime _lastRx = DateTime.now();
@@ -255,6 +263,7 @@ class GuestClient {
     _retry?.cancel();
     _pacer?.cancel();
     _liveness?.cancel();
+    _handshake?.cancel();
     await _teardownSocket();
     if (!_welcome.isCompleted) {
       _welcome.completeError(const GuestHandshakeException('disposed'));
@@ -304,6 +313,22 @@ class GuestClient {
     );
     // The handshake: the only frame that carries the room code.
     _sendNow(HelloMessage(name: name, code: roomCode, resume: _resume).encode());
+    // A DEADLINE ON THE HANDSHAKE ITSELF, not just on the connect.
+    //
+    // The liveness rule below cannot stand in for this one: it watches for
+    // SILENCE, and an unanswered hello is not silent. A host that accepts the
+    // socket and starts its heartbeat — but whose relay never answers, because the
+    // transport that answers hellos did not exist when ours arrived — refreshes
+    // [_lastRx] every [LanTimings.heartbeatInterval] forever. Without this timer
+    // the client then stays in [GuestConnectionStatus.connecting] for good: no
+    // welcome, no drop, no retry, and a joining device spinning on "Connecting…"
+    // with nothing behind it. That was a real shipped hang, so the deadline is a
+    // correctness requirement rather than a nicety. Dropping the link is the right
+    // cure: the reconnect re-sends `hello`, which the host answers by then.
+    _handshake = Timer(timings.handshakeTimeout, () {
+      if (_stale(gen) || _welcomedThisConnection) return;
+      _onDropped('the host did not answer the handshake', gen);
+    });
     _liveness =
         Timer.periodic(timings.heartbeatInterval, (_) => _checkLiveness(gen));
   }
@@ -408,6 +433,8 @@ class GuestClient {
   Future<void> _teardownSocket() async {
     _liveness?.cancel();
     _liveness = null;
+    _handshake?.cancel();
+    _handshake = null;
     _pacer?.cancel();
     _pacer = null;
     _queue.clear();
@@ -458,6 +485,8 @@ class GuestClient {
 
   void _onWelcome(WelcomeMessage message) {
     _welcomedThisConnection = true;
+    _handshake?.cancel();
+    _handshake = null;
     _lastWelcome = message;
     _resume = message.resume;
     _backoff = timings.reconnectMinDelay;

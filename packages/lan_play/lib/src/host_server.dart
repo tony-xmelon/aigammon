@@ -169,6 +169,19 @@ class HostServer {
   /// The connected guest's display name, if any.
   String? get guestName => _guest?.name;
 
+  /// The `hello` the CURRENTLY authenticated guest presented, or null when nobody
+  /// holds the playing slot.
+  ///
+  /// Retained because [guestFrames] is broadcast and NON-BUFFERING while the slot
+  /// is claimed the instant the socket is bound: the "Play Nearby" screen shows a
+  /// room code long before it builds a transport, so the join `hello` is routinely
+  /// published with no subscriber attached and is then gone for good. A transport
+  /// built late reads it here and answers it (see `SocketTransport.host`), instead
+  /// of leaving the guest waiting for a welcome that can never arrive.
+  ///
+  /// Lives on the connection, so it disappears with the guest.
+  HelloMessage? get guestHello => _guest?.hello;
+
   /// How many sockets are mid-handshake. Diagnostics (and a test hook).
   int get pendingConnections => _pendingCount;
 
@@ -355,6 +368,8 @@ class HostServer {
     _guest = c;
     c.authenticated = true;
     c.name = hello.name;
+    // Kept for a transport that does not exist yet — see [guestHello].
+    c.hello = hello;
     c.handshakeTimer?.cancel();
     c.handshakeTimer = null;
     c.markHello(DateTime.now());
@@ -446,6 +461,9 @@ class _GuestConnection {
   bool closing = false;
   bool detached = false;
   String? name;
+
+  /// The `hello` that claimed the playing slot — see [HostServer.guestHello].
+  HelloMessage? hello;
   DateTime lastActivity;
   DateTime? _lastHello;
   DateTime? _lastFrame;
