@@ -20,6 +20,11 @@ import 'socket_harness.dart';
 /// `hello` was dropped on the floor and nothing ever answered it. The guest then
 /// waited for a welcome forever — kept alive, and so kept silent, by the host's
 /// own heartbeat — which is the "stuck on connecting" report these tests pin down.
+/// A well-formed commitment for roll [n] — the protocol requires exactly 64
+/// lowercase hex characters, and a frame that carries anything else is refused at
+/// the decoder rather than reaching the mirror.
+String _commit(int n) => n.toRadixString(16).padLeft(64, '0');
+
 void main() {
   group('a guest that authenticates before the host transport exists', () {
     late MatchRelay relay;
@@ -83,6 +88,95 @@ void main() {
       // missed is what makes the join immediate.
       expect(seen, isNot(contains(GuestConnectionStatus.reconnecting)),
           reason: 'the guest should not have had to drop the link and retry');
+    });
+
+    test('does not lose the frames pushed before its own transport exists',
+        () async {
+      // THE SECOND HALF OF THE SAME BUG, on the other end of the link.
+      //
+      // Retaining the `hello` gets the guest welcomed. But the welcome is not the
+      // last thing the host sends before the joining screen has built anything to
+      // receive it: the host starts the OPENING ROLL the instant its transport
+      // connects (it needs nothing from the guest to do that) and pushes the roll
+      // frame straight after the welcome, routinely inside the same TCP segment.
+      //
+      // `GuestClient.inbound` is broadcast and non-buffering, so that frame was
+      // dropped, and a dropped roll frame is gone for good — nothing replays it.
+      // The guest then never contributes entropy for roll 1, and the host waits
+      // for that entropy with no retry that could ever produce it. Neither peer
+      // ever folds game 1, neither reports an error, and the board simply never
+      // opens. Same symptom as the dropped `hello`, different cause.
+      guest = GuestClient.connect(
+        InternetAddress.loopbackIPv4.address,
+        server.port,
+        roomCode: testCode,
+        name: 'Bo',
+        timings: LanTimings.test,
+      );
+      await waitFor(() => server.hasGuest, what: 'the guest to authenticate');
+
+      transport = SocketTransport.host(server: server, relay: relay);
+      await transport!.connect();
+      await guest!.welcome.timeout(const Duration(seconds: 5));
+
+      // The host's opening roll, pushed while the joining screen is still a
+      // screen transition away from building its transport.
+      await transport!.createRoll(1, _commit(1));
+      // One beat, which is all it takes: the frame crosses the socket and is
+      // published to a stream nobody is attached to yet.
+      await settle(30);
+
+      final view = SocketTransport.guest(client: guest!);
+      addTearDown(view.dispose);
+      await view.connect();
+
+      final roll = await view.fetchRoll(1);
+      expect(roll, isNotNull,
+          reason: 'the roll frame pushed before this view existed was dropped, '
+              'so this guest can never contribute entropy for it');
+      expect(roll!.commit, _commit(1));
+      expect(await view.rollsSince(1), hasLength(1));
+    });
+
+    test('resyncs when more was pushed than it could retain', () async {
+      guest = GuestClient.connect(
+        InternetAddress.loopbackIPv4.address,
+        server.port,
+        roomCode: testCode,
+        name: 'Bo',
+        timings: LanTimings.test,
+      );
+      await waitFor(() => server.hasGuest, what: 'the guest to authenticate');
+      transport = SocketTransport.host(server: server, relay: relay);
+      await transport!.connect();
+      await guest!.welcome.timeout(const Duration(seconds: 5));
+
+      // Past the cap the retention holds only a PREFIX, so the mirror may have a
+      // hole the retained frames themselves cannot reveal. The view must not
+      // quietly trust it: it asks for the whole log instead.
+      for (var n = 1; n <= maxRetainedFrames + 10; n++) {
+        relay.createRoll(
+            author: MatchRelay.hostAuthor, n: n, commit: _commit(n));
+      }
+      await waitFor(() => guest!.retainedFramesLost,
+          timeout: const Duration(seconds: 10),
+          what: 'the retention to overflow');
+
+      final view = SocketTransport.guest(client: guest!);
+      addTearDown(view.dispose);
+      await view.connect();
+      // The resync is a fresh `hello`, and the welcome answering it carries every
+      // roll — so the hole heals rather than persisting.
+      final want = maxRetainedFrames + 10;
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      var have = 0;
+      while (have < want) {
+        if (DateTime.now().isAfter(deadline)) {
+          fail('the overflowed mirror never healed: $have of $want rolls');
+        }
+        await settle(10);
+        have = (await view.rollsSince(1)).length;
+      }
     });
 
     test('never welcomed at all, it stops waiting instead of hanging forever',

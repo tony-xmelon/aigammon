@@ -451,6 +451,24 @@ class _GuestSocketTransport implements SocketTransport {
     // was handed; adopt it rather than starting from an empty mirror.
     final welcomed = client.lastWelcome;
     if (welcomed != null) _adopt(welcomed); // ignore: unused_result
+    // …and the welcome is not all we missed. The host starts the opening roll as
+    // soon as ITS transport connects and pushes the roll frame straight after the
+    // welcome — routinely inside the same TCP segment — while this view is still
+    // one screen transition away from existing. Those frames were published to
+    // [GuestClient.inbound], which is broadcast and non-buffering, so with nobody
+    // attached they were dropped, and a roll frame that is dropped is dropped for
+    // good: nothing replays it, so this guest never contributes entropy and the
+    // host waits for it forever. The client retains them for exactly this moment.
+    //
+    // Drained AFTER [_frames] is subscribed above (so nothing can slip past in
+    // between) and after the welcome is adopted (so they land on the log they
+    // followed, in the order they arrived).
+    for (final frame in client.takeRetainedFrames()) {
+      _onFrame(frame);
+    }
+    // Past [maxRetainedFrames] the retention is only a prefix, so the mirror may
+    // have a hole the frames themselves cannot show. Ask for the whole log.
+    if (client.retainedFramesLost) _resyncSoon();
   }
 
   /// The link. NOT owned: [dispose] leaves it connected (see the class doc).
