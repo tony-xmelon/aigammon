@@ -100,10 +100,18 @@ Write-Host "app two-client E2E suite passed" -ForegroundColor Green
 #    the path. Re-running the adversarial legs would double the wall clock to
 #    re-prove `firestore.rules`, which does not care which delivery mechanism
 #    asked.
+#    `--name <regexp>` with DOTS where the test name has spaces, rather than
+#    `--plain-name "…"`, and it is not a style choice: this command string is
+#    handed to a native executable, and Windows PowerShell 5.1 re-splits such an
+#    argument once it carries this many quoted segments — `emulators:exec` then
+#    sees a dozen arguments instead of one script and refuses with "Too many
+#    arguments". A regexp with no spaces needs no quotes at all. (`^` is cmd's
+#    escape character, so the pattern is deliberately unanchored.)
 $pollCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
   "set `"AIGAMMON_E2E_POLL_MS=100`" && set `"AIGAMMON_E2E_LISTEN=0`" && " +
-  "flutter test --tags emulator test\online\emulator_e2e_test.dart " +
-  "--plain-name `"two clients play a complete match through the emulator`""
+  "flutter test --tags emulator " +
+  "--name two.clients.play.a.complete.match.through.the.emulator " +
+  "test\online\emulator_e2e_test.dart"
 
 Push-Location $PSScriptRoot
 try {

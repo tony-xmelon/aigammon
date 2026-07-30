@@ -50,7 +50,11 @@ set -euo pipefail
 #    the path, and re-running the adversarial legs on it would double this job's
 #    wall clock to re-prove `firestore.rules`, which does not care which delivery
 #    mechanism asked.
+#    `--name <regexp>` (dots for the spaces) rather than `--plain-name '…'`, to
+#    stay byte-identical with run-emulator-tests.ps1, which cannot quote it — see
+#    the note on leg 4 there.
 (cd ../app &&
   AIGAMMON_EMULATOR=1 AIGAMMON_E2E_POLL_MS=100 AIGAMMON_E2E_LISTEN=0 \
-  flutter test --tags emulator test/online/emulator_e2e_test.dart \
-    --plain-name 'two clients play a complete match through the emulator')
+  flutter test --tags emulator \
+    --name two.clients.play.a.complete.match.through.the.emulator \
+    test/online/emulator_e2e_test.dart)
