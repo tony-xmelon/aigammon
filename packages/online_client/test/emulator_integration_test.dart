@@ -1,6 +1,7 @@
 @Tags(['emulator'])
 library;
 
+import 'dart:async';
 import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
@@ -691,6 +692,210 @@ void main() {
   });
 
   // =========================================================================
+  group('FirestoreTransport on the real-time path', () {
+    /// Channels this group built, newest last — so a test can break the live one.
+    final broken = <_BreakableChannel>[];
+
+    setUp(broken.clear);
+
+    /// A transport whose real-time channel is a REAL gRPC `Listen` stream against
+    /// the emulator, wrapped so the test can sever it.
+    ///
+    /// The resting poll cadence is parked at 10 SECONDS on purpose: it is far
+    /// longer than any assertion here, so every frame that arrives promptly can
+    /// only have been PUSHED. That is what makes these tests about the listener
+    /// rather than about a fast poller.
+    Future<FirestoreTransport> listeningTransport(
+      TestUser user,
+      MatchDoc match, {
+      Duration poll = const Duration(seconds: 10),
+    }) async {
+      final t = FirestoreTransport(
+        api: user.api,
+        code: match.code,
+        match: match,
+        pollInterval: poll,
+        listenStartDelay: Duration.zero,
+        listenRetryFloor: const Duration(milliseconds: 100),
+        listenChannel: () {
+          final channel = _BreakableChannel(GrpcFirestoreListenChannel(
+            config: config,
+            token: user.api.auth.validToken,
+          ));
+          broken.add(channel);
+          return channel;
+        },
+      );
+      addTearDown(t.dispose);
+      await t.connect();
+      await waitFor(() => t.listenerLive,
+          reason: 'the listen stream never reached CURRENT on both targets');
+      return t;
+    }
+
+    test('both targets go CURRENT, and then nothing is polled at all', () async {
+      final match = await activeMatch();
+      final t = await listeningTransport(host, match);
+      expect(t.inboundCadence, Duration.zero,
+          reason: 'a live listener is a push transport');
+      final atLive = t.documentsRead;
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(t.documentsRead, atLive,
+          reason: 'an idle turn must cost nothing — that is the whole win');
+    });
+
+    test('events and every roll phase are PUSHED, in order', () async {
+      final match = await activeMatch();
+      final hostT = await listeningTransport(host, match);
+      final guestT = await listeningTransport(guest, match);
+      final seen = <InboundFrame>[];
+      hostT.inbound.listen(seen.add);
+
+      // Three events written back to back land as three ORDERED frames. Listen
+      // gives no ordering guarantee inside a snapshot, so this is the assertion
+      // the transport's batch-and-sort exists for.
+      await guestT.sendEvent(
+          seq: 1,
+          gameNo: 1,
+          event: const OpeningRollEvent(whiteDie: 3, blackDie: 6));
+      await guestT.sendEvent(seq: 2, gameNo: 1, event: DoubleEvent(Player.black));
+      await guestT.sendEvent(seq: 3, gameNo: 1, event: TakeEvent(Player.white));
+      await waitFor(() => seen.whereType<EventFrame>().length >= 3,
+          reason: 'the events were not pushed');
+      expect(seen.whereType<EventFrame>().map((f) => f.seq), [1, 2, 3]);
+      expect(seen.whereType<EventFrame>().first.author, guest.uid);
+
+      // The three roll phases, each pushed exactly once as it commits.
+      await guestT.createRoll(2, 'a' * 64);
+      await waitFor(() => seen.whereType<RollFrame>().isNotEmpty);
+      await hostT.sendEntropy(2, 'b' * 64);
+      await waitFor(() => seen
+          .whereType<RollFrame>()
+          .any((r) => r.phase == FairDicePhase.entropy));
+      await guestT.sendReveal(2, 'c' * 64);
+      await waitFor(() => seen
+          .whereType<RollFrame>()
+          .any((r) => r.phase == FairDicePhase.revealed));
+
+      expect(
+        seen.whereType<RollFrame>().map((r) => r.phase),
+        [
+          FairDicePhase.committed,
+          FairDicePhase.entropy,
+          FairDicePhase.revealed,
+        ],
+        reason: 'one frame per phase change, and no re-emission in between',
+      );
+      expect(seen.whereType<EventFrame>(), hasLength(3),
+          reason: 'a document is delivered once, not once per snapshot');
+      expect(seen.whereType<ResetFrame>(), isEmpty,
+          reason: 'the emulator RESETs before every batch; none of that is a '
+              'match-identity change');
+    });
+
+    test('a severed stream falls back to polling, keeps playing, and recovers',
+        () async {
+      final match = await activeMatch();
+      // A 700ms cadence: slow enough that a pushed frame cannot be mistaken for a
+      // polled one, fast enough that the degraded leg finishes.
+      final hostT = await listeningTransport(host, match,
+          poll: const Duration(milliseconds: 700));
+      final guestT = await listeningTransport(guest, match);
+      final seen = <InboundFrame>[];
+      final errors = <Object>[];
+      var closed = false;
+      hostT.inbound
+          .listen(seen.add, onError: errors.add, onDone: () => closed = true);
+
+      await guestT.sendEvent(
+          seq: 1,
+          gameNo: 1,
+          event: const OpeningRollEvent(whiteDie: 3, blackDie: 6));
+      await waitFor(() => seen.whereType<EventFrame>().length == 1);
+
+      // Sever it. The transport must NOT close inbound, must fall back at once,
+      // and must keep the match playable.
+      broken.first.sever();
+      await waitFor(() => !hostT.listenerLive);
+      expect(closed, isFalse, reason: 'inbound may never end to signal trouble');
+      expect(errors, hasLength(1));
+      expect(errors.single, isA<TransportUnavailable>());
+      expect(hostT.status, TransportStatus.connected,
+          reason: 'the match is still connected, just slower');
+      expect(hostT.inboundCadence, const Duration(milliseconds: 700));
+
+      // Delivered by the POLL loop while the listener is down.
+      await guestT.sendEvent(seq: 2, gameNo: 1, event: DoubleEvent(Player.black));
+      await waitFor(() => seen.whereType<EventFrame>().length == 2,
+          reason: 'the poll fallback did not carry the match');
+
+      // ... and the listener comes back on its own.
+      await waitFor(() => hostT.listenerLive,
+          reason: 'the listener never recovered');
+      expect(hostT.inboundCadence, Duration.zero);
+      expect(broken.length, greaterThan(1), reason: 'a fresh channel per listen');
+
+      // Recovered, and still exactly-once: the re-listen must not replay 1-2.
+      await guestT.sendEvent(seq: 3, gameNo: 1, event: TakeEvent(Player.white));
+      await waitFor(() => seen.whereType<EventFrame>().length == 3);
+      expect(seen.whereType<EventFrame>().map((f) => f.seq), [1, 2, 3],
+          reason: 'no duplicate survived the fallback round trip');
+    });
+
+    test('a listen target the RULES refuse degrades — it never freezes',
+        () async {
+      // `firestore.rules` refuses the query behind the target, so it is REMOVEd.
+      // That must degrade to polling (where the refusal arrives with a body
+      // attached and can be classified properly), not arrive as a
+      // TransportRejected the controller would freeze on.
+      final match = await activeMatch();
+      final outsider = await signIn();
+      final t = FirestoreTransport(
+        api: outsider.api,
+        code: match.code,
+        // Seated by fiat — connect() would refuse an outsider outright, and what
+        // is under test is the LISTENER's reaction to a refusal.
+        match: MatchDoc(
+          code: match.code,
+          hostUid: outsider.uid,
+          guestUid: match.guestUid,
+          length: match.length,
+          cubeless: match.cubeless,
+          status: match.status,
+        ),
+        pollInterval: const Duration(seconds: 10),
+        listenStartDelay: Duration.zero,
+        listenRetryFloor: const Duration(seconds: 30),
+        listenChannel: () => GrpcFirestoreListenChannel(
+          config: config,
+          token: outsider.api.auth.validToken,
+        ),
+      );
+      addTearDown(t.dispose);
+      await t.connect();
+      final errors = <Object>[];
+      t.inbound.listen((_) {}, onError: errors.add);
+      await Future<void>.delayed(const Duration(seconds: 2));
+      expect(t.listenerLive, isFalse,
+          reason: 'the rules refused the target, so it never went CURRENT');
+      // The refusal DOES reach the controller — but classified by the POLL path,
+      // which is the only one that gets a rules body back. The listener's own
+      // contribution to this is nothing at all: it degraded silently (it was
+      // never live, so nothing was interrupted) and handed the question to the
+      // arbiter. That is the whole point of not mapping a REMOVEd target to
+      // TransportRejected: a stale resume token looks identical from the stream,
+      // and must not freeze a match.
+      expect(errors, isNotEmpty);
+      expect(
+        errors,
+        everyElement(isA<TransportRejected>()
+            .having((e) => e.code, 'code', 'PERMISSION_DENIED')),
+        reason: 'every refusal here came from the poll arbiter',
+      );
+    });
+  });
+
+  // =========================================================================
   group('non-participant access', () {
     late MatchDoc match;
     late TestUser outsider;
@@ -748,4 +953,36 @@ void main() {
       );
     });
   });
+}
+
+/// A real [FirestoreListenChannel] with a cut-out: [sever] fails the stream the
+/// way a dropped connection would, without touching the emulator.
+class _BreakableChannel implements FirestoreListenChannel {
+  _BreakableChannel(this.inner);
+
+  final FirestoreListenChannel inner;
+  StreamController<ListenDelta>? _out;
+  StreamSubscription<ListenDelta>? _sub;
+
+  @override
+  Stream<ListenDelta> listen(List<ListenTarget> targets) {
+    final out = _out = StreamController<ListenDelta>();
+    _sub = inner.listen(targets).listen(
+          out.add,
+          onError: out.addError,
+          onDone: out.close,
+        );
+    return out.stream;
+  }
+
+  void sever() => _out?.addError('the connection dropped');
+
+  @override
+  Future<void> close() async {
+    await _sub?.cancel();
+    _sub = null;
+    await _out?.close();
+    _out = null;
+    await inner.close();
+  }
 }

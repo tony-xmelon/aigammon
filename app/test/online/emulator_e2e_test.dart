@@ -1,6 +1,7 @@
 @Tags(['emulator'])
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:aigammon_app/data/persistence_hooks.dart';
@@ -65,6 +66,28 @@ import 'package:online_client/online_client.dart';
 /// takes the interval as a constructor parameter, so nothing production-side
 /// changes for the sake of the test.
 
+/// ## Reading the numbers
+///
+/// The happy-path test prints a wall-clock time and a delivered-document count.
+/// Both need a caveat, and neither is a production figure on its own:
+///
+///  * **wall clock** is dominated by the delivery path. Measured on this machine
+///    at a 100ms poll knob: **26.7s on the polling path** against **4.5s on the
+///    listener path** for one 1-point match (the listener has no cycle to wait
+///    for, so a roll's three phases arrive as fast as they commit rather than in
+///    three poll latencies). Production polls at 2s/500ms rather than 100ms, so
+///    the real-world gap is far wider than 6x.
+///  * **delivered documents** is `FirestoreTransport.documentsRead` summed over
+///    both clients. On the POLLING path it is accurate but incomplete (it counts
+///    query result rows, and cannot see the `firestore.rules` `get()` that every
+///    read evaluates and that Firestore bills too). On the LISTENER path it is
+///    wildly INFLATED, because the Firestore EMULATOR does not diff a watch: it
+///    re-sends a target's entire result set on every change, so a 94-event match
+///    delivers ~15,000 documents locally where production delivers each changed
+///    document once. That is why the line also prints the
+///    production-equivalent figure — `(events + 3 x rolls) x 2 watchers` — which
+///    is what `firebase/DEPLOY.md`'s free-tier budget is reasoned from.
+///
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -80,6 +103,18 @@ Duration get _pollInterval {
   final raw = Platform.environment['AIGAMMON_E2E_POLL_MS']?.trim();
   final ms = int.tryParse(raw ?? '') ?? _defaultPollMs;
   return Duration(milliseconds: ms);
+}
+
+/// Whether the transports get a real-time Firestore `Listen` stream.
+///
+/// On by default — that IS production now, and the whole suite is here to prove
+/// the listener path carries every property the polling path had. Set
+/// `AIGAMMON_E2E_LISTEN=0` to run the identical suite on polling alone, which is
+/// how the two are compared (and how a gRPC problem is isolated from a game
+/// problem).
+bool get _useListeners {
+  final raw = Platform.environment['AIGAMMON_E2E_LISTEN']?.trim();
+  return raw == null || raw.isEmpty || raw != '0';
 }
 
 /// One anonymous user with a full REST stack of its own.
@@ -185,7 +220,23 @@ void main() {
     );
   }
 
-  /// A controller over its own [FirestoreTransport] — the production wiring.
+  /// Every transport built by [controllerFor] in this test, so a test can read
+  /// its read count or sever its listener.
+  final transports = <FirestoreTransport>[];
+
+  /// Every real-time channel built in this test, newest last.
+  final channels = <_BreakableChannel>[];
+
+  setUp(() {
+    transports.clear();
+    channels.clear();
+  });
+
+  /// A controller over its own [FirestoreTransport] — the production wiring,
+  /// real-time listener included (see [_useListeners]).
+  ///
+  /// The channel is wrapped in a [_BreakableChannel] so a test can drop the
+  /// stream the way a lost connection would, without touching the emulator.
   NetMatchController controllerFor(
     _Client client,
     MatchDoc doc, {
@@ -196,12 +247,24 @@ void main() {
       code: doc.code,
       match: doc,
       pollInterval: _pollInterval,
+      listenRetryFloor: const Duration(milliseconds: 200),
+      listenChannel: !_useListeners
+          ? null
+          : () {
+              final channel = _BreakableChannel(GrpcFirestoreListenChannel(
+                config: config,
+                token: client.api.auth.validToken,
+              ));
+              channels.add(channel);
+              return channel;
+            },
     );
+    transports.add(transport);
     final c = NetMatchController(
       transport: transport,
       persistence: persistence,
-      // A committed write still has to come back through a poll cycle; the same
-      // sizing production uses.
+      // The listener can drop mid-submission, and then a committed write has to
+      // come back through a poll cycle; the same sizing production uses.
       gateTimeout: transport.suggestedGateTimeout,
     );
     // The controller OWNS the transport, so disposing it is the whole teardown.
@@ -376,15 +439,104 @@ void main() {
       expect(replayed.blackScore, host.match.blackScore);
       expect(replayed.winner, host.match.winner);
 
-      // Timing is the point of the interval knob — report it either way.
+      // Timing and read count are the point of Plan 17's Task 5 — report both,
+      // on whichever path this run used. `documentsRead` is a LOWER bound on what
+      // Firestore bills (a rules `get()` is billed too and is invisible from
+      // here), but it is the number that separates "polled every cycle" from
+      // "pushed once per change", which is the claim `firebase/DEPLOY.md` makes.
+      final reads = transports.fold<int>(0, (sum, t) => sum + t.documentsRead);
+      // A changed document reaches BOTH watchers, and a roll changes three times.
+      final changed = (events.length + 3 * rolls.length) * 2;
       // ignore: avoid_print
-      print('E2E full match: ${elapsed.inMilliseconds / 1000}s wall-clock at a '
-          '${_pollInterval.inMilliseconds}ms poll interval '
-          '(${events.length} events, ${rolls.length} rolls, '
-          '$comparisons convergence checks).');
+      print('E2E full match: ${elapsed.inMilliseconds / 1000}s wall-clock '
+          '(${_useListeners ? 'LISTENER' : 'POLLING'} path, '
+          '${_pollInterval.inMilliseconds}ms poll interval) — '
+          '${events.length} events, ${rolls.length} rolls, '
+          '$comparisons convergence checks. '
+          'Documents handed to the two transports: $reads '
+          '(production-equivalent delivery for this match: $changed — '
+          'see "Reading the numbers" in this file).');
+      if (_useListeners) {
+        expect(transports.every((t) => t.listenerLive), isTrue,
+            reason: 'the whole match should have run on the listener');
+      }
     },
     timeout: const Timeout(Duration(minutes: 25)),
     skip: skipReason,
+  );
+
+  // =========================================================================
+  test(
+    'a listener dropped mid-match falls back to polling, and the match still '
+    'finishes',
+    () async {
+      // The fallback is the difference between "slower for a moment" and "a dead
+      // match". So: play a real match, sever the host's real-time stream in the
+      // middle of it, and require BOTH that the game keeps moving on the poll
+      // loop and that the listener comes back by itself.
+      final m = await newMatch(length: 1);
+      await seedOpening(m.host, m.guest, m.doc.code, whiteDie: 6, blackDie: 3);
+      final host = controllerFor(m.host, m.doc);
+      final guest = controllerFor(m.guest, m.doc);
+      await host.playMatch();
+      await guest.playMatch();
+      await host.ready;
+      await guest.ready;
+
+      await waitFor(() => host.linkStatus.value == TransportStatus.connected);
+      final hostTransport = transports.first;
+      await waitFor(() => hostTransport.listenerLive,
+          reason: 'the host never got a live listener to drop');
+
+      var severed = false;
+      var polledWhileDown = false;
+      final lastActed = <NetMatchController, GameState?>{};
+      final deadline = DateTime.now().add(const Duration(minutes: 20));
+      while (!(host.matchOver && guest.matchOver)) {
+        if (host.frozen || guest.frozen) {
+          fail('a controller froze mid-match: '
+              '${host.cheatError ?? guest.cheatError}');
+        }
+        if (DateTime.now().isAfter(deadline)) {
+          fail('the match did not finish in time.\n'
+              '${_diag('host', host)}\n${_diag('guest', guest)}');
+        }
+        // Sever once, a few folds in — early enough that plenty of match is left
+        // to play on the fallback.
+        if (!severed && host.lastSeq >= 4) {
+          severed = true;
+          channels.first.sever();
+        }
+        if (severed && !hostTransport.listenerLive) polledWhileDown = true;
+        _act(host, lastActed);
+        _act(guest, lastActed);
+        _expectConverged(host, guest);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+
+      expect(severed, isTrue, reason: 'the listener was never dropped');
+      expect(polledWhileDown, isTrue,
+          reason: 'the drop was never observed — nothing was proven');
+      expect(host.error, isNull);
+      expect(guest.error, isNull);
+      expect(host.frozen, isFalse, reason: 'a dropped stream is not a cheat');
+      expect(host.match.winner, isNotNull);
+      expect(host.match.winner, guest.match.winner);
+      expect(host.match.whiteScore, guest.match.whiteScore);
+      expect(_expectConverged(host, guest), 1,
+          reason: 'the two clients did not finish at the same fold depth');
+      // Exactly-once survived the round trip: the fold is seq-CONTIGUOUS by
+      // construction, so a duplicate or a gap would have stalled or frozen it —
+      // finishing at the same seq is the proof.
+      expect(host.lastSeq, guest.lastSeq);
+      await waitFor(() => hostTransport.listenerLive,
+          reason: 'the listener never recovered');
+    },
+    timeout: const Timeout(Duration(minutes: 25)),
+    skip: _useListeners
+        ? skipReason
+        : (skipReason ??
+            'AIGAMMON_E2E_LISTEN=0 — there is no listener to drop.'),
   );
 
   // =========================================================================
@@ -802,4 +954,36 @@ String _diag(String label, NetMatchController c) {
   final sig = _signature(c);
   if (sig != null) buf.write(' state=$sig');
   return buf.toString();
+}
+
+/// A real [FirestoreListenChannel] with a cut-out: [sever] fails the stream the
+/// way a lost connection would, leaving the emulator untouched.
+class _BreakableChannel implements FirestoreListenChannel {
+  _BreakableChannel(this.inner);
+
+  final FirestoreListenChannel inner;
+  StreamController<ListenDelta>? _out;
+  StreamSubscription<ListenDelta>? _sub;
+
+  @override
+  Stream<ListenDelta> listen(List<ListenTarget> targets) {
+    final out = _out = StreamController<ListenDelta>();
+    _sub = inner.listen(targets).listen(
+          out.add,
+          onError: out.addError,
+          onDone: out.close,
+        );
+    return out.stream;
+  }
+
+  void sever() => _out?.addError('the connection dropped');
+
+  @override
+  Future<void> close() async {
+    await _sub?.cancel();
+    _sub = null;
+    await _out?.close();
+    _out = null;
+    await inner.close();
+  }
 }

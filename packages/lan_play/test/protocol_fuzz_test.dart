@@ -3,7 +3,6 @@ import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
-import 'package:match_transport/match_transport.dart';
 import 'package:test/test.dart';
 
 import 'socket_harness.dart';

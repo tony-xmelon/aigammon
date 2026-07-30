@@ -91,6 +91,11 @@ Widget _app(FakeMatchApi api, {bool configured = true, required AppDatabase db})
       onlineConfigProvider
           .overrideWithValue(configured ? OnlineConfig.emulator() : null),
       matchApiProvider.overrideWith((ref) async => api),
+      // The lobby's api is a FAKE with no Firestore behind it, so there is
+      // nothing to open a real-time gRPC stream to: every match here runs on the
+      // transport's poll loop. (The transport would degrade to exactly that by
+      // itself, but saying so keeps the test free of a retry timer.)
+      listenChannelBuilderProvider.overrideWithValue((_) => null),
       engineFacadeProvider.overrideWithValue(const FakeFacade()),
       databaseProvider.overrideWithValue(db),
       // Launching a game reads settingsProvider (for animation speed); serve a

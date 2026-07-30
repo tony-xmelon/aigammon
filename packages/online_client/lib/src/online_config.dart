@@ -75,6 +75,26 @@ class OnlineConfig {
     return '$root/$documentsResourcePrefix';
   }
 
+  /// Firestore's DATABASE resource name — what `ListenRequest.database` and the
+  /// `google-cloud-resource-prefix` gRPC metadata header both carry.
+  String get firestoreDatabaseName => 'projects/$projectId/databases/(default)';
+
+  /// Host for Firestore's gRPC endpoint (the real-time `Listen` RPC).
+  ///
+  /// The emulator serves gRPC and REST on the SAME port — that is how the native
+  /// SDKs watch documents against `localhost:8080` — so there is no separate
+  /// emulator port to configure.
+  String get firestoreGrpcHost =>
+      isEmulator ? emulatorHost! : 'firestore.googleapis.com';
+
+  /// Port for Firestore's gRPC endpoint: 443 in production, the emulator's
+  /// Firestore port locally.
+  int get firestoreGrpcPort => isEmulator ? firestorePort : 443;
+
+  /// Whether the gRPC channel needs TLS. Production yes; the emulator speaks
+  /// cleartext HTTP/2 (h2c), which is also what makes it testable with no certs.
+  bool get firestoreGrpcSecure => !isEmulator;
+
   /// Base URL for the Identity Toolkit REST v1 accounts endpoints.
   String get identityToolkitBase => isEmulator
       ? 'http://$emulatorHost:$authPort/identitytoolkit.googleapis.com/v1'

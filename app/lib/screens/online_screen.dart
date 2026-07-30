@@ -364,12 +364,20 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     // The match document has both seats by now (the create flow waited for the
     // join, the join flow just claimed one), so it is handed to the transport as
     // a seed and connect() costs no extra read.
-    final transport = FirestoreTransport(api: api, code: doc.code, match: doc);
+    final transport = FirestoreTransport(
+      api: api,
+      code: doc.code,
+      match: doc,
+      // Real-time delivery when this build has a backend to listen to; the
+      // transport falls back to its poll loop by itself if the stream ever dies.
+      listenChannel: ref.read(listenChannelBuilderProvider)(api),
+    );
     final controller = NetMatchController(
       transport: transport,
       persistence: RepositoryPersistence(repo, matchIdFuture),
-      // A committed write still has to come back through a poll cycle before the
-      // fold advances, so the submitting gate must outlast several of them.
+      // The listener can drop mid-submission, and then a committed write has to
+      // come back through a poll cycle before the fold advances — so the
+      // submitting gate is sized for that, not for the push path.
       gateTimeout: transport.suggestedGateTimeout,
     );
     // Remember the match BEFORE playing it: the point of the pointer is to

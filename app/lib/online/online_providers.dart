@@ -70,6 +70,28 @@ final matchApiProvider = FutureProvider<MatchApi>((ref) async {
   return api;
 });
 
+/// Builds the real-time Firestore [FirestoreListenChannelFactory] for a match, or
+/// null when this build has no online backend at all.
+typedef ListenChannelBuilder = FirestoreListenChannelFactory? Function(
+    MatchApi api);
+
+/// How a [FirestoreTransport] gets its real-time channel.
+///
+/// A provider rather than a direct construction in the screen, because the
+/// channel needs BOTH halves of the online stack — the config's gRPC endpoint and
+/// the [MatchApi]'s auto-refreshing idToken — and because a test that swaps
+/// [matchApiProvider] for a fake has no gRPC endpoint behind it and must be able
+/// to say so. Override with `(_) => null` to run a match on polling alone.
+///
+/// Returning a FACTORY rather than a channel is the transport's contract: one
+/// channel carries one stream, so every re-listen builds a fresh one.
+final listenChannelBuilderProvider = Provider<ListenChannelBuilder>((ref) {
+  final config = ref.watch(onlineConfigProvider);
+  if (config == null) return (_) => null;
+  return (api) =>
+      () => GrpcFirestoreListenChannel(config: config, token: api.auth.validToken);
+});
+
 /// The durable half of the device's online identity: the anonymous session and
 /// the match it was last in.
 final onlineSessionStoreProvider = Provider<OnlineSessionStore>(

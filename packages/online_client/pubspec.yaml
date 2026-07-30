@@ -10,6 +10,7 @@ dependencies:
   backgammon_core:
     path: ../backgammon_core
   crypto: ^3.0.3
+  grpc: ^5.1.0
   http: ^1.2.0
   match_transport:
     path: ../match_transport

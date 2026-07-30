@@ -38,6 +38,7 @@ export 'package:match_transport/match_transport.dart'
 
 export 'src/auth_client.dart';
 export 'src/firestore_docs.dart';
+export 'src/firestore_listen.dart';
 export 'src/firestore_transport.dart';
 export 'src/firestore_value.dart';
 export 'src/match_api.dart';
