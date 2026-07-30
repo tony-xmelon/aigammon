@@ -2,13 +2,21 @@
 /// the reference implementation ([InMemoryTransport]).
 ///
 /// These cases are written from the prose contract in `src/match_transport.dart`
-/// (one group per clause), so that when Task 3/4 land the socket and Firestore
-/// transports the same expectations can be pointed at them: build the transport
-/// pair differently, assert identically.
+/// (one group per clause). The clauses that are true of EVERY backend have been
+/// lifted into `lib/transport_contract.dart` and are run here against
+/// [InMemoryTransport], in `packages/lan_play/test/socket_contract_test.dart`
+/// against [SocketTransport] over a real loopback socket, and in
+/// `packages/online_client/test/emulator_integration_test.dart` against
+/// `FirestoreTransport` on the emulator — same assertions, three backends.
+///
+/// What stays HERE is what only the reference implementation can pin down: the
+/// manual-pump delivery model, the reset/replay clause, scripted dice, presence,
+/// pacing, and the fine-grained ordering cases that need a controllable clock.
 library;
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:match_transport/match_transport.dart';
+import 'package:match_transport/transport_contract.dart';
 import 'package:test/test.dart';
 
 /// A host+guest endpoint pair on one backend, plus a frame recorder per endpoint.
@@ -64,6 +72,33 @@ List<RollFrame> _rolls(List<InboundFrame> frames) =>
     frames.whereType<RollFrame>().toList();
 
 void main() {
+  // The SHARED suite, against the reference implementation. The identical call
+  // appears in lan_play's and online_client's suites — that is what makes
+  // "interchangeable with any other" a checked claim rather than a comment.
+  runTransportContract(
+    name: 'InMemoryTransport',
+    newUnconnected: () async => InMemoryTransport.host(InMemoryBackend()),
+    newPair: (config) async {
+      final backend = InMemoryBackend(config: config);
+      final host = InMemoryTransport.host(backend);
+      final guest = InMemoryTransport.guest(backend);
+      final hostSession = await host.connect();
+      final guestSession = await guest.connect();
+      return TransportPair(
+        host: host,
+        guest: guest,
+        hostSession: hostSession,
+        guestSession: guestSession,
+        dispose: () async {
+          await host.dispose();
+          await guest.dispose();
+        },
+      );
+    },
+    // In-process: nothing here waits on a socket.
+    timeout: const Duration(seconds: 5),
+  );
+
   // -------------------------------------------------------------------------
   group('connect()', () {
     test('seats the host white and the joiner black, and reports connected',

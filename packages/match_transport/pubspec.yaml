@@ -12,7 +12,10 @@ dependencies:
   backgammon_core:
     path: ../backgammon_core
   crypto: ^3.0.3
+  # A real dependency, not a dev one: lib/transport_contract.dart is a
+  # deliverable of this package (the executable half of the contract) and is
+  # imported by lan_play's and online_client's test suites.
+  test: ^1.25.0
 
 dev_dependencies:
   lints: ^4.0.0
-  test: ^1.25.0

@@ -74,7 +74,12 @@
 ///    when it definitively did not. This is what lets one controller gate its UI
 ///    on a single `await` on both substrates.
 ///
-/// A transport that honours all of the above is interchangeable with any other.
+/// A transport that honours all of the above is interchangeable with any other —
+/// and that is CHECKED, not asserted: `lib/transport_contract.dart` turns the
+/// clauses above into one reusable suite, which runs against [InMemoryTransport]
+/// (this package), `SocketTransport` over a real loopback socket (`lan_play`) and
+/// `FirestoreTransport` against the emulator (`online_client`). Add a clause here
+/// and add it there.
 library;
 
 import 'package:backgammon_core/backgammon_core.dart';

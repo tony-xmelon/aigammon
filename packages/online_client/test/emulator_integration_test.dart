@@ -6,6 +6,7 @@ import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:match_transport/match_transport.dart';
+import 'package:match_transport/transport_contract.dart';
 import 'package:online_client/online_client.dart';
 import 'package:test/test.dart';
 
@@ -953,6 +954,51 @@ void main() {
       );
     });
   });
+
+  // =========================================================================
+  // The SHARED transport contract, against the real Firestore transport.
+  //
+  // `packages/match_transport/lib/transport_contract.dart` holds the assertions;
+  // the in-memory reference and `SocketTransport` over loopback run the very same
+  // ones. That is what makes "a transport that honours all of the above is
+  // interchangeable with any other" a checked claim: a clause that means
+  // something subtly different online than it does on a socket fails here rather
+  // than being re-interpreted in a bespoke suite.
+  //
+  // On the POLL path deliberately (50ms): the listener adds a second delivery
+  // mechanism for the same frames, which is this package's own business and is
+  // covered by 'FirestoreTransport on the real-time path' above. What the shared
+  // contract is checking is the document model underneath both.
+  runTransportContract(
+    name: 'FirestoreTransport (emulator)',
+    newUnconnected: () async => FirestoreTransport(api: host.api, code: 'NOSUCH'),
+    newPair: (config) async {
+      final match = await activeMatch(
+        length: config.length,
+        cubeless: config.cubeless,
+      );
+      FirestoreTransport transportFor(TestUser user) => FirestoreTransport(
+            api: user.api,
+            code: match.code,
+            match: match,
+            pollInterval: const Duration(milliseconds: 50),
+          );
+      final hostT = transportFor(host);
+      final guestT = transportFor(guest);
+      final hostSession = await hostT.connect();
+      final guestSession = await guestT.connect();
+      return TransportPair(
+        host: hostT,
+        guest: guestT,
+        hostSession: hostSession,
+        guestSession: guestSession,
+        dispose: () async {
+          await hostT.dispose();
+          await guestT.dispose();
+        },
+      );
+    },
+  );
 }
 
 /// A real [FirestoreListenChannel] with a cut-out: [sever] fails the stream the
