@@ -1,7 +1,7 @@
 name: aigammon_app
 description: AIGammon — backgammon with a neural-net engine.
 publish_to: 'none'
-version: 0.11.3+16
+version: 0.12.0+17
 
 environment:
   sdk: ^3.12.2
@@ -13,6 +13,16 @@ dependencies:
   path: ^1.9.0
   path_provider: ^2.1.5
   drift: ^2.18.0
+  # The QR code the host shows. Pure Dart (its only dependency is `qr`, the
+  # encoder) — it paints on a canvas and pulls in no platform channel, so it
+  # costs the app nothing on the platforms that never scan.
+  qr_flutter: ^4.1.0
+  # The camera preview the guest scans with. A plugin, so it does have native
+  # code on Android/iOS/macOS/web, but it is the only way to reach a camera and
+  # its dependency list is small (collection, meta, plugin_platform_interface,
+  # web). Requires CAMERA on Android and NSCameraUsageDescription on iOS — see
+  # the manifest and Info.plist, and test/android_manifest_test.dart.
+  mobile_scanner: ^7.4.0
   drift_flutter: ^0.2.0
   sqlite3_flutter_libs: ^0.5.24
   backgammon_core:

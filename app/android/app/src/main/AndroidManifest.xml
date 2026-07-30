@@ -9,6 +9,23 @@
          working perfectly in development. No plugin in this app contributes the
          permission through manifest merging, so nothing else supplies it. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Play Nearby's QR join: the guest points its camera at the code on the
+         host's screen. Same rule as INTERNET above — it must live in THIS
+         manifest, not only in src/debug, or the scanner is dead on a release
+         build while working perfectly in development. mobile_scanner does not
+         contribute the permission by merging; it only requests it at runtime,
+         and a runtime request for a permission the manifest never declared is
+         denied outright.
+
+         Android grants CAMERA at runtime, so declaring it here costs nothing
+         until the user actually taps "Scan QR code". -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Scanning is one optional path into a LAN game (discovery and typed
+         addresses are the others), so a device with no camera must still be
+         able to install the app. Without this, declaring CAMERA would make the
+         hardware an implicit Play Store requirement. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <!-- Deliberately NO usesCleartextTraffic and no network_security_config, even
          though Play Nearby dials a plain `ws://` LAN address and API 28+ blocks
          cleartext by default.
