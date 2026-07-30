@@ -74,9 +74,25 @@ const int maxResumeLength = 64;
 /// vehicle for bulk data.
 const int maxCodeLength = 16;
 
-/// Cap on a peer-supplied reject/ack reason (relay-authored, but validated on
-/// read).
+/// Cap on a reject/ack reason. Enforced on CONSTRUCTION (see [capReason]) as
+/// well as on read: a refusal is built from a [ProtocolError] message, and some
+/// of those quote peer-supplied text, so capping only on read would let a peer
+/// buy an arbitrarily large outbound frame with one small nonsense field — and
+/// would then have the honest peer DROP it, losing the `lastSeq` signal too.
 const int maxReasonLength = 256;
+
+/// [reason] truncated to [maxReasonLength] code units, so a frame that quotes
+/// peer-supplied text stays constant-size. Null in, null out.
+///
+/// Never splits a surrogate pair: a trailing lone high surrogate is dropped
+/// rather than shipped as an unpaired code unit.
+String? capReason(String? reason) {
+  if (reason == null || reason.length <= maxReasonLength) return reason;
+  var end = maxReasonLength;
+  final last = reason.codeUnitAt(end - 1);
+  if (last >= 0xD800 && last <= 0xDBFF) end--;
+  return reason.substring(0, end);
+}
 
 /// The most hops one turn can ever have (doubles: four checkers).
 const int maxMoveHops = 4;
@@ -696,12 +712,12 @@ class WriteRevealMessage extends WriteMessage {
 /// about the write itself. Attaching the log here instead would let any peer pull
 /// hundreds of KB out of the relay with one small always-invalid frame, forever.
 class AckMessage extends Envelope {
-  const AckMessage({
+  AckMessage({
     required this.id,
     required this.status,
     required this.lastSeq,
-    this.reason,
-  });
+    String? reason,
+  }) : reason = capReason(reason);
 
   final int id;
   final AckStatus status;
@@ -727,8 +743,22 @@ class AckMessage extends Envelope {
 ///
 /// Constant-size for the same reason as [AckMessage]; before the welcome it is
 /// TERMINAL (retrying a wrong code only burns the brute-force quota).
+///
+/// [reason] is capped HERE, at construction, and not merely on read. Every
+/// refusal is built from a [ProtocolError] message, and several of those quote
+/// the offending peer-supplied value verbatim (`unreadable event: ...` carries
+/// the peer's `event.type`), so a 100 KB nonsense field would otherwise buy a
+/// 100 KB reject — the constant-size invariant gone, and with it the [lastSeq]
+/// signal, since a reason longer than [maxReasonLength] is DROPPED by the honest
+/// peer's decoder and takes the whole frame with it.
 class RejectMessage extends Envelope {
-  const RejectMessage({required this.reason, required this.lastSeq});
+  RejectMessage({required String reason, required this.lastSeq})
+      // Never empty: the decoder requires a non-empty string, and dropping a
+      // reject would drop [lastSeq] with it.
+      : reason = _nonEmpty(capReason(reason));
+
+  static String _nonEmpty(String? reason) =>
+      (reason == null || reason.isEmpty) ? 'refused' : reason;
 
   final String reason;
 

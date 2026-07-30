@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
@@ -208,7 +208,7 @@ void main() {
         expect((jsonDecode(raw) as Map)['payload'], isNot(contains('log')));
       }
       expect(
-          (ok(const AckMessage(id: 1, status: AckStatus.ok, lastSeq: 0).encode())
+          (ok(AckMessage(id: 1, status: AckStatus.ok, lastSeq: 0).encode())
                   as AckMessage)
               .reason,
           isNull);
@@ -228,9 +228,62 @@ void main() {
           ProtocolErrorKind.badField);
     });
 
+    test('a reason built from peer text is CAPPED at construction', () {
+      // The cap used to be enforced only on READ, and several ProtocolError
+      // messages quote the offending value verbatim — so one small nonsense field
+      // bought an arbitrarily large outbound reject, and the honest peer then
+      // DROPPED it (its decoder refuses a reason over maxReasonLength), losing
+      // the "you are behind" lastSeq signal with it.
+      final huge = 'x' * 100000;
+      final reject = RejectMessage(reason: huge, lastSeq: 7);
+      expect(reject.reason.length, maxReasonLength);
+      final raw = reject.encode();
+      expect(raw.length, lessThan(maxReasonLength + 200),
+          reason: 'the frame is constant-size whatever the peer sent');
+      // And it still DECODES, so lastSeq is still delivered.
+      final back = ok(raw) as RejectMessage;
+      expect(back.lastSeq, 7);
+      expect(back.reason.length, maxReasonLength);
+
+      // The same for an ack's optional reason.
+      final ack = AckMessage(
+          id: 1, status: AckStatus.rejected, lastSeq: 9, reason: huge);
+      expect(ack.reason!.length, maxReasonLength);
+      expect((ok(ack.encode()) as AckMessage).lastSeq, 9);
+
+      // Exactly at the cap is untouched; a null ack reason stays null.
+      final atCap = 'y' * maxReasonLength;
+      expect(RejectMessage(reason: atCap, lastSeq: 0).reason, atCap);
+      expect(
+          AckMessage(id: 1, status: AckStatus.ok, lastSeq: 0).reason, isNull);
+      // An empty reason would be refused by the decoder, so it never ships.
+      expect(RejectMessage(reason: '', lastSeq: 0).reason, isNotEmpty);
+    });
+
+    test('the whole path from a hostile frame to a bounded reject', () {
+      // The concrete route the review found: an enormous `event.type` reaches
+      // `_bad('unreadable event: $e')`, whose message embeds it.
+      final hostile = jsonEncode({
+        'v': protocolVersion,
+        'type': 'w_event',
+        'payload': {
+          'id': 1,
+          'seq': 1,
+          'gameNo': 1,
+          'event': {'type': 'z' * 100000},
+        },
+      });
+      final error = bad(hostile);
+      expect(error.message.length, greaterThan(maxReasonLength),
+          reason: 'the error itself does quote the peer');
+      final raw = RejectMessage(reason: error.message, lastSeq: 3).encode();
+      expect(raw.length, lessThan(maxReasonLength + 200));
+      expect((ok(raw) as RejectMessage).lastSeq, 3);
+    });
+
     test('reject carries a reason and the relay lastSeq, never a log', () {
       final raw =
-          const RejectMessage(reason: 'bad code', lastSeq: 12).encode();
+          RejectMessage(reason: 'bad code', lastSeq: 12).encode();
       final back = ok(raw) as RejectMessage;
       expect(back.reason, 'bad code');
       expect(back.lastSeq, 12);
@@ -241,7 +294,7 @@ void main() {
 
       // lastSeq is 0 before any event, and required.
       expect(
-          (ok(const RejectMessage(reason: 'x', lastSeq: 0).encode())
+          (ok(RejectMessage(reason: 'x', lastSeq: 0).encode())
                   as RejectMessage)
               .lastSeq,
           0);
@@ -532,7 +585,7 @@ void main() {
           ProtocolErrorKind.badField);
       expect(bad(jsonEncode(base({'rolls': 'none'}))).kind,
           ProtocolErrorKind.badField);
-      // Missing rolls entirely is fine — an old-shaped welcome has no rolls.
+      // Missing rolls entirely is fine â€” an old-shaped welcome has no rolls.
       expect((ok(jsonEncode(base({}))) as WelcomeMessage).rolls, isEmpty);
     });
 

@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
@@ -16,7 +16,7 @@ import 'socket_harness.dart';
 /// The old version of this suite fuzzed `HostAuthority`, including a "deep
 /// validation path" case that fed adversarial MOVES into `canonicalPlay`. There
 /// is no such path here on purpose: the relay does not know the rules, so an
-/// illegal move is not its business — it is written to the log and the opponent's
+/// illegal move is not its business â€” it is written to the log and the opponent's
 /// controller FREEZES on it (`app/test/net/net_cheat_freeze_test.dart` owns those
 /// cases, on both transports). What this suite still owns is that a hostile frame
 /// cannot make the relay throw, mis-order the log, or answer with anything
@@ -138,7 +138,7 @@ void main() {
 
     // Seq 1 is taken and every generated write claims 1..4 with no roll behind
     // it, so nothing in the corpus is BOTH decodable and correctly ordered
-    // except an append at the next free seq — and even that only ever lands
+    // except an append at the next free seq â€” and even that only ever lands
     // once, because the seq then moves on.
     expect(f.relay.lastSeq, lessThanOrEqualTo(2),
         reason: 'a hostile burst cannot pump the log');
@@ -176,7 +176,7 @@ void main() {
     // The relay-side refusal is built by HostServer; its SHAPE is what bounds
     // the amplification, so assert on the frame itself.
     final reject =
-        const RejectMessage(reason: 'not valid JSON', lastSeq: 4).encode();
+        RejectMessage(reason: 'not valid JSON', lastSeq: 4).encode();
     expect(reject.length, lessThan(150));
     expect(jsonDecode(reject), isNot(contains('log')));
   });
@@ -189,7 +189,7 @@ void main() {
     guest.hello();
     await waitFor(() => guest.gotWelcome, what: 'a welcome');
 
-    // There is no author field on a write frame at all — the relay stamps it —
+    // There is no author field on a write frame at all â€” the relay stamps it â€”
     // so the best a hostile peer can do is add one and have it ignored.
     guest.sendRaw(jsonEncode({
       'v': protocolVersion,
