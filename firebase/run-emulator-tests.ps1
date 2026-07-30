@@ -67,6 +67,12 @@ Write-Host "online_client emulator suite passed" -ForegroundColor Green
 #    100ms against 4m50s at 2000ms). Production answers that with adaptive
 #    polling (500ms while a handshake is in flight); the knob still overrides
 #    BOTH cadences, since the fast one is capped at the resting one.
+#
+#    The E2E runs on the REAL-TIME LISTENER path by default (that is production
+#    since v0.11), which also adds a leg that severs the stream mid-match and
+#    requires the poll fallback to carry the game. AIGAMMON_E2E_LISTEN=0 runs the
+#    identical suite on polling alone — how a gRPC problem is isolated from a game
+#    problem — and the poll knob above still governs the DEGRADED path either way.
 $app = (Resolve-Path (Join-Path $PSScriptRoot '..\app')).Path
 $appCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
   "set `"AIGAMMON_E2E_POLL_MS=100`" && " +
