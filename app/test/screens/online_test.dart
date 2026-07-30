@@ -244,6 +244,45 @@ void main() {
     expect(api.joinCodes, ['ZZZZZZ', 'ZZZZZZ']);
   });
 
+  testWidgets('the lobby wait BACKS OFF instead of billing 2s forever',
+      (t) async {
+    // A free-tier budget guard, not a UX one. The lobby wait is the longest idle
+    // window in the product ("create a match, then go and tell your friend"),
+    // and it is the ONE window still polled — what it waits for is a field on
+    // the match document, which no subcollection watch can see. At a flat 2s,
+    // ten minutes of it cost 300 match reads (600 with the rules-gets each one
+    // evaluates): a whole game's worth of quota for nobody doing anything.
+    await t.binding.setSurfaceSize(surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final api = screenApi(backend, activeAfter: 100000);
+    await t.pumpWidget(_app(api, db: db));
+    await t.pumpAndSettle();
+
+    await t.tap(find.widgetWithText(FilledButton, 'Create'));
+    await t.pump();
+    await t.pump();
+    await t.pump();
+    expect(find.text('Waiting for opponent…'), findsOneWidget);
+
+    // Ten minutes of fake time, advanced in 1s slices so every timer fires.
+    for (var i = 0; i < 600; i++) {
+      await t.pump(const Duration(seconds: 1));
+    }
+    final reads = api.calls['fetchMatch'] ?? 0;
+
+    // Stop the loop so no timer outlives the test.
+    await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await t.pump();
+
+    // Flat 2s would be ~300. The 15s ceiling puts it near 45 (5 fast cycles,
+    // then 4+8+15+15… seconds); allow slack for the ramp, but nowhere near flat.
+    expect(reads, lessThan(60),
+        reason: 'the lobby wait is not backing off — $reads reads in 10 minutes');
+    expect(reads, greaterThan(5),
+        reason: 'the wait stopped polling entirely, which would never launch');
+  });
+
   testWidgets('cancel-while-waiting stops polling without errors', (t) async {
     await t.binding.setSurfaceSize(surface);
     addTearDown(() => t.binding.setSurfaceSize(null));

@@ -163,9 +163,12 @@ bill completely, so the arithmetic is worth spelling out.
 target for `events` where `seq > cursor`, one for `rolls` where `n >= floor`.
 A watch is **billed per document DELIVERED**, not per unit of time — so:
 
-* an **idle turn costs nothing at all.** A player thinking for five minutes, or
-  an app left open on the board, bills zero reads. Under the old poll loop the
-  same five minutes cost 150 cycles per client;
+* an **idle turn costs nothing at all** — *once the match has started.* A player
+  thinking for five minutes, or an app left open on the board, bills zero reads.
+  Under the old poll loop the same five minutes cost 150 cycles per client.
+  (The **lobby wait** before the match starts is the exception and is priced
+  separately below: it is the one window with no subcollection to watch, because
+  what it is waiting for is a field on the match document itself);
 * a **change costs one read per watcher.** Each `events/{seq}` create and each of
   the three phase writes on a `rolls/{n}` document is delivered once to each of
   the two clients;
@@ -182,6 +185,26 @@ conservatively for one such get per delivered document puts the range at
 **750–1,500 reads**, plus about 375 more for the rules-gets the writes evaluate,
 plus two match-document reads at connect. Round it to **under 2,000 reads for a
 whole 5-point match, and nothing for the time nobody is moving.**
+
+### The lobby wait: the one poll loop that survives
+
+A watch needs something to watch, and the host's "waiting for opponent" state is
+not a document appearing — it is `guestUid` being **set on the existing match
+document**. So that one window is still polled, by
+`_pollUntilActive` in `app/lib/screens/online_screen.dart`: a `fetchMatch` per
+cycle, each billing its own rules-get, so **~2 reads per cycle**.
+
+Two properties keep it bounded:
+
+* it **stops the moment the seat fills** (or the host cancels, or the screen is
+  disposed). Nothing polls the match document once a match is under way — the
+  transport reads it at `connect` and then never again, because `guestUid` is the
+  only field it cares about and it already has the answer;
+* the cadence **backs off**: 2s for the first five cycles, then doubling to a
+  **15s ceiling**. A five-minute wait for a friend to answer their phone is
+  therefore about **25 reads, not 300** — the flat-2s version cost roughly a
+  whole game's worth of budget for nobody doing anything, which was the largest
+  remaining hole in the numbers above.
 
 The poll loop cost several thousand for the same match, and most of it was spent
 on nothing happening: two queries per client every 2s (500ms while a dice
@@ -201,8 +224,15 @@ no server — but it is no longer a budget that a single long game can eat.
 * **A reconnect re-bills.** Every re-listen delivers whatever its target's query
   matches at that moment. The watermark bounds keep that near zero for a live
   match, but a client on a flaky network that reconnects repeatedly pays a little
-  each time, and a cold rejoin into a match in progress pays for the tail of the
-  log once.
+  each time.
+* **A cold rejoin pays for the WHOLE log, not its tail.** Re-entering a match
+  after an app restart has no watermarks to start from, so
+  `NetMatchController` primes with `eventsSince(0)` and `rollsSince(1)` — every
+  event and every roll document the match has accumulated. For a 5-pointer in its
+  endgame that is ~300 reads (~600 with the rules-gets), i.e. a rejoin costs
+  roughly a third of the match it is rejoining. It is bounded and it is paid
+  once per rejoin, but it is not free, and a player who force-quits and rejoins
+  repeatedly is the most expensive thing a single user can do to the quota.
 * **A degraded client pays the old price.** If the gRPC stream cannot be
   established at all (a network that blocks HTTP/2, a proxy, an outage), the
   transport falls back to the poll loop and keeps the match alive at the old

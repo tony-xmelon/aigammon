@@ -100,7 +100,27 @@ class _OnlineBody extends ConsumerStatefulWidget {
 }
 
 class _OnlineBodyState extends ConsumerState<_OnlineBody> {
+  /// The first few match-document reads while waiting for an opponent.
+  ///
+  /// Snappy at the start (a friend who is already on the join screen appears
+  /// within a couple of seconds), then [_pollCeiling] takes over — see [_wait].
   static const _pollInterval = Duration(seconds: 2);
+
+  /// The cadence the wait settles at once it is clear nobody is joining
+  /// immediately.
+  ///
+  /// This is a FREE-TIER budget decision, not a UX one. The lobby wait is the
+  /// longest idle window in the product — "create a match, then go and tell your
+  /// friend" — and at a flat 2s a five-minute wait cost ~150 match-document
+  /// reads, each of which also bills the `matchOf(code)` rules-get: a whole
+  /// game's worth of the daily quota for nothing happening. Backing off to 15s
+  /// makes the same five minutes cost about 25 reads, and costs at most 15
+  /// seconds of latency on the join itself. See "Free-tier budget" in
+  /// `firebase/DEPLOY.md`.
+  static const _pollCeiling = Duration(seconds: 15);
+
+  /// How many cycles run at [_pollInterval] before the backoff starts.
+  static const _pollFastCycles = 5;
 
   // --- Create state ----------------------------------------------------------
   int _matchLength = 5;
@@ -124,6 +144,9 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
   // --- Polling / lifecycle ---------------------------------------------------
   bool _cancelled = false;
   Timer? _pollTimer;
+
+  /// Waits completed in the current [_pollUntilActive] run, for the backoff.
+  int _pollCycles = 0;
 
   @override
   void initState() {
@@ -254,10 +277,15 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     }
   }
 
-  /// Polls `fetchMatch` every [_pollInterval] until an opponent has taken the
-  /// guest seat, then launches the game as the White (host) side. Transient
-  /// fetch failures surface inline and keep polling; cancelling stops the loop.
+  /// Polls `fetchMatch` until an opponent has taken the guest seat, then
+  /// launches the game as the White (host) side. Transient fetch failures
+  /// surface inline and keep polling; cancelling stops the loop.
+  ///
+  /// The cadence backs off ([_wait]) because this is the one wait that can last
+  /// minutes, and every cycle of it is billed twice against the free tier (the
+  /// read, plus the rules-get it evaluates).
   Future<void> _pollUntilActive(MatchApi api, String code) async {
+    _pollCycles = 0;
     while (mounted && !_cancelled) {
       MatchDoc doc;
       try {
@@ -277,12 +305,23 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     }
   }
 
-  /// A cancellable [_pollInterval] delay. [_cancelWaiting] cancels the timer,
-  /// leaving the returned future to hang harmlessly (the loop has already exited
-  /// via its `mounted`/`_cancelled` checks).
+  /// A cancellable, BACKING-OFF delay: [_pollInterval] for the first
+  /// [_pollFastCycles] cycles, then doubling to [_pollCeiling].
+  ///
+  /// [_cancelWaiting] cancels the timer, leaving the returned future to hang
+  /// harmlessly (the loop has already exited via its `mounted`/`_cancelled`
+  /// checks).
   Future<void> _wait() {
+    final cycle = _pollCycles++;
+    var delay = _pollInterval;
+    if (cycle >= _pollFastCycles) {
+      // The shift is capped so a wait that lasts hours cannot overflow it.
+      final steps = cycle - _pollFastCycles + 1;
+      final scaled = _pollInterval * (1 << (steps > 8 ? 8 : steps));
+      delay = scaled > _pollCeiling ? _pollCeiling : scaled;
+    }
     final completer = Completer<void>();
-    _pollTimer = Timer(_pollInterval, () {
+    _pollTimer = Timer(delay, () {
       if (!completer.isCompleted) completer.complete();
     });
     return completer.future;
