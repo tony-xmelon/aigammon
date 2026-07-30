@@ -147,6 +147,7 @@ class _HostSocketTransport implements SocketTransport {
     if (!_connected) {
       _connected = true;
       _setStatus(TransportStatus.connected);
+      _answerHelloWeMissed();
     }
     return _sessionNow();
   }
@@ -289,6 +290,40 @@ class _HostSocketTransport implements SocketTransport {
       case ResetFrame():
         break; // the relay never emits one
     }
+  }
+
+  /// Answer a join `hello` that arrived BEFORE this transport existed.
+  ///
+  /// This is the production order, not an edge case: "Play Nearby" binds the
+  /// server and shows a room code first, and only builds this transport — inside
+  /// `HostSession.controller()` — once a guest has authenticated. By then the
+  /// guest's `hello` has already been published to [HostServer.guestFrames],
+  /// which is broadcast and non-buffering, so with no subscriber attached it was
+  /// DROPPED. Nothing ever asked for it again either: the guest re-sends a `hello`
+  /// only through its own transport, which it does not build until it is welcomed.
+  ///
+  /// The failure that caused was silent and permanent. The guest sat in
+  /// [GuestConnectionStatus.connecting] forever — the host's heartbeat kept
+  /// refreshing its liveness clock, so it never even dropped the link and retried —
+  /// and the joining device simply spun on "Connecting…".
+  ///
+  /// So the server retains that `hello` ([HostServer.guestHello]) and it is
+  /// answered here, from [connect] rather than from the constructor: a transport
+  /// that was built but never opened must not push frames at a guest.
+  void _answerHelloWeMissed() {
+    // False means a hello has already been answered on this connection (the
+    // ordinary path, where this transport predates the guest), so there is
+    // nothing owed. Re-sending would hand the guest a duplicate welcome and, with
+    // it, a spurious replay.
+    if (!_resetOwedOnHello) return;
+    if (server.guestHello == null) return;
+    // The join is now complete. Our OWN fold needs no [ResetFrame] for it: the
+    // controller primes itself from the relay immediately after subscribing, and
+    // anything emitted here would be dropped anyway — it subscribes to [inbound]
+    // only after this call returns. A guest that later drops re-arms the flag
+    // through [_onPresence].
+    _resetOwedOnHello = false;
+    server.send(relay.welcome());
   }
 
   void _onGuestFrame(Envelope message) {

@@ -9,6 +9,22 @@
          working perfectly in development. No plugin in this app contributes the
          permission through manifest merging, so nothing else supplies it. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Deliberately NO usesCleartextTraffic and no network_security_config, even
+         though Play Nearby dials a plain `ws://` LAN address and API 28+ blocks
+         cleartext by default.
+
+         That default does not reach this code. Android enforces it through
+         NetworkSecurityPolicy, which java.net / OkHttp / WebView consult — and
+         `dart:io` does not: WebSocket.connect and HttpClient are implemented in the
+         VM over raw POSIX sockets. So a cleartext exception here would buy nothing,
+         while a global usesCleartextTraffic="true" would weaken the app's posture
+         for the native layers that DO honour the policy.
+
+         Recorded because "Android is blocking cleartext" is the obvious first guess
+         when a LAN join fails, and it is the wrong one — the shipped join hang was
+         a dropped handshake frame in Dart (see SocketTransport.host). Revisit only
+         if a plugin or platform channel, rather than dart:io, ever needs http://. -->
+
     <application
         android:label="AIGammon"
         android:name="${applicationName}"

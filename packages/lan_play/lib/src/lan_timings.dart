@@ -11,8 +11,9 @@ class LanTimings {
     this.silenceTimeout = const Duration(seconds: 15),
     this.helloMinInterval = const Duration(seconds: 1),
     this.frameMinInterval = const Duration(milliseconds: 50),
+    this.frameBurst = 4,
     this.connectTimeout = const Duration(seconds: 5),
-    this.writeTimeout = const Duration(seconds: 4),
+    this.writeTimeout = const Duration(milliseconds: 1500),
     this.reconnectMinDelay = const Duration(milliseconds: 500),
     this.reconnectMaxDelay = const Duration(seconds: 8),
     this.busyRetryDelay = const Duration(seconds: 5),
@@ -60,23 +61,45 @@ class LanTimings {
   /// lever a peer has; excess hellos are dropped, not answered.
   final Duration helloMinInterval;
 
-  /// Minimum spacing between two non-`hello` frames on one connection. Excess
-  /// frames are dropped silently — a peer cannot make the host spend unbounded
-  /// CPU by spinning submissions.
+  /// The SUSTAINED spacing between two non-`hello` frames on one connection: the
+  /// refill period of the host's per-connection token bucket. Excess frames are
+  /// dropped silently — a peer cannot make the host spend unbounded CPU by
+  /// spinning submissions.
   final Duration frameMinInterval;
+
+  /// The bucket's capacity: how many frames may arrive back-to-back before the
+  /// [frameMinInterval] average starts to bite.
+  ///
+  /// Must cover the one BURST the protocol itself produces — the three writes of
+  /// a guest-owned roll (`createRoll`, `reveal`, the `RollEvent`) — because the
+  /// penalty for dropping one of those is a whole [writeTimeout] of dead board
+  /// (nothing replays a dropped frame; only the guest's controller retries, and
+  /// only once the write it is waiting on has failed). A hard minimum spacing
+  /// could not cover it: the guest paces its sends to just outside
+  /// [frameMinInterval], and ordinary WiFi jitter delivers them closer together
+  /// than they were sent. See `HostServer`'s `allowFrame`.
+  final int frameBurst;
 
   /// Cap on how long a single WebSocket connect attempt may take.
   final Duration connectTimeout;
 
   /// How long a guest waits for the relay's `ack` before calling one write lost.
   ///
-  /// A write really can vanish: the relay DROPS any frame that arrives inside
-  /// [frameMinInterval], silently and by design, and nothing replays it. So the
+  /// A write really can vanish: the relay DROPS a frame that overruns the
+  /// [frameBurst] bucket, silently and by design, and nothing replays it. So the
   /// deadline is a correctness requirement, not a nicety — without it a single
   /// dropped frame would leave the controller's gate latched for the rest of the
-  /// match. Comfortably longer than a LAN round trip and comfortably shorter than
-  /// the controller's own gate deadline, so a lost write surfaces as a retryable
-  /// error rather than as a mystery timeout.
+  /// match.
+  ///
+  /// It is also the whole of what a lost write COSTS the player, which is why it
+  /// is 1.5s and not the 4s it shipped as. A decision submit retries immediately
+  /// on failure, so one dropped frame costs up to 2x this deadline; that has to
+  /// fit inside the gate deadline ([connectTimeout], 5s) with room to spare — at
+  /// 4s it did not (8s > 5s), and the user got the gate's "the other device did
+  /// not answer" on top of the stall. (A roll-drive write instead cancels its own
+  /// gate and re-arms at the retry beat, ~200ms later — no stacking there.) Still
+  /// thirty times a LAN round trip, and comfortably past the client's own send
+  /// pacing, so nothing healthy can reach it.
   final Duration writeTimeout;
 
   /// First reconnect delay; doubles up to [reconnectMaxDelay].
@@ -118,6 +141,7 @@ class LanTimings {
     Duration? silenceTimeout,
     Duration? helloMinInterval,
     Duration? frameMinInterval,
+    int? frameBurst,
     Duration? connectTimeout,
     Duration? writeTimeout,
     Duration? reconnectMinDelay,
@@ -134,6 +158,7 @@ class LanTimings {
         silenceTimeout: silenceTimeout ?? this.silenceTimeout,
         helloMinInterval: helloMinInterval ?? this.helloMinInterval,
         frameMinInterval: frameMinInterval ?? this.frameMinInterval,
+        frameBurst: frameBurst ?? this.frameBurst,
         connectTimeout: connectTimeout ?? this.connectTimeout,
         writeTimeout: writeTimeout ?? this.writeTimeout,
         reconnectMinDelay: reconnectMinDelay ?? this.reconnectMinDelay,

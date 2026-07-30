@@ -60,9 +60,12 @@ const int maxThrottledAddresses = 256;
 ///  * **Amplification.** `hello` is the ONLY frame that replays the whole log,
 ///    so it is rate-limited twice: [LanTimings.helloMinInterval] within a
 ///    connection, and [LanTimings.maxConnectionsPerWindow] across reconnects
-///    from one address. Every other frame is limited by
-///    [LanTimings.frameMinInterval]. Excess is DROPPED silently — never
-///    answered, never queued.
+///    from one address. Every other frame is limited by a per-connection TOKEN
+///    BUCKET — [LanTimings.frameBurst] frames of capacity, refilled one per
+///    [LanTimings.frameMinInterval] — so the sustained rate is bounded while the
+///    protocol's own three-frame roll burst always gets through (see
+///    `_GuestConnection.allowFrame` for why a hard minimum spacing could not).
+///    Excess is DROPPED silently — never answered, never queued.
 ///  * **Hostile input.** Frames over [maxMessageLength] are dropped before the
 ///    parser; binary frames are ignored; a decode failure earns a bounded
 ///    `reject` (an unknown TYPE is ignored instead — a newer peer may send
@@ -168,6 +171,19 @@ class HostServer {
 
   /// The connected guest's display name, if any.
   String? get guestName => _guest?.name;
+
+  /// The `hello` the CURRENTLY authenticated guest presented, or null when nobody
+  /// holds the playing slot.
+  ///
+  /// Retained because [guestFrames] is broadcast and NON-BUFFERING while the slot
+  /// is claimed the instant the socket is bound: the "Play Nearby" screen shows a
+  /// room code long before it builds a transport, so the join `hello` is routinely
+  /// published with no subscriber attached and is then gone for good. A transport
+  /// built late reads it here and answers it (see `SocketTransport.host`), instead
+  /// of leaving the guest waiting for a welcome that can never arrive.
+  ///
+  /// Lives on the connection, so it disappears with the guest.
+  HelloMessage? get guestHello => _guest?.hello;
 
   /// How many sockets are mid-handshake. Diagnostics (and a test hook).
   int get pendingConnections => _pendingCount;
@@ -317,16 +333,16 @@ class HostServer {
           return;
         }
         if (envelope is PingMessage) {
-          if (!c.allowFrame(now, timings.frameMinInterval)) return;
+          if (!c.allowFrame(now, timings.frameMinInterval, timings.frameBurst)) return;
           _send(c, const PongMessage());
           return;
         }
         if (envelope is PongMessage) return; // liveness only, already recorded
-        if (!c.allowFrame(now, timings.frameMinInterval)) return;
+        if (!c.allowFrame(now, timings.frameMinInterval, timings.frameBurst)) return;
         _publish(envelope);
       case DecodeFailure(:final error):
         if (error.kind == ProtocolErrorKind.unknownType) return;
-        if (!c.allowFrame(now, timings.frameMinInterval)) return;
+        if (!c.allowFrame(now, timings.frameMinInterval, timings.frameBurst)) return;
         // A bounded refusal, carrying our seq so a guest that has drifted can
         // tell the difference between "you are behind" and "that frame was
         // nonsense".
@@ -355,6 +371,8 @@ class HostServer {
     _guest = c;
     c.authenticated = true;
     c.name = hello.name;
+    // Kept for a transport that does not exist yet — see [guestHello].
+    c.hello = hello;
     c.handshakeTimer?.cancel();
     c.handshakeTimer = null;
     c.markHello(DateTime.now());
@@ -446,9 +464,18 @@ class _GuestConnection {
   bool closing = false;
   bool detached = false;
   String? name;
+
+  /// The `hello` that claimed the playing slot — see [HostServer.guestHello].
+  HelloMessage? hello;
   DateTime lastActivity;
   DateTime? _lastHello;
+
+  /// When the frame bucket last paid out, less any unspent remainder — see
+  /// [allowFrame].
   DateTime? _lastFrame;
+
+  /// Frames the bucket can pay out right now.
+  int _tokens = 0;
   Timer? handshakeTimer;
   Timer? heartbeat;
 
@@ -461,10 +488,51 @@ class _GuestConnection {
     return true;
   }
 
-  bool allowFrame(DateTime now, Duration min) {
+  /// The frame limiter: a TOKEN BUCKET, not a minimum spacing.
+  ///
+  /// The average it enforces is the same one [LanTimings.frameMinInterval] always
+  /// named — one frame per interval — but it lets a short burst through, and that
+  /// difference is a correctness requirement rather than a kindness.
+  ///
+  /// A minimum spacing is unsatisfiable by an honest peer over a real link. The
+  /// guest paces its sends to 1.25x this interval plus 2ms (see
+  /// `GuestClient._sendSpacing`), which on the production 50ms is about 15ms of
+  /// margin; a WiFi retransmit or a power-save wakeup delays one frame by more
+  /// than that routinely, and the frame BEHIND it then arrives inside the window
+  /// through no fault of the sender. Dropping it — silently, with nothing to
+  /// replay it — cost the guest a whole [LanTimings.writeTimeout] before its
+  /// controller could even retry.
+  ///
+  /// That landed on exactly one thing: a roll the GUEST owns is the only burst in
+  /// the protocol (`createRoll`, then `reveal`, then the `RollEvent`), which is
+  /// why the symptom was "each time the joiner rolls the dice" and never a move
+  /// or a host roll, both of which are single frames.
+  ///
+  /// [burst] is the bucket's capacity, sized to cover that burst with room to
+  /// spare. Sustained spam is still capped at one frame per [min] — a peer cannot
+  /// buy more than [burst] frames of head start, ever — so the amplification
+  /// bound the policy rests on is unchanged.
+  bool allowFrame(DateTime now, Duration min, int burst) {
     final last = _lastFrame;
-    if (last != null && now.difference(last) < min) return false;
-    _lastFrame = now;
+    if (last == null) {
+      _tokens = burst - 1;
+      _lastFrame = now;
+      return true;
+    }
+    if (min > Duration.zero) {
+      final earned = now.difference(last).inMicroseconds ~/ min.inMicroseconds;
+      if (earned > 0) {
+        _tokens = (_tokens + earned).clamp(0, burst);
+        // Credit only the whole intervals actually spent, so the remainder is
+        // carried rather than repeatedly rounded away (which would let a fast
+        // enough caller earn a token per frame at any rate).
+        _lastFrame = last.add(min * earned);
+      }
+    } else {
+      _tokens = burst;
+    }
+    if (_tokens <= 0) return false;
+    _tokens--;
     return true;
   }
 }

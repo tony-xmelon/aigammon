@@ -52,6 +52,9 @@ const String testResumeToken = 'TESTTOKEN';
 final LanTimings lanTestTimings =
     LanTimings.test.copyWith(connectTimeout: const Duration(seconds: 2));
 
+/// The default the rig uses when a test does not name its own clocks.
+final LanTimings lanDefaultTestTimings = lanTestTimings;
+
 /// Let real timers and socket events run for a beat.
 Future<void> tick([int ms = 2]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
@@ -76,7 +79,18 @@ class SocketPair {
     int length = 1,
     bool cubeless = false,
     MovePicker pickMove = greedyFirstMove,
+    LanTimings? timings,
+    LanTimings? hostTimings,
   }) async {
+    final lanTestTimings = timings ?? lanDefaultTestTimings;
+    // The two ends are configured SEPARATELY so a test can model the one thing a
+    // loopback rig otherwise cannot: network jitter. The guest paces its sends
+    // just outside the host's stated minimum, so on a real WiFi link a frame
+    // that is delayed relative to its predecessor ARRIVES inside that minimum —
+    // indistinguishable, at the host, from a guest that never paced at all.
+    // Giving the host a stricter limiter than the guest paces to reproduces that
+    // compression deterministically.
+    final serverTimings = hostTimings ?? lanTestTimings;
     final relay = MatchRelay(
       config: MatchConfig(length: length, cubeless: cubeless),
       resumeToken: testResumeToken,
@@ -84,7 +98,7 @@ class SocketPair {
     final server = await HostServer.start(
       port: 0,
       roomCode: testRoomCode,
-      timings: lanTestTimings,
+      timings: serverTimings,
       bindAddress: InternetAddress.loopbackIPv4,
       lastSeq: () => relay.lastSeq,
     );
