@@ -24,11 +24,25 @@
 
 ### Signing
 
-The release APK is signed with Flutter's **debug** keystore (see the
-`signingConfig = signingConfigs.getByName("debug")` in
-`app/android/app/build.gradle.kts`). That is fine for internal tester
-distribution via Firebase App Distribution, but a real Play Store release needs a
-proper upload keystore + `key.properties` signing config. Not done here.
+Release signing is **repository-secret gated**, like the Firebase and iOS paths.
+The `Configure release signing` step decodes the upload keystore and writes
+`app/android/key.properties`; `app/android/app/build.gradle.kts` picks it up and
+selects the real `release` signing config. When the secrets are absent the step
+prints a `::warning::` and Gradle falls back to Flutter's **debug** keystore, so
+the job stays green — but that APK cannot be published.
+
+Four secrets, all required together:
+
+| Secret | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | base64 of the upload `.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS` | key alias (`aigammon-upload`) |
+| `ANDROID_KEY_PASSWORD` | key password |
+
+Full instructions — including how to generate your own keystore — are in
+**`app/android/KEYSTORE_SETUP.md`**. `app/test/android_signing_test.dart` guards
+the wiring.
 
 ### Neural nets
 

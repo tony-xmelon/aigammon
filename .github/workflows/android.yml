@@ -66,6 +66,35 @@ jobs:
         working-directory: app
         run: flutter pub get
 
+      # Release signing, gated on four repository secrets exactly the way the
+      # Firebase and iOS-signing paths are gated. Present -> decode the upload
+      # keystore and write the key.properties that app/android/app/build.gradle.kts
+      # reads. Absent -> say so loudly and let Gradle's documented debug-key
+      # fallback keep the job green. See app/android/KEYSTORE_SETUP.md.
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -eu
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] \
+             && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > app/android/aigammon-upload.jks
+            # A .properties file treats backslash as an escape, so escape it.
+            esc() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+            {
+              echo "storeFile=aigammon-upload.jks"
+              echo "storePassword=$(esc "$ANDROID_KEYSTORE_PASSWORD")"
+              echo "keyAlias=$(esc "$ANDROID_KEY_ALIAS")"
+              echo "keyPassword=$(esc "$ANDROID_KEY_PASSWORD")"
+            } > app/android/key.properties
+            echo "Release signing ENABLED (upload keystore installed)"
+          else
+            echo "::warning::Android signing secrets not set — the release APK will be signed with the DEBUG keystore and cannot be published. See app/android/KEYSTORE_SETUP.md"
+          fi
+
       # Every CI build gets a unique, monotonically increasing build number
       # (the workflow run number), so testers can tell releases apart in
       # Firebase App Distribution. The semantic version comes from pubspec.
