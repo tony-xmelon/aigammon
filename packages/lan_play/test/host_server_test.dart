@@ -389,8 +389,13 @@ void main() {
           what: 'the spaced resync welcome');
     });
 
-    test('a burst of ordinary frames is throttled, not answered', () async {
-      final f = await ServerFixture.start();
+    test('a long burst of ordinary frames is throttled, not answered',
+        () async {
+      // A coarse refill so the bucket's two halves are separable: capacity is
+      // what a legitimate burst spends, the refill is what a spammer is held to.
+      final f = await ServerFixture.start(
+          timings: LanTimings.test
+              .copyWith(frameMinInterval: const Duration(milliseconds: 200)));
       addTearDown(f.dispose);
       seedOpening(f.relay, whiteDie: 6, blackDie: 1);
       final guest = await RawGuest.connect(f.server);
@@ -400,14 +405,51 @@ void main() {
 
       // Seq 1 is taken, so every one of these earns a `contested` ack — unless
       // the limiter drops it first.
-      for (var i = 0; i < 12; i++) {
+      for (var i = 0; i < 40; i++) {
         guest.writeEvent(const TakeEvent(Player.black), seq: 1);
       }
       await settle(80);
-      expect(guest.of<AckMessage>().length, lessThan(4),
-          reason: 'the burst is dropped, not answered one for one');
+      expect(guest.of<AckMessage>().length,
+          lessThanOrEqualTo(LanTimings.test.frameBurst),
+          reason: 'the bucket answers its capacity and drops the rest — never '
+              'one for one');
       expect(guest.closed, isFalse);
       expect(f.relay.lastSeq, 1, reason: 'nothing illegitimate applied');
+    });
+
+    test('the three frames of a guest-owned roll are never dropped', () async {
+      // THE REGRESSION. A guest-owned roll is the one burst the protocol itself
+      // produces: `createRoll`, then `reveal`, then the `RollEvent`. Under a hard
+      // minimum-spacing limiter, two arriving inside the window — which ordinary
+      // WiFi jitter causes, however carefully the client paced them — were
+      // dropped silently, and the guest sat out a whole `writeTimeout` per drop.
+      //
+      // Policed here at 200ms while the frames arrive in the same instant: a
+      // spacing rule could not pass this, and the protocol's own client cannot
+      // guarantee spacing it does not control the arrival of.
+      final f = await ServerFixture.start(
+          timings: LanTimings.test
+              .copyWith(frameMinInterval: const Duration(milliseconds: 200)));
+      addTearDown(f.dispose);
+      seedOpening(f.relay, whiteDie: 6, blackDie: 1);
+      final guest = await RawGuest.connect(f.server);
+      addTearDown(guest.close);
+      guest.hello();
+      await waitFor(() => guest.gotWelcome, what: 'a welcome');
+
+      final ids = [
+        guest.nextId(),
+        guest.nextId(),
+        guest.nextId(),
+      ];
+      guest.send(WriteRollMessage(id: ids[0], n: 2, commit: 'a' * 64));
+      guest.send(WriteEntropyMessage(id: ids[1], n: 2, entropy: 'b' * 64));
+      guest.send(WriteRevealMessage(id: ids[2], n: 2, reveal: 'c' * 64));
+
+      await waitFor(() => guest.of<AckMessage>().length == 3,
+          what: 'all three frames of the burst to be answered');
+      expect(guest.of<AckMessage>().map((a) => a.id), ids,
+          reason: 'in order, none dropped');
     });
   });
 
