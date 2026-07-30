@@ -14,7 +14,10 @@ import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
 import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
+import '../lan/join_qr_code.dart';
 import '../lan/lan_transport.dart';
+import '../lan/qr_payload.dart';
+import '../lan/qr_scanner.dart';
 import '../net/net_match_controller.dart';
 import '../tutor/tutor_service.dart';
 import 'game_screen.dart';
@@ -311,10 +314,25 @@ class _HostTabState extends ConsumerState<_HostTab> {
 
   List<Widget> _waiting(HostSession session) {
     final theme = Theme.of(context);
+    final address = _localAddress;
     return [
       _SectionCard(
         title: 'Waiting for a player',
         children: [
+          // The QR code is the fast path and the text below it is the reliable
+          // one. Both are shown, always: scanning needs two devices that can be
+          // pointed at each other, which a tabletop setup (one phone flat on
+          // the table, two players either side) frequently is not.
+          if (address != null) ...[
+            JoinQrCode(
+              payload: QrJoinPayload(
+                address: address,
+                port: session.port,
+                code: session.roomCode,
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
           Text('Room code', style: theme.textTheme.titleSmall),
           const SizedBox(height: 4),
           Center(
@@ -464,6 +482,15 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
   String? _failure;
   String? _formError;
 
+  /// Whatever the last scan had to say — a foreign code, a refused camera —
+  /// shown under the scan button rather than under the typing form.
+  String? _scanError;
+
+  /// True while a scanner route is open. A second tap on the button (or a
+  /// double tap registered as two) must not push a second camera, and the
+  /// scanner's own latch cannot see the taps that got it there.
+  bool _scanning = false;
+
   @override
   void initState() {
     super.initState();
@@ -551,6 +578,8 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       _phase = _JoinPhase.browsing;
       _target = null;
       _failure = null;
+      // Whatever the last scan said is about a scan that is over.
+      _scanError = null;
     });
     if (widget.active) _startSweeping();
   }
@@ -591,8 +620,60 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
     ));
   }
 
-  bool _validCode(String code) =>
-      code.length == 4 && int.tryParse(code) != null;
+  bool _validCode(String code) => validRoomCode(code);
+
+  // --- scanning --------------------------------------------------------------
+
+  /// Open the camera, and if it comes back with one of our codes, join.
+  ///
+  /// The scanned target is written into the manual-entry fields on the way
+  /// past. That is not decoration: if the join then fails (the host stopped, the
+  /// code is stale) the user is left looking at exactly what was scanned, in
+  /// fields they can correct by hand. Scanning is a shortcut through the manual
+  /// path, not a separate one.
+  Future<void> _scan() async {
+    if (_scanning || _phase != _JoinPhase.browsing) return;
+    _scanning = true;
+    try {
+      final outcome = await ref.read(qrScannerProvider).scan(context);
+      if (!mounted) return;
+      switch (outcome) {
+        case QrScanCancelled():
+          // Backed out on purpose; nothing to report.
+          break;
+        case QrScanUnavailable(:final message):
+          // No camera, or no permission. The typing form below is untouched and
+          // still works — that is the whole point of saying this here.
+          setState(() => _scanError = message);
+        case QrScanCode(:final raw):
+          final payload = tryDecodeQrJoin(raw);
+          if (payload == null) {
+            setState(() => _scanError = 'That QR code is not an AIGammon game. '
+                'Scan the one on the other device\'s Host screen.');
+            return;
+          }
+          _addressController.text = payload.address;
+          _portController.text = '${payload.port}';
+          _manualCodeController.text = payload.code;
+          setState(() {
+            _scanError = null;
+            _formError = null;
+          });
+          unawaited(_connect(
+            _Target(
+              name: payload.address,
+              address: payload.address,
+              port: payload.port,
+            ),
+            payload.code,
+          ));
+      }
+    } finally {
+      // Guards the ROUTE, so it is released as soon as the route is gone —
+      // long before the join it may have started finishes.
+      _scanning = false;
+    }
+  }
 
   Future<void> _connect(_Target target, String code) async {
     _stopSweeping();
@@ -706,6 +787,8 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
     return _TabBody(
       children: switch (_phase) {
         _JoinPhase.browsing => [
+            _scanCard(),
+            const SizedBox(height: 16),
             _hostsCard(),
             const SizedBox(height: 16),
             _manualCard(),
@@ -713,6 +796,33 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
         _JoinPhase.code => [_codeCard()],
         _JoinPhase.connecting => [_connectingCard()],
       },
+    );
+  }
+
+  /// The fast path: the host's screen carries everything this device needs, so
+  /// point the camera at it and skip both the search and the typing.
+  Widget _scanCard() {
+    final theme = Theme.of(context);
+    return _SectionCard(
+      title: 'Scan the host',
+      children: [
+        Text(
+          'The other device shows a QR code on its Host screen. Scanning it '
+          'fills in the address and the room code for you.',
+          style: theme.textTheme.bodyMedium
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: () => unawaited(_scan()),
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('Scan QR code'),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+        ),
+        if (_scanError != null) _ErrorRow(_scanError!),
+      ],
     );
   }
 

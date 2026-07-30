@@ -8,7 +8,10 @@ import 'package:aigammon_app/data/persistence_hooks.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
+import 'package:aigammon_app/lan/join_qr_code.dart';
 import 'package:aigammon_app/lan/lan_transport.dart';
+import 'package:aigammon_app/lan/qr_payload.dart';
+import 'package:aigammon_app/lan/qr_scanner.dart';
 import 'package:aigammon_app/net/net_match_controller.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:aigammon_app/screens/lan_screen.dart';
@@ -75,6 +78,11 @@ class FakeTransport implements NearbyTransport {
   /// Set to make [startHosting] fail.
   Object? hostError;
 
+  /// What the NEXT session hosts as — so a test can restart hosting on a
+  /// different port or code and check the screen followed it.
+  String nextRoomCode = '4271';
+  int nextPort = 47780;
+
   FakeHostSession? hostSession;
   FakeGuestSession? guestSession;
 
@@ -88,7 +96,11 @@ class FakeTransport implements NearbyTransport {
   }) async {
     final error = hostError;
     if (error != null) throw error;
-    return hostSession = FakeHostSession(config);
+    return hostSession = FakeHostSession(
+      config,
+      roomCode: nextRoomCode,
+      port: nextPort,
+    );
   }
 
   @override
@@ -116,7 +128,7 @@ class FakeTransport implements NearbyTransport {
 
 /// A hosting session over an in-memory backend, with the guest arriving on cue.
 class FakeHostSession implements HostSession {
-  FakeHostSession(this.config)
+  FakeHostSession(this.config, {this.roomCode = '4271', this.port = 47780})
       : backend = InMemoryBackend(
           config: config,
           matchCode: '4271',
@@ -130,10 +142,10 @@ class FakeHostSession implements HostSession {
   final InMemoryBackend backend;
 
   @override
-  String roomCode = '4271';
+  String roomCode;
 
   @override
-  int port = 47780;
+  int port;
 
   @override
   Player get localSide => TransportSession.hostSide;
@@ -228,22 +240,50 @@ class FakeGuestSession implements GuestSession {
   }
 }
 
+/// The camera, scripted.
+///
+/// There is no camera on a test machine and no way to point one at anything, so
+/// [QrScanner] is the seam the whole scan-to-join path is driven through: the
+/// test says what the scanner "saw" and the screen does the rest.
+class FakeScanner implements QrScanner {
+  /// What the next scan comes back with.
+  QrScanOutcome outcome = const QrScanCancelled();
+
+  /// How many times a scanner was opened — the debounce assertion.
+  int calls = 0;
+
+  /// Held to keep a scan "open", so a second tap lands while the first route
+  /// is still up.
+  Completer<void>? gate;
+
+  @override
+  Future<QrScanOutcome> scan(BuildContext context) async {
+    calls++;
+    final open = gate;
+    if (open != null) await open.future;
+    return outcome;
+  }
+}
+
 void main() {
   const surface = Size(900, 1400);
 
   late AppDatabase db;
   late FakeTransport transport;
+  late FakeScanner scanner;
 
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized();
     db = newTestDatabase();
     transport = FakeTransport();
+    scanner = FakeScanner();
   });
   tearDown(() => db.close());
 
   Widget app() => ProviderScope(
         overrides: [
           nearbyTransportProvider.overrideWithValue(transport),
+          qrScannerProvider.overrideWithValue(scanner),
           engineFacadeProvider.overrideWithValue(const FakeFacade()),
           databaseProvider.overrideWithValue(db),
           // A plain stream keeps the test off drift's watch-timer.
@@ -600,6 +640,229 @@ void main() {
 
       expect(find.text('Enter address'), findsOneWidget);
       expect(session.disposed, isTrue);
+    });
+  });
+
+  group('qr join', () {
+    /// The one QR symbol on screen, and what it encodes.
+    String shownQr(WidgetTester t) =>
+        encodeQrJoin(t.widget<JoinQrCode>(find.byType(JoinQrCode)).payload);
+
+    testWidgets('the host shows a QR code carrying its address, port and code',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.byType(JoinQrCode));
+
+      expect(
+        shownQr(t),
+        encodeQrJoin(const QrJoinPayload(
+            address: '192.168.1.5', port: 47780, code: '4271')),
+      );
+      // An addition, not a replacement: the spoken code is still there.
+      expect(find.text('4271'), findsOneWidget);
+      expect(find.text('192.168.1.5:47780'), findsOneWidget);
+    });
+
+    testWidgets('the QR follows the CURRENT session, not the first one',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.byType(JoinQrCode));
+      final first = shownQr(t);
+
+      await t.tap(find.widgetWithText(TextButton, 'Stop hosting'));
+      await pumpUntil(t, find.widgetWithText(FilledButton, 'Start hosting'));
+
+      // A second session on a different port, with a different code, on a
+      // device that moved to another subnet.
+      transport
+        ..address = '10.0.0.9'
+        ..nextPort = 47790
+        ..nextRoomCode = '1357';
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.byType(JoinQrCode));
+
+      expect(shownQr(t), isNot(first));
+      expect(
+        shownQr(t),
+        encodeQrJoin(const QrJoinPayload(
+            address: '10.0.0.9', port: 47790, code: '1357')),
+      );
+      // And it round-trips: what the guest's camera reads is what it dials.
+      final decoded = tryDecodeQrJoin(shownQr(t))!;
+      expect(decoded.address, '10.0.0.9');
+      expect(decoded.port, 47790);
+      expect(decoded.code, '1357');
+    });
+
+    testWidgets('with no local address there is no QR, but the code remains',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      transport.address = null;
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.text('4271'));
+
+      // Nothing to encode — a QR pointing at no address would be worse than
+      // none — but the join is still reachable by discovery and by typing.
+      expect(find.byType(JoinQrCode), findsNothing);
+      expect(find.text('4271'), findsOneWidget);
+    });
+
+    testWidgets('the join tab offers a scan entry point', (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+
+      expect(find.widgetWithText(FilledButton, 'Scan QR code'), findsOneWidget);
+    });
+
+    testWidgets('a scanned code fills the form and joins', (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      scanner.outcome = QrScanCode(encodeQrJoin(const QrJoinPayload(
+          address: '10.0.0.4', port: 47790, code: '1234')));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await pumpUntil(t, find.text('Joining 10.0.0.4'));
+
+      expect(transport.joins, hasLength(1));
+      expect(transport.joins.single.address, '10.0.0.4');
+      expect(transport.joins.single.port, 47790);
+      expect(transport.joins.single.code, '1234');
+      expect(transport.joins.single.name, 'TestPhone');
+      expect(find.text('Joining 10.0.0.4'), findsOneWidget);
+    });
+
+    testWidgets('the scanned target is left in the manual fields to correct',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      scanner.outcome = QrScanCode(encodeQrJoin(const QrJoinPayload(
+          address: '10.0.0.4', port: 47790, code: '1234')));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await pumpUntil(t, find.text('Joining 10.0.0.4'));
+
+      // Cancel back to the form: the scan is still visible, and editable.
+      await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await pumpUntil(t, find.text('Enter address'));
+
+      final fields = find.byType(TextField);
+      expect(t.widget<TextField>(fields.at(0)).controller!.text, '10.0.0.4');
+      expect(t.widget<TextField>(fields.at(1)).controller!.text, '47790');
+      expect(t.widget<TextField>(fields.at(2)).controller!.text, '1234');
+    });
+
+    testWidgets('a foreign QR code is refused and nothing is dialled',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      scanner.outcome = const QrScanCode('WIFI:S:CafeWifi;T:WPA;P:hunter2;;');
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await pumpUntil(t, find.textContaining('not an AIGammon game'));
+
+      expect(transport.joins, isEmpty);
+      expect(find.textContaining('not an AIGammon game'), findsOneWidget);
+      // Still on the browsing form, with every other way in intact.
+      expect(find.text('Enter address'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Scan QR code'), findsOneWidget);
+    });
+
+    testWidgets('a refused camera explains itself and leaves manual entry '
+        'working', (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      scanner.outcome = const QrScanUnavailable(
+          'AIGammon does not have permission to use the camera. Enter the '
+          'address by hand.');
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await pumpUntil(t, find.textContaining('permission to use the camera'));
+
+      expect(find.textContaining('permission to use the camera'),
+          findsOneWidget);
+      expect(transport.joins, isEmpty);
+
+      // Not a dead end: the typed path still gets this device into a game.
+      final fields = find.byType(TextField);
+      await t.enterText(fields.at(0), '10.0.0.4');
+      await t.enterText(fields.at(2), '1234');
+      await t.tap(find.widgetWithText(FilledButton, 'Connect'));
+      await t.pump();
+      expect(transport.joins, hasLength(1));
+      expect(transport.joins.single.address, '10.0.0.4');
+    });
+
+    testWidgets('cancelling the scanner changes nothing', (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      scanner.outcome = const QrScanCancelled();
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await t.pump();
+      await t.pump();
+
+      expect(transport.joins, isEmpty);
+      expect(find.byIcon(Icons.error_outline), findsNothing,
+          reason: 'backing out of a scan is not a failure');
+      expect(find.text('Enter address'), findsOneWidget);
+    });
+
+    testWidgets('a second tap while the scanner is open opens nothing new',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      scanner
+        ..gate = Completer<void>()
+        ..outcome = QrScanCode(encodeQrJoin(const QrJoinPayload(
+            address: '10.0.0.4', port: 47790, code: '1234')));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await t.pump();
+      expect(scanner.calls, 1, reason: 'one camera at a time');
+
+      // One scan comes back; one join goes out.
+      scanner.gate!.complete();
+      await pumpUntil(t, find.text('Joining 10.0.0.4'));
+      expect(transport.joins, hasLength(1));
     });
   });
 }
