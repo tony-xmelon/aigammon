@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:lan_play/lan_play.dart';
-import 'package:match_transport/match_transport.dart';
 import 'package:match_transport/transport_contract.dart';
 import 'package:test/test.dart';
 

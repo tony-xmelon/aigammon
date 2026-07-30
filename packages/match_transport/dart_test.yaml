@@ -1,7 +1,0 @@
-tags:
-  emulator:
-exclude_tags: emulator
-presets:
-  emulator:
-    exclude_tags: __none__
-    include_tags: emulator

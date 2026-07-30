@@ -22,11 +22,51 @@ import 'socket_harness.dart';
 /// cannot make the relay throw, mis-order the log, or answer with anything
 /// unbounded.
 void main() {
-  const cases = 200;
+  const cases = 400;
+
+  /// Every `type` the decoder switches on. Fuzzing has to USE these: a random
+  /// string in `type` dies at `unknownType` before any payload decoder runs, so a
+  /// corpus that invents type names tests the switch's default arm 200 times over
+  /// and the ten payload decoders not once.
+  const types = [
+    'hello',
+    'welcome',
+    'event',
+    'roll',
+    'w_event',
+    'w_roll',
+    'w_entropy',
+    'w_reveal',
+    'ack',
+    'reject',
+    'busy',
+    'ping',
+    'pong',
+  ];
+
+  /// A hex-ish value: sometimes the exact 64-hex the wire demands, more often
+  /// something that only looks like it (wrong length, wrong alphabet, wrong type).
+  Object? hexish(Random r) => switch (r.nextInt(6)) {
+        0 => 'ab' * 32, // valid
+        1 => 'ab' * (1 + r.nextInt(64)), // wrong length
+        2 => 'zz' * 32, // right length, not hex
+        3 => 'AB' * 32, // uppercase
+        4 => r.nextInt(1 << 20),
+        _ => null,
+      };
 
   /// Deterministic generator of nasty frames.
   String nasty(Random r) {
-    switch (r.nextInt(8)) {
+    /// A junk scalar, biased towards values that get PAST a type check.
+    Object? junk() {
+      const pool = <Object?>[
+        null, 0, 1, -1, 3.7, true, false, 'x', 'white', 'black', 'ok',
+        'reject', [], <String, Object?>{}, 1 << 40,
+      ];
+      return pool[r.nextInt(pool.length)];
+    }
+
+    switch (r.nextInt(10)) {
       case 0: // random bytes as latin-1 text
         return String.fromCharCodes(
             [for (var i = 0; i < r.nextInt(64); i++) r.nextInt(256)]);
@@ -46,25 +86,30 @@ void main() {
           'type': 'hello',
           'payload': {'name': 'x' * (1 << r.nextInt(16))},
         });
-      case 5: // right shape, wrong types everywhere
-        final junk = <Object?>[null, 1, -1, 3.7, true, 'x', [], {}, 'white'];
-        Object? pick() => junk[r.nextInt(junk.length)];
+      case 5: // a REAL type, wrong types everywhere in the payload
         return jsonEncode({
-          'v': pick(),
-          'type': pick(),
+          'v': r.nextBool() ? protocolVersion : junk(),
+          'type': types[r.nextInt(types.length)],
           'payload': {
-            'id': pick(),
-            'name': pick(),
-            'side': pick(),
-            'seq': pick(),
-            'gameNo': pick(),
-            'n': pick(),
-            'commit': pick(),
-            'status': pick(),
-            'log': pick(),
-            'rolls': pick(),
-            'matchConfig': pick(),
-            'event': {'type': pick(), 'player': pick(), 'move': pick()},
+            'id': junk(),
+            'name': junk(),
+            'side': junk(),
+            'seq': junk(),
+            'gameNo': junk(),
+            'n': junk(),
+            'commit': hexish(r),
+            'entropy': hexish(r),
+            'reveal': hexish(r),
+            'status': junk(),
+            'reason': junk(),
+            'lastSeq': junk(),
+            'resume': junk(),
+            'log': junk(),
+            'rolls': junk(),
+            'matchConfig': junk(),
+            'entry': junk(),
+            'roll': junk(),
+            'event': {'type': junk(), 'player': junk(), 'move': junk()},
           },
         });
       case 6: // a plausible move event with nonsense hops
@@ -89,6 +134,82 @@ void main() {
             },
           },
         });
+      case 7: // the ROLL-PROTOCOL writes, the deepest untested payloads
+        // w_roll / w_entropy / w_reveal each run `_positive` twice and `_hex`
+        // once; nothing in the old corpus ever reached them, so the hex guard —
+        // the check that keeps a garbage commitment out of the log — was fuzzed
+        // zero times.
+        final type = ['w_roll', 'w_entropy', 'w_reveal'][r.nextInt(3)];
+        final field =
+            {'w_roll': 'commit', 'w_entropy': 'entropy', 'w_reveal': 'reveal'}[
+                type]!;
+        return jsonEncode({
+          'v': protocolVersion,
+          'type': type,
+          'payload': {
+            'id': r.nextBool() ? 1 + r.nextInt(5) : junk(),
+            'n': r.nextBool() ? r.nextInt(6) - 1 : junk(),
+            field: hexish(r),
+            // A hostile peer may also send the OTHER two fields; they must be
+            // ignored rather than confused for this one.
+            if (r.nextBool()) 'commit': hexish(r),
+            if (r.nextBool()) 'entropy': hexish(r),
+          },
+        });
+
+      case 8: // welcome/ack/event/roll — the ARRAY-bearing replies
+        // A guest decodes these, so a hostile HOST reaches them. `log` and
+        // `rolls` are the only unbounded-length fields in the protocol, and they
+        // were never fuzzed at all.
+        Object? entry(int i) => switch (r.nextInt(4)) {
+              0 => {
+                  'seq': r.nextBool() ? i + 1 : junk(),
+                  'gameNo': junk(),
+                  'author': junk(),
+                  'event': {'type': junk(), 'player': junk()},
+                },
+              1 => {
+                  'seq': i + 1,
+                  'gameNo': 1,
+                  'author': 'host',
+                  'event': DoubleEvent(Player.white).toJson(),
+                },
+              2 => junk(),
+              _ => [i, i, i],
+            };
+        Object? roll(int i) => switch (r.nextInt(3)) {
+              0 => {
+                  'n': r.nextBool() ? i + 1 : junk(),
+                  'roller': junk(),
+                  'commit': hexish(r),
+                  'entropy': hexish(r),
+                  'reveal': hexish(r),
+                },
+              1 => junk(),
+              _ => {'n': i + 1, 'roller': 'host', 'commit': 'ab' * 32},
+            };
+        final n = r.nextInt(8);
+        return jsonEncode({
+          'v': protocolVersion,
+          'type': ['welcome', 'ack', 'event', 'roll'][r.nextInt(4)],
+          'payload': {
+            'matchConfig': r.nextBool()
+                ? {'length': junk(), 'cubeless': junk()}
+                : {'length': 3, 'cubeless': false},
+            'side': r.nextBool() ? 'white' : junk(),
+            'resume': junk(),
+            'log': r.nextBool() ? [for (var i = 0; i < n; i++) entry(i)] : junk(),
+            'rolls':
+                r.nextBool() ? [for (var i = 0; i < n; i++) roll(i)] : junk(),
+            'entry': entry(r.nextInt(3)),
+            'roll': roll(r.nextInt(3)),
+            'id': r.nextBool() ? 1 : junk(),
+            'status': ['ok', 'reject', junk()][r.nextInt(3)],
+            'reason': junk(),
+            'lastSeq': r.nextBool() ? r.nextInt(9) - 1 : junk(),
+          },
+        });
+
       default: // random unicode soup, sometimes JSON-ish
         final buf = StringBuffer(r.nextBool() ? '{"v":2,' : '');
         for (var i = 0; i < r.nextInt(80); i++) {
@@ -101,6 +222,7 @@ void main() {
   test('decode is total over $cases hostile frames', () {
     final r = Random(20260726);
     var ok = 0;
+    final kindCounts = {for (final k in ProtocolErrorKind.values) k: 0};
     for (var i = 0; i < cases; i++) {
       final raw = nasty(r);
       final result = Envelope.decode(raw);
@@ -111,6 +233,7 @@ void main() {
           expect(Envelope.decode(envelope.encode()), isA<DecodeOk>());
         case DecodeFailure(:final error):
           expect(error.message, isNotEmpty);
+          kindCounts[error.kind] = kindCounts[error.kind]! + 1;
       }
     }
     // The corpus is meant to be mostly-invalid; a few (case 4/6 with benign
@@ -119,6 +242,23 @@ void main() {
     expect(ok, greaterThan(0), reason: 'corpus never produced a valid frame');
     expect(ok, lessThan(cases),
         reason: 'corpus never produced an invalid frame');
+
+    // …and it must REACH the payload decoders. `badField` can only be raised
+    // after the type switch has picked a message and started reading fields, so
+    // it is the evidence that the corpus is testing the ten payload decoders and
+    // not just the switch's default arm 400 times over. (Before the roll-protocol
+    // and array-bearing cases existed, `w_roll`/`w_entropy`/`w_reveal`/`ack`/
+    // `welcome` were never once reached.)
+    final kinds = kindCounts.entries
+        .where((e) => e.value > 0)
+        .map((e) => e.key)
+        .toSet();
+    expect(kinds, contains(ProtocolErrorKind.badField),
+        reason: 'the corpus never got past the type switch');
+    expect(kinds, contains(ProtocolErrorKind.malformed));
+    expect(kindCounts[ProtocolErrorKind.badField]!, greaterThan(cases ~/ 10),
+        reason: 'only $kinds and ${kindCounts[ProtocolErrorKind.badField]} '
+            'badField failures — the deep paths are barely exercised');
   });
 
   test('the relay survives $cases hostile frames over a real socket', () async {

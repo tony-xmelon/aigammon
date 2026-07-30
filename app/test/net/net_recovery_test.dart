@@ -174,6 +174,43 @@ void main() {
           reason: 'an honest double in a cubeful match must simply fold');
       expect(c.frozen, isFalse);
     });
+
+    test('a log that will NEVER replay is re-read a bounded number of times',
+        () async {
+      // The read-budget hole this closes. An event authored by US that the engine
+      // refuses is not a cheat (we wrote it) and not retryable, so the fold stops
+      // below the log's end permanently — and then EVERY later frame arrives as a
+      // gap and asks for the whole log again. One `eventsSince(0)` +
+      // `rollsSince(1)` per inbound frame, against a 50,000-read daily quota, for
+      // the rest of the match.
+      final rig =
+          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      final c = rig.controller;
+      await pumpUntil(() => c.isReady);
+      final primed = rig.transport.calls['eventsSince'] ?? 0;
+
+      // A take with no double outstanding: our own author, and the engine will
+      // refuse it on every replay for as long as the log exists.
+      rig.forge(const TakeEvent(Player.black), author: rig.localAuthor);
+      await pumpUntil(() => c.error != null,
+          reason: 'the unfoldable own event never surfaced');
+      expect(c.frozen, isFalse, reason: 'our own event is not a cheat');
+
+      // Now keep the frames coming. Each is a fresh gap over a fold that cannot
+      // advance, which is exactly the shape that used to re-read the log forever.
+      for (var i = 0; i < 8; i++) {
+        rig.forge(const TakeEvent(Player.black), author: rig.localAuthor);
+        await settle();
+      }
+      await settle();
+
+      final reads = (rig.transport.calls['eventsSince'] ?? 0) - primed;
+      expect(reads, lessThanOrEqualTo(4),
+          reason: 'the log was re-read $reads times for 9 unfoldable frames — '
+              'the failed-replay bound is not holding');
+      expect(reads, greaterThan(0), reason: 'it must try at least once');
+      expect(c.error, isNotNull, reason: 'and the banner must stay up');
+    });
   });
 
   group('contested writes', () {

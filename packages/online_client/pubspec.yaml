@@ -1,6 +1,8 @@
 name: online_client
-description: Pure-Dart REST transport (Firestore/Auth/Functions) + MatchApi facade for AIGammon online play.
-version: 0.1.0
+description: >-
+  Pure-Dart Firestore/Auth REST + gRPC-Listen transport and MatchApi facade for
+  AIGammon online play. No Cloud Functions: the backend is firestore.rules.
+version: 0.2.0
 publish_to: none
 
 environment:
@@ -9,7 +11,6 @@ environment:
 dependencies:
   backgammon_core:
     path: ../backgammon_core
-  crypto: ^3.0.3
   grpc: ^5.1.0
   http: ^1.2.0
   match_transport:

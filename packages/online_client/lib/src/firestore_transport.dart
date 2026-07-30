@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:backgammon_core/backgammon_core.dart';
@@ -134,7 +135,9 @@ import 'online_exception.dart';
 /// moment the listener reports `CURRENT` on both targets, and restarted
 /// immediately (with no initial sleep) if the stream ever errors, closes, or has
 /// a target removed under it. Re-listen attempts back off from
-/// [listenRetryFloor] to [listenRetryCeiling]; a recovery stops polling again.
+/// [listenRetryFloor] to [listenRetryCeiling], each step jittered so a
+/// server-side outage does not have every client re-attempt in lockstep (see
+/// [_scheduleRelisten]); a recovery stops polling again.
 /// A drop of a LIVE listener also surfaces a transient error on [inbound]
 /// (without closing it — the contract forbids ending the stream to signal
 /// trouble). [status] is deliberately NOT moved to `reconnecting` for a listener
@@ -302,6 +305,9 @@ class FirestoreTransport implements MatchTransport {
   Timer? _listenStartTimer;
   Timer? _relistenTimer;
   Duration? _listenBackoff;
+
+  /// Spreads the re-listen ladder across clients — see [_scheduleRelisten].
+  final _jitter = Random();
 
   /// Whether the attempt in flight replayed resume tokens, and whether it got as
   /// far as CURRENT — together they decide whether a failure invalidates the
@@ -997,6 +1003,16 @@ class FirestoreTransport implements MatchTransport {
     _scheduleRelisten();
   }
 
+  /// Arm the next listen attempt at the current backoff, PLUS jitter.
+  ///
+  /// The jitter (up to +25%) is not cosmetic. The thing that most often kills a
+  /// listener is not this client — it is the far end: an outage, a proxy, a rules
+  /// deploy. Every client that was watching drops at the same instant, and a
+  /// deterministic 1-2-4-8-16-30 ladder then has all of them re-attempt in the
+  /// same instants forever, so each recovery attempt arrives as a synchronised
+  /// spike against the endpoint that is already unhealthy. Spreading each step
+  /// over a quarter of its own length breaks the lockstep after the first retry
+  /// while leaving the ladder's shape (and its ceiling) intact.
   void _scheduleRelisten() {
     if (_disposed || _listenDisabled) return;
     _relistenTimer?.cancel();
@@ -1004,8 +1020,13 @@ class FirestoreTransport implements MatchTransport {
     final next = previous == null
         ? listenRetryFloor
         : (previous * 2 > listenRetryCeiling ? listenRetryCeiling : previous * 2);
+    // The BACKOFF is stored unjittered, so the ladder does not drift.
     _listenBackoff = next;
-    _relistenTimer = Timer(next, () {
+    final spread = next.inMicroseconds ~/ 4;
+    final delay = spread <= 0
+        ? next
+        : next + Duration(microseconds: _jitter.nextInt(spread + 1));
+    _relistenTimer = Timer(delay, () {
       _relistenTimer = null;
       _startListening();
     });

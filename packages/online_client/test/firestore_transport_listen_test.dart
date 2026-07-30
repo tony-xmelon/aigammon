@@ -246,8 +246,14 @@ void main() {
       await t.dispose();
     });
 
-    test('a malformed document surfaces on inbound and keeps the stream alive',
-        () async {
+    test('a malformed document is TERMINAL — the fault surfaces, the stream '
+        'stays open, and nothing keeps re-reading it', () async {
+      // This used to be "surfaces and keeps listening", which was wrong in the
+      // one way that costs money: the poll fallback would then re-read the same
+      // undecodable document every cycle for the rest of the day (~43,000 reads
+      // against a 50,000 quota). An `events/{seq}` document is write-once, so it
+      // will never decode; the only correct answer is to stop. See
+      // `_onTerminalRead`.
       final t = await connected(quiet);
       final frames = <InboundFrame>[];
       final errors = <Object>[];
@@ -260,13 +266,22 @@ void main() {
         fields: {'seq': 'not an int'},
         targetIds: [1],
       ));
-      channel().emit(_event(0, DoubleEvent(Player.white)));
       channel().emit(const ListenSnapshot(targetIds: [1], current: false));
       await pumpEventQueue();
 
-      expect(errors.single, isA<TransportUnavailable>());
-      expect(closed, isFalse);
-      expect(frames, hasLength(1), reason: 'the good document still arrives');
+      expect(errors.single,
+          isA<TransportRejected>().having((e) => e.code, 'code', 'malformed-event'));
+      expect(closed, isFalse,
+          reason: 'the contract forbids ending inbound to signal trouble');
+      expect(t.status, TransportStatus.failed,
+          reason: 'retrying cannot help, so this is not "reconnecting"');
+
+      // No further reads, on either path: the same document arriving again is
+      // reported at most once more, never in a loop.
+      final reported = errors.length;
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(errors.length, reported);
+      expect(frames, isEmpty);
     });
 
     test('a document leaving the result set is ignored, not trusted', () async {

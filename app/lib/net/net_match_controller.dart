@@ -424,6 +424,22 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// leaving the banner for the user.
   static const int _maxResyncAttempts = 5;
 
+  /// Consecutive full replays that FETCHED fine and then failed to fold.
+  ///
+  /// [_maxResyncAttempts] bounds the other half — a replace whose fetch failed —
+  /// but nothing bounded this one, and it is the more expensive of the two. A
+  /// permanently unfoldable own event (our engine refuses an event we ourselves
+  /// wrote, so it is not a cheat and not retryable) leaves the fold stuck below
+  /// the log's end forever; every subsequent inbound frame then arrives as a GAP
+  /// and asks for the whole log again. One `eventsSince(0)` + `rollsSince(1)` per
+  /// inbound frame, on a 50,000-read daily quota, for the rest of the match.
+  ///
+  /// So: three failed replays in a row and the log is not re-read again. The
+  /// banner stays, the folded state stays published, and any FORWARD progress
+  /// (a replay that folds) clears the count.
+  int _failedReplays = 0;
+  static const int _maxFailedReplays = 3;
+
   /// The roll index a refetch has already been spent on because the opponent
   /// held it when our turn said it was ours. See [_onContestedRoll].
   int? _contestedRoll;
@@ -1504,6 +1520,8 @@ class NetMatchController extends ChangeNotifier implements MatchController {
     _witnesses.clear();
     _roller = null;
     _rollFloor = null;
+    // A different log is entitled to a fresh set of replay attempts.
+    _failedReplays = 0;
   }
 
   /// Re-read the whole match and rebuild from scratch. The ONLY recovery path:
@@ -1511,6 +1529,17 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// re-derived by replaying the log.
   void _resync(String why) {
     if (_disposed || frozen) return;
+    if (_failedReplays >= _maxFailedReplays) {
+      // See [_failedReplays]: re-reading a log that has refused to replay three
+      // times running cannot succeed the fourth, and each attempt costs the whole
+      // log. Surface it and stop.
+      _transientError = NetMatchException('diverged',
+          '$why; the match log has failed to replay $_failedReplays times — '
+              'not re-reading it again');
+      _submitting = false;
+      _notify();
+      return;
+    }
     _transientError = NetMatchException('diverged', '$why; resyncing');
     _submitting = false;
     _notify();
@@ -1643,9 +1672,12 @@ class NetMatchController extends ChangeNotifier implements MatchController {
     if (frozen) return;
     final failure = _replaceFailure;
     if (failure == null) {
+      // The log replayed: whatever the divergence was, it is gone.
+      _failedReplays = 0;
       _afterFold();
       return;
     }
+    _failedReplays++;
     _transientError = failure;
     if (_game != null) _completeReady();
     _refreshPending();
