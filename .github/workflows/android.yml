@@ -1,17 +1,54 @@
 name: Android
 on:
   workflow_dispatch:
-  push:
+  # Gated on CI rather than on `push`. Both workflows used to fire on the same
+  # master push, in parallel, so a commit that broke the test suite still built
+  # an APK and pushed it to the testers group — a broken master reached real
+  # devices before anyone saw the red X.
+  #
+  # `workflow_run` was chosen over folding these jobs into ci.yml with `needs:`
+  # because the two have genuinely different shapes: ci.yml also runs on every
+  # pull request, where a 3-ABI Rust cross-compile plus an APK build would be
+  # pure waste, and this workflow keeps a manual `workflow_dispatch` entry point
+  # that a `needs:` dependency would drag the whole test matrix into.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Keyed on the COMMIT, not the ref: under `workflow_run` every event reports
+  # `github.ref` as the default branch, so a plain ref key would let a newer
+  # master commit cancel an in-flight distribution of an older one mid-upload.
+  # Keyed this way, cancellation only ever supersedes a re-run of the same
+  # commit — which is exactly the redundant work worth killing.
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   apk:
     name: build APK + distribute
     runs-on: ubuntu-latest
+    # Cold path: NDK download, three Rust Android targets built from scratch,
+    # then a release APK. Deliberately well clear of the observed ~25 min worst
+    # case so a cache miss is not mistaken for a hang.
+    timeout-minutes: 60
+    # A manual dispatch builds whatever is at HEAD; a CI-triggered run builds
+    # only if CI actually passed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # `workflow_run` checks out the DEFAULT BRANCH by default, not the
+          # commit that triggered CI. Without this the job could build a
+          # different tree than the one CI validated.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Rust toolchain (Android targets)
         uses: dtolnay/rust-toolchain@stable
@@ -162,7 +199,12 @@ jobs:
 
       - name: Distribute to Firebase App Distribution
         if: steps.fb.outputs.has_firebase == 'true'
-        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        # Pinned to a commit SHA, not the `v1` tag: a mutable tag can be
+        # repointed at any commit by the action's owner (or by anyone who
+        # compromises that account), and this step is handed the Firebase
+        # service-account key. `v1` resolved to this commit on 2026-07-31.
+        # Re-pin deliberately when upgrading; do not switch back to a tag.
+        uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1
         with:
           appId: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

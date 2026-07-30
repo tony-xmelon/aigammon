@@ -5,10 +5,28 @@ on:
     branches: [master]
   pull_request:
 
+# Least privilege. Nothing here writes to the repo, comments on PRs, or
+# publishes packages, so the default read/write token is more authority than any
+# step needs — and a compromised third-party action inherits whatever the token
+# has. Individual jobs can opt back up if that ever changes.
+permissions:
+  contents: read
+
+# One live run per branch. A force-push or a rapid second push supersedes the
+# first: the older run's result is about code nobody is looking at any more, and
+# these six jobs are the bulk of the repo's CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   core:
     name: backgammon_core tests
     runs-on: ubuntu-latest
+    # Pure-Dart unit suite; about a minute in practice. The ceiling only ever
+    # fires on a hang (a stuck pub fetch, a test awaiting a future that never
+    # lands) rather than on slow-but-working CI.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -24,6 +42,8 @@ jobs:
   lan:
     name: lan_play tests
     runs-on: ubuntu-latest
+    # Real sockets and timers - the likeliest suite to deadlock rather than fail.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -39,6 +59,7 @@ jobs:
   match_transport:
     name: match_transport tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -54,6 +75,10 @@ jobs:
   engine:
     name: engine build + integration tests (linux)
     runs-on: ubuntu-latest
+    # A COLD Rust cache builds wildbg + the shim from scratch, then the real-net
+    # integration suite runs. Generous on purpose: a cache miss must not read as
+    # a failure.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,6 +109,8 @@ jobs:
   app:
     name: flutter app tests
     runs-on: ubuntu-latest
+    # Flutter SDK download plus ~700 widget tests.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -101,6 +128,9 @@ jobs:
   online:
     name: online play (emulator)
     runs-on: ubuntu-latest
+    # The heaviest leg: Node + Java + Flutter + Dart toolchains, then the whole
+    # Firestore-emulator suite (rules + two-client E2E) behind emulators:exec.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # Node is here for the Firebase CLI and for the rules suite's

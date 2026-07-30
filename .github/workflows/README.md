@@ -3,8 +3,37 @@
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
 | CI | `ci.yml` | push to `master`, all PRs | `backgammon_core` + `engine_bindings` + Flutter app tests (Linux) |
-| Android | `android.yml` | `workflow_dispatch`, push to `master` | Cross-compile the Rust engine for Android ABIs, build a release APK, and (when configured) push it to Firebase App Distribution |
-| iOS | `ios.yml` | `workflow_dispatch`, push to `master` | Build the Rust engine staticlib, statically link it into `Runner`, produce an unsigned `Runner.app`, and (when configured) build a signed IPA and push it to Firebase App Distribution |
+| Android | `android.yml` | `workflow_dispatch`, **CI success on `master`** | Cross-compile the Rust engine for Android ABIs, build a release APK, and (when configured) push it to Firebase App Distribution |
+| iOS | `ios.yml` | `workflow_dispatch`, **CI success on `master`** | Build the Rust engine staticlib, statically link it into `Runner`, produce an unsigned `Runner.app`, and (when configured) build a signed IPA and push it to Firebase App Distribution |
+
+## Distribution is gated on CI
+
+`android.yml` and `ios.yml` no longer trigger on `push`. They trigger on
+`workflow_run` — CI *completing* on `master` — and their single job is guarded
+by `github.event.workflow_run.conclusion == 'success'`. Previously all three
+workflows raced the same push in parallel, so a commit that broke the test suite
+still built and distributed a binary; testers got a broken build before anyone
+noticed the red X.
+
+Two details this shape forces:
+
+* Each build job checks out `github.event.workflow_run.head_sha`. A
+  `workflow_run` job otherwise checks out the **default branch**, which is not
+  necessarily the commit CI validated.
+* `workflow_dispatch` still builds unconditionally, from `github.sha` — the
+  manual escape hatch is intact.
+
+Folding the build jobs into `ci.yml` with `needs:` was the alternative. It was
+rejected because `ci.yml` also runs on every pull request (where a three-ABI
+Rust cross-compile is pure waste) and because the manual dispatch entry point
+would have dragged the whole test matrix along with it.
+
+All three workflows declare `permissions: contents: read`, a
+`concurrency` group with `cancel-in-progress`, and per-job `timeout-minutes`.
+The distribution workflows key their concurrency group on the **commit**, not
+the ref: under `workflow_run` every event reports `github.ref` as the default
+branch, so a ref key would let a newer master commit cancel an older commit's
+distribution mid-upload.
 
 ## `android.yml` — how it builds
 

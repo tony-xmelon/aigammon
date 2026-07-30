@@ -1,18 +1,40 @@
 name: iOS
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
+  # Gated on CI passing for the same commit — see the long note in android.yml
+  # for why `workflow_run` rather than merging into ci.yml with `needs:`. A
+  # broken master must not reach the testers group.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Commit-keyed, not ref-keyed: see android.yml.
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ios:
     name: build .app + (gated) signed distribute
     runs-on: macos-latest
+    # macOS runners are the slowest in the fleet and this job can do TWO full
+    # release compiles (unsigned, then the signed archive) plus an xcodebuild
+    # archive/export. Generous by design.
+    timeout-minutes: 60
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # `workflow_run` would otherwise check out the default branch rather
+          # than the commit CI validated.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Rust toolchain (iOS device target)
         uses: dtolnay/rust-toolchain@stable
@@ -254,7 +276,10 @@ jobs:
 
       - name: Distribute IPA to Firebase App Distribution
         if: steps.ios.outputs.has_signing == 'true'
-        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        # Commit-pinned for the same reason as android.yml: a mutable tag is a
+        # supply-chain hole and this step receives the service-account key.
+        # `v1` resolved to this commit on 2026-07-31.
+        uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1
         with:
           appId: ${{ secrets.FIREBASE_IOS_APP_ID }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
