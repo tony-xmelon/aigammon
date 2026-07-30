@@ -68,6 +68,16 @@ class GuestConnectionState {
       'GuestConnectionState(${status.name}${reason == null ? '' : ', $reason'})';
 }
 
+/// How many frames [GuestClient] will retain for a consumer that does not exist
+/// yet — see [GuestClient.takeRetainedFrames].
+///
+/// The window it covers is one screen transition, in which the host can push at
+/// most a handful of frames, so this is orders of magnitude of headroom. It is a
+/// CAP rather than a guess because the host is the untrusted peer here: an
+/// unbounded retention would be a memory lever for a guest that connects and
+/// never opens a board.
+const int maxRetainedFrames = 512;
+
 /// Thrown into [GuestClient.welcome] when the handshake cannot succeed.
 class GuestHandshakeException implements Exception {
   const GuestHandshakeException(this.reason);
@@ -178,6 +188,19 @@ class GuestClient {
   final _welcome = Completer<WelcomeMessage>();
   final List<String> _queue = [];
 
+  /// Frames [inbound] could not deliver because nothing was listening YET — see
+  /// [takeRetainedFrames]. Oldest first.
+  final List<Envelope> _retained = [];
+
+  /// Whether [_retained] hit [maxRetainedFrames] and is therefore only a prefix.
+  bool _retainedOverflowed = false;
+
+  /// Whether [inbound] has ever had a listener. Retention is a ONE-SHOT window
+  /// covering "the consumer does not exist yet"; once one has attached, a stream
+  /// with no listener means the consumer is GONE (its transport was disposed),
+  /// and holding frames for it would be a leak rather than a repair.
+  bool _everListened = false;
+
   WebSocket? _socket;
   StreamSubscription<dynamic>? _sub;
   Timer? _retry;
@@ -205,6 +228,11 @@ class GuestClient {
   /// after a reconnect). `ping`/`pong` are handled internally and never surface.
   ///
   /// Broadcast and non-buffering: subscribe as soon as the client is built.
+  ///
+  /// The joining screen CANNOT do that — it builds its transport only once it has
+  /// been welcomed — so frames that arrive before the first subscriber are
+  /// retained rather than dropped; see [takeRetainedFrames], which is the only
+  /// way to get them and must be drained by whoever subscribes first.
   Stream<Envelope> get inbound => _inbound.stream;
 
   /// Connection lifecycle transitions. Broadcast; [state] holds the current one.
@@ -223,6 +251,44 @@ class GuestClient {
   /// keeps the live mirror (the log a late-attaching folder needs), because it is
   /// the layer that knows what a log entry means.
   WelcomeMessage? get lastWelcome => _lastWelcome;
+
+  /// The frames that arrived AFTER the welcome but BEFORE anything subscribed to
+  /// [inbound], oldest first. Handed over exactly once; the retention window then
+  /// closes for good.
+  ///
+  /// This is the guest-side twin of `HostServer.guestHello`, and it exists for
+  /// the same reason: the screen does not build the thing that consumes frames
+  /// until it has been welcomed, and [inbound] is broadcast and non-buffering, so
+  /// every frame the host pushed in that gap was silently dropped.
+  ///
+  /// It was not a cosmetic loss. The host starts the opening roll the moment its
+  /// own transport connects — it needs nothing from the guest to do so — and
+  /// pushes the roll frame straight after the welcome, often in the very same TCP
+  /// segment. A guest that missed it never learns roll 1 exists, so it never
+  /// contributes entropy; and the host, having a roll outstanding and no reason to
+  /// re-push it, waits for that entropy with no retry that could ever help.
+  /// Neither peer folds game 1 and neither reports an error: the board simply
+  /// never opens, forever. That is the same "joined and stuck" symptom the
+  /// [guestHello] retention cured one layer up, from a second and independent
+  /// cause.
+  ///
+  /// A welcome CLEARS the retention (it is the whole truth, and [lastWelcome]
+  /// carries it), and so does losing the link, because the reconnect's own welcome
+  /// supersedes anything held from the dead connection.
+  ///
+  /// [retainedFramesLost] must be checked alongside this: past
+  /// [maxRetainedFrames] the list is only a prefix and the caller must resync.
+  List<Envelope> takeRetainedFrames() {
+    if (_retained.isEmpty) return const [];
+    final frames = List<Envelope>.of(_retained);
+    _retained.clear();
+    return frames;
+  }
+
+  /// True when retention overflowed [maxRetainedFrames], so what
+  /// [takeRetainedFrames] returns is a PREFIX of what was missed and the caller
+  /// must ask for the whole log instead.
+  bool get retainedFramesLost => _retainedOverflowed;
 
   /// True while the link is up and welcomed.
   bool get isConnected => _state.isConnected;
@@ -438,6 +504,11 @@ class GuestClient {
     _pacer?.cancel();
     _pacer = null;
     _queue.clear();
+    // Anything held for a consumer that does not exist yet described the
+    // connection that is ending. The reconnect's own welcome is the truth about
+    // the match, so replaying these on top of it would fold stale frames.
+    _retained.clear();
+    _retainedOverflowed = false;
     final sub = _sub;
     final socket = _socket;
     _sub = null;
@@ -496,7 +567,30 @@ class GuestClient {
   }
 
   void _publish(Envelope message) {
-    if (!_inbound.isClosed) _inbound.add(message);
+    if (_inbound.isClosed) return;
+    if (_inbound.hasListener) {
+      _everListened = true;
+      _inbound.add(message);
+      return;
+    }
+    if (_everListened) return; // the consumer is gone, not merely unborn
+    // NOBODY IS LISTENING YET, and [inbound] is broadcast and non-buffering, so
+    // this frame is about to be dropped for good. Keep it — see
+    // [takeRetainedFrames] for why that is a correctness requirement.
+    if (message is WelcomeMessage) {
+      // A welcome is the WHOLE truth and supersedes everything before it. It is
+      // not itself retained: [lastWelcome] already carries it, and a consumer
+      // that adopts that AND replayed this one would fold two resets for one
+      // join.
+      _retained.clear();
+      _retainedOverflowed = false;
+      return;
+    }
+    if (_retained.length >= maxRetainedFrames) {
+      _retainedOverflowed = true;
+      return;
+    }
+    _retained.add(message);
   }
 
   void _emit(GuestConnectionState next) {

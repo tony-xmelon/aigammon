@@ -15,6 +15,28 @@
 /// hung in `connecting` — with the host's heartbeat refreshing its liveness clock
 /// it never even dropped the link to retry — which is the "clicked join, stuck on
 /// connecting" report. This test walks those three steps in order.
+///
+/// There is a FOURTH step with the same shape, and it is the one this test first
+/// caught by accident (as a rare CI failure) before it was pinned down here:
+///
+///  4. the guest is welcomed, and only THEN does its screen build ITS transport
+///     and controller.
+///
+/// The host does not wait for that. It starts the opening roll the instant its own
+/// transport connects, and pushes the roll frame straight after the welcome —
+/// often in the very same TCP segment. Whether the joining side had subscribed to
+/// `GuestClient.inbound` by the time that frame arrived was a RACE, decided by
+/// which of two microtask chains the scheduler resumed first. Losing it dropped
+/// the frame for good: the guest never learned roll 1 existed, so it never
+/// contributed entropy, and the host — with a roll outstanding and no reason to
+/// re-push it — waited for that entropy forever. Neither peer folded game 1 and
+/// neither reported an error.
+///
+/// So step 4 here inserts a REAL gap rather than relying on winning that race the
+/// way the first version of this test silently did. The screen cannot build a
+/// board inside a microtask anyway, so the gap is the honest model; and with the
+/// frames now retained (see `GuestClient.takeRetainedFrames`) the join no longer
+/// depends on timing at all.
 library;
 
 import 'dart:async';
@@ -82,6 +104,17 @@ void main() {
           fail('the guest was never welcomed — the join hello was dropped'),
     );
     expect(welcome.side, Player.black);
+
+    // 4. The joining SCREEN now opens its board — which is what builds the
+    //    guest's transport, and therefore the first thing to subscribe to
+    //    `GuestClient.inbound`. It cannot do that in the same microtask as the
+    //    welcome, and the host has not been idle: its opening roll is already on
+    //    the wire. Anything that arrived in this gap used to be dropped, which
+    //    stalled the dice handshake permanently (see the library doc).
+    await tick(30);
+    expect(relay.rollsFrom(1), isNotEmpty,
+        reason: 'the host should already have pushed its opening roll into this '
+            'gap — otherwise this test is not exercising the window at all');
 
     final guest = NetMatchController(
       transport: SocketTransport.guest(client: client),
