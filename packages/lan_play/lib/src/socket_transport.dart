@@ -35,8 +35,30 @@ import 'protocol.dart';
 /// fixed for the match's life and identical to the online convention. Author
 /// identity is not negotiated either: [MatchRelay.hostAuthor] /
 /// [MatchRelay.guestAuthor] are constants the relay stamps from the connection a
-/// write arrived on, so neither peer can author an event as the other and the
-/// controllers' author↔seat validation is trustworthy.
+/// write arrived on.
+///
+/// That closes guest→host forgery outright — a `w_event` frame carries no author
+/// field at all, so there is nothing for a guest to lie about. It does NOT close
+/// host→guest forgery, and no relay-side rule could: the host's process IS the
+/// relay, so every `author` and every `roller` a guest folds is ultimately a value
+/// the host chose to put on the wire. The symmetry is restored one level up
+/// instead, in `NetMatchController`, which is what makes the claim "the two
+/// transports place their trust in the same place" true rather than aspirational:
+///
+///  * the guest pins the commitment it witnessed and the entropy it contributed
+///    for every roll, and freezes on a roll frame that carries anything else (or
+///    that arrives already carrying an entropy the guest never sent) — so a host
+///    cannot choose its own dice;
+///  * the guest keeps a ledger of every event it asked to append, and freezes on
+///    a log entry attributed to it that it never wrote — so a host cannot play the
+///    guest's seat, which used to route through the self-healing RESYNC path
+///    rather than the freeze;
+///  * both peers replay every event through the rules engine.
+///
+/// What remains, and is inherent to a peer that owns the wire, is denial of
+/// service: a modified host can withhold, delay or reorder frames and serve a
+/// short log. The guest then sees a stalled or resyncing match — never a wrong
+/// one. See [MatchRelay]'s class doc for the same statement from the log's side.
 ///
 /// ## Capabilities: nothing survives the socket
 ///
@@ -107,6 +129,14 @@ class _HostSocketTransport implements SocketTransport {
   bool _connected = false;
   bool _disposed = false;
 
+  /// Whether the next `hello` is a (re)connection rather than a plain resync
+  /// request, and so owes our own fold a [ResetFrame]. See [_onGuestFrame].
+  ///
+  /// Starts true: this transport may be built AFTER a guest attached (the "Play
+  /// Nearby" screen binds the server first and opens the board second), so the
+  /// first hello it observes is treated as the join.
+  bool _resetOwedOnHello = true;
+
   // --- MatchTransport --------------------------------------------------------
 
   @override
@@ -118,20 +148,22 @@ class _HostSocketTransport implements SocketTransport {
       _connected = true;
       _setStatus(TransportStatus.connected);
     }
-    return TransportSession(
-      assignedSide: TransportSession.hostSide,
-      config: relay.config,
-      localAuthor: MatchRelay.hostAuthor,
-      hostAuthor: MatchRelay.hostAuthor,
-      // Known from the start even though nobody has joined yet: the seat ids are
-      // constants, so the seat mapping is a fact about the protocol rather than
-      // about who happens to be attached. [opponentPresent] is what says whether
-      // anyone is there.
-      guestAuthor: MatchRelay.guestAuthor,
-      matchCode: server.roomCode,
-      resumeToken: relay.resumeToken,
-    );
+    return _sessionNow();
   }
+
+  TransportSession _sessionNow() => TransportSession(
+        assignedSide: TransportSession.hostSide,
+        config: relay.config,
+        localAuthor: MatchRelay.hostAuthor,
+        hostAuthor: MatchRelay.hostAuthor,
+        // Known from the start even though nobody has joined yet: the seat ids
+        // are constants, so the seat mapping is a fact about the protocol rather
+        // than about who happens to be attached. [opponentPresent] is what says
+        // whether anyone is there.
+        guestAuthor: MatchRelay.guestAuthor,
+        matchCode: server.roomCode,
+        resumeToken: relay.resumeToken,
+      );
 
   @override
   Stream<InboundFrame> get inbound => _inbound.stream;
@@ -266,9 +298,21 @@ class _HostSocketTransport implements SocketTransport {
         // A join, a rejoin or a plain resync — all answered the same way, with
         // everything the relay holds.
         server.send(relay.welcome());
-        // And OUR fold re-primes too: a guest that (re)connects may have written
-        // while we were not looking at it, and a replay from our own log is free.
-        _emitReset('the other player joined');
+        // But OUR OWN fold is only re-primed on an actual (re)connection.
+        //
+        // A `hello` is ALSO the guest's plain resync request, and it can repeat:
+        // a guest stuck behind a gap re-sends one every
+        // [LanTimings.helloMinInterval] until its mirror heals, and a hostile
+        // one can simply do so forever. Resetting on each of them would put the
+        // host into a permanent replace — clearing its in-flight submission gate
+        // every second, so the host player could never complete a decision —
+        // for something the host never needed in the first place: its own writes
+        // go through the relay it is subscribed to, so its fold cannot be
+        // missing anything a replay would add.
+        if (_resetOwedOnHello) {
+          _resetOwedOnHello = false;
+          _emitReset('the other player joined');
+        }
       case WriteEventMessage(:final id, :final seq, :final gameNo, :final event):
         _ack(id, () => relay.appendEvent(
               author: MatchRelay.guestAuthor,
@@ -331,12 +375,21 @@ class _HostSocketTransport implements SocketTransport {
   void _onPresence(bool present) {
     if (_disposed || _opponentPresent == present) return;
     _opponentPresent = present;
+    // A guest that went away will come back on a NEW connection, whose first
+    // `hello` is a genuine (re)join and does owe us a reset. Armed on the
+    // departure rather than on the arrival so the flag is already set however
+    // the presence event and the hello interleave.
+    if (!present) _resetOwedOnHello = true;
     if (!_presence.isClosed) _presence.add(present);
   }
 
   void _emitReset(String reason) {
     if (_disposed || _inbound.isClosed) return;
-    _inbound.add(ResetFrame(resumeToken: relay.resumeToken, reason: reason));
+    _inbound.add(ResetFrame(
+      resumeToken: relay.resumeToken,
+      reason: reason,
+      session: _sessionNow(),
+    ));
   }
 
   void _setStatus(TransportStatus status) {
@@ -362,7 +415,7 @@ class _GuestSocketTransport implements SocketTransport {
     // screen connects first and opens the board second) already holds the log it
     // was handed; adopt it rather than starting from an empty mirror.
     final welcomed = client.lastWelcome;
-    if (welcomed != null) _adopt(welcomed);
+    if (welcomed != null) _adopt(welcomed); // ignore: unused_result
   }
 
   /// The link. NOT owned: [dispose] leaves it connected (see the class doc).
@@ -417,20 +470,29 @@ class _GuestSocketTransport implements SocketTransport {
     if (_disposed) {
       throw const TransportUnavailable('disposed', 'transport disposed');
     }
-    return _session = TransportSession(
-      assignedSide: welcome.side,
-      config: welcome.config,
-      localAuthor: MatchRelay.guestAuthor,
-      hostAuthor: MatchRelay.hostAuthor,
-      guestAuthor: MatchRelay.guestAuthor,
-      matchCode: client.roomCode,
-      // Carried even though the transport is not durable: it is the MATCH
-      // IDENTITY, and a host that restarted mints a new one. The controller
-      // compares it on every ResetFrame and voids its per-match watermarks when
-      // it changes, so a second match is never written into the first one's row.
-      resumeToken: welcome.resume,
-    );
+    return _session ??= _sessionFrom(welcome);
   }
+
+  /// The session one welcome describes.
+  ///
+  /// Recomputed on EVERY welcome (see [_adopt]) rather than fixed at [connect]:
+  /// a welcome bearing a different `resume` is a different match, and a different
+  /// match brings its own [MatchConfig] and its own seat. Pinning the first
+  /// welcome's session forever is how a replayed collision would be folded under
+  /// the previous match's length and cubeless flag.
+  TransportSession _sessionFrom(WelcomeMessage welcome) => TransportSession(
+        assignedSide: welcome.side,
+        config: welcome.config,
+        localAuthor: MatchRelay.guestAuthor,
+        hostAuthor: MatchRelay.hostAuthor,
+        guestAuthor: MatchRelay.guestAuthor,
+        matchCode: client.roomCode,
+        // Carried even though the transport is not durable: it is the MATCH
+        // IDENTITY, and a host that restarted mints a new one. The controller
+        // compares it on every ResetFrame and voids its per-match watermarks when
+        // it changes, so a second match is never written into the first one's row.
+        resumeToken: welcome.resume,
+      );
 
   @override
   Stream<InboundFrame> get inbound => _inbound.stream;
@@ -613,16 +675,48 @@ class _GuestSocketTransport implements SocketTransport {
 
   /// A welcome is the WHOLE truth: adopt it and tell the controller to replay.
   void _onWelcome(WelcomeMessage welcome) {
-    _adopt(welcome);
+    if (!_adopt(welcome)) return;
     _publish(ResetFrame(
       resumeToken: welcome.resume,
       reason: 'the match log was replayed',
+      // NORMATIVE (see [ResetFrame.session]): a welcome carrying a different
+      // `resume` is a different match, so the frame must carry the config and
+      // seats that go with it — otherwise the controller replays a new match
+      // under the old one's length and cubeless flag.
+      session: _session,
     ));
   }
 
   /// Replace the mirror with what a welcome carries, and stand the resync loop
-  /// down.
-  void _adopt(WelcomeMessage welcome) {
+  /// down. Returns false when the welcome was REFUSED (see below), in which case
+  /// nothing was changed.
+  ///
+  /// The log is VALIDATED before it is adopted, because [eventsSince] promises
+  /// its answer is ascending and contiguous and the mirror IS that answer. The
+  /// host is the untrusted peer here, so `[1, 2, 4]` (a hole the contract
+  /// forbids, which would make every folder's gap detection unreliable) and
+  /// `[3, 1, 2]` (out of order, which pins [_lastSeq] at 2 forever and so
+  /// livelocks [_resyncSoon] at `helloMinInterval` for the rest of the match) are
+  /// both protocol faults rather than things to mirror faithfully. A refusal is
+  /// surfaced as a [TransportRejected] — deterministic, so re-asking cannot help
+  /// — and the previous (contiguous) mirror is left intact.
+  bool _adopt(WelcomeMessage welcome) {
+    final fault = _logFault(welcome.log);
+    if (fault != null) {
+      // Deterministic: re-asking gets the same answer, so the resync loop stands
+      // down instead of spinning at [LanTimings.helloMinInterval] forever, and
+      // the link is reported terminally failed.
+      _needResync = false;
+      _resyncTimer?.cancel();
+      _resyncTimer = null;
+      _publishError(TransportRejected('bad-welcome', fault));
+      _statusValue = TransportStatus.failed;
+      _statusReason = fault;
+      if (!_status.isClosed) {
+        _status.add(TransportStatusEvent(TransportStatus.failed, fault));
+      }
+      return false;
+    }
     _needResync = false;
     _resyncTimer?.cancel();
     _resyncTimer = null;
@@ -632,7 +726,22 @@ class _GuestSocketTransport implements SocketTransport {
     _rolls
       ..clear()
       ..addEntries(welcome.rolls.map((r) => MapEntry(r.n, r)));
+    _session = _sessionFrom(welcome);
     _setOpponentPresent(true);
+    return true;
+  }
+
+  /// Why [log] cannot be a mirror — or null when it is strictly ascending and
+  /// contiguous from 1, which is what the transport contract requires of
+  /// [eventsSince].
+  static String? _logFault(List<EventFrame> log) {
+    for (var i = 0; i < log.length; i++) {
+      if (log[i].seq != i + 1) {
+        return 'the welcome log is not contiguous from 1: entry $i has seq '
+            '${log[i].seq}';
+      }
+    }
+    return null;
   }
 
   void _onEvent(EventFrame entry) {

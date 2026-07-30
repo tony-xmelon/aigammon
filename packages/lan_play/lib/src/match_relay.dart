@@ -22,19 +22,45 @@ import 'protocol.dart';
 ///
 /// Every one of those is now enforced by BOTH peers' `NetMatchController`s, which
 /// re-derive each roll from its commit-reveal document and replay each event
-/// through the rules engine, freezing the match on a violation. The relay is the
-/// LAN counterpart of `firestore.rules`: it polices document shape and ordering
-/// and nothing else, so the two transports place their trust in exactly the same
-/// place.
+/// through the rules engine, freezing the match on a violation.
+///
+/// ## How far the "same as firestore.rules" analogy actually goes
+///
+/// This class polices the same three things `firebase/firestore.rules` polices —
+/// document shape, authorship, write-once ordering — but it is NOT the same kind
+/// of thing, and the difference is worth stating plainly: `firestore.rules` is
+/// enforced by a third party neither peer controls, whereas this relay runs
+/// INSIDE ONE OF THE TWO PLAYERS' processes. Everything below therefore binds the
+/// guest and an HONEST host; a modified host is bound only by what the guest can
+/// check for itself.
+///
+/// What the guest can check for itself (all of it in `NetMatchController`, so it
+/// holds over any transport):
+///
+///  * **its own dice contribution.** The guest pins the commitment it witnessed
+///    and the entropy it contributed, and freezes on a roll frame that carries
+///    anything else — including a roll that arrives with an entropy the guest
+///    never sent. A host cannot pick its own dice: not by swapping its commitment
+///    after seeing the entropy, not by fabricating the entropy itself.
+///  * **its own authorship.** The guest keeps a ledger of every event it asked to
+///    append and freezes on an entry attributed to it that it did not write, so a
+///    host cannot play the guest's seat.
+///  * **every rule of the game**, by replaying the log through the engine.
+///
+/// What a modified host CAN still do, because it owns the wire: withhold, delay
+/// or reorder frames, and present a short log. Those are denial of service — the
+/// guest sees a stalled or resyncing match, never a wrong one — and the same is
+/// true of a peer that simply stops playing. It cannot bias a die, forge the
+/// guest's move, or slip an illegal event past the guest's fold.
 ///
 /// What it therefore DOES enforce, and all it enforces:
 ///
 ///  1. **Authorship comes from the connection, never from the wire.** Every
 ///     write names its author here ([hostAuthor] for the bound peer's own
 ///     writes, [guestAuthor] for anything that arrived over the socket), so a
-///     guest cannot author an event as the host. This is what makes
-///     [TransportSession.sideOf] trustworthy on both peers, and hence what makes
-///     the controllers' author↔seat check meaningful.
+///     GUEST cannot author an event as the host. (The converse — a modified host
+///     authoring as the guest — is not stopped here and cannot be: it is caught
+///     by the guest's own-write ledger in `NetMatchController`.)
 ///  2. **Event seqs are write-once and contiguous from 1.** A seq already used
 ///     is [TransportContested] (the writer is behind and must resync); a seq
 ///     beyond the next free one is [TransportRejected] (a hole would break every

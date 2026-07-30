@@ -58,7 +58,12 @@ class InMemoryBackend {
     this.deliverImmediately = true,
   });
 
-  final MatchConfig config;
+  /// The match parameters. MUTABLE for the same reason [resumeToken] is: the
+  /// room-code-collision / host-restart scenario replaces the whole match
+  /// identity, and a new identity brings its OWN length and cubeless flag. A
+  /// `final` config here would make that case untestable and would quietly
+  /// assert that a reset can only ever mean "same match, replay it".
+  MatchConfig config;
   final String hostAuthor;
   final String guestAuthor;
   final String matchCode;
@@ -247,6 +252,34 @@ class InMemoryBackend {
     _schedule();
   }
 
+  /// Seed a SOUND, AIMED roll DOCUMENT at the next free index — no event, and
+  /// optionally stopping short of the entropy/reveal phase. Returns the index and
+  /// the secrets, so a test can advance the phases itself later.
+  ///
+  /// Why a test would want this rather than [seedRoll]: aiming an opponent's dice
+  /// means choosing the roller's secret and the WITNESS'S ENTROPY together, which
+  /// is exactly the substitution a live witness refuses (`NetMatchController`
+  /// freezes on entropy it did not contribute to a roll it is witnessing). Seeded
+  /// BEFORE a controller connects, the roll falls below that controller's roll
+  /// floor and is legitimately taken as found — which is what makes an aimed
+  /// opponent roll scriptable at all.
+  ({int n, ScriptedSecrets secrets}) seedRollDoc({
+    required String author,
+    required int die1,
+    required int die2,
+    bool withEntropy = true,
+    bool withReveal = true,
+  }) {
+    final n = _rolls.isEmpty ? 1 : (_rolls.keys.reduce((a, b) => a > b ? a : b) + 1);
+    final s = turnSecretsFor(die1, die2);
+    final roll = _Roll(n: n, roller: author, commit: s.commit);
+    if (withEntropy) roll.entropy = s.entropy;
+    if (withEntropy && withReveal) roll.reveal = s.secret;
+    _rolls[n] = roll;
+    _schedule();
+    return (n: n, secrets: s);
+  }
+
   // --- delivery --------------------------------------------------------------
 
   void _schedule() {
@@ -325,16 +358,21 @@ class InMemoryTransport implements MatchTransport {
     }
     _connected = true;
     _setStatus(TransportStatus.connected);
-    return TransportSession(
-      assignedSide: side,
-      config: backend.config,
-      localAuthor: author,
-      hostAuthor: backend.hostAuthor,
-      guestAuthor: backend.guestAuthor,
-      matchCode: backend.matchCode,
-      resumeToken: backend.capabilities.durable ? backend.resumeToken : null,
-    );
+    return _sessionNow();
   }
+
+  /// The session as the backend stands RIGHT NOW. Rebuilt on every call rather
+  /// than cached, so a test that changes the backend's identity/config is
+  /// modelling a transport that re-reads it (which both shipped ones do).
+  TransportSession _sessionNow() => TransportSession(
+        assignedSide: _sideOf(author) ?? TransportSession.hostSide,
+        config: backend.config,
+        localAuthor: author,
+        hostAuthor: backend.hostAuthor,
+        guestAuthor: backend.guestAuthor,
+        matchCode: backend.matchCode,
+        resumeToken: backend.capabilities.durable ? backend.resumeToken : null,
+      );
 
   Player? _sideOf(String a) {
     if (a == backend.hostAuthor) return TransportSession.hostSide;
@@ -460,7 +498,22 @@ class InMemoryTransport implements MatchTransport {
     _inbound.add(ResetFrame(
       resumeToken: backend.capabilities.durable ? backend.resumeToken : null,
       reason: reason,
+      // The CURRENT session, per the contract: a test that changed
+      // [InMemoryBackend.config] alongside the token is modelling a different
+      // match, and the frame has to say so.
+      session: _sessionNow(),
     ));
+  }
+
+  /// Push an ARBITRARY frame onto [inbound], bypassing the store entirely.
+  ///
+  /// The store enforces what a well-behaved backend enforces (write-once phases,
+  /// entropy from the non-roller), so it cannot express a peer that IS the wire —
+  /// a LAN host, which publishes whatever it likes to the guest regardless of what
+  /// its own relay would have allowed. This is how a test plays that peer.
+  void injectFrame(InboundFrame frame) {
+    if (_disposed || _inbound.isClosed) return;
+    _inbound.add(frame);
   }
 
   /// Push a transient read failure onto [inbound] WITHOUT closing it.

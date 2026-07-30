@@ -482,6 +482,123 @@ void main() {
           timeout: const Duration(seconds: 5),
           what: 'the transport to keep asking');
     });
+
+    test('a welcome log that is not contiguous from 1 is REFUSED, not mirrored',
+        () async {
+      // The welcome used to be adopted wholesale, unchecked. The host is the
+      // untrusted peer here, and the mirror IS this transport's answer to
+      // [MatchTransport.eventsSince] — which the contract requires to be
+      // ascending and contiguous. A hole (`[1, 2, 4]`) would hand a folder an
+      // answer with a gap in it; a reordering (`[3, 1, 2]`) would pin the
+      // mirror's lastSeq at 2 and livelock the resync loop at
+      // `helloMinInterval` for the rest of the match.
+      for (final bad in <List<int>>[
+        [1, 2, 4],
+        [3, 1, 2],
+        [2, 3],
+      ]) {
+        final scripted = await _ScriptedRelay.start();
+        addTearDown(scripted.stop);
+        final client = GuestClient.connect(
+          InternetAddress.loopbackIPv4.address,
+          scripted.port,
+          roomCode: testCode,
+          name: 'Bo',
+          timings: LanTimings.test,
+        );
+        final transport = SocketTransport.guest(client: client);
+        addTearDown(() async {
+          await transport.dispose();
+          await client.dispose();
+        });
+        final frames = <InboundFrame>[];
+        final errors = <Object>[];
+        transport.inbound
+            .listen(frames.add, onError: (Object e) => errors.add(e));
+
+        scripted.log = [
+          for (final seq in bad)
+            _entry(seq, MatchRelay.hostAuthor,
+                const OpeningRollEvent(whiteDie: 6, blackDie: 1)),
+        ];
+        await waitFor(() => errors.isNotEmpty,
+            what: 'the refusal of $bad');
+
+        expect(errors.first, isA<TransportRejected>(),
+            reason: 'a deterministic protocol fault, never a retryable blip');
+        expect((errors.first as TransportRejected).code, 'bad-welcome');
+        // Deterministic, so the link is reported terminally failed rather than
+        // left re-asking a question that has one answer.
+        expect(transport.status, TransportStatus.failed);
+        expect(await mirrorSeqs(transport), isEmpty,
+            reason: 'the mirror was left alone rather than corrupted');
+        expect(frames.whereType<ResetFrame>(), isEmpty,
+            reason: 'nothing to replay from, so no replay is ordered');
+      }
+    });
+  });
+
+  group('the bound peer and repeated hellos', () {
+    test('a resync hello is answered with the log but does NOT reset the host',
+        () async {
+      // A `hello` is a join, a rejoin AND a plain resync request. Emitting a
+      // ResetFrame on every one of them put the host into a permanent replace —
+      // and each reset clears its in-flight submission gate, so a guest stuck
+      // behind a gap (or a hostile one) could stop the host player from ever
+      // completing a decision. The host's own fold cannot be missing anything a
+      // replay would add: its writes go through the relay it is subscribed to.
+      final f = await ServerFixture.start();
+      addTearDown(f.dispose);
+      final hostFrames = <InboundFrame>[];
+      f.transport.inbound.listen(hostFrames.add);
+      await f.transport.connect();
+
+      final guest = await RawGuest.connect(f.server, autoPong: true);
+      addTearDown(guest.close);
+      guest.hello();
+      await waitFor(() => guest.gotWelcome, what: 'the welcome');
+      await waitFor(() => hostFrames.whereType<ResetFrame>().length == 1,
+          what: 'the join reset');
+
+      // Two more hellos, spaced past the relay's hello limiter so both land.
+      for (var i = 0; i < 2; i++) {
+        await settle(250);
+        guest.hello();
+        await waitFor(() => guest.of<WelcomeMessage>().length >= i + 2,
+            what: 'welcome ${i + 2}');
+      }
+      await settle(120);
+
+      expect(guest.of<WelcomeMessage>().length, 3,
+          reason: 'every hello is still answered with the whole log');
+      expect(hostFrames.whereType<ResetFrame>().length, 1,
+          reason: 'but only the (re)connection reset the host\'s own fold');
+    });
+
+    test('a guest that leaves and comes back DOES reset the host again',
+        () async {
+      final f = await ServerFixture.start();
+      addTearDown(f.dispose);
+      final hostFrames = <InboundFrame>[];
+      f.transport.inbound.listen(hostFrames.add);
+      await f.transport.connect();
+
+      final first = await RawGuest.connect(f.server, autoPong: true);
+      first.hello();
+      await waitFor(() => first.gotWelcome, what: 'the first welcome');
+      await waitFor(() => hostFrames.whereType<ResetFrame>().length == 1,
+          what: 'the first join reset');
+
+      await first.close();
+      await waitFor(() => !f.server.hasGuest, what: 'the guest to leave');
+
+      final second = await RawGuest.connect(f.server, autoPong: true);
+      addTearDown(second.close);
+      second.hello();
+      await waitFor(() => second.gotWelcome, what: 'the second welcome');
+      await waitFor(() => hostFrames.whereType<ResetFrame>().length == 2,
+          what: 'the rejoin reset — a NEW connection may have written');
+    });
   });
 }
 

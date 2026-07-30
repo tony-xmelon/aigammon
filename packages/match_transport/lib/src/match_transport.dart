@@ -44,7 +44,8 @@
 ///    changed under us (a host restart, a room-code collision). Its
 ///    `resumeToken` is the authority's current one: a token that differs from
 ///    the one the controller has been folding under invalidates every per-match
-///    watermark.
+///    watermark — AND the session, so such a frame MUST carry
+///    [ResetFrame.session] (the new match's config and seats).
 ///  * **[inbound] may emit errors WITHOUT closing.** A transient read failure
 ///    surfaces as a [TransportUnavailable] on the stream and the stream keeps
 ///    running; the controller shows a banner and folds on. A transport never
@@ -213,8 +214,16 @@ sealed class InboundFrame {
 /// the MATCH IDENTITY changed and every per-match watermark
 /// (persisted-through / acknowledged-through / match-persisted) must be reset
 /// too, so the new match is not silently written into the old one's row.
+///
+/// An identity change also invalidates the [TransportSession] itself — a
+/// different match has its own [MatchConfig] (length, cubeless) and its own seat
+/// assignment — which is why [session] exists and why carrying it is NORMATIVE
+/// whenever [resumeToken] differs. Replaying a different match's log under the
+/// old config is not a cosmetic error: the fold would seed [MatchState] with the
+/// wrong match length, and a stale `cubeless` flag turns the opponent's
+/// perfectly legal double into a `cube-in-cubeless` freeze.
 final class ResetFrame extends InboundFrame {
-  const ResetFrame({this.resumeToken, this.reason});
+  const ResetFrame({this.resumeToken, this.reason, this.session});
 
   /// The authority's CURRENT resume token, or null for a transport that has
   /// none. Compare against the folding token to detect an identity change.
@@ -222,6 +231,15 @@ final class ResetFrame extends InboundFrame {
 
   /// Why the reset happened, for logs and the connection chip.
   final String? reason;
+
+  /// The authority's CURRENT session — config and seat identities included.
+  ///
+  /// MUST be non-null when [resumeToken] differs from the token the controller
+  /// has been folding under (see the class doc); optional, and simply re-adopted,
+  /// when the identity is unchanged. A controller that receives a session-less
+  /// identity change re-reads the session with [MatchTransport.connect] rather
+  /// than replaying a new match under the old one's parameters.
+  final TransportSession? session;
 
   @override
   String toString() => 'ResetFrame(token: $resumeToken, reason: $reason)';
