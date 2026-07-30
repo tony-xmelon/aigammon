@@ -117,7 +117,7 @@ class MatchDoc {
     T need<T>(String key) {
       final v = f[key];
       if (v is! T) {
-        throw OnlineException(
+        throw MalformedDocumentException(
             'malformed-match', 'matches/$code: bad or missing "$key"');
       }
       return v;
@@ -127,7 +127,7 @@ class MatchDoc {
     return MatchDoc(
       code: code,
       hostUid: need<String>('hostUid'),
-      guestUid: f['guestUid'] as String?,
+      guestUid: need<String?>('guestUid'),
       length: need<int>('length'),
       cubeless: need<bool>('cubeless'),
       status: need<String>('status'),
@@ -173,23 +173,38 @@ class RemoteEvent {
   /// `jsonDecode` then [GameEvent.fromJson] — no field remapping. This is why
   /// the old nested-array workaround (move hops as maps) is gone: a JSON string
   /// carries `[[from,to,hit],…]` verbatim.
+  /// Every failure mode is a [MalformedDocumentException] — including a `raw`
+  /// that is not JSON, or JSON that [GameEvent.fromJson] rejects. Letting those
+  /// escape as a bare `FormatException`/`ArgumentError`/`TypeError` was a
+  /// quota bug, not just untidiness: the transport only maps `OnlineException`,
+  /// so an undecodable document fell through to a generic retry and the poll
+  /// loop re-read it every two seconds for the rest of the day.
   factory RemoteEvent.fromFields(Map<String, Object?> f) {
     final raw = f['event'];
     if (raw is! String) {
-      throw OnlineException('malformed-event', 'event field is not a string');
+      throw const MalformedDocumentException(
+          'malformed-event', 'event field is not a string');
     }
     final seq = f['seq'];
     final gameNo = f['gameNo'];
     if (seq is! int || gameNo is! int) {
-      throw OnlineException('malformed-event', 'bad seq/gameNo: $f');
+      throw MalformedDocumentException(
+          'malformed-event', 'bad seq/gameNo: $f');
+    }
+    final GameEvent event;
+    try {
+      event = GameEvent.fromJson(
+        Map<String, dynamic>.from(jsonDecode(raw) as Map),
+      );
+    } catch (e) {
+      throw MalformedDocumentException(
+          'malformed-event', 'events/$seq does not decode as a GameEvent: $e');
     }
     return RemoteEvent(
       seq: seq,
       gameNo: gameNo,
       author: f['author'] as String? ?? '',
-      event: GameEvent.fromJson(
-        Map<String, dynamic>.from(jsonDecode(raw) as Map),
-      ),
+      event: event,
     );
   }
 }
@@ -235,15 +250,22 @@ class RollDoc {
     final n = f['n'];
     final roller = f['roller'];
     final commit = f['commit'];
-    if (n is! int || roller is! String || commit is! String) {
-      throw OnlineException('malformed-roll', 'bad roll document: $f');
+    final entropy = f['entropy'];
+    final reveal = f['reveal'];
+    if (n is! int ||
+        roller is! String ||
+        commit is! String ||
+        (entropy != null && entropy is! String) ||
+        (reveal != null && reveal is! String)) {
+      throw MalformedDocumentException(
+          'malformed-roll', 'bad roll document: $f');
     }
     return RollDoc(
       n: n,
       roller: roller,
       commit: commit,
-      entropy: f['entropy'] as String?,
-      reveal: f['reveal'] as String?,
+      entropy: entropy as String?,
+      reveal: reveal as String?,
     );
   }
 }

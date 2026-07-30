@@ -31,6 +31,20 @@ class PermissionDeniedException extends OnlineException {
       : super('PERMISSION_DENIED', message);
 }
 
+/// A document came back that this client cannot decode: a missing or
+/// wrong-typed field, or an `event` string that is not JSON / not a
+/// [GameEvent].
+///
+/// **Terminal, not transient.** The bytes are already in hand and they will not
+/// change (`events/{seq}` documents are write-once, and the rules pin their
+/// shape), so re-reading the same document can only fail identically. That is
+/// why this is its own type: the transport maps it to a `TransportRejected` and
+/// STOPS, instead of billing a fresh read against the free-tier quota every
+/// poll cycle forever.
+class MalformedDocumentException extends OnlineException {
+  const MalformedDocumentException(super.code, super.message);
+}
+
 /// The caller presented no (or an unusable) credential.
 class UnauthenticatedException extends OnlineException {
   const UnauthenticatedException(String message)

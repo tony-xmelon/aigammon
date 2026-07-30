@@ -617,7 +617,12 @@ class FirestoreTransport implements MatchTransport {
           _setStatus(TransportStatus.connected);
         }
       } on OnlineException catch (e) {
-        _onPollFailure(_mapRead(e));
+        final fault = _mapRead(e);
+        if (fault is TransportRejected) {
+          _onTerminalRead(fault);
+          return;
+        }
+        _onPollFailure(fault);
       } catch (e) {
         _onPollFailure(TransportUnavailable('io', '$e'));
       }
@@ -655,6 +660,37 @@ class FirestoreTransport implements MatchTransport {
   void _onPollFailure(TransportException error) {
     if (_disposed) return;
     _setStatus(TransportStatus.reconnecting, error.message);
+    _publishError(error);
+  }
+
+  /// A read that CANNOT succeed on a retry: the rules refuse us, or a document
+  /// in the log does not decode.
+  ///
+  /// Both paths stop. Polling a document that will never parse is the worst
+  /// possible use of a 50,000-read daily quota — at the 2s cadence it is ~43,000
+  /// reads for no information — and the listener would only re-deliver the same
+  /// bytes. So this is a TERMINAL state: `failed` on [statusStream] (which the
+  /// controller surfaces as a hard error rather than a reconnect banner) and the
+  /// fault itself on [inbound], then silence.
+  ///
+  /// [inbound] is NOT closed: the contract forbids ending the stream to signal
+  /// trouble, and `failed` is the agreed way to say "retrying cannot help".
+  void _onTerminalRead(TransportRejected error) {
+    if (_disposed) return;
+    _polling = false;
+    _wake();
+    _listenDisabled = true;
+    _listenStartTimer?.cancel();
+    _listenStartTimer = null;
+    _relistenTimer?.cancel();
+    _relistenTimer = null;
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _listenerLive = false;
+    _pendingEvents.clear();
+    _pendingRolls.clear();
+    unawaited(_teardownListener());
+    _setStatus(TransportStatus.failed, error.message);
     _publishError(error);
   }
 
@@ -815,9 +851,17 @@ class FirestoreTransport implements MatchTransport {
         _pendingRolls[roll.n] = roll;
       }
     } on OnlineException catch (e) {
-      // A malformed document is the peer's problem, not a stream fault: surface
-      // it and keep listening.
-      _publishError(_mapRead(e));
+      final fault = _mapRead(e);
+      if (fault is TransportRejected) {
+        // Undecodable bytes, delivered. Re-listening would only re-deliver the
+        // same document and the poll fallback would re-read it every cycle, so
+        // this is terminal on both paths — see [_onTerminalRead].
+        _onTerminalRead(fault);
+        return;
+      }
+      // A transient decode failure is the peer's problem, not a stream fault:
+      // surface it and keep listening.
+      _publishError(fault);
     }
   }
 
@@ -1030,8 +1074,15 @@ class FirestoreTransport implements MatchTransport {
   /// A READ failure. A refusal here is not a protocol violation to freeze on —
   /// a token that expired mid-flight reads as `PERMISSION_DENIED` too — so only
   /// a rules refusal on a read stays terminal, and everything else is transient.
+  /// A read failure as a typed fault.
+  ///
+  /// [MalformedDocumentException] joins `PERMISSION_DENIED` on the TERMINAL side
+  /// deliberately: a document that does not decode now will not decode on the
+  /// next cycle either (`events/{seq}` is write-once), so retrying it forever at
+  /// the poll cadence would burn the whole day's free-tier read budget on one
+  /// bad document. See [_isTerminalRead].
   TransportException _mapRead(OnlineException e) {
-    if (e is PermissionDeniedException) {
+    if (e is PermissionDeniedException || e is MalformedDocumentException) {
       return TransportRejected(e.code, e.message);
     }
     return TransportUnavailable(e.code, e.message);
@@ -1045,10 +1096,8 @@ class FirestoreTransport implements MatchTransport {
       _documentsRead++;
       return doc;
     } on OnlineException catch (e) {
-      if (e is NotFoundException || e is PermissionDeniedException) {
-        throw TransportRejected(e.code, e.message);
-      }
-      throw TransportUnavailable(e.code, e.message);
+      if (e is NotFoundException) throw TransportRejected(e.code, e.message);
+      throw _mapRead(e);
     }
   }
 

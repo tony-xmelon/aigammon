@@ -94,6 +94,32 @@ void main() {
           throwsA(isA<FormatException>()));
     });
 
+    test('a length varint near 2^63 is a FormatException on BOTH paths', () {
+      // The bounds check used to be `_pos + count > _end`, which OVERFLOWS to a
+      // negative number for a length this big and therefore passes. A hostile
+      // (or corrupt) frame then either threw the wrong type out of `readBytes`
+      // (`RangeError`, which nothing catches) or — worse — nothing at all out of
+      // `skip`, which left `_pos` hugely negative and every later read reading
+      // garbage from outside the field.
+      //
+      // 0x7fffffffffffffff as a varint: nine 0xff-ish groups then 0x7f.
+      const hostile = [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+      ];
+      Uint8List framed() => Uint8List.fromList([0x0a, ...hostile, 1, 2, 3]);
+
+      final forBytes = ProtoReader(framed())..readTag();
+      expect(forBytes.readBytes, throwsA(isA<FormatException>()));
+
+      final forMessage = ProtoReader(framed())..readTag();
+      expect(forMessage.readMessage, throwsA(isA<FormatException>()));
+
+      final forSkip = ProtoReader(framed());
+      final tag = forSkip.readTag();
+      expect(() => forSkip.skip(tag & 7), throwsA(isA<FormatException>()),
+          reason: 'skip must refuse it too, not silently rewind _pos');
+    });
+
     test('a repeated int field decodes packed AND unpacked', () {
       // proto3 packs by default, but one-varint-per-occurrence is legal too and
       // `target_ids` has been seen both ways.

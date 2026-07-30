@@ -517,6 +517,95 @@ void main() {
           ]));
     });
 
+    test('an UNDECODABLE event document is terminal, not a poll-forever drain',
+        () async {
+      // The quota bug this closes: `events/{seq}` is write-once, so a document
+      // whose `event` string is not a `GameEvent` will never decode. The old
+      // code let `jsonDecode`/`GameEvent.fromJson` escape as a bare
+      // `FormatException`, which the loop caught as generic IO and retried at
+      // the poll cadence — ~43,000 reads a day against a 50,000 quota, on one
+      // bad document, forever.
+      var queries = 0;
+      final t = await connected((req) async {
+        if (req.url.path.endsWith(':runQuery')) {
+          if (queriedCollection(req) == 'rolls') return http.Response('[]', 200);
+          queries++;
+          // A well-formed envelope carrying an `event` string that is not JSON.
+          return http.Response(
+            jsonEncode([
+              {
+                'document': {
+                  'name': 'projects/p/databases/(default)/documents/matches/C'
+                      '/events/00000000',
+                  'fields': {
+                    'seq': {'integerValue': '0'},
+                    'gameNo': {'integerValue': '1'},
+                    'author': {'stringValue': 'uid-remote'},
+                    'event': {'stringValue': 'not json at all'},
+                  },
+                },
+              },
+            ]),
+            200,
+          );
+        }
+        return quiet(req);
+      }, poll: const Duration(milliseconds: 5));
+
+      final errors = <Object>[];
+      var closed = false;
+      t.inbound.listen((_) {}, onError: errors.add, onDone: () => closed = true);
+
+      await waitFor(() => errors.isNotEmpty, reason: 'the fault never surfaced');
+      expect(errors.single, isA<TransportRejected>()
+          .having((e) => e.code, 'code', 'malformed-event'));
+      expect(t.status, TransportStatus.failed,
+          reason: 'a document that will never decode is not "reconnecting"');
+      expect(closed, isFalse,
+          reason: 'inbound must never end to signal trouble');
+
+      // And the loop is STOPPED: many poll intervals later, no further reads.
+      final after = queries;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(queries, after, reason: 'the poll loop kept re-reading it');
+      expect(errors.length, 1, reason: 'and kept re-reporting it');
+    });
+
+    test('an undecodable ROLL document is terminal the same way', () async {
+      final t = await connected((req) async {
+        if (req.url.path.endsWith(':runQuery')) {
+          if (queriedCollection(req) == 'events') {
+            return http.Response('[]', 200);
+          }
+          return http.Response(
+            jsonEncode([
+              {
+                'document': {
+                  'name': 'projects/p/databases/(default)/documents/matches/C'
+                      '/rolls/1',
+                  'fields': {
+                    'n': {'integerValue': '1'},
+                    'roller': {'stringValue': 'uid-remote'},
+                    // `commit` must be a string; an integer is undecodable.
+                    'commit': {'integerValue': '7'},
+                  },
+                },
+              },
+            ]),
+            200,
+          );
+        }
+        return quiet(req);
+      }, poll: const Duration(milliseconds: 5));
+
+      final errors = <Object>[];
+      t.inbound.listen((_) {}, onError: errors.add);
+      await waitFor(() => errors.isNotEmpty);
+      expect(errors.single, isA<TransportRejected>()
+          .having((e) => e.code, 'code', 'malformed-roll'));
+      expect(t.status, TransportStatus.failed);
+    });
+
     test('every operation refuses to run before connect, and after dispose',
         () async {
       final api = await apiFor(quiet);

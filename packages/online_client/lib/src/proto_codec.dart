@@ -199,8 +199,17 @@ class ProtoReader {
     _pos += count;
   }
 
+  /// Bounds-check a run of [count] bytes at [_pos].
+  ///
+  /// Written as `count > _end - _pos` and NOT `_pos + count > _end`: a varint
+  /// carries up to 64 bits, so a hostile length near 2^63 makes `_pos + count`
+  /// WRAP to a negative number and the check pass. The consequences were both
+  /// wrong and inconsistent — [readBytes] then threw `RangeError` instead of the
+  /// `FormatException` the decoder's callers catch, and [skip] threw nothing at
+  /// all, silently leaving `_pos` hugely negative for every subsequent read.
+  /// `_end - _pos` cannot overflow: both are in-range indices of [_bytes].
   void _require(int count) {
-    if (count < 0 || _pos + count > _end) {
+    if (count < 0 || count > _end - _pos) {
       throw const FormatException('truncated protobuf field');
     }
   }
