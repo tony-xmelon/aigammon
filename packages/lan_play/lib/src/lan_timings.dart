@@ -92,10 +92,12 @@ class LanTimings {
   /// match.
   ///
   /// It is also the whole of what a lost write COSTS the player, which is why it
-  /// is 1.5s and not the 4s it shipped as. The controller retries 200ms after the
-  /// write fails, so the recovery has to fit inside its gate deadline
-  /// ([connectTimeout], 5s) with room to spare — at 4s it did not, and the user
-  /// got the gate's "the other device did not answer" on top of the stall. Still
+  /// is 1.5s and not the 4s it shipped as. A decision submit retries immediately
+  /// on failure, so one dropped frame costs up to 2x this deadline; that has to
+  /// fit inside the gate deadline ([connectTimeout], 5s) with room to spare — at
+  /// 4s it did not (8s > 5s), and the user got the gate's "the other device did
+  /// not answer" on top of the stall. (A roll-drive write instead cancels its own
+  /// gate and re-arms at the retry beat, ~200ms later — no stacking there.) Still
   /// thirty times a LAN round trip, and comfortably past the client's own send
   /// pacing, so nothing healthy can reach it.
   final Duration writeTimeout;
