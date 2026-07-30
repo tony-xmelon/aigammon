@@ -115,8 +115,13 @@ jobs:
         with: { sdk: stable }
       - uses: subosito/flutter-action@v2
         with: { channel: stable }
+      # online_client is the largest package on the online side and was the one
+      # package CI never analysed. It passes locally, so the step is free.
+      - name: online_client analyze
+        run: dart pub get && dart analyze --fatal-infos
+        working-directory: packages/online_client
       - name: online_client unit tests
-        run: dart pub get && dart test
+        run: dart test
         working-directory: packages/online_client
       - name: Emulator suites
         run: |

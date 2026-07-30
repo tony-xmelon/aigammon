@@ -88,4 +88,31 @@ try {
 if ($appCode -ne 0) { throw "app two-client E2E suite failed ($appCode)" }
 Write-Host "app two-client E2E suite passed" -ForegroundColor Green
 
+# 4. The DEGRADED path, for real: the same E2E with AIGAMMON_E2E_LISTEN=0, so a
+#    client that can never open a gRPC stream (a network blocking HTTP/2, a
+#    proxy, an outage) is proven to still play a whole match on the poll loop.
+#
+#    Documenting the flag without ever running it left the fallback covered only
+#    by leg 3's mid-match listener-drop test, which polls for a few moves and then
+#    hands back to a listener that works. This leg never has one.
+#
+#    ONE test, not the suite: a complete 1-point match end to end is what proves
+#    the path. Re-running the adversarial legs would double the wall clock to
+#    re-prove `firestore.rules`, which does not care which delivery mechanism
+#    asked.
+$pollCommand = "cd /d `"$app`" && set `"AIGAMMON_EMULATOR=1`" && " +
+  "set `"AIGAMMON_E2E_POLL_MS=100`" && set `"AIGAMMON_E2E_LISTEN=0`" && " +
+  "flutter test --tags emulator test\online\emulator_e2e_test.dart " +
+  "--plain-name `"two clients play a complete match through the emulator`""
+
+Push-Location $PSScriptRoot
+try {
+  firebase emulators:exec --project demo-aigammon --only firestore,auth $pollCommand
+  $pollCode = $LASTEXITCODE
+} finally {
+  Pop-Location
+}
+if ($pollCode -ne 0) { throw "app E2E poll-fallback leg failed ($pollCode)" }
+Write-Host "app E2E poll-fallback leg passed" -ForegroundColor Green
+
 Write-Host "all emulator suites passed" -ForegroundColor Green

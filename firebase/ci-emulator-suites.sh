@@ -31,7 +31,26 @@ set -euo pipefail
 #    The E2E runs on the REAL-TIME LISTENER path by default (that is production
 #    since v0.11). AIGAMMON_E2E_LISTEN=0 runs the identical suite on polling
 #    alone, which is how a gRPC problem is isolated from a game problem — and the
-#    poll knob above still governs the DEGRADED path either way.
+#    poll knob above still governs the DEGRADED path either way. Leg 4 below is
+#    that flag, actually executed.
 (cd ../app && flutter pub get &&
   AIGAMMON_EMULATOR=1 AIGAMMON_E2E_POLL_MS=100 \
   flutter test --tags emulator test/online/emulator_e2e_test.dart)
+
+# 4. The DEGRADED path, for real: the same E2E with the listener switched off, so
+#    a client that can never open a gRPC stream (a network blocking HTTP/2, a
+#    proxy, an outage) is proven to still play a whole match on the poll loop.
+#
+#    Documenting AIGAMMON_E2E_LISTEN=0 without ever running it left the fallback
+#    covered only by the mid-match listener-drop leg, which exercises polling for
+#    a few moves and then hands back to a listener that works. This leg never has
+#    one.
+#
+#    ONE test, not the suite: a complete 1-point match end to end is what proves
+#    the path, and re-running the adversarial legs on it would double this job's
+#    wall clock to re-prove `firestore.rules`, which does not care which delivery
+#    mechanism asked.
+(cd ../app &&
+  AIGAMMON_EMULATOR=1 AIGAMMON_E2E_POLL_MS=100 AIGAMMON_E2E_LISTEN=0 \
+  flutter test --tags emulator test/online/emulator_e2e_test.dart \
+    --plain-name 'two clients play a complete match through the emulator')
