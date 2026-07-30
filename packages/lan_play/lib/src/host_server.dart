@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
-import 'host_authority.dart';
 import 'lan_timings.dart';
 import 'protocol.dart';
 
@@ -24,11 +23,21 @@ const int defaultMatchPort = 47780;
 /// per-connection limits still hold, and on a home LAN this is unreachable.
 const int maxThrottledAddresses = 256;
 
-/// The host device's socket transport: an [HttpServer] on the local network
-/// that upgrades `GET /match` to a WebSocket and wires exactly ONE guest to a
-/// [HostAuthority].
+/// The bound peer's socket transport: an [HttpServer] on the local network that
+/// upgrades `GET /match` to a WebSocket and carries frames to and from exactly
+/// ONE guest.
 ///
-/// ## Policy (all of it deliberate, none of it in the authority)
+/// ## A pipe, not a player
+///
+/// This class knows nothing about backgammon. It authenticates a guest, polices
+/// the connection, and exposes two things: [guestFrames] (every authenticated,
+/// rate-limited frame the guest sent) and [send] (one frame to the guest). What
+/// those frames MEAN is `SocketTransport`'s business, and the game logic above it
+/// is the controller's. Before Plan 17 this class held a `HostAuthority`
+/// reference and fed a referee; the referee is gone and the socket policy below
+/// is unchanged — that separation is exactly why the deletion was safe.
+///
+/// ## Policy (all of it deliberate)
 ///
 ///  * **One guest, claimed by AUTHENTICATION.** The playing slot is taken by a
 ///    valid `hello`, never by a mere connection — otherwise anyone able to open
@@ -39,10 +48,11 @@ const int maxThrottledAddresses = 256;
 ///    at [LanTimings.maxPendingConnections] and each carries its own
 ///    [LanTimings.handshakeTimeout].
 ///  * **Room code.** The first frame must be a valid `hello` carrying the room
-///    code. Anything else — a wrong code, a missing code, a `submit`, a garbage
-///    frame — gets a constant-size `reject` (with `lastSeq: 0`, so nothing about
-///    the match escapes) and the connection is closed. The authority never sees
-///    the frame, so an unauthenticated peer can never pull the log.
+///    code. Anything else — a wrong code, a missing code, a write frame, a
+///    garbage frame — gets a constant-size `reject` (with `lastSeq: 0`, so
+///    nothing about the match escapes) and the connection is closed. No frame
+///    from an unauthenticated peer ever reaches [guestFrames], so it can never
+///    pull the log.
 ///  * **Brute force.** Wrong codes are counted per remote address; past
 ///    [LanTimings.maxAuthFailuresPerWindow] that address is refused before the
 ///    upgrade. That, not the four digits, is what makes a four-digit code
@@ -54,32 +64,32 @@ const int maxThrottledAddresses = 256;
 ///    [LanTimings.frameMinInterval]. Excess is DROPPED silently — never
 ///    answered, never queued.
 ///  * **Hostile input.** Frames over [maxMessageLength] are dropped before the
-///    parser; binary frames are ignored; decode failures are handed to
-///    [HostAuthority.onGuestRaw], which answers with a bounded reject. Nothing a
-///    peer sends can throw out of this class.
+///    parser; binary frames are ignored; a decode failure earns a bounded
+///    `reject` (an unknown TYPE is ignored instead — a newer peer may send
+///    frames we predate). Nothing a peer sends can throw out of this class.
 ///  * **Liveness.** A `ping` goes out every [LanTimings.heartbeatInterval]; a
 ///    connection silent for [LanTimings.silenceTimeout] is dropped.
 ///
-/// A dropped guest does NOT disturb the authority: the match state, the log and
-/// the score all survive. The next connection presenting the right code becomes
-/// the active guest and resyncs through the ordinary `hello`/`welcome` path.
+/// A dropped guest does NOT disturb the match: the relay's log and roll
+/// documents survive. The next connection presenting the right code becomes the
+/// active guest and resyncs through the ordinary `hello`/`welcome` path.
 class HostServer {
   /// Serve on an already-bound [server] that has NOT been listened to yet,
   /// taking ownership of it ([stop] closes it).
   ///
   /// [HostServer.start] is the usual entry point; this one exists for a caller
   /// that must hold the port before the match machinery exists.
+  ///
+  /// [lastSeq] is read when refusing a malformed frame, so the guest learns
+  /// whether it is behind. It defaults to "nothing committed"; the socket
+  /// transport wires it to the relay.
   HostServer.attach(
     this._server, {
-    required HostAuthority authority,
     required this.roomCode,
     this.timings = LanTimings.defaults,
-  }) : _authority = authority {
+    int Function()? lastSeq,
+  }) : _lastSeq = lastSeq ?? _noSeq {
     validateRoomCode(roomCode);
-    // Subscribed BEFORE any request can arrive: `outbound` is a non-buffering
-    // broadcast stream, so a late subscription would silently swallow the first
-    // welcome.
-    _outSub = _authority.outbound.listen(_onOutbound);
     _server.listen(_onRequest, onError: (Object _) {});
   }
 
@@ -87,10 +97,10 @@ class HostServer {
   /// chosen one back from [port].
   static Future<HostServer> start({
     int port = 0,
-    required HostAuthority authority,
     required String roomCode,
     LanTimings timings = LanTimings.defaults,
     InternetAddress? bindAddress,
+    int Function()? lastSeq,
   }) async {
     // Validated BEFORE binding: a bad code must not leave a socket behind.
     validateRoomCode(roomCode);
@@ -99,7 +109,7 @@ class HostServer {
       port,
     );
     return HostServer.attach(server,
-        authority: authority, roomCode: roomCode, timings: timings);
+        roomCode: roomCode, timings: timings, lastSeq: lastSeq);
   }
 
   /// Mint a room code: four digits, drawn from [Random.secure] unless a
@@ -121,16 +131,18 @@ class HostServer {
     }
   }
 
+  static int _noSeq() => 0;
+
   final HttpServer _server;
-  final HostAuthority _authority;
+  final int Function() _lastSeq;
 
   /// The code a guest must present in its `hello`.
   final String roomCode;
 
   final LanTimings timings;
 
-  late final StreamSubscription<HostOutbound> _outSub;
   final _presence = StreamController<bool>.broadcast();
+  final _frames = StreamController<Envelope>.broadcast();
   final _Throttle _throttle = _Throttle();
 
   /// Sockets that have connected but not yet authenticated.
@@ -168,6 +180,22 @@ class HostServer {
   /// Broadcast and non-buffering — subscribe before starting to wait.
   Stream<bool> get guestPresence => _presence.stream;
 
+  /// Every frame from the AUTHENTICATED guest, after the rate limits, including
+  /// each `hello` (the first one and every later resync).
+  ///
+  /// Broadcast and non-buffering: subscribe before the server can accept, or the
+  /// handshake that arrives first will be missed.
+  Stream<Envelope> get guestFrames => _frames.stream;
+
+  /// Send one frame to the active guest. Returns false when there is nobody to
+  /// send to (the frame is dropped — the guest resyncs on its next `hello`).
+  bool send(Envelope message) {
+    final c = _guest;
+    if (c == null || _stopped) return false;
+    _send(c, message);
+    return true;
+  }
+
   /// Close the current guest's connection, keeping the server (and the match)
   /// running. The guest's client will reconnect and resync.
   Future<void> disconnectGuest([String reason = 'disconnected']) async {
@@ -176,12 +204,12 @@ class HostServer {
     await _close(c, WebSocketStatus.normalClosure, reason);
   }
 
-  /// Stop serving and close every connection. Does NOT close the
-  /// [HostAuthority] — its owner does that. Idempotent.
+  /// Stop serving and close every connection. Does NOT close the [MatchRelay] or
+  /// the transport built over this server — their owner does that (see
+  /// `SocketTransport.host`). Idempotent.
   Future<void> stop() async {
     if (_stopped) return;
     _stopped = true;
-    await _outSub.cancel();
     final open = <_GuestConnection>[
       if (_guest != null) _guest!,
       ..._pending,
@@ -191,6 +219,7 @@ class HostServer {
     }
     await _server.close(force: true);
     await _presence.close();
+    await _frames.close();
   }
 
   // --- accepting -------------------------------------------------------------
@@ -284,16 +313,24 @@ class HostServer {
             _fail(c, 'bad code', countFailure: true);
             return;
           }
-          _authority.onGuestMessage(envelope);
+          _publish(envelope);
           return;
         }
+        if (envelope is PingMessage) {
+          if (!c.allowFrame(now, timings.frameMinInterval)) return;
+          _send(c, const PongMessage());
+          return;
+        }
+        if (envelope is PongMessage) return; // liveness only, already recorded
         if (!c.allowFrame(now, timings.frameMinInterval)) return;
-        _authority.onGuestMessage(envelope);
-      case DecodeFailure():
+        _publish(envelope);
+      case DecodeFailure(:final error):
+        if (error.kind == ProtocolErrorKind.unknownType) return;
         if (!c.allowFrame(now, timings.frameMinInterval)) return;
-        // Hand the RAW frame over so the authority's refusal policy (unknown
-        // types ignored, everything else a bounded reject) stays in one place.
-        _authority.onGuestRaw(data);
+        // A bounded refusal, carrying our seq so a guest that has drifted can
+        // tell the difference between "you are behind" and "that frame was
+        // nonsense".
+        _send(c, RejectMessage(reason: error.message, lastSeq: _lastSeq()));
     }
   }
 
@@ -323,7 +360,7 @@ class HostServer {
     c.markHello(DateTime.now());
     c.heartbeat = Timer.periodic(timings.heartbeatInterval, (_) => _beat(c));
     if (!_presence.isClosed) _presence.add(true);
-    _authority.onGuestMessage(hello);
+    _publish(hello);
   }
 
   /// Constant-time-ish comparison: no early exit on the first differing
@@ -357,11 +394,8 @@ class HostServer {
 
   // --- outbound --------------------------------------------------------------
 
-  void _onOutbound(HostOutbound out) {
-    if (!out.toGuest) return; // host-local messages ride the authority stream
-    final c = _guest;
-    if (c == null) return;
-    _send(c, out.message);
+  void _publish(Envelope message) {
+    if (!_frames.isClosed) _frames.add(message);
   }
 
   void _send(_GuestConnection c, Envelope message) {

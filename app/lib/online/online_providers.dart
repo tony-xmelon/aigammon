@@ -33,6 +33,12 @@ final onlineConfigProvider = Provider<OnlineConfig?>((ref) {
 
 /// The shared [MatchApi] for the app, built once per session.
 ///
+/// This is the APP-lifetime half of online play: the anonymous session and the
+/// HTTP clients. The PER-MATCH half is a [FirestoreTransport] over it, built by
+/// `online_screen.dart` when a match is entered and owned by the
+/// `NetMatchController` it is handed to — so nothing here is per-match, and
+/// nothing here is disposed when a match ends.
+///
 /// Signs in an anonymous Firebase user, then talks to Firestore documents
 /// DIRECTLY — there are no Cloud Functions in the serverless model, so
 /// `firebase/firestore.rules` is the only server-side logic. Being a plain
@@ -62,6 +68,28 @@ final matchApiProvider = FutureProvider<MatchApi>((ref) async {
   ref.onDispose(api.close);
   await api.signIn();
   return api;
+});
+
+/// Builds the real-time Firestore [FirestoreListenChannelFactory] for a match, or
+/// null when this build has no online backend at all.
+typedef ListenChannelBuilder = FirestoreListenChannelFactory? Function(
+    MatchApi api);
+
+/// How a [FirestoreTransport] gets its real-time channel.
+///
+/// A provider rather than a direct construction in the screen, because the
+/// channel needs BOTH halves of the online stack — the config's gRPC endpoint and
+/// the [MatchApi]'s auto-refreshing idToken — and because a test that swaps
+/// [matchApiProvider] for a fake has no gRPC endpoint behind it and must be able
+/// to say so. Override with `(_) => null` to run a match on polling alone.
+///
+/// Returning a FACTORY rather than a channel is the transport's contract: one
+/// channel carries one stream, so every re-listen builds a fresh one.
+final listenChannelBuilderProvider = Provider<ListenChannelBuilder>((ref) {
+  final config = ref.watch(onlineConfigProvider);
+  if (config == null) return (_) => null;
+  return (api) =>
+      () => GrpcFirestoreListenChannel(config: config, token: api.auth.validToken);
 });
 
 /// The durable half of the device's online identity: the anonymous session and

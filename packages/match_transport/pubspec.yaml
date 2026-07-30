@@ -1,0 +1,21 @@
+name: match_transport
+description: >-
+  Pure-Dart MatchTransport interface, shared wire frames, commit-reveal fair
+  dice and an in-memory transport for AIGammon's unified LAN + online play.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  backgammon_core:
+    path: ../backgammon_core
+  crypto: ^3.0.3
+  # A real dependency, not a dev one: lib/transport_contract.dart is a
+  # deliverable of this package (the executable half of the contract) and is
+  # imported by lan_play's and online_client's test suites.
+  test: ^1.25.0
+
+dev_dependencies:
+  lints: ^4.0.0

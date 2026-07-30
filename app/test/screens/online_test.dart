@@ -19,7 +19,7 @@ import 'package:online_client/online_client.dart';
 import 'package:aigammon_app/online/online_session_store.dart';
 
 import '../data/test_database.dart';
-import '../online/fake_online_backend.dart';
+import '../online/fake_match_api.dart';
 
 /// A no-native [EngineFacade] with instant, flat responses — enough for the
 /// online [TutorService] the game screen constructs (it never blocks a test).
@@ -56,19 +56,15 @@ class FakeFacade implements EngineFacade {
 }
 
 /// A [FakeMatchApi] wired for the create/join screen: `createMatch` hands out
-/// [code], an invisible opponent takes the guest seat after [activeAfter]
+/// `ABC123`, an invisible opponent takes the guest seat after [activeAfter]
 /// `fetchMatch` calls, and the match goes live with a sound opening roll already
-/// in its log (there is no second client here to make one, and the launched
-/// controller cannot become ready without it).
-///
-/// The beat is disabled: a widget test's clock is fake, so the poll stays purely
-/// change-driven.
+/// in its log (there is no second client here to make one, and the
+/// [NetMatchController] the screen launches cannot become ready without it).
 FakeMatchApi screenApi(FakeBackend backend, {int activeAfter = 1}) =>
     FakeMatchApi(backend, 'me')
       ..nextCode = 'ABC123'
       ..autoJoinAfterFetches = activeAfter
-      ..autoSeedOpening = true
-      ..pollBeat = null;
+      ..autoSeedOpening = true;
 
 /// A match sitting open under [code], for the join flow to claim.
 FakeMatch _waitingMatch(FakeBackend backend, String code) {
@@ -95,6 +91,11 @@ Widget _app(FakeMatchApi api, {bool configured = true, required AppDatabase db})
       onlineConfigProvider
           .overrideWithValue(configured ? OnlineConfig.emulator() : null),
       matchApiProvider.overrideWith((ref) async => api),
+      // The lobby's api is a FAKE with no Firestore behind it, so there is
+      // nothing to open a real-time gRPC stream to: every match here runs on the
+      // transport's poll loop. (The transport would degrade to exactly that by
+      // itself, but saying so keeps the test free of a retry timer.)
+      listenChannelBuilderProvider.overrideWithValue((_) => null),
       engineFacadeProvider.overrideWithValue(const FakeFacade()),
       databaseProvider.overrideWithValue(db),
       // Launching a game reads settingsProvider (for animation speed); serve a
@@ -124,7 +125,6 @@ void main() {
     backend = FakeBackend();
   });
   tearDown(() async {
-    await backend.close();
     await db.close();
   });
 
@@ -242,6 +242,45 @@ void main() {
     await _pumpUntil(t, find.byType(GameScreen));
     expect(find.byType(GameScreen), findsOneWidget);
     expect(api.joinCodes, ['ZZZZZZ', 'ZZZZZZ']);
+  });
+
+  testWidgets('the lobby wait BACKS OFF instead of billing 2s forever',
+      (t) async {
+    // A free-tier budget guard, not a UX one. The lobby wait is the longest idle
+    // window in the product ("create a match, then go and tell your friend"),
+    // and it is the ONE window still polled — what it waits for is a field on
+    // the match document, which no subcollection watch can see. At a flat 2s,
+    // ten minutes of it cost 300 match reads (600 with the rules-gets each one
+    // evaluates): a whole game's worth of quota for nobody doing anything.
+    await t.binding.setSurfaceSize(surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final api = screenApi(backend, activeAfter: 100000);
+    await t.pumpWidget(_app(api, db: db));
+    await t.pumpAndSettle();
+
+    await t.tap(find.widgetWithText(FilledButton, 'Create'));
+    await t.pump();
+    await t.pump();
+    await t.pump();
+    expect(find.text('Waiting for opponent…'), findsOneWidget);
+
+    // Ten minutes of fake time, advanced in 1s slices so every timer fires.
+    for (var i = 0; i < 600; i++) {
+      await t.pump(const Duration(seconds: 1));
+    }
+    final reads = api.calls['fetchMatch'] ?? 0;
+
+    // Stop the loop so no timer outlives the test.
+    await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await t.pump();
+
+    // Flat 2s would be ~300. The 15s ceiling puts it near 45 (5 fast cycles,
+    // then 4+8+15+15… seconds); allow slack for the ramp, but nowhere near flat.
+    expect(reads, lessThan(60),
+        reason: 'the lobby wait is not backing off — $reads reads in 10 minutes');
+    expect(reads, greaterThan(5),
+        reason: 'the wait stopped polling entirely, which would never launch');
   });
 
   testWidgets('cancel-while-waiting stops polling without errors', (t) async {

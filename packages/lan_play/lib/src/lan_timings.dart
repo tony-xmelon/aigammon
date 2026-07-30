@@ -12,6 +12,7 @@ class LanTimings {
     this.helloMinInterval = const Duration(seconds: 1),
     this.frameMinInterval = const Duration(milliseconds: 50),
     this.connectTimeout = const Duration(seconds: 5),
+    this.writeTimeout = const Duration(seconds: 4),
     this.reconnectMinDelay = const Duration(milliseconds: 500),
     this.reconnectMaxDelay = const Duration(seconds: 8),
     this.busyRetryDelay = const Duration(seconds: 5),
@@ -33,6 +34,7 @@ class LanTimings {
     helloMinInterval: Duration(milliseconds: 200),
     frameMinInterval: Duration(milliseconds: 5),
     connectTimeout: Duration(milliseconds: 250),
+    writeTimeout: Duration(milliseconds: 400),
     reconnectMinDelay: Duration(milliseconds: 20),
     reconnectMaxDelay: Duration(milliseconds: 80),
     busyRetryDelay: Duration(milliseconds: 60),
@@ -65,6 +67,17 @@ class LanTimings {
 
   /// Cap on how long a single WebSocket connect attempt may take.
   final Duration connectTimeout;
+
+  /// How long a guest waits for the relay's `ack` before calling one write lost.
+  ///
+  /// A write really can vanish: the relay DROPS any frame that arrives inside
+  /// [frameMinInterval], silently and by design, and nothing replays it. So the
+  /// deadline is a correctness requirement, not a nicety — without it a single
+  /// dropped frame would leave the controller's gate latched for the rest of the
+  /// match. Comfortably longer than a LAN round trip and comfortably shorter than
+  /// the controller's own gate deadline, so a lost write surfaces as a retryable
+  /// error rather than as a mystery timeout.
+  final Duration writeTimeout;
 
   /// First reconnect delay; doubles up to [reconnectMaxDelay].
   final Duration reconnectMinDelay;
@@ -106,6 +119,7 @@ class LanTimings {
     Duration? helloMinInterval,
     Duration? frameMinInterval,
     Duration? connectTimeout,
+    Duration? writeTimeout,
     Duration? reconnectMinDelay,
     Duration? reconnectMaxDelay,
     Duration? busyRetryDelay,
@@ -121,6 +135,7 @@ class LanTimings {
         helloMinInterval: helloMinInterval ?? this.helloMinInterval,
         frameMinInterval: frameMinInterval ?? this.frameMinInterval,
         connectTimeout: connectTimeout ?? this.connectTimeout,
+        writeTimeout: writeTimeout ?? this.writeTimeout,
         reconnectMinDelay: reconnectMinDelay ?? this.reconnectMinDelay,
         reconnectMaxDelay: reconnectMaxDelay ?? this.reconnectMaxDelay,
         busyRetryDelay: busyRetryDelay ?? this.busyRetryDelay,

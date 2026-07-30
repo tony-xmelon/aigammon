@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:backgammon_core/backgammon_core.dart';
-
 import 'host_server.dart' show matchPath;
 import 'lan_timings.dart';
 import 'protocol.dart';
@@ -80,9 +78,14 @@ class GuestHandshakeException implements Exception {
   String toString() => 'GuestHandshakeException: $reason';
 }
 
-/// The guest device's end of the LAN link: one WebSocket to the host's
-/// `/match`, a `hello`/`welcome` handshake carrying the room code, and an
-/// [Envelope] stream a controller folds exactly like the Firestore stream.
+/// The guest device's end of the LAN link: one WebSocket to the relay's
+/// `/match`, a `hello`/`welcome` handshake carrying the room code, and a raw
+/// [Envelope] stream.
+///
+/// Deliberately game-blind, exactly like [HostServer] on the other end: it
+/// carries frames, reconnects, paces and heartbeats. Turning frames into
+/// transport semantics (a mirrored log, write acknowledgements, resync) is
+/// `SocketTransport.guest`'s job.
 ///
 /// ## Lifecycle
 ///
@@ -93,8 +96,8 @@ class GuestHandshakeException implements Exception {
 /// ```dart
 /// final guest = GuestClient.connect('192.168.1.20', 47780,
 ///     roomCode: '0421', name: 'Bo');
-/// guest.inbound.listen(controller.apply);
-/// final welcome = await guest.welcome;   // side + config + log so far
+/// guest.inbound.listen(transport.onFrame);
+/// final welcome = await guest.welcome;   // side + config + log + rolls
 /// ```
 ///
 /// ## Reconnection
@@ -168,10 +171,6 @@ class GuestClient {
   final _welcome = Completer<WelcomeMessage>();
   final List<String> _queue = [];
 
-  /// The running authoritative log behind [snapshot]: replaced wholesale by
-  /// every welcome, extended by every contiguous event.
-  final List<LogEntry> _log = [];
-
   WebSocket? _socket;
   StreamSubscription<dynamic>? _sub;
   Timer? _retry;
@@ -193,9 +192,9 @@ class GuestClient {
   /// socket, start a timer, or report a state.
   int _generation = 0;
 
-  /// Every post-handshake frame from the host: `event`s, `reject`s, and each
-  /// `welcome` (including the first, and every resync welcome after a
-  /// reconnect). `ping`/`pong` are handled internally and never surface.
+  /// Every post-handshake frame from the relay: `event`s, `roll`s, `ack`s,
+  /// `reject`s, and each `welcome` (including the first, and every resync welcome
+  /// after a reconnect). `ping`/`pong` are handled internally and never surface.
   ///
   /// Broadcast and non-buffering: subscribe as soon as the client is built.
   Stream<Envelope> get inbound => _inbound.stream;
@@ -212,45 +211,22 @@ class GuestClient {
 
   /// The most recent welcome, exactly as it ARRIVED.
   ///
-  /// It goes stale the instant the next event lands — use [snapshot] to attach
-  /// a folder to the log as it stands now.
+  /// It goes stale the instant the next event lands: `SocketTransport.guest`
+  /// keeps the live mirror (the log a late-attaching folder needs), because it is
+  /// the layer that knows what a log entry means.
   WelcomeMessage? get lastWelcome => _lastWelcome;
-
-  /// The authoritative log as of NOW — the last welcome's log plus every event
-  /// entry received since — shaped as a [WelcomeMessage] so a late-attaching
-  /// folder can adopt it with the ordinary "replace your fold" semantics.
-  ///
-  /// This exists because [inbound] is broadcast and NON-BUFFERING, while the
-  /// natural way to build a folder is `await welcome` and then subscribe: the
-  /// host appends the opening roll of the joined game in the same tick it sends
-  /// the welcome, so that first event is routinely published in the gap between
-  /// the future completing and the subscription attaching. Folding
-  /// [lastWelcome] alone then leaves the folder one seq behind with nothing
-  /// further on the way — a deadlock, not a hiccup, when the missing entry is
-  /// the one that starts the game.
-  ///
-  /// The running log only extends on CONTIGUOUS entries; a gap leaves it short,
-  /// which the folder detects from the live stream and cures with a resync.
-  WelcomeMessage? get snapshot {
-    final w = _lastWelcome;
-    if (w == null) return null;
-    return WelcomeMessage(
-      config: w.config,
-      side: w.side,
-      resume: w.resume,
-      log: List.of(_log),
-    );
-  }
-
-  /// The side this guest plays, once welcomed.
-  Player? get side => _lastWelcome?.side;
 
   /// True while the link is up and welcomed.
   bool get isConnected => _state.isConnected;
 
-  /// Queue [message] for the host. Returns false when there is no live socket
+  /// True once [dispose] has run: the link is gone for good and nothing on it
+  /// will ever answer again. A view built over this client (see
+  /// `SocketTransport.guest`) reads it to stop its own retry loops.
+  bool get isDisposed => _disposed;
+
+  /// Queue [message] for the relay. Returns false when there is no live socket
   /// (the frame is dropped — after a reconnect the fresh welcome resyncs, so a
-  /// stale submission must not be replayed).
+  /// stale write must not be replayed).
   bool send(Envelope message) {
     if (_disposed || _socket == null) return false;
     _queue.add(message.encode());
@@ -258,13 +234,7 @@ class GuestClient {
     return true;
   }
 
-  /// Submit an event for this guest's own side.
-  bool submit(GameEvent event) => send(SubmitMessage(event));
-
-  /// Ask the host (which owns the dice) to roll for this guest.
-  bool requestRoll() => send(const RollRequestMessage());
-
-  /// Ask the host to replay the WHOLE log, by re-sending `hello` — the only
+  /// Ask the relay to replay the WHOLE log, by re-sending `hello` — the only
   /// frame that answers with a [WelcomeMessage]. That welcome arrives on
   /// [inbound] like any other, so a folding controller resyncs through exactly
   /// the path a reconnect uses.
@@ -474,11 +444,6 @@ class GuestClient {
         _onBusy(gen);
       case WelcomeMessage():
         _onWelcome(message);
-      case EventMessage(:final entry):
-        // Kept BEFORE publishing, so a folder attaching from [snapshot] in the
-        // very next statement cannot miss what it is about to be told.
-        if (entry.seq == (_log.isEmpty ? 0 : _log.last.seq) + 1) _log.add(entry);
-        _publish(message);
       case RejectMessage(:final reason):
         if (!_welcomedThisConnection) {
           // Before the welcome, a reject IS the handshake's answer.
@@ -494,9 +459,6 @@ class GuestClient {
   void _onWelcome(WelcomeMessage message) {
     _welcomedThisConnection = true;
     _lastWelcome = message;
-    _log
-      ..clear()
-      ..addAll(message.log);
     _resume = message.resume;
     _backoff = timings.reconnectMinDelay;
     _emit(const GuestConnectionState.connected());

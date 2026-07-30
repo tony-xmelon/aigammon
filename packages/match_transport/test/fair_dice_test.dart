@@ -2,7 +2,7 @@ import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:crypto/crypto.dart';
-import 'package:online_client/online_client.dart';
+import 'package:match_transport/match_transport.dart';
 import 'package:test/test.dart';
 
 // ---------------------------------------------------------------------------

@@ -253,8 +253,10 @@ class GameState {
 
   /// The CANONICAL legal move a submitted [move] denotes, or null when [move]
   /// is not a legal play here. The single place legality of a play is decided:
-  /// [play] applies the answer, and a remote authority (see `lan_play`'s
-  /// HostAuthority) validates AND records it.
+  /// [play] applies the answer, so a networked peer folding an opponent's
+  /// [MoveEvent] through `Game.append` gets the canonical play (and a refusal on
+  /// an illegal one) for free — which is how the unified match controller
+  /// validates a move now that there is no host referee to do it first.
   ///
   /// Two kinds of submission map onto a legal move:
   ///  * one whose hops form the same MULTISET ([Move.sameAs]) — hop order is

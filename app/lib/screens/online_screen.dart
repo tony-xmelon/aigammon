@@ -12,7 +12,7 @@ import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
 import '../data/settings_repository.dart';
 import '../engine/engine_provider.dart';
-import '../online/online_match_controller.dart';
+import '../net/net_match_controller.dart';
 import '../online/online_providers.dart';
 import '../tutor/tutor_service.dart';
 import 'game_screen.dart';
@@ -23,11 +23,12 @@ import 'game_screen.dart';
 /// When [onlineConfigProvider] is `null` the whole feature is unavailable and a
 /// friendly not-configured card is shown instead of the create/join cards.
 ///
-/// Both flows end by constructing an [OnlineMatchController], awaiting its
-/// [OnlineMatchController.ready] (so [GameScreen] never reads game state before
-/// the first opening roll has folded), and pushing [GameScreen]. The board is
-/// pinned to the local side: White at the bottom for the creator, Black at the
-/// bottom for the joiner.
+/// Both flows end by building a [FirestoreTransport] over the seated match and
+/// handing it to the ONE unified [NetMatchController] (the same controller LAN
+/// play drives over a socket), awaiting its [NetMatchController.ready] — so
+/// [GameScreen] never reads game state before the first opening roll has folded —
+/// and pushing [GameScreen]. The board is pinned to the local side: White at the
+/// bottom for the creator, Black at the bottom for the joiner.
 class OnlineScreen extends ConsumerWidget {
   const OnlineScreen({super.key});
 
@@ -99,7 +100,27 @@ class _OnlineBody extends ConsumerStatefulWidget {
 }
 
 class _OnlineBodyState extends ConsumerState<_OnlineBody> {
+  /// The first few match-document reads while waiting for an opponent.
+  ///
+  /// Snappy at the start (a friend who is already on the join screen appears
+  /// within a couple of seconds), then [_pollCeiling] takes over — see [_wait].
   static const _pollInterval = Duration(seconds: 2);
+
+  /// The cadence the wait settles at once it is clear nobody is joining
+  /// immediately.
+  ///
+  /// This is a FREE-TIER budget decision, not a UX one. The lobby wait is the
+  /// longest idle window in the product — "create a match, then go and tell your
+  /// friend" — and at a flat 2s a five-minute wait cost ~150 match-document
+  /// reads, each of which also bills the `matchOf(code)` rules-get: a whole
+  /// game's worth of the daily quota for nothing happening. Backing off to 15s
+  /// makes the same five minutes cost about 25 reads, and costs at most 15
+  /// seconds of latency on the join itself. See "Free-tier budget" in
+  /// `firebase/DEPLOY.md`.
+  static const _pollCeiling = Duration(seconds: 15);
+
+  /// How many cycles run at [_pollInterval] before the backoff starts.
+  static const _pollFastCycles = 5;
 
   // --- Create state ----------------------------------------------------------
   int _matchLength = 5;
@@ -123,6 +144,9 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
   // --- Polling / lifecycle ---------------------------------------------------
   bool _cancelled = false;
   Timer? _pollTimer;
+
+  /// Waits completed in the current [_pollUntilActive] run, for the backoff.
+  int _pollCycles = 0;
 
   @override
   void initState() {
@@ -253,10 +277,15 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     }
   }
 
-  /// Polls `fetchMatch` every [_pollInterval] until an opponent has taken the
-  /// guest seat, then launches the game as the White (host) side. Transient
-  /// fetch failures surface inline and keep polling; cancelling stops the loop.
+  /// Polls `fetchMatch` until an opponent has taken the guest seat, then
+  /// launches the game as the White (host) side. Transient fetch failures
+  /// surface inline and keep polling; cancelling stops the loop.
+  ///
+  /// The cadence backs off ([_wait]) because this is the one wait that can last
+  /// minutes, and every cycle of it is billed twice against the free tier (the
+  /// read, plus the rules-get it evaluates).
   Future<void> _pollUntilActive(MatchApi api, String code) async {
+    _pollCycles = 0;
     while (mounted && !_cancelled) {
       MatchDoc doc;
       try {
@@ -276,12 +305,23 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     }
   }
 
-  /// A cancellable [_pollInterval] delay. [_cancelWaiting] cancels the timer,
-  /// leaving the returned future to hang harmlessly (the loop has already exited
-  /// via its `mounted`/`_cancelled` checks).
+  /// A cancellable, BACKING-OFF delay: [_pollInterval] for the first
+  /// [_pollFastCycles] cycles, then doubling to [_pollCeiling].
+  ///
+  /// [_cancelWaiting] cancels the timer, leaving the returned future to hang
+  /// harmlessly (the loop has already exited via its `mounted`/`_cancelled`
+  /// checks).
   Future<void> _wait() {
+    final cycle = _pollCycles++;
+    var delay = _pollInterval;
+    if (cycle >= _pollFastCycles) {
+      // The shift is capped so a wait that lasts hours cannot overflow it.
+      final steps = cycle - _pollFastCycles + 1;
+      final scaled = _pollInterval * (1 << (steps > 8 ? 8 : steps));
+      delay = scaled > _pollCeiling ? _pollCeiling : scaled;
+    }
     final completer = Completer<void>();
-    _pollTimer = Timer(_pollInterval, () {
+    _pollTimer = Timer(delay, () {
       if (!completer.isCompleted) completer.complete();
     });
     return completer.future;
@@ -327,12 +367,23 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
 
   // --- Launch ----------------------------------------------------------------
 
-  /// Builds the controller, waits until it is ready, and pushes [GameScreen].
-  /// If the screen is torn down (or the controller disposed) before readiness,
-  /// the controller is disposed and nothing is pushed.
+  /// Builds the transport + controller, waits until it is ready, and pushes
+  /// [GameScreen]. If the screen is torn down (or the controller disposed) before
+  /// readiness, the controller is disposed and nothing is pushed.
   ///
   /// The seat is positional and comes from the match document (host plays white,
   /// guest black), so both flows funnel through here.
+  ///
+  /// ## Who stops what
+  ///
+  /// The [FirestoreTransport] belongs to the CONTROLLER
+  /// ([NetMatchController.disposeController] disposes it), so this screen never
+  /// tears a transport down — that is the one ownership rule the controller's doc
+  /// calls out. [api] belongs to the APP: [matchApiProvider] holds the anonymous
+  /// session and the HTTP clients for the whole run and closes them with the
+  /// provider scope, so nothing here closes it either. What IS this screen's is
+  /// the lobby: the create-flow poll timer and the resume pointer in
+  /// [onlineSessionStoreProvider].
   Future<void> _launch(MatchApi api, MatchDoc doc) async {
     final localSide = doc.sideOf(api.uid) ?? Player.white;
     final orientation = localSide == Player.white
@@ -349,10 +400,24 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       whiteType: localSide == Player.white ? 'human' : 'remote',
       blackType: localSide == Player.black ? 'human' : 'remote',
     );
-    final controller = OnlineMatchController(
+    // The match document has both seats by now (the create flow waited for the
+    // join, the join flow just claimed one), so it is handed to the transport as
+    // a seed and connect() costs no extra read.
+    final transport = FirestoreTransport(
       api: api,
-      matchDoc: doc,
+      code: doc.code,
+      match: doc,
+      // Real-time delivery when this build has a backend to listen to; the
+      // transport falls back to its poll loop by itself if the stream ever dies.
+      listenChannel: ref.read(listenChannelBuilderProvider)(api),
+    );
+    final controller = NetMatchController(
+      transport: transport,
       persistence: RepositoryPersistence(repo, matchIdFuture),
+      // The listener can drop mid-submission, and then a committed write has to
+      // come back through a poll cycle before the fold advances — so the
+      // submitting gate is sized for that, not for the push path.
+      gateTimeout: transport.suggestedGateTimeout,
     );
     // Remember the match BEFORE playing it: the point of the pointer is to
     // survive a crash or a kill mid-match, which is exactly when nothing later

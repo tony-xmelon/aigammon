@@ -152,35 +152,124 @@ play in distributed builds — no workflow edit.
 Spark's daily Firestore quota is **50,000 document reads, 20,000 writes and
 20,000 deletes**, and it resets every day at midnight Pacific.
 
-Reads are what this design spends. Each client polls two collection queries per
-cycle — events and rolls — at 2s while it is idle and 500ms only while a dice
-handshake is outstanding (`OnlineMatchController.currentPollInterval`). Each of
-those queries evaluates the `matchOf(code)` participation check in
-`firestore.rules`, and a security-rule `get()` is itself **billed as a document
-read**: so a poll cycle costs roughly its two query results *plus* two more
-reads for the two rules-gets — about double the naive count. (Event and roll
-writes evaluate the same `get()` too, adding a read apiece, though writes are
-far rarer than polls.)
+Reads are what this design spends, and since v0.11 it spends them on a
+**real-time listener** rather than a poll loop. That changes the shape of the
+bill completely, so the arithmetic is worth spelling out.
 
-Folding that overhead in, a whole match — both clients, every game, mostly at
-the idle cadence with brief 500ms bursts per roll — costs several thousand
-reads, so the 50K/day quota is realistically **roughly 5–10 matches a day**
-across all users. That is a friends-and-family budget, and it is the deliberate
-price of having no server. Exceeding it makes reads fail until the reset (the
-app surfaces them as transient errors); the only remedies are polling less often
-or moving to Blaze.
+### How a match is billed
 
-Writes are negligible by comparison: one document per event and three phase
-writes per roll, a few hundred per match.
+`FirestoreTransport` watches the match's two subcollections over Firestore's
+`Listen` RPC (`packages/online_client/lib/src/firestore_listen.dart`): one query
+target for `events` where `seq > cursor`, one for `rolls` where `n >= floor`.
+A watch is **billed per document DELIVERED**, not per unit of time — so:
+
+* an **idle turn costs nothing at all** — *once the match has started.* A player
+  thinking for five minutes, or an app left open on the board, bills zero reads.
+  Under the old poll loop the same five minutes cost 150 cycles per client.
+  (The **lobby wait** before the match starts is the exception and is priced
+  separately below: it is the one window with no subcollection to watch, because
+  what it is waiting for is a field on the match document itself);
+* a **change costs one read per watcher.** Each `events/{seq}` create and each of
+  the three phase writes on a `rolls/{n}` document is delivered once to each of
+  the two clients;
+* the **inequality bounds are the budget.** They are set from the transport's own
+  delivery watermarks, so a re-listen after a dropped connection re-delivers only
+  what is genuinely still live (normally nothing, plus the roll in flight)
+  instead of the whole log.
+
+For a 5-point match — call it ~150 events and ~75 rolls, so 375 changed documents
+— that is `375 x 2 watchers = 750` delivered documents. Every read still
+evaluates the `matchOf(code)` participation check in `firestore.rules`, and a
+security-rule `get()` is **itself billed as a document read**; budgeting
+conservatively for one such get per delivered document puts the range at
+**750–1,500 reads**, plus about 375 more for the rules-gets the writes evaluate,
+plus two match-document reads at connect. Round it to **under 2,000 reads for a
+whole 5-point match, and nothing for the time nobody is moving.**
+
+### The lobby wait: the one poll loop that survives
+
+A watch needs something to watch, and the host's "waiting for opponent" state is
+not a document appearing — it is `guestUid` being **set on the existing match
+document**. So that one window is still polled, by
+`_pollUntilActive` in `app/lib/screens/online_screen.dart`: a `fetchMatch` per
+cycle, each billing its own rules-get, so **~2 reads per cycle**.
+
+Two properties keep it bounded:
+
+* it **stops the moment the seat fills** (or the host cancels, or the screen is
+  disposed). Nothing polls the match document once a match is under way — the
+  transport reads it at `connect` and then never again, because `guestUid` is the
+  only field it cares about and it already has the answer;
+* the cadence **backs off**: 2s for the first five cycles, then doubling to a
+  **15s ceiling**. A five-minute wait for a friend to answer their phone is
+  therefore about **25 reads, not 300** — the flat-2s version cost roughly a
+  whole game's worth of budget for nobody doing anything, which was the largest
+  remaining hole in the numbers above.
+
+The poll loop cost several thousand for the same match, and most of it was spent
+on nothing happening: two queries per client every 2s (500ms while a dice
+handshake was outstanding), each query billing its rules-get whether it returned
+a document or not, for as long as the match was open.
+
+### The figure
+
+**Roughly 25–40 matches a day** across all users, up from the ~5–10 the polling
+design managed. Both ends of that range are real: 40 is two attentive players
+finishing 5-pointers briskly, 25 leaves headroom for reconnects and for longer
+matches. It is still a friends-and-family budget — the deliberate price of having
+no server — but it is no longer a budget that a single long game can eat.
+
+### The honest caveats
+
+* **A reconnect re-bills.** Every re-listen delivers whatever its target's query
+  matches at that moment. The watermark bounds keep that near zero for a live
+  match, but a client on a flaky network that reconnects repeatedly pays a little
+  each time.
+* **A cold rejoin pays for the WHOLE log, not its tail.** Re-entering a match
+  after an app restart has no watermarks to start from, so
+  `NetMatchController` primes with `eventsSince(0)` and `rollsSince(1)` — every
+  event and every roll document the match has accumulated. For a 5-pointer in its
+  endgame that is ~300 reads (~600 with the rules-gets), i.e. a rejoin costs
+  roughly a third of the match it is rejoining. It is bounded and it is paid
+  once per rejoin, but it is not free, and a player who force-quits and rejoins
+  repeatedly is the most expensive thing a single user can do to the quota.
+* **A degraded client pays the old price.** If the gRPC stream cannot be
+  established at all (a network that blocks HTTP/2, a proxy, an outage), the
+  transport falls back to the poll loop and keeps the match alive at the old
+  cost — correctness first. It retries the listener with a capped backoff and
+  stops polling the moment it recovers.
+* **The emulator's numbers are not production's.** The two-client E2E prints a
+  delivered-document count, and on the listener path it is inflated by more than
+  an order of magnitude: the Firestore *emulator* does not diff a watch, it
+  re-sends the target's entire result set on every change. See "Reading the
+  numbers" in `app/test/online/emulator_e2e_test.dart`.
+* Exceeding the quota makes reads fail until the reset (the app surfaces them as
+  transient errors); the remedies are unchanged — play less, or move to Blaze.
+
+Writes are negligible by comparison and unaffected: one document per event and
+three phase writes per roll, a few hundred per match.
+
+Measured side effect of the same change: one 1-point match through the local
+emulator went from **26.7s to 4.5s** of wall clock, because a roll's three-message
+handshake no longer waits three poll latencies.
 
 ## What is NOT set up (and does not need to be)
 
 For the avoidance of doubt, online play needs **none** of: Cloud Functions,
 Cloud Run, a service account for gameplay, App Engine, Hosting, Cloud Storage,
 FlutterFire/`google-services.json`/`GoogleService-Info.plist`, or a billing
-account. The client talks to Firestore and Identity Toolkit over plain REST with
-the Web API key, and the only server-side artifact in this repo is
+account. The client talks to Identity Toolkit and to Firestore's document
+operations over plain REST with the Web API key, and to Firestore's real-time
+`Listen` RPC over gRPC on `firestore.googleapis.com:443` — same project, same
+rules, nothing extra to enable or configure. Both paths authenticate with the
+same anonymous idToken, and the only server-side artifact in this repo is
 `firebase/firestore.rules`.
+
+The gRPC dependency is `package:grpc` (pure Dart, no native toolchain, no
+`protoc`: the Listen messages are encoded by hand in
+`packages/online_client/lib/src/proto_codec.dart`). A network that blocks HTTP/2
+to `firestore.googleapis.com` does not break online play — the transport falls
+back to polling and keeps retrying the listener.
 
 (`FIREBASE_SERVICE_ACCOUNT` does exist as a repo secret — it is used by the
 **App Distribution** steps in `android.yml`/`ios.yml` to upload builds to
