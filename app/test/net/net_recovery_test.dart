@@ -18,8 +18,15 @@ void main() {
   group('gap + replace', () {
     test('a dropped frame is a GAP that the whole log closes', () async {
       // Black (us) moves first, so the host's answering turn is scripted.
-      final rig =
-          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      // White's answering roll is AIMED at 5-2, so its document has to
+      // PRE-EXIST: choosing a roller secret together with the witness entropy is
+      // the substitution a live witness now freezes on. See
+      // [ScriptedRig.scriptSeededTurn].
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 5, die2: 2),
+      );
       final c = rig.controller;
       await pumpUntil(() => c.isReady);
       expect(c.lastSeq, 1, reason: 'seqs are contiguous FROM 1');
@@ -29,7 +36,7 @@ void main() {
 
       // The relay loses the host's roll event; only the move after it arrives.
       rig.transport.dropEventSeqs.add(3);
-      rig.scriptTurn(die1: 5, die2: 2);
+      rig.scriptSeededTurn();
 
       // The gap cannot be closed incrementally — the whole log is re-read, and
       // that heals it.
@@ -41,8 +48,15 @@ void main() {
     });
 
     test('a full replace does not re-animate the moves it replays', () async {
-      final rig =
-          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      // White's answering roll is AIMED at 5-2, so its document has to
+      // PRE-EXIST: choosing a roller secret together with the witness entropy is
+      // the substitution a live witness now freezes on. See
+      // [ScriptedRig.scriptSeededTurn].
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 5, die2: 2),
+      );
       final c = rig.controller;
       await pumpUntil(() => c.isReady);
 
@@ -50,7 +64,7 @@ void main() {
       c.lastMove.addListener(() => fires++);
       c.submitMove(Player.black, c.state.legalMoves.first);
       await pumpUntil(() => c.lastSeq == 2);
-      rig.scriptTurn(die1: 5, die2: 2);
+      rig.scriptSeededTurn();
       await pumpUntil(() => c.lastSeq == 4);
       final liveFires = fires;
       expect(liveFires, greaterThan(0), reason: 'live moves DO animate');
@@ -121,6 +135,45 @@ void main() {
       expect(p.guestPersistence.games.last.gameNumber, 1);
       expect(p.guestPersistence.matchFinishedCalls, 2);
     });
+
+    test('a ResetFrame with a DIFFERENT identity adopts that match\'s CONFIG',
+        () async {
+      // The room-code collision the identity reset was written for, carried
+      // through to its consequence. The controller writes its session ONCE (at
+      // construction / connect), so adopting only the resume token left the
+      // MatchConfig behind: the replayed log was folded with the previous match's
+      // length, and — the part that matters — with its stale `cubeless` flag, so
+      // the new opponent's perfectly legal double froze the match with
+      // `cube-in-cubeless`. That was the only way this controller could freeze an
+      // honest peer.
+      // We are the host (white) and play the opening move, so the joiner is then
+      // on turn awaiting its roll — the exact spot a double belongs.
+      final rig = await ScriptedRig.host(
+          length: 1, cubeless: true, openingWhiteDie: 6, openingBlackDie: 3);
+      final c = rig.controller;
+      await pumpUntil(() => c.isReady);
+      expect(c.cubeless, isTrue);
+      expect(c.match.matchLength, 1);
+      c.submitMove(Player.white, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.black);
+
+      // A DIFFERENT authority's match, with its own parameters, on the same code.
+      rig.backend
+        ..config = const MatchConfig(length: 5)
+        ..resumeToken = 'A-DIFFERENT-MATCH';
+      rig.transport.simulateReset(reason: 'room code collision');
+
+      await pumpUntil(() => c.match.matchLength == 5,
+          reason: 'a new identity brings its own match length');
+      expect(c.cubeless, isFalse, reason: 'and its own cube agreement');
+
+      await pumpUntil(() => c.state.phase == GamePhase.awaitingRoll);
+      expect(c.state.turn, Player.black);
+      rig.forge(const DoubleEvent(Player.black));
+      await pumpUntil(() => c.state.phase == GamePhase.cubeOffered,
+          reason: 'an honest double in a cubeful match must simply fold');
+      expect(c.frozen, isFalse);
+    });
   });
 
   group('contested writes', () {
@@ -156,8 +209,15 @@ void main() {
     });
 
     test('the roll counter survives a resync', () async {
-      final rig =
-          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      // White's answering roll is AIMED at 5-2, so its document has to
+      // PRE-EXIST: choosing a roller secret together with the witness entropy is
+      // the substitution a live witness now freezes on. See
+      // [ScriptedRig.scriptSeededTurn].
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 5, die2: 2),
+      );
       final c = rig.controller;
       final backend = rig.backend;
       await pumpUntil(() => c.isReady);
@@ -171,7 +231,7 @@ void main() {
 
       c.submitMove(Player.black, c.state.legalMoves.first);
       await pumpUntil(() => c.state.turn == Player.white);
-      rig.scriptTurn(die1: 5, die2: 2);
+      rig.scriptSeededTurn();
       await pumpUntil(() => c.awaitingHumanTurn,
           reason: 'the pre-roll gate never came back to us');
 
@@ -189,14 +249,21 @@ void main() {
 
     test('a failed roll re-opens the gate and the retry RESUMES the same roll',
         () async {
-      final rig =
-          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      // White's answering roll is AIMED at 5-2, so its document has to
+      // PRE-EXIST: choosing a roller secret together with the witness entropy is
+      // the substitution a live witness now freezes on. See
+      // [ScriptedRig.scriptSeededTurn].
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 5, die2: 2),
+      );
       final c = rig.controller;
       final backend = rig.backend;
       await pumpUntil(() => c.isReady);
       c.submitMove(Player.black, c.state.legalMoves.first);
       await pumpUntil(() => c.state.turn == Player.white);
-      rig.scriptTurn(die1: 5, die2: 2);
+      rig.scriptSeededTurn();
       await pumpUntil(() => c.awaitingHumanTurn);
 
       rig.transport.intercept = (op) => op == 'createRoll'

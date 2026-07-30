@@ -156,23 +156,22 @@ void main() {
     });
 
     test('a roll event whose dice differ from the roll frame freezes', () async {
-      // Black (us) opens and moves, so the NEXT roll is the host's.
-      final rig =
-          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      // Black (us) opens and moves, so the NEXT roll is the host's. Its frame is
+      // AIMED at 3-4, so it has to pre-exist the fold (see
+      // [InMemoryBackend.seedRollDoc]).
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 3, die2: 4),
+      );
       final c = rig.controller;
       await pumpUntil(() => c.isReady);
       expect(c.state.turn, Player.black);
       c.submitMove(Player.black, c.state.legalMoves.first);
       await pumpUntil(() => c.state.turn == Player.white);
 
-      // A perfectly sound roll frame deriving 3-4 …
-      final backend = rig.backend;
-      final s = turnSecretsFor(3, 4);
-      backend.createRoll(author: backend.hostAuthor, n: 2, commit: s.commit);
-      backend.addEntropy(
-          author: backend.guestAuthor, n: 2, entropy: s.entropy);
-      backend.addReveal(author: backend.hostAuthor, n: 2, reveal: s.secret);
-      // … under an event claiming 6-6.
+      // A perfectly sound roll frame deriving 3-4, under an event claiming 6-6.
+      expect(rig.backend.fetchRoll(2)!.completed!.dice, Dice(3, 4));
       rig.forge(RollEvent(Player.white, 6, 6));
 
       await pumpUntil(() => c.frozen);
@@ -199,6 +198,139 @@ void main() {
 
       await pumpUntil(() => c.frozen);
       expect(c.cheatError!.code, 'roll-author');
+    });
+  });
+
+  group('a peer that also owns the wire', () {
+    // On a LAN the HOST process is the relay, so every value the guest folds is
+    // one the host chose to put on the wire. `verifyCommit` only proves a roll
+    // frame is SELF-consistent — any (commit, entropy, reveal) triple with
+    // sha256(reveal) == commit passes it — so a modified host could manufacture
+    // one after the fact and pick whichever of the 36 outcomes it liked. The only
+    // thing it cannot change is what the GUEST itself put in, and these are the
+    // three ways the guest now holds it to that.
+
+    test('a commitment swapped AFTER our entropy landed freezes', () async {
+      // Black (us) opens and moves, so roll 2 is the host's own.
+      final rig =
+          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      final c = rig.controller;
+      final backend = rig.backend;
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+
+      // An honest commitment, which we witness and answer.
+      final honest = turnSecretsFor(3, 4);
+      backend.createRoll(
+          author: backend.hostAuthor, n: 2, commit: honest.commit);
+      await pumpUntil(() => backend.fetchRoll(2)!.entropy != null,
+          reason: 'the due roll must be witnessed');
+      final ourEntropy = backend.fetchRoll(2)!.entropy!;
+
+      // The host now picks a secret KNOWING our entropy and republishes roll 2
+      // with the commitment that secret hashes to. The triple is self-consistent,
+      // so `verifyCommit` passes and the derived dice are exactly what the host
+      // chose. Our memory of the commitment we witnessed is the only thing that
+      // catches it.
+      final swapped = turnSecretsFor(6, 6, rng: _seeded(777));
+      final chosen = diceFrom(swapped.secret, ourEntropy);
+      // And it publishes the EVENT FIRST. That ordering is the host's to choose,
+      // and it used to matter: once the roll event folds, the roll stops being
+      // the "due" one, so [WitnessSession.verifyReveal] — the only thing that
+      // held the commitment before — is never reached.
+      rig.forge(RollEvent(Player.white, chosen.die1, chosen.die2));
+      await settle();
+      expect(c.frozen, isFalse, reason: 'the event alone cannot be judged yet');
+
+      rig.transport.injectFrame(RollFrame(
+        n: 2,
+        roller: backend.hostAuthor,
+        commit: swapped.commit,
+        entropy: ourEntropy,
+        reveal: swapped.secret,
+      ));
+
+      await pumpUntil(() => c.frozen);
+      expect(c.cheatError!.code, 'roll-commit-substituted');
+      expect(c.cheatError!.message, contains('tampered dice'));
+      expect(c.state.dice, isNot(chosen),
+          reason: 'the host\'s chosen dice never reached the board');
+    });
+
+    test('an entropy swapped for one we never sent freezes', () async {
+      final rig =
+          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      final c = rig.controller;
+      final backend = rig.backend;
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+
+      final s = turnSecretsFor(3, 4);
+      backend.createRoll(author: backend.hostAuthor, n: 2, commit: s.commit);
+      await pumpUntil(() => backend.fetchRoll(2)!.entropy != null);
+
+      // Same commitment, same reveal — but the entropy the roller pairs with them
+      // is its OWN choice, made after seeing ours. The derived dice are entirely
+      // the roller's.
+      rig.transport.injectFrame(RollFrame(
+        n: 2,
+        roller: backend.hostAuthor,
+        commit: s.commit,
+        entropy: s.entropy,
+        reveal: s.secret,
+      ));
+
+      await pumpUntil(() => c.frozen);
+      expect(c.cheatError!.code, 'roll-entropy-substituted');
+    });
+
+    test('a roll that arrives already carrying an entropy we never sent freezes',
+        () async {
+      // The strongest form: the host never lets us witness the roll at all. It
+      // fabricates all three values — so it has aimed its own dice — and only
+      // then publishes the roll and its event. Every commitment check passes and
+      // the event's dice DO match the frame, so nothing else here would notice.
+      final rig =
+          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      final c = rig.controller;
+      final backend = rig.backend;
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+
+      final s = turnSecretsFor(6, 6);
+      backend.createRoll(author: backend.hostAuthor, n: 2, commit: s.commit);
+      backend.addEntropy(author: backend.guestAuthor, n: 2, entropy: s.entropy);
+      backend.addReveal(author: backend.hostAuthor, n: 2, reveal: s.secret);
+      rig.forge(RollEvent(Player.white, 6, 6));
+
+      await pumpUntil(() => c.frozen);
+      expect(c.cheatError!.code, 'roll-entropy-forged');
+      expect(c.state.dice, isNot(Dice(6, 6)),
+          reason: 'the aimed roll never folded');
+    });
+
+    test('an event attributed to US that we never wrote freezes', () async {
+      final rig =
+          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      final c = rig.controller;
+      await pumpUntil(() => c.isReady);
+
+      // One real write of ours, so the ledger has a floor to reason from.
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.lastSeq == 2);
+
+      // The host now plays OUR seat, stamping the entry with our author. This
+      // used to fold as our own echo: it unlatched the gate, and when the engine
+      // refused it the failure routed to a harmless RESYNC (the "our view was
+      // behind" reading) instead of accusing anyone.
+      rig.forge(const DoubleEvent(Player.black), author: rig.localAuthor);
+
+      await pumpUntil(() => c.frozen);
+      expect(c.cheatError!.code, 'forged-as-us');
+      expect(c.cheatError!.message, contains('never wrote it'));
     });
   });
 
@@ -246,8 +378,18 @@ void main() {
       // validated without a COMPLETE roll frame, so the drain blocks — and must
       // not re-fetch in a tight loop while it waits (every attempt is a billed
       // read, and the loop pins the isolate).
-      final rig =
-          await ScriptedRig.guest(openingWhiteDie: 3, openingBlackDie: 6);
+      // Committed and witnessed but NEVER revealed, and pre-existing (an aimed
+      // roll cannot be created under a live witness — see
+      // [InMemoryBackend.seedRollDoc]).
+      late ScriptedSecrets s;
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => s = b
+            .seedRollDoc(
+                author: b.hostAuthor, die1: 5, die2: 2, withReveal: false)
+            .secrets,
+      );
       final c = rig.controller;
       final backend = rig.backend;
       await pumpUntil(() => c.isReady);
@@ -255,11 +397,6 @@ void main() {
       await pumpUntil(() => c.state.turn == Player.white);
 
       final before = rig.transport.calls['fetchRoll'] ?? 0;
-      // Committed and witnessed, but never revealed — then the event anyway.
-      final s = turnSecretsFor(5, 2, rng: _seeded(31));
-      backend.createRoll(author: backend.hostAuthor, n: 2, commit: s.commit);
-      backend.addEntropy(
-          author: backend.guestAuthor, n: 2, entropy: s.entropy);
       rig.forge(RollEvent(Player.white, 5, 2));
       await settle(400);
 

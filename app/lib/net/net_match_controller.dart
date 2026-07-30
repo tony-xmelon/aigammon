@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
@@ -371,8 +372,37 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// Roll indices with a [MatchTransport.fetchRoll] in flight (see [_fetchRoll]).
   final Set<int> _fetchingRolls = {};
 
+  /// The highest roll index that already existed when this fold FIRST primed
+  /// itself, or null until it has. See [_pinFailure]: rolls above it are rolls
+  /// this device must have witnessed, so their entropy is ours or forged; rolls at
+  /// or below it predate us and can only be taken as found.
+  int? _rollFloor;
+
   _RollerDrive? _roller;
   final Map<int, _WitnessDrive> _witnesses = {};
+
+  /// What THIS device has asked the transport to append, by seq: the encoded
+  /// forms it attempted at each index (more than one when a write timed out and
+  /// the retried decision differed).
+  ///
+  /// The ledger behind the `forged-as-us` check in [_validate]. A relay that is
+  /// also a player cannot be trusted to attribute honestly — on a LAN the host
+  /// chooses every `author` the guest folds — and an event forged as OURS is the
+  /// one attribution the rest of this class treats as beyond suspicion: it
+  /// unlatches the gate ([_ingest]) and routes a fold failure to a harmless
+  /// RESYNC instead of a freeze ([_onFoldFailure]). We know exactly what we
+  /// wrote, so we can say so.
+  final Map<int, Set<String>> _ownWrites = {};
+
+  /// The lowest seq this device has ever attempted to write, or null before its
+  /// first write.
+  ///
+  /// The ledger is only authoritative from here up. A [Capabilities.durable]
+  /// match re-entered in a NEW process legitimately contains our own events from
+  /// the previous one, and those are not in this ledger; but we only ever write
+  /// at `lastFolded + 1`, having folded the whole log first, so every such event
+  /// sits strictly BELOW our first write of this session.
+  int? _ownWriteFloor;
 
   bool _pumping = false;
 
@@ -838,12 +868,52 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// changed and every per-match watermark is void.
   void _onReset(ResetFrame frame) {
     _cancelResyncRetry();
-    _adoptIdentity(frame.resumeToken);
+    // The SESSION first, and the whole session — not just the token.
+    //
+    // A reset whose token differs is a different MATCH (a host restart, a
+    // room-code collision), and a different match has its own [MatchConfig] and
+    // its own seat. Adopting only the identity used to leave the config stale, so
+    // the replayed log was folded with the previous match's length and — worse —
+    // with the previous match's `cubeless` flag, which turns the new opponent's
+    // perfectly legal double into a `cube-in-cubeless` FREEZE. That was the one
+    // path in this class that could freeze an honest opponent.
+    final s = frame.session;
+    if (s != null) {
+      _adoptSession(s);
+    } else {
+      _adoptIdentity(frame.resumeToken);
+    }
     _transientError = NetMatchException('diverged',
         'the match log is being replayed (${frame.reason ?? 'reset'})');
     _submitting = false;
     _notify();
+    // Belt to the contract's braces: a transport that changed identity WITHOUT
+    // carrying its session (which [ResetFrame.session] makes normative) is
+    // re-asked for it before anything is replayed, rather than having its new
+    // match folded under the old one's parameters.
+    if (s == null && frame.resumeToken != null && _identityChanged) {
+      unawaited(_reconnectThenReplace());
+      return;
+    }
     unawaited(_runReplace());
+  }
+
+  /// Set by [_adoptIdentity] when the token it was handed was a CHANGE.
+  bool _identityChanged = false;
+
+  Future<void> _reconnectThenReplace() async {
+    try {
+      final fresh = await transport.connect();
+      if (_disposed) return;
+      _adoptSession(fresh);
+    } catch (e) {
+      if (_disposed || frozen) return;
+      _transientError = e;
+      _notify();
+      return;
+    }
+    if (_disposed || frozen) return;
+    await _runReplace();
   }
 
   void _onStatus(TransportStatusEvent e) {
@@ -881,9 +951,14 @@ class NetMatchController extends ChangeNotifier implements MatchController {
     if (!frozen && _started) unawaited(_pumpRolls());
   }
 
-  /// A completed roll frame must be a sound commitment, whoever made it.
-  /// Returns false (after freezing) when it is not.
+  /// A roll frame must agree with what WE witnessed of it, and (once complete) be
+  /// a sound commitment. Returns false (after freezing) when it is not.
   bool _verifyRollDoc(RollFrame roll) {
+    final pinned = _pinFailure(roll);
+    if (pinned != null) {
+      _freeze(pinned);
+      return false;
+    }
     final done = roll.completed;
     if (done == null) return true;
     try {
@@ -905,6 +980,90 @@ class NetMatchController extends ChangeNotifier implements MatchController {
       ));
       return false;
     }
+  }
+
+  /// Whether [roll] contradicts what this device ITSELF put into it — the check
+  /// that makes a relay-and-player peer unable to steer its own dice.
+  ///
+  /// `verifyCommit` alone only proves a roll frame is SELF-consistent: any
+  /// `(commit, entropy, reveal)` triple with `sha256(reveal) == commit` passes it.
+  /// A peer that both plays and carries the wire can manufacture such a triple
+  /// AFTER the fact — pick the entropy itself, or swap the commitment once it has
+  /// seen ours — and choose whichever of the 36 outcomes it likes while every
+  /// commitment check still succeeds. What it cannot do is change what WE
+  /// contributed, and we remember that:
+  ///
+  ///  * **the commitment is pinned.** [WitnessSession.verifyReveal] already
+  ///    checks the reveal against the commit we SAW, but only if it runs, and it
+  ///    is skipped once the roll's event has folded ([_isDueRoll] stops matching)
+  ///    — an ordering a hostile peer controls, by sending the roll event ahead of
+  ///    the reveal. Checked here instead, on first sighting of every frame, so
+  ///    the ordering cannot matter.
+  ///  * **the entropy is pinned.** The witness's entropy is the one value the
+  ///    roller must not choose; on a roll we witnessed, any entropy other than
+  ///    the exact bytes we sent is a fabrication.
+  /// The third leg — entropy on a roll we are the witness of but never
+  /// contributed to at all — cannot be judged from the frame alone (a roll may
+  /// predate this fold), so it lives in [_witnessEntropyFailure] and is checked
+  /// when the roll's EVENT is about to fold.
+  MatchCheatException? _pinFailure(RollFrame roll) {
+    if (roll.roller == _author) return null; // our own roll: we chose the secret
+    final w = _witnesses[roll.n];
+    if (w == null || w.session.phase == FairDicePhase.fresh) return null;
+    if (roll.commit != w.session.commit) {
+      return MatchCheatException(
+        'roll-commit-substituted',
+        'roll ${roll.n} now carries commitment "${roll.commit}" but this device '
+            'witnessed it committed to "${w.session.commit}".',
+        headline: MatchCheatException.dice,
+      );
+    }
+    final entropy = roll.entropy;
+    if (entropy == null) return null;
+    // `committed` means we have seen the commit but not produced entropy yet, so
+    // there is nothing of ours to compare against — that is the
+    // [_witnessEntropyFailure] case.
+    if (w.session.phase == FairDicePhase.committed) return null;
+    if (entropy == w.session.entropy) return null;
+    return MatchCheatException(
+      'roll-entropy-substituted',
+      'roll ${roll.n} carries entropy "$entropy", which is not the entropy this '
+          'device contributed as its witness.',
+      headline: MatchCheatException.dice,
+    );
+  }
+
+  /// Whether the roll behind an about-to-fold roll event carries a witness
+  /// entropy that CANNOT be ours — the strongest form of the dice attack.
+  ///
+  /// [_pinFailure] catches a peer that swaps a value we already put in. This
+  /// catches the peer that never let us put one in: it fabricates the entropy
+  /// itself and only then shows us the roll, so we are never its witness, every
+  /// commitment check still passes, and it has picked its own dice. The proof is
+  /// structural — only the NON-roller may contribute entropy, and in a two-player
+  /// match the non-roller of the opponent's roll is us.
+  ///
+  /// Bounded by [_rollFloor], which is the honest ambiguity: a roll that already
+  /// existed when this fold first primed may carry OUR entropy from a previous
+  /// process (a durable match re-entered) or a previous occupant of the seat (a
+  /// LAN room whose earlier guest contributed it), and we have no memory to check
+  /// it against. Above the floor there is no such reading.
+  MatchCheatException? _witnessEntropyFailure(RollFrame doc) {
+    if (doc.entropy == null || doc.roller == _author) return null;
+    final floor = _rollFloor;
+    if (floor == null || doc.n <= floor) return null;
+    final w = _witnesses[doc.n];
+    if (w != null &&
+        w.session.phase != FairDicePhase.fresh &&
+        w.session.phase != FairDicePhase.committed) {
+      return null; // ours — and [_pinFailure] has already compared the bytes
+    }
+    return MatchCheatException(
+      'roll-entropy-forged',
+      'roll ${doc.n} carries a witness entropy, but this device is its only '
+          'possible witness and never contributed one.',
+      headline: MatchCheatException.dice,
+    );
   }
 
   /// Ingest as much of [_inbox] as can be validated right now.
@@ -1031,6 +1190,27 @@ class NetMatchController extends ChangeNotifier implements MatchController {
           'event ${ef.seq} was written by "${ef.author}", who is not one of '
               'the two players.');
     }
+    // ATTRIBUTED TO US, BUT NOT WRITTEN BY US.
+    //
+    // Every other check in this method reasons about the OPPONENT's events; an
+    // event stamped with our own author is normally the echo of something we
+    // sent, and the fold treats it as such (it unlatches the gate, and a fold
+    // failure on it routes to a resync rather than a freeze — see
+    // [_onFoldFailure]). But the author is a value the other end chose: on a LAN
+    // the host stamps it, and a modified host can therefore play OUR seat by
+    // writing an event as us, with a fold failure that self-heals into a resync
+    // instead of accusing anyone. We know precisely what we wrote — see
+    // [_ownWrites]/[_ownWriteFloor] — so this is provable rather than merely
+    // suspicious.
+    final floor = _ownWriteFloor;
+    if (ef.author == _author && floor != null && ef.seq >= floor) {
+      if (!(_ownWrites[ef.seq]?.contains(_fingerprint(ef.event)) ?? false)) {
+        return MatchCheatException(
+            'forged-as-us',
+            'event ${ef.seq} (${ef.event.runtimeType}) is attributed to this '
+                'device, which never wrote it.');
+      }
+    }
     final event = ef.event;
     final actor = _actorOf(event);
     if (actor != null && actor != authorSide) {
@@ -1078,6 +1258,8 @@ class NetMatchController extends ChangeNotifier implements MatchController {
         headline: MatchCheatException.dice,
       );
     }
+    final forgedEntropy = _witnessEntropyFailure(doc);
+    if (forgedEntropy != null) return forgedEntropy;
     try {
       final ok = event is OpeningRollEvent
           ? openingDiceMatchRoll(roll, event)
@@ -1149,7 +1331,7 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   }
 
   void _fold(EventFrame ef) {
-    final event = ef.event;
+    var event = ef.event;
     if (event is OpeningRollEvent) {
       _game = Game.start(event, isCrawfordGame: _match.isCrawfordNext);
       return;
@@ -1158,6 +1340,7 @@ class NetMatchController extends ChangeNotifier implements MatchController {
     // position, knowable only here (several events may fold between two painted
     // frames, so an observer cannot recover it from [state]). See [AppliedMove].
     final preBoard = _game!.state.board;
+    event = _canonicalise(event);
     final next = _game!.append(event);
     _game = next;
     // NOT published during a full replace: [lastMove] drives a cosmetic
@@ -1167,7 +1350,51 @@ class NetMatchController extends ChangeNotifier implements MatchController {
       _lastMove.value = AppliedMove(event, preBoard);
     }
     if (next.state.phase != GamePhase.gameOver) return;
+    _foldTail(ef, next);
+  }
 
+  /// The ENGINE's rendering of [event], never the submitter's.
+  ///
+  /// [Game.append] computes the next state from the canonical play but STORES
+  /// what it was handed, so without this the peer's own rendering is what reaches
+  /// [lastMove] (the animation) and `Game.events` (the log handed to
+  /// [MatchPersistence.onGameFinished], and therefore the analysis replay).
+  /// `HostAuthority` used to close this by rewriting the entry before it entered
+  /// the authoritative log; with the referee gone, the folding peer closes it on
+  /// the way in instead.
+  ///
+  /// Two things a peer can get wrong while still submitting a LEGAL play, both of
+  /// which [GameState.canonicalPlay] normalises away:
+  ///
+  ///  * **false `isHit` flags** — cosmetic to the rules engine (which recomputes
+  ///    hits from the board) but not to the history: a replay would draw hits
+  ///    that never happened, or miss ones that did;
+  ///  * **a non-canonical hop decomposition** — a route that reaches the same
+  ///    position through a point the mover's own checker only transits.
+  ///    [BoardState.applyMove] is order-dependent there, so replaying the
+  ///    submitted route rather than the generator's representative can land on a
+  ///    different board.
+  ///
+  /// Done HERE (at fold time) rather than in [Game.append]: `append` is also the
+  /// local/AI and analysis-replay path, where the caller has just taken the move
+  /// FROM the generator and a second canonicalisation would be pure cost — and
+  /// where an already-canonical event must fold byte-identically. The networked
+  /// fold is the only caller whose input is untrusted.
+  ///
+  /// Returns [event] unchanged for everything that is not a move, and for a move
+  /// the engine refuses (so [Game.append] raises the same violation it always
+  /// did, and the freeze/resync routing in [_onFoldFailure] is untouched).
+  GameEvent _canonicalise(GameEvent event) {
+    if (event is! MoveEvent) return event;
+    final s = _game!.state;
+    if (s.phase != GamePhase.moving || s.turn != event.player) return event;
+    final canonical = s.canonicalPlay(event.move);
+    if (canonical == null) return event;
+    return MoveEvent(event.player, canonical);
+  }
+
+  /// The game-over half of [_fold], split out only to keep that method short.
+  void _foldTail(EventFrame ef, Game next) {
     _lastFinishedGameNo = ef.gameNo;
     final result = next.state.result!;
     _match = _match.applyResult(result);
@@ -1259,14 +1486,24 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// match is void. Carrying them over is how a second match would silently never
   /// be recorded.
   void _adoptIdentity(String? identity) {
+    _identityChanged = false;
     if (identity == null || identity == _matchIdentity) return;
     final hadOne = _matchIdentity != null;
     _matchIdentity = identity;
     if (!hadOne) return; // the first token simply names the match
+    _identityChanged = true;
     _persistedThrough = 0;
     _acknowledgedThrough = 0;
     _matchPersisted = false;
     _completionSent = false;
+    // A different match has a different log, so what THIS device wrote into the
+    // old one says nothing about who wrote the new one's entries — and what we
+    // witnessed of the old match's roll 3 says nothing about the new one's.
+    _ownWrites.clear();
+    _ownWriteFloor = null;
+    _witnesses.clear();
+    _roller = null;
+    _rollFloor = null;
   }
 
   /// Re-read the whole match and rebuild from scratch. The ONLY recovery path:
@@ -1348,6 +1585,10 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// watermarks survive so a rebuild neither records a game twice nor re-opens a
   /// dialog the user already dismissed.
   void _rebuild(List<EventFrame> events, List<RollFrame> rolls) {
+    // Established ONCE per match identity, on the first log we ever see: every
+    // roll above it is one whose whole handshake happened while we were folding.
+    _rollFloor ??=
+        rolls.isEmpty ? 0 : rolls.map((r) => r.n).reduce((a, b) => a > b ? a : b);
     _rolls
       ..clear()
       ..addEntries(rolls.map((r) => MapEntry(r.n, r)));
@@ -1642,7 +1883,7 @@ class NetMatchController extends ChangeNotifier implements MatchController {
         ? OpeningRollEvent(whiteDie: dice.die1, blackDie: dice.die2)
         : RollEvent(localSide, dice.die1, dice.die2);
     try {
-      await transport.sendEvent(
+      await _sendOwnEvent(
         seq: _lastSeq + 1,
         gameNo: d.gameNo,
         event: event,
@@ -1685,12 +1926,31 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   void _submitDecision(GameEvent event) {
     if (_submitting || _disposed || frozen || _game == null) return;
     final gameNo = _gameNumber;
-    _runSubmit(() => transport.sendEvent(
+    _runSubmit(() => _sendOwnEvent(
           seq: _lastSeq + 1,
           gameNo: gameNo,
           event: event,
         ));
   }
+
+  /// [MatchTransport.sendEvent] plus the ledger entry — the ONE way this class
+  /// appends, so nothing this device writes can be missing from [_ownWrites].
+  Future<void> _sendOwnEvent({
+    required int seq,
+    required int gameNo,
+    required GameEvent event,
+  }) {
+    // Recorded BEFORE the await, and kept even if the write fails: a write that
+    // times out may still have landed, and the echo of it must not look forged.
+    (_ownWrites[seq] ??= <String>{}).add(_fingerprint(event));
+    final floor = _ownWriteFloor;
+    if (floor == null || seq < floor) _ownWriteFloor = seq;
+    return transport.sendEvent(seq: seq, gameNo: gameNo, event: event);
+  }
+
+  /// A comparable rendering of [event] — the wire form, which is what the two
+  /// peers actually exchange.
+  static String _fingerprint(GameEvent event) => jsonEncode(event.toJson());
 
   /// Runs a submission with a single retry. A first failure is retried once; a
   /// second failure surfaces [error] and leaves any pending notifier set for a

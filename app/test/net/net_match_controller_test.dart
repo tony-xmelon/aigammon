@@ -186,6 +186,50 @@ void main() {
     expect(mover.offerDouble, throwsStateError);
   });
 
+  group('canonicalisation', () {
+    test('a peer\'s move is FOLDED AND RECORDED in the engine\'s own form',
+        () async {
+      // [Game.append] computes the next state from the canonical play but stores
+      // what it was handed, so the peer's rendering used to reach the animation
+      // ([lastMove]) and the persisted event log — and from there the analysis
+      // replay. `HostAuthority` closed this by rewriting the entry before it
+      // entered the authoritative log; with the referee gone, the folding peer
+      // rewrites it on the way in.
+      //
+      // White (the scripted host) plays first.
+      final rig =
+          await ScriptedRig.guest(openingWhiteDie: 6, openingBlackDie: 3);
+      final c = rig.controller;
+      await pumpUntil(() => c.isReady);
+
+      final canonical = rig.mirrorGame().state.legalMoves.first;
+      expect(canonical.checkerMoves.length, greaterThan(1),
+          reason: 'a 6-3 opening plays two hops, so hop ORDER is observable');
+      // The same play as the peer chooses to render it: hops in the reverse order
+      // and every hit flag lied about. Still LEGAL — [GameState.canonicalPlay]
+      // matches by hop multiset and ignores hit flags — so nothing freezes.
+      final lying = Move([
+        for (final h in canonical.checkerMoves.reversed)
+          CheckerMove(h.from, h.to, isHit: !h.isHit),
+      ]);
+      expect(lying.checkerMoves, isNot(canonical.checkerMoves));
+
+      rig.forge(MoveEvent(Player.white, lying));
+      await pumpUntil(() => c.lastSeq == 2);
+      expect(c.frozen, isFalse, reason: 'the play itself is legal');
+
+      final recorded = c.game.events.last as MoveEvent;
+      expect(recorded.move.checkerMoves, canonical.checkerMoves,
+          reason: 'the log must hold the generator\'s representative');
+      expect(c.lastMove.value!.event.move.checkerMoves, canonical.checkerMoves,
+          reason: 'and so must the move the animation replays');
+      // The property that makes it matter: replaying the RECORDED log reproduces
+      // the board the fold reached. A non-canonical decomposition need not —
+      // [BoardState.applyMove] is order-dependent for a transited point.
+      expect(Game.replay(c.game.events).state.board, c.state.board);
+    });
+  });
+
   group('persistence', () {
     test('fires once per finished game and once per match on BOTH ends',
         () async {

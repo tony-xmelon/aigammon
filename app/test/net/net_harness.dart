@@ -321,6 +321,7 @@ class ProxyTransport implements MatchTransport {
   void simulateReconnect() => inner.simulateReconnect();
   void simulateReset({String reason = 'reconnected'}) =>
       inner.simulateReset(reason: reason);
+  void injectFrame(InboundFrame frame) => inner.injectFrame(frame);
   void simulateInboundError([
     TransportException error =
         const TransportUnavailable('read-failed', 'transient read failure'),
@@ -345,6 +346,7 @@ class ScriptedRig {
     int? openingBlackDie,
     Duration gateTimeout = const Duration(seconds: 30),
     bool registerOpponentEndpoint = true,
+    void Function(InMemoryBackend backend)? seed,
   }) =>
       _start(
         host: false,
@@ -354,6 +356,7 @@ class ScriptedRig {
         openingBlackDie: openingBlackDie,
         gateTimeout: gateTimeout,
         registerOpponentEndpoint: registerOpponentEndpoint,
+        seed: seed,
       );
 
   static Future<ScriptedRig> host({
@@ -363,6 +366,7 @@ class ScriptedRig {
     int? openingBlackDie,
     Duration gateTimeout = const Duration(seconds: 30),
     bool registerOpponentEndpoint = true,
+    void Function(InMemoryBackend backend)? seed,
   }) =>
       _start(
         host: true,
@@ -372,6 +376,7 @@ class ScriptedRig {
         openingBlackDie: openingBlackDie,
         gateTimeout: gateTimeout,
         registerOpponentEndpoint: registerOpponentEndpoint,
+        seed: seed,
       );
 
   static Future<ScriptedRig> _start({
@@ -382,12 +387,20 @@ class ScriptedRig {
     required int? openingBlackDie,
     required Duration gateTimeout,
     required bool registerOpponentEndpoint,
+    void Function(InMemoryBackend backend)? seed,
   }) async {
     final backend =
         InMemoryBackend(config: MatchConfig(length: length, cubeless: cubeless));
     if (openingWhiteDie != null && openingBlackDie != null) {
       backend.seedOpening(whiteDie: openingWhiteDie, blackDie: openingBlackDie);
     }
+    // Anything the test needs to PRE-EXIST — i.e. to be there before the
+    // controller ever primes, and so to fall at or below its roll floor. That is
+    // the only way to script an AIMED opponent roll (which needs both secrets
+    // chosen together, the witness's included): a roll created mid-match would be
+    // one the controller is the live witness of, and entropy it did not itself
+    // contribute is a proven forgery there. See `_witnessEntropyFailure`.
+    seed?.call(backend);
     // The opponent's endpoint exists but is never folded — it is what makes
     // `opponentPresent` true, exactly as the absent peer's socket/uid would.
     if (registerOpponentEndpoint) {
@@ -439,6 +452,28 @@ class ScriptedRig {
         gameNo: gameNo ?? (controller.gameNumber == 0 ? 1 : controller.gameNumber),
         event: event,
       );
+
+  /// Play the opponent's whole turn from a roll document that was PRE-SEEDED (see
+  /// the `seed` hook and [InMemoryBackend.seedRollDoc]): append the [RollEvent]
+  /// the document derives, then the opponent's first legal move.
+  ///
+  /// The two-step shape exists because an aimed opponent roll cannot be created
+  /// mid-match any more: choosing the roller's secret together with the witness's
+  /// entropy IS the dice-substitution attack, and a live witness now freezes on
+  /// it. Seeded before the controller connects, the document is below its roll
+  /// floor and legitimately taken as found.
+  void scriptSeededTurn() {
+    final n = controller.rollCount + 1;
+    final doc = backend.fetchRoll(n);
+    if (doc == null || !doc.isComplete) {
+      throw StateError('no complete pre-seeded roll document at index $n');
+    }
+    final dice = doc.completed!.dice;
+    final side = controller.localSide.opponent;
+    forge(RollEvent(side, dice.die1, dice.die2));
+    final legal = mirrorGame().state.legalMoves;
+    forge(MoveEvent(side, legal.isEmpty ? Move.none : legal.first));
+  }
 
   /// Play the scripted opponent's whole turn: a sound roll plus its first legal
   /// move.
