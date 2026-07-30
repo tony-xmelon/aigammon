@@ -103,6 +103,17 @@ jobs:
       # (Settings -> Secrets and variables -> Actions -> Variables); when
       # unset the app builds with online play "not configured", exactly as
       # before. See firebase/DEPLOY.md.
+      #
+      # --obfuscate --split-debug-info strips Dart symbols out of the binary
+      # and into build/symbols/android. Two consequences worth knowing:
+      #   * a stack trace from a release build is now UNREADABLE until it is
+      #     symbolicated (`flutter symbolize -d <symbols> -i trace.txt`), which
+      #     is why the symbols directory is uploaded as its own artifact,
+      #     keyed by run number so a trace can be matched to the exact build;
+      #   * `runtimeType.toString()` no longer yields real class names. The
+      #     only uses in this repo are diagnostic message interpolation
+      #     (net_match_controller, match_transport, online_client) — degraded
+      #     text, no behaviour change. Nothing here dispatches on it.
       - name: Build release APK
         working-directory: app
         env:
@@ -116,12 +127,23 @@ jobs:
           else
             echo "Online-play repo variables not set — building with online play not configured"
           fi
-          flutter build apk --release --build-number=${{ github.run_number }} $DEFINES
+          flutter build apk --release --build-number=${{ github.run_number }} \
+            --obfuscate --split-debug-info=build/symbols/android \
+            $DEFINES
 
       - uses: actions/upload-artifact@v4
         with:
           name: aigammon-apk
           path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      # Keyed by run number: the build number in the APK is the same value, so
+      # a trace from a tester's build maps to exactly one symbols artifact.
+      - name: Upload Dart debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: aigammon-symbols-android-${{ github.run_number }}
+          path: app/build/symbols/android
           if-no-files-found: error
 
       # Secrets can't be referenced in a step-level `if:`, so gate on an env var

@@ -138,3 +138,30 @@ present. Until then the job builds and uploads the APK artifact and logs a clear
 
 Once both secrets exist, the next run of `android.yml` distributes the release
 APK to the `testers` group automatically.
+
+## Debug symbols (release builds)
+
+Both release builds pass `--obfuscate --split-debug-info=build/symbols/<platform>`.
+That shrinks the binary and removes Dart symbol names from it — which means a
+stack trace from a shipped build is **unreadable until it is symbolicated**.
+
+Each build therefore uploads its symbols as their own artifact, keyed by run
+number (the same value as the build number baked into the app), so a trace can
+be matched to the exact build that produced it:
+
+| Artifact | From |
+|---|---|
+| `aigammon-symbols-android-<run>` | `android.yml` |
+| `aigammon-symbols-ios-<run>` | `ios.yml` |
+
+To read a trace a tester copied out of **Settings → Diagnostics** (see
+`app/lib/diagnostics/crash_log.dart`):
+
+```bash
+# download and unzip the matching symbols artifact first
+flutter symbolize -d <symbols-dir>/app.android-arm64.symbols -i trace.txt
+```
+
+Obfuscation also means `runtimeType.toString()` no longer returns real class
+names. The only uses in this repo are diagnostic string interpolation, so the
+effect is degraded log text, not changed behaviour — nothing dispatches on it.
