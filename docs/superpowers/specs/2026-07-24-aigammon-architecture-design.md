@@ -1,7 +1,27 @@
 # AIGammon — Architecture & Engine Integration Design
 
 **Date:** 2026-07-24
-**Status:** Approved
+**Status:** SUPERSEDED in its networking chapters — HISTORICAL RECORD of the v1
+design.
+
+> ### ⚠️ Read this first: the networking design below is no longer what ships
+>
+> Everything about the **engine, rules core, event sourcing, UI and persistence**
+> in this document is still accurate and still the design in force. The
+> **multiplayer/online chapters are not** — they describe the original v1 plan,
+> kept here because the reasoning behind the pivots is worth having.
+>
+> | This document says | What actually ships (v0.11) |
+> |---|---|
+> | Cloud Functions roll the dice server-side (§1, §3, §6, §8) | **No Cloud Functions at all, and no server-side dice.** Dice come from a **commit-reveal handshake between the two clients** (`packages/match_transport/lib/src/fair_dice.dart`): the roller publishes a commitment, the witness contributes entropy, the roller reveals, and both derive the same dice. Neither peer can bias the RNG without the other proving it. |
+> | Firebase is the backend | The **entire** backend is `firebase/firestore.rules` — one rules file, free **Spark** plan, no billing account. See `firebase/DEPLOY.md`. |
+> | "Server-authoritative" online play | **Nobody is an authority.** Both peers run the same controller and re-validate every event the other writes with the full rules engine; a proven violation **freezes** the match. |
+> | One online sync path | **One seam, two transports.** `MatchTransport` (`packages/match_transport`) is the only pipe a match controller drives; `SocketTransport` (LAN, `packages/lan_play`) and `FirestoreTransport` (online, `packages/online_client`) implement it, and one `NetMatchController` (`app/lib/net/net_match_controller.dart`) drives either. LAN play did not exist in this document. |
+>
+> The normative, current description of the seam is the library doc of
+> `packages/match_transport/lib/src/match_transport.dart`, and the plan that got
+> there is `docs/superpowers/plans/2026-07-27-unify-multiplayer.md`.
+> For the online cost model and deployment, `firebase/DEPLOY.md`.
 
 ## Overview
 
@@ -18,7 +38,7 @@ gammon/backgammon scoring.
 | Framework | Flutter | Single codebase, custom-drawn board UI, first-class C interop via `dart:ffi` |
 | AI engine | wildbg (Rust, MIT/Apache-2.0), embedded | Strong neural-net engine, permissive license (App Store safe), runs offline |
 | Rules of record | Pure Dart package (`backgammon_core`) | Testable, shared by all modes, fast iteration; engine only evaluates |
-| Online backend | Firebase (anonymous Auth, Firestore, Cloud Functions) | Turn-based sync without running servers; server-authoritative dice |
+| Online backend | ~~Firebase (anonymous Auth, Firestore, Cloud Functions)~~ **SUPERSEDED: anonymous Auth + Firestore documents only, `firestore.rules` as the whole backend** | ~~server-authoritative dice~~ **commit-reveal dice agreed between the two clients; no server code, free Spark plan** |
 | Game representation | Event-sourced append-only log | One primitive powers replay, undo, online sync, and post-game analysis |
 | Inference backend | tract (pure Rust ONNX) | No ONNX Runtime binary to bundle; simpler mobile builds |
 
@@ -34,7 +54,7 @@ aigammon/
 │   └── engine_bindings/        # dart:ffi bindings + isolate wrapper for wildbg
 ├── native/
 │   └── wildbg/                 # Vendored wildbg (git submodule) + C shim + build scripts
-├── firebase/                   # Cloud Functions (TypeScript), Firestore security rules
+├── firebase/                   # SUPERSEDED: `firestore.rules` ONLY (no Cloud Functions)
 └── docs/
 ```
 
@@ -106,8 +126,12 @@ advances the state machine.
   Hot-seat shows a pass-device prompt between turns.
 - **Online:** `/matches/{id}` document (players, match metadata, invite code) +
   append-only `events` subcollection. Firestore security rules enforce turn
-  order and event shape. **Dice are rolled by a Cloud Function**
-  (server-authoritative — clients cannot influence rolls). Clients validate
+  order and event shape. ~~**Dice are rolled by a Cloud Function**
+  (server-authoritative — clients cannot influence rolls).~~
+  **SUPERSEDED: dice come from a three-message commit-reveal handshake in a
+  `rolls/{n}` subcollection — commit, witness entropy, reveal — so both clients
+  derive the same dice and neither can bias them. There is no Cloud Function.**
+  Clients validate
   every incoming event with `backgammon_core`; on any divergence, state is
   rebuilt from the event log, which is authoritative.
 - **Invites:** 6-character match code, shareable as a link. Anonymous Firebase
@@ -162,8 +186,10 @@ Online games are cached locally in the same event schema as local games.
   sane probabilities (sum/range checks, no NaN) and known-best moves.
 - `GameController`: full AI-vs-AI simulated games must complete with no illegal
   states across many seeds.
-- Firebase: security-rules tests and Cloud Function tests on the Firebase
-  emulator suite.
+- Firebase: security-rules tests ~~and Cloud Function tests~~ on the Firebase
+  emulator suite. **SUPERSEDED/EXTENDED: the rules suite, the `online_client`
+  transport suite and a two-client full-match E2E (with adversarial legs), all on
+  the emulator; there are no Cloud Functions to test.**
 - UI: widget tests for move input; golden tests for board rendering.
 
 ## Out of scope for v1

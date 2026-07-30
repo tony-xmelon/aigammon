@@ -33,12 +33,24 @@ engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
   match rather than being quietly accepted. The whole backend is one security
   rules file, which runs against the **Firebase Emulator Suite** for offline
   development; a two-client full-match end-to-end test (with adversarial legs)
-  verifies it there. See
+  verifies it there. Frames arrive over Firestore's **real-time listener**
+  (gRPC `Listen`), with the **poll loop kept as a fallback** for a network that
+  cannot open the stream. See
   [**Deploying online play**](#deploying-online-play) below.
+- **Play Nearby (LAN)** — two devices on the same Wi-Fi, no internet and no
+  account: one hosts (UDP discovery beacon + a WebSocket relay), the other joins
+  from a discovered list or a room code. It runs the **same** commit-reveal dice
+  and the same mutual validation as online play, because both go through one
+  **`MatchTransport`** seam and one match controller — the host binds a socket,
+  it does not referee the game.
+- **Tabletop hot-seat** — two players, one device, passing it between turns.
 
-See [`docs/superpowers/plans/`](docs/superpowers/plans/) and the
+See [`docs/superpowers/plans/`](docs/superpowers/plans/) for the per-phase plans,
+and the
 [architecture design](docs/superpowers/specs/2026-07-24-aigammon-architecture-design.md)
-for the design and per-phase plans.
+for the ORIGINAL v1 design (its networking chapters predate the current
+serverless, one-controller architecture — see the banner at the top of that
+file).
 
 ## Repository layout
 
@@ -47,7 +59,9 @@ for the design and per-phase plans.
 | [`app/`](app/) | The Flutter app — UI (`CustomPaint` board), Riverpod state, `GameController`, screens (home, new match, game, history, post-game analysis), the tutor overlay (`app/lib/tutor/`), and drift persistence (`app/lib/data/`). |
 | [`packages/backgammon_core`](packages/backgammon_core) | Pure Dart rules engine — zero dependencies. `BoardState`, `GameState`, `MatchState`, move generation, event-sourced game log, gnubg Position IDs. |
 | [`packages/engine_bindings`](packages/engine_bindings) | `dart:ffi` bindings + an isolate-hosted `EngineService` over the native library: move ranking, evaluation, difficulty sampling, and match-aware cube advice (`MatchCubeAdvisor` — Janowski cubeful equities over a Kazaross-XG2 match-equity table). |
-| [`packages/online_client`](packages/online_client) | Firebase-backed online-play client — pure-Dart REST: anonymous auth, direct Firestore documents (match create/join by invite code, append-only event log, polling), and the commit-reveal fair-dice protocol. Runs against the emulator in tests. |
+| [`packages/match_transport`](packages/match_transport) | The `MatchTransport` seam both multiplayer modes run on: the interface and its normative fold/resync contract, the shared wire frames, the commit-reveal fair-dice protocol, an in-memory reference transport, and `transport_contract.dart` — the contract as a reusable suite, run against all three implementations. |
+| [`packages/lan_play`](packages/lan_play) | Play Nearby over a LAN — UDP discovery, a WebSocket host server + guest client, the JSON wire protocol, and `SocketTransport` (host and guest halves) over a dumb append-only relay. No game authority anywhere. |
+| [`packages/online_client`](packages/online_client) | Firebase-backed online-play client — pure Dart, no Firebase SDK: anonymous auth and direct Firestore documents over REST (match create/join by invite code, append-only event log), plus `FirestoreTransport` on Firestore's **real-time `Listen` gRPC stream with a polling fallback**. Runs against the emulator in tests. |
 | [`firebase/`](firebase/) | The online backend, which is **only** Firestore security rules (`firestore.rules`) — no Cloud Functions, free Spark plan — plus their emulator rules-test suite, emulator config, and the deploy guide ([`DEPLOY.md`](firebase/DEPLOY.md)). |
 | [`native/wildbg`](native/wildbg) | The vendored [wildbg](https://github.com/carsten-wenderdel/wildbg) engine — a **git submodule**, never edited directly. |
 | [`native/engine_shim`](native/engine_shim) | Thin C shim (`cdylib`, `aigammon_engine`) — a verbatim copy of wildbg's `wildbg-c` crate plus a `wildbg_new_with_path` constructor that loads nets from disk at runtime. Windows/Android/iOS build scripts live here. |
@@ -133,14 +147,16 @@ building a production release with the online defines are documented in
 
 ## Continuous integration
 
-- **`ci.yml`** (push to `master`, all PRs, Linux): runs five jobs —
-  `backgammon_core` (`dart analyze --fatal-infos` + `dart test`), `lan_play`
-  (the same pair), `engine_bindings` (builds the Rust cdylib, then `dart test`
-  + `dart test -P engine` against the real `.so`), the Flutter app
-  (`flutter analyze` + `flutter test`), and **online play** (the
-  `online_client` unit tests, then the
-  three emulator suites — the `firestore.rules` unit tests, `online_client -P
-  emulator` and the app's two-client E2E — inside a `firebase emulators:exec`).
+- **`ci.yml`** (push to `master`, all PRs, Linux): runs six jobs —
+  `backgammon_core` (`dart analyze --fatal-infos` + `dart test`), `lan_play` and
+  `match_transport` (the same pair each), `engine_bindings` (builds the Rust
+  cdylib, then `dart test` + `dart test -P engine` against the real `.so`), the
+  Flutter app (`flutter analyze` + `flutter test`), and **online play**
+  (`online_client` analyze + unit tests, then four emulator legs inside a
+  `firebase emulators:exec` — the `firestore.rules` unit tests,
+  `online_client -P emulator`, the app's two-client E2E on the real-time listener
+  path, and the same E2E once more with the listener forced off so the poll
+  fallback is actually exercised).
 - **`android.yml`** (`workflow_dispatch`, push to `master`): cross-compiles the
   engine for the Android ABIs with `cargo-ndk`, builds a release APK, and — when
   the Firebase secrets are configured — distributes it to testers via Firebase
