@@ -840,6 +840,30 @@ void main() {
       expect(find.text('Enter address'), findsOneWidget);
     });
 
+    testWidgets('cancelling a later scan clears the earlier scan\'s error',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      scanner.outcome = const QrScanCode('WIFI:S:CafeWifi;T:WPA;P:hunter2;;');
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await openJoinTab(t);
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await pumpUntil(t, find.textContaining('not an AIGammon game'));
+      expect(find.textContaining('not an AIGammon game'), findsOneWidget);
+
+      // Second attempt, backed out of. The complaint about the FIRST scan is
+      // about a scan that is over, and must not sit under the button.
+      scanner.outcome = const QrScanCancelled();
+      await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
+      await t.pump();
+      await t.pump();
+
+      expect(find.textContaining('not an AIGammon game'), findsNothing);
+      expect(transport.joins, isEmpty);
+    });
+
     testWidgets('a second tap while the scanner is open opens nothing new',
         (t) async {
       await t.binding.setSurfaceSize(surface);

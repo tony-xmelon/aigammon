@@ -108,6 +108,11 @@ QrJoinPayload? tryDecodeQrJoin(String? raw) {
     if (uri.scheme != qrJoinScheme) return null;
     if (uri.host != qrJoinHost) return null;
 
+    // LAST WINS on a repeated key — `Uri.queryParameters` keeps the final
+    // value, so `?p=8080&p=1` is port 1. Pinned by a test rather than left to
+    // chance: a v2 parser that reads the query some other way must decide this
+    // deliberately, because "which of the two ports did the host mean" has no
+    // safe default.
     final params = uri.queryParameters;
     if (params['v'] != qrJoinVersion) return null;
 

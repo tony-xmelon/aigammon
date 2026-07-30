@@ -57,6 +57,29 @@ void main() {
       expect(decoded?.code, '4271');
     });
 
+    test('a repeated key is LAST wins, and that is pinned on purpose', () {
+      // `Uri.queryParameters` keeps the final value. Nothing this app writes
+      // repeats a key, so this only ever comes from a hand-made or hostile
+      // code — but a future parser must not change the answer by accident.
+      expect(
+        tryDecodeQrJoin('aigammon://join?v=1&h=1.2.3.4&p=8080&p=1&c=1234')
+            ?.port,
+        1,
+      );
+      expect(
+        tryDecodeQrJoin(
+                'aigammon://join?v=1&h=10.0.0.1&h=10.0.0.2&p=47780&c=1234')
+            ?.address,
+        '10.0.0.2',
+      );
+      // And a repeat that makes the LAST value invalid is refused outright,
+      // rather than falling back to the earlier good one.
+      expect(
+        tryDecodeQrJoin('aigammon://join?v=1&h=1.2.3.4&p=47780&p=0&c=1234'),
+        isNull,
+      );
+    });
+
     test('surrounding whitespace is tolerated', () {
       expect(
         tryDecodeQrJoin('  aigammon://join?v=1&h=10.0.0.4&p=47780&c=1234\n'),

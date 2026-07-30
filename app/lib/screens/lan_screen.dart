@@ -639,8 +639,12 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       if (!mounted) return;
       switch (outcome) {
         case QrScanCancelled():
-          // Backed out on purpose; nothing to report.
-          break;
+          // Backed out on purpose. Nothing to report — and nothing left over
+          // either: a message about the LAST scan ("that was not an AIGammon
+          // code") is stale the moment a new scan is opened, and leaving it
+          // under the button makes a deliberate cancellation look like a
+          // failure.
+          if (_scanError != null) setState(() => _scanError = null);
         case QrScanUnavailable(:final message):
           // No camera, or no permission. The typing form below is untouched and
           // still works — that is the whole point of saying this here.

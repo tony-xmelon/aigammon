@@ -147,48 +147,91 @@ class _QrScanPageState extends State<QrScanPage> {
     }
   }
 
+  /// Toggle the lamp, tolerating a camera that is not up yet.
+  ///
+  /// `toggleTorch` throws `controllerUninitialized` until `start()` has come
+  /// back — half a second on a real phone, and the torch button is on screen
+  /// for all of it. A tap in that window is a no-op, not a crash report.
+  Future<void> _toggleTorch() async {
+    try {
+      await _controller.toggleTorch();
+    } on MobileScannerException catch (_) {
+      // Not up yet, or no lamp on this camera. Nothing to tell the user: they
+      // can see whether the light came on.
+    }
+  }
+
+  /// What a back gesture out of this route reports.
+  ///
+  /// The distinction matters: backing out of a WORKING camera is a decision
+  /// (nothing to say), while backing out of a camera that refused to start is
+  /// the same event as tapping "Enter the address instead" — and the join tab
+  /// must show the reason either way, or the user is left with a scan button
+  /// that silently does nothing.
+  QrScanOutcome get _backOutcome => backOutcomeFor(_controller.value.error);
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Scan the host\'s code'),
-        actions: [
-          IconButton(
-            tooltip: 'Torch',
-            icon: const Icon(Icons.flashlight_on),
-            onPressed: () => unawaited(_controller.toggleTorch()),
-          ),
-        ],
-      ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-            // A camera error is a message and a way out, never a black screen
-            // the user has to guess their way off.
-            errorBuilder: (context, error) => _CameraProblem(
-              message: _cameraErrorText(error),
-              onDismiss: () => Navigator.of(context)
-                  .pop(QrScanUnavailable(_cameraErrorText(error))),
+    return PopScope(
+      // The route always pops WITH a value. Left to itself, a system back or a
+      // swipe pops with null, which reads as a plain cancellation even when the
+      // camera never started.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        Navigator.of(context).pop(_backOutcome);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Scan the host\'s code'),
+          actions: [
+            IconButton(
+              tooltip: 'Torch',
+              icon: const Icon(Icons.flashlight_on),
+              onPressed: () => unawaited(_toggleTorch()),
             ),
-          ),
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 32,
-            child: _ScanCaption(hint: _hint),
-          ),
-        ],
+          ],
+        ),
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            MobileScanner(
+              controller: _controller,
+              onDetect: _onDetect,
+              // A camera error is a message and a way out, never a black screen
+              // the user has to guess their way off.
+              errorBuilder: (context, error) => _CameraProblem(
+                message: cameraErrorText(error),
+                onDismiss: () =>
+                    Navigator.of(context).pop(QrScanUnavailable(cameraErrorText(error))),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 32,
+              child: _ScanCaption(hint: _hint),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
+/// The outcome a back gesture out of the scanner reports, given whatever the
+/// camera's last state was.
+///
+/// Split out so the "back says the same thing the button says" rule can be
+/// tested: the permission-denied SCREEN cannot be reached headlessly (no
+/// camera means no camera error), but this rule is the whole point of it.
+QrScanOutcome backOutcomeFor(MobileScannerException? error) => error == null
+    ? const QrScanCancelled()
+    : QrScanUnavailable(cameraErrorText(error));
+
 /// Turn a scanner failure into something a person can act on. Every branch ends
 /// by pointing at manual entry.
-String _cameraErrorText(MobileScannerException error) =>
+String cameraErrorText(MobileScannerException error) =>
     switch (error.errorCode) {
       MobileScannerErrorCode.permissionDenied =>
         'AIGammon does not have permission to use the camera. Allow camera '
