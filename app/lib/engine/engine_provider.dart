@@ -6,6 +6,7 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+import '../diagnostics/crash_log.dart';
 import '../game/player_agent.dart';
 import 'nets_installer.dart';
 
@@ -164,6 +165,13 @@ class EngineManager {
     final service = await EngineService.spawn(
       libraryPath: _resolveLibraryPath(),
       netsPath: netsPath,
+      // An uncaught error inside the engine isolate reaches neither
+      // FlutterError.onError nor PlatformDispatcher.onError. Without this the
+      // manager's transparent re-spawn would quietly paper over a repeating
+      // native failure and the user would only notice the AI "thinking"
+      // forever. Record it, then let the existing recovery run.
+      onIsolateError: (error, stack) => CrashLog.instance
+          .record(error, stack: stack, source: 'engine-isolate'),
     );
     return _EngineServiceApi(service);
   }

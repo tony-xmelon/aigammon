@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/app_settings.dart';
 import '../data/settings_repository.dart';
+import 'diagnostics_screen.dart';
 
 /// The preferences screen. Every control autosaves on change (there is no save
 /// button); a "Reset to defaults" action in the app bar restores
@@ -233,6 +234,26 @@ class SettingsScreen extends ConsumerWidget {
                                 save(settings.copyWith(showScoring: v)),
                           ),
                         ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    // The ONLY route to the on-device error log. There is no
+                    // remote crash reporting, so if a tester cannot reach
+                    // this, a bug report has nothing in it.
+                    _Section(
+                      label: 'Diagnostics',
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.bug_report_outlined),
+                        title: const Text('Error log'),
+                        subtitle: const Text(
+                            'Recent errors, ready to copy into a bug report'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const DiagnosticsScreen(),
+                          ),
+                        ),
                       ),
                     ),
                   ],

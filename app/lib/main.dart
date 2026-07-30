@@ -1,11 +1,24 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'data/app_settings.dart';
 import 'data/settings_repository.dart';
+import 'diagnostics/crash_log.dart';
 import 'screens/home_screen.dart';
 
 void main() {
+  // Binding first: the crash handlers touch PlatformDispatcher, and storage
+  // resolution goes through a platform channel.
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Installed SYNCHRONOUSLY and before anything else can fail, so an error in
+  // startup itself is captured. Storage attaches asynchronously; anything
+  // recorded in the gap is merged in when it does (see CrashLog.attachFile).
+  CrashLog.installGlobalHandlers();
+  unawaited(CrashLog.initializeStorage());
+
   runApp(const ProviderScope(child: AiGammonApp()));
 }
 

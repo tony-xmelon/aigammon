@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'package:backgammon_core/backgammon_core.dart';
 
 import 'engine.dart';
+import 'isolate_error.dart';
 import 'scored_move.dart';
 
 /// Async facade over [Engine], hosted in a dedicated isolate so neural-net
@@ -22,7 +23,22 @@ class EngineService {
   int _nextId = 0;
   bool _dead = false;
 
-  EngineService._(this._isolate, this._worker, this._fromWorker) {
+  /// Called with an uncaught error from inside the worker isolate.
+  ///
+  /// Isolate errors reach NEITHER `FlutterError.onError` NOR
+  /// `PlatformDispatcher.instance.onError` — they arrive only on a port
+  /// registered with [Isolate.addErrorListener], which this class already owns
+  /// for its own death handling. Without this hook a native-engine failure is
+  /// invisible to the app's diagnostics: callers see `StateError('engine
+  /// isolate died')` with the actual cause discarded. The app passes a callback
+  /// that writes to its crash log; the package itself stays Flutter-free.
+  ///
+  /// Never called for a clean exit, and never throws into the caller (a
+  /// throwing observer is swallowed).
+  final void Function(Object error, StackTrace? stack)? _onIsolateError;
+
+  EngineService._(this._isolate, this._worker, this._fromWorker,
+      this._onIsolateError) {
     _fromWorker.listen(_onReply);
   }
 
@@ -30,9 +46,12 @@ class EngineService {
   /// after the worker confirms a successful [Engine.open]; throws
   /// [StateError] (with the worker's message) if init fails — e.g. a bad
   /// [netsPath].
+  /// [onIsolateError] observes uncaught worker-isolate errors — including the
+  /// ones that kill the isolate during startup. See [_onIsolateError].
   static Future<EngineService> spawn({
     String? libraryPath,
     required String netsPath,
+    void Function(Object error, StackTrace? stack)? onIsolateError,
   }) async {
     final handshake = ReceivePort();
     final errors = ReceivePort();
@@ -56,6 +75,7 @@ class EngineService {
       }
     });
     errorSub = errors.listen((err) {
+      _reportIsolateError(onIsolateError, err);
       if (!ready.isCompleted) {
         final message = (err is List && err.isNotEmpty) ? err[0] : err;
         ready.completeError(
@@ -82,7 +102,8 @@ class EngineService {
       final fromWorker = ReceivePort();
       workerPort.send(['bind', fromWorker.sendPort]);
 
-      final service = EngineService._(isolate, workerPort, fromWorker);
+      final service =
+          EngineService._(isolate, workerPort, fromWorker, onIsolateError);
       final death = ReceivePort();
       isolate.addErrorListener(death.sendPort);
       isolate.addOnExitListener(death.sendPort);
@@ -115,7 +136,11 @@ class EngineService {
     }
   }
 
-  void _onDeath(Object? _) {
+  void _onDeath(Object? message) {
+    // The one port carries both listeners: an ERROR arrives as
+    // [errorString, stackString?], a clean exit as the exit-response (null).
+    // Only the former is worth reporting.
+    _reportIsolateError(_onIsolateError, message);
     if (_dead) return;
     _dead = true;
     final pending = List.of(_pending.values);
@@ -293,6 +318,22 @@ class EngineService {
       default:
         throw StateError('unknown verb "$verb"');
     }
+  }
+}
+
+/// Hands a decoded isolate error to [observer], if there is one and if the
+/// message really is an error (see [decodeIsolateError] — the same port also
+/// carries the clean-exit signal). A throwing observer is swallowed: this runs
+/// on the crash path, where a second failure helps nobody.
+void _reportIsolateError(
+    void Function(Object error, StackTrace? stack)? observer, Object? message) {
+  if (observer == null) return;
+  final decoded = decodeIsolateError(message);
+  if (decoded == null) return;
+  try {
+    observer(decoded.error, decoded.stack);
+  } catch (_) {
+    // An observer that throws must not compound the failure it was told about.
   }
 }
 
