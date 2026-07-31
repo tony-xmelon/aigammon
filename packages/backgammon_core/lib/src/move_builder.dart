@@ -94,6 +94,23 @@ class MoveBuilder {
   /// recomputed whenever the prefix changes.
   List<CheckerMove> _nextHops = const [];
 
+  /// [chainedDestinationsFor]'s answers for the CURRENT prefix, keyed by source.
+  /// Dropped wholesale by [_recompute] — i.e. by every prefix change — which is
+  /// the only thing the answer depends on besides the source, so an entry can
+  /// never go stale. The builder itself is per-position (a new turn, a new
+  /// position, or a new game builds a new one), so nothing survives a turn.
+  ///
+  /// The cache exists because the board view asks for a source's chained
+  /// destinations on every drag frame — many times a second, with an unchanged
+  /// prefix — and each answer is a permutation-enumerating DFS.
+  final Map<int, Set<int>> _chainCache = {};
+
+  /// How many chained-destination searches have actually RUN (cache misses).
+  /// Exposed so the memoization has a regression test: repeating a
+  /// [chainedDestinationsFor] call must not advance this.
+  int get chainSearches => _chainSearches;
+  int _chainSearches = 0;
+
   /// The board the CHOSEN prefix has reached, when the position is known — the
   /// base for the playability filter and for the chain DFS, which carries it
   /// forward hop by hop. `null` for the position-free constructor.
@@ -166,10 +183,18 @@ class MoveBuilder {
   /// but never deeper. Landings that would also be a single-hop [destinationsFor]
   /// value cannot occur (one die vs. two dice never coincide for one source),
   /// but callers that paint both sets may subtract [destinationsFor] defensively.
+  ///
+  /// Memoized per source for the current prefix (see [_chainCache]); the
+  /// returned set is unmodifiable because it is the cached one.
   Set<int> chainedDestinationsFor(int source) {
+    final cached = _chainCache[source];
+    if (cached != null) return cached;
+    _chainSearches++;
     final out = <int>{};
     _collectChains(List.of(_chosen), _position, source, const [], out);
-    return out;
+    final answer = Set<int>.unmodifiable(out);
+    _chainCache[source] = answer;
+    return answer;
   }
 
   /// One enterable hop sequence (length ≥ 2) that runs the same checker from
@@ -270,7 +295,12 @@ class MoveBuilder {
 
   /// Recomputes the position the chosen prefix has reached and the next-hop
   /// options from it. Both are cached until the prefix changes.
+  ///
+  /// The prefix is also the only input to [_chainCache], so it is dropped here:
+  /// every path that changes [_chosen] ([addHop], [undoHop], [reset], and
+  /// construction) ends in this method.
   void _recompute() {
+    _chainCache.clear();
     var position = _board;
     if (position != null) {
       for (final hop in _chosen) {

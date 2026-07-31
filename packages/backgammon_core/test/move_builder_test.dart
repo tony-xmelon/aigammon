@@ -409,6 +409,107 @@ void main() {
       }
     });
 
+    test('a repeated (prefix, source) reuses one search, and the prefix '
+        'invalidates it', () {
+      // The board view asks for chained destinations on EVERY drag frame with
+      // the same prefix and source, so the answer is cached per source and
+      // dropped whenever the prefix moves. This pins both halves: the cached
+      // answer is the same answer, and it is computed once.
+      final legal = MoveGenerator.legalMoves(
+          BoardState.initial(), Player.white, Dice(3, 1));
+      final b = MoveBuilder(legal);
+      expect(b.chainSearches, 0);
+
+      final first = b.chainedDestinationsFor(23);
+      expect(b.chainSearches, 1);
+      final second = b.chainedDestinationsFor(23);
+      expect(second, equals(first), reason: 'same inputs, same output');
+      expect(b.chainSearches, 1, reason: 'the search ran once, not twice');
+
+      // Another source is its own entry, and does not evict the first.
+      b.chainedDestinationsFor(7);
+      expect(b.chainSearches, 2);
+      expect(b.chainedDestinationsFor(23), equals(first));
+      expect(b.chainSearches, 2);
+
+      // A chosen hop changes the prefix: the answer is recomputed, and equals
+      // what a FRESH builder standing at the same prefix reports.
+      b.addHop(7, 4);
+      final afterHop = b.chainedDestinationsFor(23);
+      expect(b.chainSearches, 3);
+      final reference = MoveBuilder(legal)..addHop(7, 4);
+      expect(afterHop, equals(reference.chainedDestinationsFor(23)));
+
+      // Undo restores the original prefix — and the original answer.
+      b.undoHop();
+      expect(b.chainedDestinationsFor(23), equals(first));
+      expect(b.chainSearches, 4);
+
+      // reset() invalidates too (same prefix here, so the same answer again).
+      b.reset();
+      expect(b.chainedDestinationsFor(23), equals(first));
+      expect(b.chainSearches, 5);
+    });
+
+    test('the cached set is unmodifiable, so a caller cannot poison it', () {
+      final legal = MoveGenerator.legalMoves(
+          BoardState.initial(), Player.white, Dice(3, 1));
+      final b = MoveBuilder(legal);
+      expect(() => b.chainedDestinationsFor(23).add(99),
+          throwsUnsupportedError);
+    });
+
+    test('memoized answers match an unmemoized reference across a random '
+        'playout', () {
+      // Correctness-equivalence for the memoization: over real positions from a
+      // random game, the cached answer for every selectable source equals the
+      // answer a FRESH builder (empty cache) gives for the same prefix.
+      final rng = Random(20260731);
+      Dice rollDice() => Dice(rng.nextInt(6) + 1, rng.nextInt(6) + 1);
+      var opening = rollDice();
+      while (opening.isDouble) {
+        opening = rollDice();
+      }
+      var state = GameState.opening(
+        firstPlayer: opening.die1 > opening.die2 ? Player.white : Player.black,
+        openingDice: opening,
+      );
+      var checked = 0;
+      var turns = 0;
+      while (state.phase != GamePhase.gameOver && turns < 400) {
+        turns++;
+        if (state.phase == GamePhase.awaitingRoll) {
+          state = state.roll(rollDice());
+          continue;
+        }
+        final builder = MoveBuilder.forState(state);
+        // Walk the whole turn hop by hop, comparing at every prefix.
+        while (!builder.isComplete && builder.selectableSources.isNotEmpty) {
+          for (final source in builder.selectableSources) {
+            final memoized = builder.chainedDestinationsFor(source);
+            // Same call again — must hit the cache and agree.
+            expect(builder.chainedDestinationsFor(source), equals(memoized));
+            // A fresh builder replaying the same prefix has an empty cache.
+            final fresh = MoveBuilder.forState(state);
+            for (final h in builder.chosenHops) {
+              fresh.addHop(h.from, h.to);
+            }
+            expect(fresh.chainedDestinationsFor(source), equals(memoized),
+                reason: 'memoized answer differs from an uncached one');
+            checked++;
+          }
+          final s = builder.selectableSources.first;
+          builder.addHop(s, builder.destinationsFor(s).first);
+        }
+        final legal = state.legalMoves;
+        state = state.play(
+            legal.isEmpty ? Move.none : (builder.isComplete
+                ? builder.build()
+                : legal[rng.nextInt(legal.length)]));
+      }
+      expect(checked, greaterThan(100), reason: 'the probe actually ran');
+    });
+
     test('chainedDestinationsFor is empty for a non-source', () {
       final legal = MoveGenerator.legalMoves(
           BoardState.initial(), Player.white, Dice(3, 1));
