@@ -160,6 +160,35 @@ CREATE TABLE "settings" (
 );
 ''';
 
+/// The exact v7 `settings` DDL — as drift generated it at schemaVersion 7:
+/// v6 plus `rotate_board_hot_seat` (between `show_pass_device` and
+/// `drag_hint_shown`, which is where the generated column order puts it).
+///
+/// This is the shape EVERY currently installed build is on, so 7 -> 8 is the
+/// migration every real upgrade actually takes. v8 adds no settings column at
+/// all — it creates the `online_session` table — which is exactly why it is
+/// worth pinning: a branch that silently did nothing would look like a pass.
+const _v7SettingsDdl = '''
+CREATE TABLE "settings" (
+  "id" INTEGER NOT NULL DEFAULT 1,
+  "theme_mode" TEXT NOT NULL DEFAULT 'system',
+  "animation_speed" TEXT NOT NULL DEFAULT 'normal',
+  "default_match_length" INTEGER NOT NULL DEFAULT 5,
+  "default_difficulty" TEXT NOT NULL DEFAULT 'medium',
+  "tutor_override" TEXT NULL,
+  "show_highlights" INTEGER NOT NULL DEFAULT 1 CHECK ("show_highlights" IN (0, 1)),
+  "enable_drag" INTEGER NOT NULL DEFAULT 1 CHECK ("enable_drag" IN (0, 1)),
+  "enable_combined_taps" INTEGER NOT NULL DEFAULT 1 CHECK ("enable_combined_taps" IN (0, 1)),
+  "show_scoring" INTEGER NOT NULL DEFAULT 1 CHECK ("show_scoring" IN (0, 1)),
+  "dice_roll_animation" INTEGER NOT NULL DEFAULT 1 CHECK ("dice_roll_animation" IN (0, 1)),
+  "show_pass_device" INTEGER NOT NULL DEFAULT 0 CHECK ("show_pass_device" IN (0, 1)),
+  "rotate_board_hot_seat" INTEGER NOT NULL DEFAULT 0 CHECK ("rotate_board_hot_seat" IN (0, 1)),
+  "drag_hint_shown" INTEGER NOT NULL DEFAULT 0 CHECK ("drag_hint_shown" IN (0, 1)),
+  PRIMARY KEY ("id"),
+  CHECK (id = 1)
+);
+''';
+
 void main() {
   test(
       'fresh install (onCreate) seeds v7 defaults: drag ON, dice roll animation '
@@ -602,6 +631,81 @@ void main() {
     await db.close();
   });
 
+  test('7 -> 8 upgrade adds the online_session table and touches NOTHING else '
+      '— the path every current install takes', () async {
+    // 1. Build a genuine v7 database: matches/games with a real match row, and
+    //    the v7 settings table holding a thoroughly edited row. v7 is what is
+    //    on every device that has ever run a shipped build, so this is not a
+    //    hypothetical rung on the ladder — it is THE upgrade.
+    final raw = sqlite3.openInMemory();
+    raw.execute(_v1MatchesDdl);
+    raw.execute(_v1GamesDdl);
+    raw.execute(_v7SettingsDdl);
+    raw.execute(
+      'INSERT INTO matches (created_at, match_length, mode, white_type, '
+      "black_type) VALUES (1700000000, 7, 'vsComputer', 'human', 'ai:expert')",
+    );
+    raw.execute(
+      'INSERT INTO settings (id, theme_mode, animation_speed, '
+      'default_match_length, default_difficulty, tutor_override, '
+      'show_highlights, enable_drag, enable_combined_taps, show_scoring, '
+      'dice_roll_animation, show_pass_device, rotate_board_hot_seat, '
+      'drag_hint_shown) '
+      "VALUES (1, 'dark', 'slow', 11, 'hard', 'off', 0, 0, 0, 0, 0, 1, 1, 1)",
+    );
+    raw.execute('PRAGMA user_version = 7');
+
+    final before = raw.select("SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='online_session'");
+    expect(before, isEmpty, reason: 'v7 predates the online-session table');
+
+    // 2. Open through AppDatabase (schemaVersion 8): onUpgrade(7 -> 8).
+    final db = AppDatabase(NativeDatabase.opened(raw));
+
+    // 3a. The new table is there, seeded, and empty — the whole content of the
+    //     v8 migration.
+    final session = await db.select(db.onlineSession).getSingle();
+    expect(session.id, 1);
+    expect(session.uid, isNull);
+    expect(session.refreshToken, isNull);
+    expect(session.matchCode, isNull);
+
+    // 3b. EVERY v7 settings value survived, bit for bit. v8 adds no settings
+    //     column, so a single changed field here would mean a migration branch
+    //     ran that had no business running — in particular the one-time v4 drag
+    //     flip, which is gated on `from < 4` and must stay quiet at 7.
+    final settings = await db.select(db.settings).getSingle();
+    expect(settings.themeMode, 'dark');
+    expect(settings.animationSpeed, 'slow');
+    expect(settings.defaultMatchLength, 11);
+    expect(settings.defaultDifficulty, 'hard');
+    expect(settings.tutorOverride, 'off');
+    expect(settings.showHighlights, isFalse);
+    expect(settings.enableDrag, isFalse,
+        reason: 'the v4 drag flip must not re-run on a 7 -> 8 upgrade');
+    expect(settings.enableCombinedTaps, isFalse);
+    expect(settings.showScoring, isFalse);
+    expect(settings.diceRollAnimation, isFalse);
+    expect(settings.showPassDevice, isTrue);
+    expect(settings.rotateBoardHotSeat, isTrue);
+    expect(settings.dragHintShown, isTrue);
+
+    // 3c. The v1 match row is still there, and the version moved.
+    final matches = await db.customSelect('SELECT * FROM matches').get();
+    expect(matches, hasLength(1));
+    expect(matches.single.read<int>('match_length'), 7);
+    final version = await db.customSelect('PRAGMA user_version').getSingle();
+    expect(version.read<int>('user_version'), 8);
+
+    // 3d. And the table is usable, which is the failure a missing branch would
+    //     have produced at the first sign-in.
+    await db.into(db.onlineSession).insertOnConflictUpdate(
+        OnlineSessionCompanion(id: const Value(1), uid: const Value('abc')));
+    expect((await db.select(db.onlineSession).getSingle()).uid, 'abc');
+
+    await db.close();
+  });
+
   test('every upgrade path lands the v8 online_session table, seeded and empty',
       () async {
     // The table holds the durable anonymous identity. If a migration missed it,
@@ -620,6 +724,11 @@ void main() {
         label: 'v6',
         version: 6,
         ddl: [_v1MatchesDdl, _v1GamesDdl, _v6SettingsDdl]
+      ),
+      (
+        label: 'v7',
+        version: 7,
+        ddl: [_v1MatchesDdl, _v1GamesDdl, _v7SettingsDdl]
       ),
     ]) {
       final raw = sqlite3.openInMemory();
