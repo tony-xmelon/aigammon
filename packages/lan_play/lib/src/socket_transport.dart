@@ -99,7 +99,7 @@ abstract class SocketTransport implements MatchTransport {
 // Host
 // ---------------------------------------------------------------------------
 
-class _HostSocketTransport implements SocketTransport {
+class _HostSocketTransport with TransportChannels implements SocketTransport {
   _HostSocketTransport({required this.server, required this.relay}) {
     // Subscribed in the CONSTRUCTOR, not in [connect]: both streams are
     // broadcast and non-buffering, and a guest can present its code (and start
@@ -107,7 +107,9 @@ class _HostSocketTransport implements SocketTransport {
     _committed = relay.committed.listen(_onCommitted);
     _frames = server.guestFrames.listen(_onGuestFrame);
     _presenceSub = server.guestPresence.listen(_onPresence);
-    _opponentPresent = server.hasGuest;
+    // Emitted into a broadcast controller nobody has subscribed to yet, so this
+    // only seeds the value — exactly what the plain field write used to do.
+    setOpponentPresent(server.hasGuest);
   }
 
   /// The bound socket. NOT owned: [dispose] leaves it serving.
@@ -116,18 +118,15 @@ class _HostSocketTransport implements SocketTransport {
   /// The log and roll documents. NOT owned: [dispose] leaves it open.
   final MatchRelay relay;
 
-  final _inbound = StreamController<InboundFrame>.broadcast();
-  final _status = StreamController<TransportStatusEvent>.broadcast();
-  final _presence = StreamController<bool>.broadcast();
-
   late final StreamSubscription<InboundFrame> _committed;
   late final StreamSubscription<Envelope> _frames;
   late final StreamSubscription<bool> _presenceSub;
 
-  TransportStatus _statusValue = TransportStatus.connecting;
-  bool _opponentPresent = false;
   bool _connected = false;
   bool _disposed = false;
+
+  @override
+  bool get isDisposed => _disposed;
 
   /// Whether the next `hello` is a (re)connection rather than a plain resync
   /// request, and so owes our own fold a [ResetFrame]. See [_onGuestFrame].
@@ -146,7 +145,7 @@ class _HostSocketTransport implements SocketTransport {
     }
     if (!_connected) {
       _connected = true;
-      _setStatus(TransportStatus.connected);
+      setStatus(TransportStatus.connected);
       _answerHelloWeMissed();
     }
     return _sessionNow();
@@ -165,9 +164,6 @@ class _HostSocketTransport implements SocketTransport {
         matchCode: server.roomCode,
         resumeToken: relay.resumeToken,
       );
-
-  @override
-  Stream<InboundFrame> get inbound => _inbound.stream;
 
   @override
   Future<void> sendEvent({
@@ -221,22 +217,10 @@ class _HostSocketTransport implements SocketTransport {
     // Bookkeeping only: the log is the authority, and it lives here.
   }
 
-  @override
-  Stream<TransportStatusEvent> get statusStream => _status.stream;
-
-  @override
-  TransportStatus get status => _statusValue;
-
   /// Always null: the bound peer's own link cannot be down — it IS the link. A
   /// guest that has left shows up in [opponentPresent], not here.
   @override
   String? get statusReason => null;
-
-  @override
-  bool get opponentPresent => _opponentPresent;
-
-  @override
-  Stream<bool> get opponentPresence => _presence.stream;
 
   @override
   Capabilities get capabilities =>
@@ -260,9 +244,7 @@ class _HostSocketTransport implements SocketTransport {
     await _committed.cancel();
     await _frames.cancel();
     await _presenceSub.cancel();
-    await _inbound.close();
-    await _status.close();
-    await _presence.close();
+    await closeChannels();
   }
 
   // --- internals -------------------------------------------------------------
@@ -281,7 +263,7 @@ class _HostSocketTransport implements SocketTransport {
   /// committing, which is what keeps their folds in step.
   void _onCommitted(InboundFrame frame) {
     if (_disposed) return;
-    if (!_inbound.isClosed) _inbound.add(frame);
+    publish(frame);
     switch (frame) {
       case EventFrame():
         server.send(EventMessage(frame));
@@ -408,29 +390,22 @@ class _HostSocketTransport implements SocketTransport {
   }
 
   void _onPresence(bool present) {
-    if (_disposed || _opponentPresent == present) return;
-    _opponentPresent = present;
+    if (_disposed || opponentPresent == present) return;
     // A guest that went away will come back on a NEW connection, whose first
     // `hello` is a genuine (re)join and does owe us a reset. Armed on the
     // departure rather than on the arrival so the flag is already set however
     // the presence event and the hello interleave.
     if (!present) _resetOwedOnHello = true;
-    if (!_presence.isClosed) _presence.add(present);
+    setOpponentPresent(present);
   }
 
   void _emitReset(String reason) {
-    if (_disposed || _inbound.isClosed) return;
-    _inbound.add(ResetFrame(
+    if (_disposed) return;
+    publish(ResetFrame(
       resumeToken: relay.resumeToken,
       reason: reason,
       session: _sessionNow(),
     ));
-  }
-
-  void _setStatus(TransportStatus status) {
-    if (_disposed) return;
-    _statusValue = status;
-    if (!_status.isClosed) _status.add(TransportStatusEvent(status));
   }
 }
 
@@ -438,14 +413,15 @@ class _HostSocketTransport implements SocketTransport {
 // Guest
 // ---------------------------------------------------------------------------
 
-class _GuestSocketTransport implements SocketTransport {
+class _GuestSocketTransport with TransportChannels implements SocketTransport {
   _GuestSocketTransport({required this.client}) {
     // Subscribed in the CONSTRUCTOR: the welcome (and the frames the relay sends
     // in the same tick) arrive before anyone can await [connect].
     _frames = client.inbound.listen(_onFrame);
     _states = client.states.listen(_onState);
-    _statusValue = _map(client.state.status);
-    _statusReason = client.state.reason;
+    // Adopted silently: nobody can be subscribed yet, and the first real
+    // transition is what the controller is owed.
+    updateStatus(_map(client.state.status), client.state.reason);
     // A client that was welcomed BEFORE this view existed (the "Play Nearby"
     // screen connects first and opens the board second) already holds the log it
     // was handed; adopt it rather than starting from an empty mirror.
@@ -474,10 +450,6 @@ class _GuestSocketTransport implements SocketTransport {
   /// The link. NOT owned: [dispose] leaves it connected (see the class doc).
   final GuestClient client;
 
-  final _inbound = StreamController<InboundFrame>.broadcast();
-  final _status = StreamController<TransportStatusEvent>.broadcast();
-  final _presence = StreamController<bool>.broadcast();
-
   late final StreamSubscription<Envelope> _frames;
   late final StreamSubscription<GuestConnectionState> _states;
 
@@ -492,10 +464,10 @@ class _GuestSocketTransport implements SocketTransport {
   int _writeId = 0;
 
   TransportSession? _session;
-  TransportStatus _statusValue = TransportStatus.connecting;
-  String? _statusReason;
-  bool _opponentPresent = false;
   bool _disposed = false;
+
+  @override
+  bool get isDisposed => _disposed;
 
   /// A gap (or a refusal quoting a seq ahead of ours) is outstanding and the
   /// `hello` that cures it has not been answered yet.
@@ -558,9 +530,6 @@ class _GuestSocketTransport implements SocketTransport {
       );
 
   @override
-  Stream<InboundFrame> get inbound => _inbound.stream;
-
-  @override
   Future<void> sendEvent({
     required int seq,
     required int gameNo,
@@ -605,24 +574,9 @@ class _GuestSocketTransport implements SocketTransport {
     // The relay's log decides the match; a guest has no bookkeeping to do.
   }
 
-  @override
-  Stream<TransportStatusEvent> get statusStream => _status.stream;
-
-  @override
-  TransportStatus get status => _statusValue;
-
-  @override
-  String? get statusReason => _statusReason;
-
   /// True from the moment we are welcomed until the link goes away again: a
   /// welcome PROVES the host is there, and losing the link is the only way to
-  /// stop knowing that.
-  @override
-  bool get opponentPresent => _opponentPresent;
-
-  @override
-  Stream<bool> get opponentPresence => _presence.stream;
-
+  /// stop knowing that. (See [TransportChannels.opponentPresent].)
   @override
   Capabilities get capabilities =>
       const Capabilities(durable: false, rejoinable: false);
@@ -645,9 +599,7 @@ class _GuestSocketTransport implements SocketTransport {
     _failPending('the transport was disposed');
     await _frames.cancel();
     await _states.cancel();
-    await _inbound.close();
-    await _status.close();
-    await _presence.close();
+    await closeChannels();
   }
 
   // --- writes ----------------------------------------------------------------
@@ -715,14 +667,14 @@ class _GuestSocketTransport implements SocketTransport {
         _onEvent(entry);
       case RollMessage(:final roll):
         _rolls[roll.n] = roll;
-        _publish(roll);
+        publish(roll);
       case AckMessage():
         final waiting = _pendingWrites.remove(message.id);
         if (waiting != null && !waiting.isCompleted) waiting.complete(message);
       case RejectMessage(:final reason, :final lastSeq):
         // Post-welcome, a reject is about a frame we sent, not about the
         // handshake (the client fails terminally on those before we see them).
-        _publishError(TransportUnavailable('rejected', reason));
+        publishError(TransportUnavailable('rejected', reason));
         if (lastSeq > _lastSeq) _resyncSoon();
       case HelloMessage():
       case WriteEventMessage():
@@ -739,7 +691,7 @@ class _GuestSocketTransport implements SocketTransport {
   /// A welcome is the WHOLE truth: adopt it and tell the controller to replay.
   void _onWelcome(WelcomeMessage welcome) {
     if (!_adopt(welcome)) return;
-    _publish(ResetFrame(
+    publish(ResetFrame(
       resumeToken: welcome.resume,
       reason: 'the match log was replayed',
       // NORMATIVE (see [ResetFrame.session]): a welcome carrying a different
@@ -772,12 +724,8 @@ class _GuestSocketTransport implements SocketTransport {
       _needResync = false;
       _resyncTimer?.cancel();
       _resyncTimer = null;
-      _publishError(TransportRejected('bad-welcome', fault));
-      _statusValue = TransportStatus.failed;
-      _statusReason = fault;
-      if (!_status.isClosed) {
-        _status.add(TransportStatusEvent(TransportStatus.failed, fault));
-      }
+      publishError(TransportRejected('bad-welcome', fault));
+      setStatus(TransportStatus.failed, fault);
       return false;
     }
     _needResync = false;
@@ -790,7 +738,7 @@ class _GuestSocketTransport implements SocketTransport {
       ..clear()
       ..addEntries(welcome.rolls.map((r) => MapEntry(r.n, r)));
     _session = _sessionFrom(welcome);
-    _setOpponentPresent(true);
+    setOpponentPresent(true);
     return true;
   }
 
@@ -810,12 +758,12 @@ class _GuestSocketTransport implements SocketTransport {
   void _onEvent(EventFrame entry) {
     if (entry.seq == _lastSeq + 1) {
       _events.add(entry);
-      _publish(entry);
+      publish(entry);
       return;
     }
     if (entry.seq <= _lastSeq) {
       // A duplicate (at-least-once delivery); harmless to republish.
-      _publish(entry);
+      publish(entry);
       return;
     }
     // A GAP: our mirror would stop being contiguous, and [eventsSince] would
@@ -849,16 +797,15 @@ class _GuestSocketTransport implements SocketTransport {
 
   void _onState(GuestConnectionState state) {
     if (_disposed) return;
-    _statusValue = _map(state.status);
-    _statusReason = state.reason;
+    // Recorded before the side effects and announced after them, so a listener
+    // woken by the presence event already reads the new [status].
+    final changed = updateStatus(_map(state.status), state.reason);
     if (state.status != GuestConnectionStatus.connected) {
       // Nothing can answer a write over a link that is not there.
       _failPending(state.reason ?? 'the link went away');
-      _setOpponentPresent(false);
+      setOpponentPresent(false);
     }
-    if (!_status.isClosed) {
-      _status.add(TransportStatusEvent(_statusValue, state.reason));
-    }
+    if (changed) emitStatus();
   }
 
   static TransportStatus _map(GuestConnectionStatus status) => switch (status) {
@@ -868,24 +815,6 @@ class _GuestSocketTransport implements SocketTransport {
         GuestConnectionStatus.busy => TransportStatus.busy,
         GuestConnectionStatus.failed => TransportStatus.failed,
       };
-
-  void _setOpponentPresent(bool present) {
-    if (_disposed || _opponentPresent == present) return;
-    _opponentPresent = present;
-    if (!_presence.isClosed) _presence.add(present);
-  }
-
-  void _publish(InboundFrame frame) {
-    if (_disposed || _inbound.isClosed) return;
-    _inbound.add(frame);
-  }
-
-  /// A transient fault on the stream, WITHOUT closing it — per the contract, a
-  /// transport never ends `inbound` to signal trouble.
-  void _publishError(TransportException error) {
-    if (_disposed || _inbound.isClosed) return;
-    _inbound.addError(error);
-  }
 
   void _ensureLive() {
     if (_disposed) {

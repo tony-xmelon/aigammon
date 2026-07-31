@@ -969,6 +969,43 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  group('status events', () {
+    test('a redundant set of the SAME status and reason emits nothing',
+        () async {
+      final rig = _Rig();
+      addTearDown(rig.dispose);
+      final statuses = <TransportStatusEvent>[];
+      rig.host.statusStream.listen(statuses.add);
+
+      await rig.host.connect();
+      await rig.settle();
+      expect(statuses, hasLength(1), reason: 'connecting -> connected');
+
+      // connect() is documented idempotent, and a link that re-reports the
+      // state it is already in must not bill the controller (or the connection
+      // chip) an event for standing still.
+      await rig.host.connect();
+      rig.host.simulateReconnect();
+      await rig.settle();
+      expect(statuses, hasLength(1), reason: 'nothing changed');
+
+      // A real transition still lands, and so does the way back.
+      rig.host.simulateDrop('cable');
+      rig.host.simulateDrop('cable');
+      await rig.settle();
+      expect(statuses, hasLength(2));
+      expect(statuses.last.status, TransportStatus.reconnecting);
+      expect(statuses.last.reason, 'cable');
+
+      // The same status with a DIFFERENT reason is a change worth reporting.
+      rig.host.simulateDrop('router');
+      await rig.settle();
+      expect(statuses, hasLength(3));
+      expect(statuses.last.reason, 'router');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   group('pacing', () {
     test('setPaceHint moves inboundCadence, which the controller reuses as its '
         'own retry beat', () async {

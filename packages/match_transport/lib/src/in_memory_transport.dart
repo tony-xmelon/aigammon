@@ -19,6 +19,7 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'fair_dice.dart';
 import 'match_transport.dart';
 import 'scripted_dice.dart';
+import 'transport_channels.dart';
 
 /// A mutable roll document inside the [InMemoryBackend].
 class _Roll {
@@ -113,7 +114,7 @@ class InMemoryBackend {
 
   void _announcePresence() {
     for (final t in List<InMemoryTransport>.from(_endpoints)) {
-      t._setOpponentPresent(_seatFilled(
+      t.setOpponentPresent(_seatFilled(
           t.author == hostAuthor ? guestAuthor : hostAuthor));
     }
   }
@@ -309,7 +310,7 @@ class InMemoryBackend {
 }
 
 /// One endpoint on an [InMemoryBackend]: the host's or the guest's view.
-class InMemoryTransport implements MatchTransport {
+class InMemoryTransport with TransportChannels implements MatchTransport {
   InMemoryTransport(this.backend, this.author) {
     backend._register(this);
   }
@@ -327,16 +328,12 @@ class InMemoryTransport implements MatchTransport {
   /// This endpoint's identity in the author/roller space.
   final String author;
 
-  final _inbound = StreamController<InboundFrame>.broadcast();
-  final _status = StreamController<TransportStatusEvent>.broadcast();
-  final _presence = StreamController<bool>.broadcast();
-
-  TransportStatus _statusValue = TransportStatus.connecting;
-  String? _statusReason;
   bool _connected = false;
   bool _disposed = false;
-  bool _opponentPresent = false;
   Duration _cadence = const Duration(milliseconds: 200);
+
+  @override
+  bool get isDisposed => _disposed;
 
   // Per-endpoint delivery cursors, so a flush emits only what is new to THIS
   // endpoint (at-least-once still holds; this only avoids re-emitting on every
@@ -357,7 +354,7 @@ class InMemoryTransport implements MatchTransport {
           'not-a-participant', '$author is neither seat of this match');
     }
     _connected = true;
-    _setStatus(TransportStatus.connected);
+    setStatus(TransportStatus.connected);
     return _sessionNow();
   }
 
@@ -379,9 +376,6 @@ class InMemoryTransport implements MatchTransport {
     if (a == backend.guestAuthor) return TransportSession.hostSide.opponent;
     return null;
   }
-
-  @override
-  Stream<InboundFrame> get inbound => _inbound.stream;
 
   @override
   Future<void> sendEvent({
@@ -436,21 +430,6 @@ class InMemoryTransport implements MatchTransport {
   }
 
   @override
-  Stream<TransportStatusEvent> get statusStream => _status.stream;
-
-  @override
-  TransportStatus get status => _statusValue;
-
-  @override
-  String? get statusReason => _statusReason;
-
-  @override
-  bool get opponentPresent => _opponentPresent;
-
-  @override
-  Stream<bool> get opponentPresence => _presence.stream;
-
-  @override
   Capabilities get capabilities => backend.capabilities;
 
   @override
@@ -465,37 +444,35 @@ class InMemoryTransport implements MatchTransport {
     if (_disposed) return;
     _disposed = true;
     backend._unregister(this);
-    await _inbound.close();
-    await _status.close();
-    await _presence.close();
+    await closeChannels();
   }
 
   // --- test controls ---------------------------------------------------------
 
   /// Simulate the link dropping (retry under way).
   void simulateDrop([String reason = 'link dropped']) =>
-      _setStatus(TransportStatus.reconnecting, reason);
+      setStatus(TransportStatus.reconnecting, reason);
 
   /// Simulate the link coming back.
-  void simulateReconnect() => _setStatus(TransportStatus.connected);
+  void simulateReconnect() => setStatus(TransportStatus.connected);
 
   /// Simulate the relay's single guest slot being taken (self-clearing).
   void simulateBusy([String reason = 'room is busy']) =>
-      _setStatus(TransportStatus.busy, reason);
+      setStatus(TransportStatus.busy, reason);
 
   /// Simulate a terminal failure (retrying cannot help).
   void simulateFailure([String reason = 'terminally failed']) =>
-      _setStatus(TransportStatus.failed, reason);
+      setStatus(TransportStatus.failed, reason);
 
   /// Emit a [ResetFrame]: "discard your fold and replay from the log".
   ///
   /// Also rewinds this endpoint's delivery cursors, so the frames the controller
   /// is about to re-pull are the ones a real reconnect would re-deliver.
   void simulateReset({String reason = 'reconnected'}) {
-    if (_disposed || _inbound.isClosed) return;
+    if (_disposed) return;
     _lastSeqDelivered = 0;
     _rollPhaseDelivered.clear();
-    _inbound.add(ResetFrame(
+    publish(ResetFrame(
       resumeToken: backend.capabilities.durable ? backend.resumeToken : null,
       reason: reason,
       // The CURRENT session, per the contract: a test that changed
@@ -511,19 +488,14 @@ class InMemoryTransport implements MatchTransport {
   /// entropy from the non-roller), so it cannot express a peer that IS the wire —
   /// a LAN host, which publishes whatever it likes to the guest regardless of what
   /// its own relay would have allowed. This is how a test plays that peer.
-  void injectFrame(InboundFrame frame) {
-    if (_disposed || _inbound.isClosed) return;
-    _inbound.add(frame);
-  }
+  void injectFrame(InboundFrame frame) => publish(frame);
 
   /// Push a transient read failure onto [inbound] WITHOUT closing it.
   void simulateInboundError([
     TransportException error =
         const TransportUnavailable('read-failed', 'transient read failure'),
-  ]) {
-    if (_disposed || _inbound.isClosed) return;
-    _inbound.addError(error);
-  }
+  ]) =>
+      publishError(error);
 
   // --- internals -------------------------------------------------------------
 
@@ -534,37 +506,24 @@ class InMemoryTransport implements MatchTransport {
     }
   }
 
-  void _setStatus(TransportStatus status, [String? reason]) {
-    if (_disposed) return;
-    _statusValue = status;
-    _statusReason = reason;
-    if (!_status.isClosed) _status.add(TransportStatusEvent(status, reason));
-  }
-
-  void _setOpponentPresent(bool present) {
-    if (_disposed || _opponentPresent == present) return;
-    _opponentPresent = present;
-    if (!_presence.isClosed) _presence.add(present);
-  }
-
   /// Emit every frame new to this endpoint: rolls (by advancing phase) first,
   /// then events (by ascending seq) — the friendly order a poll cycle uses,
   /// though the contract only promises ordering WITHIN a kind.
   int _deliverFrom(InMemoryBackend b) {
-    if (_disposed || _inbound.isClosed) return 0;
+    if (_disposed) return 0;
     var delivered = 0;
 
     for (final roll in b.rollFrames) {
       if (_rollPhaseDelivered[roll.n] != roll.phase) {
         _rollPhaseDelivered[roll.n] = roll.phase;
-        _inbound.add(roll);
+        publish(roll);
         delivered++;
       }
     }
 
     for (final e in b.eventsSince(_lastSeqDelivered)) {
       _lastSeqDelivered = e.seq;
-      _inbound.add(e);
+      publish(e);
       delivered++;
     }
     return delivered;

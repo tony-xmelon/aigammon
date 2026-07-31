@@ -10,4 +10,5 @@ library;
 export 'src/fair_dice.dart';
 export 'src/in_memory_transport.dart';
 export 'src/match_transport.dart';
+export 'src/transport_channels.dart';
 export 'src/scripted_dice.dart';

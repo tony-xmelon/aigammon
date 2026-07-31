@@ -161,7 +161,7 @@ import 'online_exception.dart';
 /// owns it) and outlives every match. The controller owns the transport; the app
 /// owns the API. Mirrors `SocketTransport`, which likewise leaves its link
 /// running.
-class FirestoreTransport implements MatchTransport {
+class FirestoreTransport with TransportChannels implements MatchTransport {
   FirestoreTransport({
     required this.api,
     required this.code,
@@ -249,21 +249,17 @@ class FirestoreTransport implements MatchTransport {
   static const Duration _minGateTimeout = Duration(seconds: 5);
   static const Duration _maxGateTimeout = Duration(seconds: 20);
 
-  final _inbound = StreamController<InboundFrame>.broadcast();
-  final _status = StreamController<TransportStatusEvent>.broadcast();
-  final _presence = StreamController<bool>.broadcast();
-
   /// The match document, once read (or handed in by the screen that created or
   /// joined it, saving a read).
   MatchDoc? _match;
   TransportSession? _session;
 
-  TransportStatus _statusValue = TransportStatus.connecting;
-  String? _statusReason;
-  bool _opponentPresent = false;
   bool _fast = false;
   bool _disposed = false;
   bool _polling = false;
+
+  @override
+  bool get isDisposed => _disposed;
 
   /// Set when the next poll cycle must not sleep first (a fresh degradation
   /// wants an immediate read, since the listener may have missed something).
@@ -385,8 +381,8 @@ class FirestoreTransport implements MatchTransport {
       matchCode: code,
       resumeToken: code,
     );
-    _setStatus(TransportStatus.connected);
-    _setOpponentPresent(true);
+    setStatus(TransportStatus.connected);
+    setOpponentPresent(true);
     // Polling first, always: it is the path that is known to be working, and it
     // covers the window before the listener catches up (and forever if there is
     // no listener).
@@ -394,9 +390,6 @@ class FirestoreTransport implements MatchTransport {
     _armListenStart();
     return _session!;
   }
-
-  @override
-  Stream<InboundFrame> get inbound => _inbound.stream;
 
   @override
   Future<void> sendEvent({
@@ -517,22 +510,8 @@ class FirestoreTransport implements MatchTransport {
     }
   }
 
-  @override
-  Stream<TransportStatusEvent> get statusStream => _status.stream;
-
-  @override
-  TransportStatus get status => _statusValue;
-
-  @override
-  String? get statusReason => _statusReason;
-
-  /// True from [connect] onwards, and never false again — see the class doc.
-  @override
-  bool get opponentPresent => _opponentPresent;
-
-  @override
-  Stream<bool> get opponentPresence => _presence.stream;
-
+  /// [opponentPresent] is true from [connect] onwards, and never false again —
+  /// see the class doc.
   /// Both true: the log lives in Firestore, and a durable anonymous uid can
   /// re-open a match after a restart. This is what enables the controller's
   /// rejoin path and the lobby's "Match in progress" card.
@@ -586,9 +565,7 @@ class FirestoreTransport implements MatchTransport {
     _relistenTimer?.cancel();
     _flushTimer?.cancel();
     await _teardownListener();
-    await _inbound.close();
-    await _status.close();
-    await _presence.close();
+    await closeChannels();
   }
 
   // --- polling ---------------------------------------------------------------
@@ -625,8 +602,8 @@ class FirestoreTransport implements MatchTransport {
       if (!_polling || _disposed) return;
       try {
         await _pollOnce();
-        if (_statusValue != TransportStatus.connected) {
-          _setStatus(TransportStatus.connected);
+        if (status != TransportStatus.connected) {
+          setStatus(TransportStatus.connected);
         }
       } on OnlineException catch (e) {
         final fault = _mapRead(e);
@@ -653,7 +630,7 @@ class FirestoreTransport implements MatchTransport {
     for (final row in events) {
       if (row.seq <= _eventCursor) continue;
       _eventCursor = row.seq;
-      _publish(_frameOf(row));
+      publish(_frameOf(row));
     }
     final rolls = await api.fetchRollsFrom(code, _rollFloor);
     if (_disposed) return;
@@ -661,7 +638,7 @@ class FirestoreTransport implements MatchTransport {
     for (final roll in rolls) {
       if (_seenPhase[roll.n] == roll.phase) continue;
       _seenPhase[roll.n] = roll.phase;
-      _publish(_rollFrameOf(roll));
+      publish(_rollFrameOf(roll));
     }
     _retireCompletedRolls({for (final r in rolls) r.n: r});
   }
@@ -671,8 +648,8 @@ class FirestoreTransport implements MatchTransport {
   /// [TransportStatus.reconnecting] chip. The next successful cycle clears both.
   void _onPollFailure(TransportException error) {
     if (_disposed) return;
-    _setStatus(TransportStatus.reconnecting, error.message);
-    _publishError(error);
+    setStatus(TransportStatus.reconnecting, error.message);
+    publishError(error);
   }
 
   /// A read that CANNOT succeed on a retry: the rules refuse us, or a document
@@ -702,8 +679,8 @@ class FirestoreTransport implements MatchTransport {
     _pendingEvents.clear();
     _pendingRolls.clear();
     unawaited(_teardownListener());
-    _setStatus(TransportStatus.failed, error.message);
-    _publishError(error);
+    setStatus(TransportStatus.failed, error.message);
+    publishError(error);
   }
 
   /// Advance [_rollFloor] over the leading run of finished rolls in [byIndex].
@@ -873,7 +850,7 @@ class FirestoreTransport implements MatchTransport {
       }
       // A transient decode failure is the peer's problem, not a stream fault:
       // surface it and keep listening.
-      _publishError(fault);
+      publishError(fault);
     }
   }
 
@@ -902,7 +879,7 @@ class FirestoreTransport implements MatchTransport {
     for (final row in events) {
       if (row.seq <= _eventCursor) continue;
       _eventCursor = row.seq;
-      _publish(_frameOf(row));
+      publish(_frameOf(row));
     }
 
     final rolls = _pendingRolls.values.toList()..sort((a, b) => a.n.compareTo(b.n));
@@ -911,7 +888,7 @@ class FirestoreTransport implements MatchTransport {
       if (roll.n < _rollFloor) continue;
       if (_seenPhase[roll.n] == roll.phase) continue;
       _seenPhase[roll.n] = roll.phase;
-      _publish(_rollFrameOf(roll));
+      publish(_rollFrameOf(roll));
     }
     _retireCompletedRolls({for (final r in rolls) r.n: r});
   }
@@ -977,8 +954,8 @@ class FirestoreTransport implements MatchTransport {
     // Real-time delivery has caught up: stop paying for cycles.
     _polling = false;
     _wake();
-    if (_statusValue != TransportStatus.connected) {
-      _setStatus(TransportStatus.connected);
+    if (status != TransportStatus.connected) {
+      setStatus(TransportStatus.connected);
     }
   }
 
@@ -1004,7 +981,7 @@ class FirestoreTransport implements MatchTransport {
       // Only a LIVE listener dropping is worth telling the controller about, and
       // only as a transient: the match is still connected (over polling), so the
       // status stays `connected` and no "reconnecting" chip appears.
-      _publishError(error);
+      publishError(error);
     }
     _scheduleRelisten();
   }
@@ -1197,30 +1174,6 @@ class FirestoreTransport implements MatchTransport {
     final waiting = _sleeper;
     _sleeper = null;
     if (waiting != null && !waiting.isCompleted) waiting.complete();
-  }
-
-  void _publish(InboundFrame frame) {
-    if (_disposed || _inbound.isClosed) return;
-    _inbound.add(frame);
-  }
-
-  void _publishError(Object error) {
-    if (_disposed || _inbound.isClosed) return;
-    _inbound.addError(error);
-  }
-
-  void _setStatus(TransportStatus status, [String? reason]) {
-    if (_disposed) return;
-    if (_statusValue == status && _statusReason == reason) return;
-    _statusValue = status;
-    _statusReason = reason;
-    if (!_status.isClosed) _status.add(TransportStatusEvent(status, reason));
-  }
-
-  void _setOpponentPresent(bool present) {
-    if (_disposed || _opponentPresent == present) return;
-    _opponentPresent = present;
-    if (!_presence.isClosed) _presence.add(present);
   }
 
   void _ensureLive() {
