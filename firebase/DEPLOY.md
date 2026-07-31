@@ -454,18 +454,34 @@ no server — but it is no longer a budget that a single long game can eat.
   once per rejoin, but it is not free, and a player who force-quits and rejoins
   repeatedly is now the most expensive thing a single user can do to the quota.
 
-  *"Now"* is load-bearing. Until the P18 rules change it was NOT the most
-  expensive thing, because the append rules gated only on participation, not on
-  the match's status: either seat could keep creating `events/{seq}` and
-  `rolls/{n}` documents indefinitely after the match completed (or before anyone
-  had even joined), each one billing a write plus its `matchOf(code)` rules-get.
-  That is unbounded, and unbounded beats any bounded figure on this page. Both
-  `create` rules now require `matchOf(code).status == 'active'`
-  (`isPlayingParticipant`), so the write channel opens when the second seat is
-  claimed and closes when the match completes — which is what makes every
-  bounded number above the real ceiling. Reads are deliberately NOT gated this
-  way: the post-match summary replays the log, so participants keep read access
-  for the match's whole life.
+  *"Now"* is load-bearing. Until the P18 rules changes it was NOT the most
+  expensive thing, because the write rules bounded neither WHEN a document could
+  be written nor WHICH INDEX it could claim. Two changes, and both are needed for
+  "ceiling" to mean anything:
+
+    1. **A window.** The rules gated only on participation, so either seat could
+       keep writing `events/{seq}` and `rolls/{n}` indefinitely after the match
+       completed (or before anyone had even joined), each write billing itself
+       plus its `matchOf(code)` rules-get. Every write rule now requires
+       `matchOf(code).status == 'active'` (`isPlayingParticipant`) — the two
+       `create`s, and the `entropy` and `reveal` update phases with them, which
+       were the residue left by the first pass at this. So the write channel
+       opens when the second seat is claimed and closes when the match
+       completes. This does not endanger the last roll of a match: a roll is
+       revealed and folded into an event, and only the event *after* that ends
+       the match and flips the status.
+    2. **A ceiling inside that window.** `seq >= 0` and `n >= 0` bound nothing —
+       a participant of an *active* match could create documents at arbitrary
+       8-digit indices, without limit. `seq <= 8192` and `n <= 4096` are the
+       actual ceiling, and because ids are unique the index bound *is* a
+       document-count bound. They are the LAN relay's numbers
+       (`MatchRelay.maxRollIndex` / `maxEventCount`), because it is one protocol:
+       a 25-pointer, the longest match these rules admit, runs to on the order
+       of two thousand rolls and twice that many events, so both carry several
+       times a real match.
+
+  Reads are deliberately NOT gated this way: the post-match summary replays the
+  log, so participants keep read access for the match's whole life.
 * **A degraded client pays the old price.** If the gRPC stream cannot be
   established at all (a network that blocks HTTP/2, a proxy, an outage), the
   transport falls back to the poll loop and keeps the match alive at the old
@@ -480,9 +496,10 @@ no server — but it is no longer a budget that a single long game can eat.
   transient errors); the remedies are unchanged — play less, or move to Blaze.
 
 Writes are negligible by comparison and unaffected: one document per event and
-three phase writes per roll, a few hundred per match — and, since the
-`status == 'active'` gate above, a few hundred is also the CEILING rather than
-merely the expected value.
+three phase writes per roll, a few hundred per match. A few hundred is the
+expected value; the enforced ceiling is the index caps above (8192 events and
+4096 rolls per match, so ~20k writes at the absolute limit), which is what makes
+a single match's write cost bounded at all rather than merely typical.
 
 Measured side effect of the same change: one 1-point match through the local
 emulator went from **26.7s to 4.5s** of wall clock, because a roll's three-message

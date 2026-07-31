@@ -55,14 +55,20 @@ service cloud.firestore {
 
     // A participant of a match that is actually BEING PLAYED.
     //
-    // The gate on every append (events and rolls alike). Reads stay open to
-    // participants for the match's whole life — the post-match summary replays
-    // the log — but the write channel opens when the second seat is claimed and
-    // closes when the match completes. Without it the two seats keep an
-    // unbounded, billable append channel open for as long as either client
-    // holds the code, long after there is any game left to write about; and a
-    // host could spend the free tier on a match nobody has joined. This is the
-    // one place the rules bound COST rather than shape.
+    // The gate on every WRITE — the two appends and both roll-update phases
+    // alike. Reads stay open to participants for the match's whole life — the
+    // post-match summary replays the log — but the write channel opens when the
+    // second seat is claimed and closes when the match completes. Without it the
+    // two seats keep an unbounded, billable write channel open for as long as
+    // either client holds the code, long after there is any game left to write
+    // about; and a host could spend the free tier on a match nobody has joined.
+    // This is the one place the rules bound COST rather than shape.
+    //
+    // It does NOT endanger the last roll of a match. A roll is revealed, derived
+    // and appended as an event, and only the event AFTER that ends the match and
+    // triggers the flip to 'complete' (NetMatchController._markCompleteIfOver,
+    // from _afterFold), so every legitimate entropy and reveal write happens
+    // while the match is still active.
     function isPlayingParticipant(m) {
       return isParticipant(m) && m.status == 'active';
     }
@@ -81,6 +87,27 @@ service cloud.firestore {
     function idMatchesIndex(docId, n) {
       return docId.matches('^[0-9]{8}$') && int(docId) == n;
     }
+
+    // ---------- index ceilings ----------
+    //
+    // `status == 'active'` closes the write channel when a match ENDS; these
+    // bound what can be written while it is still open. Without them a
+    // participant may create documents at arbitrary indices — 8 digits of them —
+    // so the write cost of an active match had no ceiling at all, only a start
+    // and a stop. The rules cannot see how many documents a collection already
+    // holds, so the index IS the count: ids are unique, so `n <= max` caps the
+    // collection at `max + 1` documents.
+    //
+    // The numbers are the LAN relay's, deliberately (MatchRelay.maxRollIndex and
+    // maxEventCount) — one protocol, one set of bounds. A roll index is the
+    // roll's position in the match, so it is bounded by the match itself: the
+    // longest match these rules admit is 25 points, which runs to on the order
+    // of two thousand rolls, and 4096 leaves several times that in headroom. The
+    // event log runs at about two entries per roll (a roll event and a move
+    // event, plus the handful of cube and resign events a game brings), hence
+    // twice the roll ceiling.
+    function maxRollIndex() { return 4096; }
+    function maxEventSeq() { return 8192; }
 
     // ---------- matches/{code} : code IS the invite code ----------
     match /matches/{code} {
@@ -166,6 +193,7 @@ service cloud.firestore {
         && request.resource.data.author == uid()
         && request.resource.data.seq is int
         && request.resource.data.seq >= 0
+        && request.resource.data.seq <= maxEventSeq()
         && idMatchesIndex(eventId, request.resource.data.seq)
         && request.resource.data.gameNo is int
         && request.resource.data.gameNo >= 1
@@ -195,6 +223,7 @@ service cloud.firestore {
         && request.resource.data.roller == uid()
         && request.resource.data.n is int
         && request.resource.data.n >= 0
+        && request.resource.data.n <= maxRollIndex()
         && idMatchesIndex(rollId, request.resource.data.n)
         && isHex64(request.resource.data.commit);
 
@@ -204,8 +233,9 @@ service cloud.firestore {
 
       // PHASE 2 — the non-roller participant contributes entropy, once,
       // before any reveal exists. Adds exactly `entropy` and nothing else.
+      // Only while the match is ACTIVE, as with every other write here.
       function isEntropyPhase() {
-        return isParticipant(matchOf(code))
+        return isPlayingParticipant(matchOf(code))
           && uid() != resource.data.roller
           && !('entropy' in resource.data)
           && !('reveal' in resource.data)
@@ -216,8 +246,14 @@ service cloud.firestore {
 
       // PHASE 3 — the roller reveals, once, and only after entropy landed
       // (revealing first would let the roller pick entropy-dependent dice).
+      //
+      // The roller is a participant by construction (the create rule pinned
+      // `roller == uid()`), so [isPlayingParticipant] adds nothing but the
+      // status gate — which is the point: without it this was the one write in
+      // the whole model that outlived the match it belonged to. It costs this
+      // phase the `matchOf(code)` rules-get the other three already pay.
       function isRevealPhase() {
-        return signedIn()
+        return isPlayingParticipant(matchOf(code))
           && uid() == resource.data.roller
           && 'entropy' in resource.data
           && !('reveal' in resource.data)

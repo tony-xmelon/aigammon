@@ -521,6 +521,33 @@ describe('events: create', () => {
     );
   });
 
+  it('accepts the last seq in range and denies the one past it', async () => {
+    // `seq >= 0` alone is not a bound: a participant of an ACTIVE match could
+    // create documents at arbitrary indices, and unbounded write cost beats any
+    // bounded figure in DEPLOY.md. The ceiling is 2 * the roll ceiling, because
+    // the protocol writes about two events per roll (roll + move, plus the
+    // handful of cube/resign events a game brings). See MatchRelay.maxEventCount,
+    // which is the same bound on the LAN side of the same protocol.
+    await assertSucceeds(
+      setDoc(
+        eventDoc(hostDb, 'ABCD1234', '00008192'),
+        newEventPayload({ seq: 8192 }),
+      ),
+    );
+    await assertFails(
+      setDoc(
+        eventDoc(hostDb, 'ABCD1234', '00008193'),
+        newEventPayload({ seq: 8193 }),
+      ),
+    );
+    await assertFails(
+      setDoc(
+        eventDoc(hostDb, 'ABCD1234', '99999999'),
+        newEventPayload({ seq: 99999999 }),
+      ),
+    );
+  });
+
   it('denies a negative seq', async () => {
     await assertFails(
       setDoc(eventDoc(hostDb, 'ABCD1234', '-0000001'), newEventPayload({ seq: -1 })),
@@ -752,6 +779,25 @@ describe('rolls: create (commit phase)', () => {
     );
   });
 
+  it('accepts the last roll index in range and denies the one past it', async () => {
+    // The same reasoning as the event log's seq ceiling, and the same number
+    // the LAN relay uses (MatchRelay.maxRollIndex): `n` is the roll's position
+    // in the match, so it is bounded by the match, and 4096 carries several
+    // times the longest match the rules admit (25 points).
+    await assertSucceeds(
+      setDoc(rollDoc(hostDb, 'ABCD1234', '00004096'), newRollPayload({ n: 4096 })),
+    );
+    await assertFails(
+      setDoc(rollDoc(hostDb, 'ABCD1234', '00004097'), newRollPayload({ n: 4097 })),
+    );
+    await assertFails(
+      setDoc(
+        rollDoc(hostDb, 'ABCD1234', '99999999'),
+        newRollPayload({ n: 99999999 }),
+      ),
+    );
+  });
+
   it('denies a doc id that disagrees with n', async () => {
     await assertFails(
       setDoc(rollDoc(hostDb, 'ABCD1234', '00000003'), newRollPayload({ n: 4 })),
@@ -831,6 +877,29 @@ describe('rolls: entropy phase', () => {
     );
   });
 
+  it('denies entropy on a COMPLETE match', async () => {
+    // The create rules closed the write channel at completion; the update rules
+    // did not, so either seat could still walk `entropy` and `reveal` onto
+    // pre-existing roll documents after the match was over. Two writes per doc
+    // (both fields are write-once), but writes after completion all the same,
+    // each billing its own matchOf(code) rules-get. The honest last roll is not
+    // affected: a roll is fully revealed and folded into an event BEFORE the
+    // event that ends the match, which is what triggers the flip to complete.
+    await seedActiveMatch('DONE0001', { status: 'complete' });
+    await seedRoll('DONE0001', '00000000', newRollPayload());
+    await assertFails(
+      updateDoc(rollDoc(guestDb, 'DONE0001', '00000000'), { entropy: HEX2 }),
+    );
+  });
+
+  it('denies entropy before anyone has JOINED', async () => {
+    await seedMatch('WAIT0001');
+    await seedRoll('WAIT0001', '00000000', newRollPayload());
+    await assertFails(
+      updateDoc(rollDoc(guestDb, 'WAIT0001', '00000000'), { entropy: HEX2 }),
+    );
+  });
+
   it('denies entropy after the reveal already landed', async () => {
     await seedRoll(
       'ABCD1234',
@@ -850,6 +919,31 @@ describe('rolls: reveal phase', () => {
     await seedRoll('ABCD1234', '00000000', newRollPayload());
     await assertFails(
       updateDoc(rollDoc(hostDb, 'ABCD1234', '00000000'), { reveal: HEX3 }),
+    );
+  });
+
+  it('denies a reveal on a COMPLETE match', async () => {
+    // As with the entropy phase: the roller's own write was gated on nothing
+    // but its uid, so it survived the end of the match too.
+    await seedActiveMatch('DONE0001', { status: 'complete' });
+    await seedRoll('DONE0001', '00000000', newRollPayload({ entropy: HEX2 }));
+    await assertFails(
+      updateDoc(rollDoc(hostDb, 'DONE0001', '00000000'), { reveal: HEX3 }),
+    );
+  });
+
+  it('reveals the FINAL roll of a match, which lands before completion', async () => {
+    // The gate above must not break the last roll of a match. It cannot: the
+    // roll is revealed, derived and appended as an event, and only the event
+    // AFTER that ends the match and flips the document to complete (see
+    // NetMatchController._markCompleteIfOver, which runs from _afterFold). So
+    // the final reveal always happens while the match is still active.
+    await seedRoll('ABCD1234', '00000000', newRollPayload({ entropy: HEX2 }));
+    await assertSucceeds(
+      updateDoc(rollDoc(hostDb, 'ABCD1234', '00000000'), { reveal: HEX3 }),
+    );
+    await assertSucceeds(
+      updateDoc(matchDoc(hostDb, 'ABCD1234'), { status: 'complete' }),
     );
   });
 
