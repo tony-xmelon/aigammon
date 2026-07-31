@@ -6,6 +6,7 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_performance/firebase_performance.dart';
 import 'package:flutter/foundation.dart';
 
+import '../diagnostics/crash_log.dart';
 import 'analytics_events.dart';
 import 'app_analytics.dart';
 import 'firebase_config.dart';
@@ -56,16 +57,27 @@ class Observability {
 ///    run`, or any fork;
 ///  * initialization itself throws — a bad key, a revoked app, an offline
 ///    first launch. Telemetry failing must never take the app down with it, so
-///    the error is swallowed here (it is still recorded in the on-device crash
-///    log by the caller if it matters).
-Future<Observability> initializeObservability() async {
+///    the error is swallowed rather than rethrown — but it IS written to
+///    [CrashLog], which is the only diagnostic channel that still works when
+///    the remote one is what broke. Without that, a release build with a
+///    revoked key is indistinguishable from a build that was never configured.
+///
+/// [configOverride] and [initializer] exist for `test/analytics/
+/// firebase_init_failure_test.dart`: the dart-defines are compile-time
+/// constants and `Firebase.initializeApp` needs a platform channel, so the
+/// failure path is unreachable in a test process without a seam. Production
+/// calls this with neither.
+Future<Observability> initializeObservability({
+  @visibleForTesting FirebaseAppConfig? configOverride,
+  @visibleForTesting FirebaseInitializer? initializer,
+}) async {
   if (!isFirebaseSupportedPlatform) return Observability.disabled;
-  final config = FirebaseAppConfig.fromEnvironment();
+  final config = configOverride ?? FirebaseAppConfig.fromEnvironment();
   if (config == null) return Observability.disabled;
 
   try {
-    await Firebase.initializeApp(
-      options: FirebaseOptions(
+    await (initializer ?? _initializeFirebaseApp)(
+      FirebaseOptions(
         apiKey: config.apiKey,
         appId: config.appId,
         messagingSenderId: config.messagingSenderId,
@@ -79,8 +91,11 @@ Future<Observability> initializeObservability() async {
       isEnabled: true,
     );
   } catch (error, stack) {
-    // Deliberately swallowed — see the doc comment. Surfaced in debug only, so
-    // a misconfigured local build is visible to the developer who caused it.
+    // Not rethrown — see the doc comment — but not silent either. The
+    // on-device log survives a dead telemetry backend and is reachable from
+    // the Diagnostics screen and from a "Send feedback" issue, so a broken
+    // Firebase config can be diagnosed from a release build in the field.
+    CrashLog.instance.record(error, stack: stack, source: 'firebase-init');
     if (kDebugMode) {
       debugPrint('Firebase initialization failed; telemetry disabled: $error');
       debugPrintStack(stackTrace: stack);
@@ -88,6 +103,14 @@ Future<Observability> initializeObservability() async {
     return Observability.disabled;
   }
 }
+
+/// How [initializeObservability] brings up the Firebase app. A typedef so a
+/// test can substitute one that throws.
+typedef FirebaseInitializer = Future<void> Function(FirebaseOptions options);
+
+/// **The only call to `Firebase.initializeApp` in the app.**
+Future<void> _initializeFirebaseApp(FirebaseOptions options) =>
+    Firebase.initializeApp(options: options);
 
 /// [AppAnalytics] over Firebase Analytics.
 class FirebaseAppAnalytics implements AppAnalytics {
