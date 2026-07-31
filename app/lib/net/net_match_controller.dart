@@ -629,9 +629,23 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// has. A drive that stalls (a peer that walks away mid-handshake) therefore
   /// holds the fast window open until the user leaves the match, which is the
   /// cheaper side of the trade against making a live handshake feel slow.
+  ///
+  /// A REFUSED drive is the one exception, and it is not the same trade: it is
+  /// kept around only so the error stays on screen (see [_rejectRoll]) and will
+  /// never write again unless the user restarts it, so nothing is outstanding
+  /// to poll FOR. Counting it left one refusal pinning the fast cadence — 4x
+  /// the resting read rate — for the rest of the session, on a metered backend,
+  /// which is the very cost the refusal handling exists to stop paying.
   bool get _diceProtocolInFlight {
     if (frozen || _match.isMatchOver) return false;
-    if (_roller != null) return true;
+    final drive = _roller;
+    if (drive != null) {
+      if (!drive.refused) return true;
+      // A refused drive that has already CREATED its document (a refusal at the
+      // reveal step) would otherwise be counted again by the due-index test
+      // below, under our own commitment. Same dead drive, same answer.
+      if (drive.n == _rollCount + 1) return false;
+    }
     // ONLY the due index counts. A peer that squats the roll frames for its
     // future turns (see [_isDueRoll]) must not be able to pin the fast cadence
     // open for the rest of the match — that would be a read-quota drain even
@@ -718,6 +732,20 @@ class NetMatchController extends ChangeNotifier implements MatchController {
     }
     _awaitingNextGame = false;
     _acknowledgedThrough = _gameNumber;
+    // Continue is the deliberate user action at the one moment an opening roll
+    // can have been refused with the board already up, so it is that roll's
+    // bounded retry — exactly what a press of Roll is for every other roll (see
+    // [_rejectRoll]). Without it the drive stays refused, [_maybeStartOpeningRoll]
+    // declines to replace it, and the match is dead with an error on screen.
+    // The flag is cleared on the SAME drive rather than the drive discarded,
+    // for the reason [rollDice] does it that way: a refusal at the reveal step
+    // leaves our commitment already written, and only this drive holds the
+    // secret behind it.
+    final opening = _roller;
+    if (opening != null && opening.opening && opening.refused) {
+      opening.refused = false;
+      _transientError = null;
+    }
     final queued = _buffer;
     _buffer = [];
     for (var i = 0; i < queued.length; i++) {
@@ -1968,10 +1996,20 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   /// So the drive stops, the refusal is surfaced, and the pre-roll gate is
   /// re-opened — pressing Roll is a deliberate, bounded retry (see [rollDice]),
   /// which is the only retry a deterministic refusal deserves.
+  ///
+  /// An OPENING roll has no Roll button behind it: [rollDice] throws unless
+  /// [awaitingHumanTurn], which needs a folded game, which needs the opening
+  /// roll that just failed. Its two recovery paths are therefore elsewhere —
+  /// [continueToNextGame] for games 2+, and [_completeReady] below for the
+  /// first one, where nothing has folded yet and the launch screen is still on
+  /// a spinner. [ready] completing means "ready OR gave up", and every launch
+  /// site reads [error] on that path, so this turns a permanent spinner into a
+  /// stated reason with the screen's own try-again behind it.
   void _rejectRoll(_RollerDrive d, TransportRejected e) {
     d.refused = true;
     _submitting = false;
     _transientError = NetMatchException('roll-rejected', e.message);
+    if (d.opening) _completeReady();
     _notify();
   }
 

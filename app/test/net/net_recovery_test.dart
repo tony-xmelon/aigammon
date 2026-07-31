@@ -87,7 +87,7 @@ void main() {
 
       // The same log again (a reconnect's reset). Everything re-derives; nothing
       // is recorded twice.
-      (p.guest.transport as InMemoryTransport).simulateReset();
+      p.guestTransport.simulateReset();
       await settle(200);
       expect(p.guest.matchOver, isTrue);
       expect(p.guest.lastSeq, seq);
@@ -108,7 +108,7 @@ void main() {
       final games = p.guestPersistence.games.length;
 
       // A SECOND replay must not re-open the dialog the user just dismissed.
-      (p.guest.transport as InMemoryTransport).simulateReset();
+      p.guestTransport.simulateReset();
       await settle(200);
       expect(p.guest.awaitingNextGame, isFalse);
       expect(p.guest.gameNumber, greaterThanOrEqualTo(2));
@@ -126,7 +126,7 @@ void main() {
       // The host restarted (or a room code collided) and we are folding a
       // DIFFERENT authority's log: its game 1 has never been recorded here.
       p.backend.resumeToken = 'A-DIFFERENT-MATCH';
-      (p.guest.transport as InMemoryTransport).simulateReset(reason: 'restart');
+      p.guestTransport.simulateReset(reason: 'restart');
       await settle(200);
 
       expect(p.guest.matchOver, isTrue);
@@ -391,6 +391,105 @@ void main() {
       expect(c.error, isNotNull);
       expect(c.frozen, isFalse);
       expect(backend.fetchRoll(3)!.reveal, isNull);
+    });
+
+    test('a refused roll releases the FAST cadence it can no longer use',
+        () async {
+      // The refusal is kept visible by holding the drive (see _rejectRoll), and
+      // the pace hint used to read "a drive exists" as "a handshake is in
+      // flight". So a single refusal pinned the transport at its fast cadence
+      // — 4x the resting read rate against a METERED backend — for as long as
+      // the screen stayed open, which is precisely the cost the refusal fix
+      // existed to stop paying. A dead drive is not a handshake.
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 5, die2: 2),
+      );
+      final c = rig.controller;
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+      rig.scriptSeededTurn();
+      await pumpUntil(() => c.awaitingHumanTurn);
+
+      rig.transport.intercept = (op) => op == 'createRoll'
+          ? const TransportRejected('refused', 'the match is not active')
+          : null;
+      c.rollDice();
+      await pumpUntil(() => c.error != null);
+      expect(rig.transport.paceFast, isFalse,
+          reason: 'a refused drive must not hold the fast window open');
+
+      // And pressing Roll — the one bounded retry a refusal gets — re-opens it,
+      // because that drive IS live again.
+      rig.transport.intercept = null;
+      c.rollDice();
+      await pumpUntil(() => rig.transport.paceFast == true,
+          reason: 'a resumed drive is a handshake in flight again');
+    });
+  });
+
+  group('a refused OPENING roll', () {
+    // The opening roll is the one drive no button starts: rollDice() throws
+    // unless awaitingHumanTurn, which needs a folded game, which needs an
+    // opening roll. So the retry that clears `refused` for every other roll
+    // cannot be reached, and a refusal there used to be terminal.
+
+    test('gives up readiness instead of spinning forever', () async {
+      // Nothing has folded, so `ready` is still pending and all three launch
+      // screens are sitting on a spinner. NetMatchController.ready completes
+      // when the controller GIVES UP as well as when it becomes ready (v0.12),
+      // and every launch site reads `error` on that path — so completing it is
+      // what turns a permanent spinner into a stated reason and the screen's
+      // own try-again.
+      final rig = await ScriptedRig.host(length: 1);
+      final c = rig.controller;
+      rig.transport.intercept = (op) => op == 'createRoll'
+          ? const TransportRejected('refused', 'the match is not active')
+          : null;
+      await pumpUntil(() => c.error != null,
+          reason: 'the opening roll was never refused');
+      await c.ready.timeout(const Duration(seconds: 5),
+          onTimeout: () => fail('ready never completed: the launch spins'));
+      expect(c.isReady, isFalse, reason: 'it gave up; it did not become ready');
+      expect(c.error, isNotNull);
+      expect(c.frozen, isFalse);
+
+      // And it is still not a retry loop.
+      final attempts = rig.transport.calls['createRoll'];
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      expect(rig.transport.calls['createRoll'], attempts);
+    });
+
+    test('is retried when the user asks for the next game', () async {
+      // Games 2+ open their own roll, and there `ready` completed long ago —
+      // the board is up and the game-over dialog is showing. Continue is the
+      // deliberate user action at exactly that moment, so it is the bounded
+      // retry the opening roll gets, the same one rollDice() is for every
+      // other roll.
+      final pair = await NetPair.start(length: 3);
+      pair.hostTransport.intercept = (op) =>
+          (op == 'createRoll' && pair.host.awaitingNextGame)
+              ? const TransportRejected('refused', 'a transient refusal')
+              : null;
+      await pair.advanceUntil(() => pair.host.awaitingNextGame,
+          what: 'the end of the first game');
+      await pumpUntil(() => pair.host.error != null,
+          reason: "game 2's opening roll was never refused");
+
+      final stuckAt = pair.host.rollCount + 1;
+      expect(pair.backend.fetchRoll(stuckAt), isNull,
+          reason: 'the refused create wrote nothing');
+
+      pair.hostTransport.intercept = null;
+      pair.host.continueToNextGame();
+      await pumpUntil(() => pair.backend.fetchRoll(stuckAt) != null,
+          reason: 'Continue did not clear the refusal, so the match is dead');
+      expect(pair.host.error, isNull, reason: 'and the banner clears with it');
+      await pair.playOut();
+      expect(pair.host.matchOver, isTrue);
+      expect(pair.guest.matchOver, isTrue);
     });
   });
 

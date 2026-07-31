@@ -308,8 +308,15 @@ class ProxyTransport implements MatchTransport {
   @override
   Duration get inboundCadence => inner.inboundCadence;
 
+  /// The last pace hint the controller sent, or null if it never sent one. The
+  /// controller only sends on a CHANGE, so this is the current hint.
+  bool? paceFast;
+
   @override
-  void setPaceHint({required bool fast}) => inner.setPaceHint(fast: fast);
+  void setPaceHint({required bool fast}) {
+    paceFast = fast;
+    inner.setPaceHint(fast: fast);
+  }
 
   @override
   Future<void> dispose() => inner.dispose();
@@ -501,7 +508,7 @@ class ScriptedRig {
 /// online suite's `pair()`.
 class NetPair {
   NetPair._(this.backend, this.host, this.guest, this.hostPersistence,
-      this.guestPersistence);
+      this.guestPersistence, this.hostTransport, this.guestTransport);
 
   static Future<NetPair> start({
     int length = 3,
@@ -513,21 +520,28 @@ class NetPair {
         InMemoryBackend(config: MatchConfig(length: length, cubeless: cubeless));
     final hostRec = RecordingPersistence();
     final guestRec = RecordingPersistence();
+    // Both seats go through a [ProxyTransport] — a faithful passthrough unless a
+    // test arms one of its knobs — so a two-controller test can break ONE side's
+    // pipe (a refused write, a dropped frame) or read back the pace hint,
+    // exactly as the single-controller rig can.
+    final hostTransport = ProxyTransport(InMemoryTransport.host(backend));
+    final guestTransport = ProxyTransport(InMemoryTransport.guest(backend));
     final host = NetMatchController(
-      transport: InMemoryTransport.host(backend),
+      transport: hostTransport,
       persistence: hostRec,
       gateTimeout: gateTimeout,
       rng: Random(101),
     );
     final guest = NetMatchController(
-      transport: InMemoryTransport.guest(backend),
+      transport: guestTransport,
       persistence: guestRec,
       gateTimeout: gateTimeout,
       rng: Random(202),
     );
     addTearDown(host.disposeController);
     addTearDown(guest.disposeController);
-    final pair = NetPair._(backend, host, guest, hostRec, guestRec)
+    final pair = NetPair._(backend, host, guest, hostRec, guestRec,
+        hostTransport, guestTransport)
       ..pickMove = pickMove;
     await host.playMatch();
     await guest.playMatch();
@@ -541,6 +555,10 @@ class NetPair {
   final NetMatchController guest;
   final RecordingPersistence hostPersistence;
   final RecordingPersistence guestPersistence;
+
+  /// Each seat's pipe, for the tests that need to break one.
+  final ProxyTransport hostTransport;
+  final ProxyTransport guestTransport;
 
   MovePicker pickMove = greedyFirstMove;
 
