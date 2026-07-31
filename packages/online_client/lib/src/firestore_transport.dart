@@ -345,6 +345,11 @@ class FirestoreTransport implements MatchTransport {
   /// event because author↔seat validation cannot map an identity it was never
   /// told about. The listener does not change that — it watches subcollections,
   /// and the match document's `guestUid` is not one of them.
+  ///
+  /// That wait BACKS OFF ([_seatWait]) rather than reading at a flat cadence: it
+  /// is the one wait in this transport that can last as long as a person takes
+  /// to walk across a room, and every cycle of it is billed against the free
+  /// tier whether or not anything has changed.
   @override
   Future<TransportSession> connect() async {
     _ensureLive();
@@ -364,8 +369,9 @@ class FirestoreTransport implements MatchTransport {
     }
     // Wait for the guest seat. Only ever true for the host, and only until
     // somebody joins; a guest reads a match that already has both seats.
+    var seatCycle = 0;
     while (doc.guestUid == null) {
-      await _sleep(pollInterval);
+      await _sleep(_seatWait(seatCycle++));
       _ensureLive();
       doc = await _readMatch();
     }
@@ -1120,6 +1126,37 @@ class FirestoreTransport implements MatchTransport {
       if (e is NotFoundException) throw TransportRejected(e.code, e.message);
       throw _mapRead(e);
     }
+  }
+
+  /// How many seat-wait cycles run at [pollInterval] before the backoff starts.
+  static const int _seatFastCycles = 5;
+
+  /// The cadence the seat wait settles at, as a multiple of [pollInterval].
+  ///
+  /// Relative rather than absolute so the ladder keeps its shape whatever
+  /// cadence the caller chose — at the 2s default this is a 16s ceiling, within
+  /// a second of the 15s the lobby screen's own wait settles at.
+  static const int _seatCeilingFactor = 8;
+
+  /// The delay before seat-wait read number [cycle]: [pollInterval] for the
+  /// first [_seatFastCycles], then doubling to a ceiling.
+  ///
+  /// This is a FREE-TIER budget decision, not a UX one. "Create a match, then go
+  /// and tell your friend" is the longest idle window in the product, and every
+  /// cycle of this wait is billed TWICE — the match-document read, plus the
+  /// `matchOf(code)` get that `firestore.rules` evaluates to authorise it. At a
+  /// flat 2s an unattended lobby bills ~1,800 reads an hour for nothing
+  /// happening; backed off it bills ~450, and costs at most one ceiling of
+  /// latency on the join itself. `_OnlineBodyState._wait` in
+  /// `app/lib/screens/online_screen.dart` backs off the screen's equivalent wait
+  /// for exactly this reason, and this is the same ladder.
+  Duration _seatWait(int cycle) {
+    if (cycle < _seatFastCycles) return pollInterval;
+    // The shift is capped so a lobby left open for hours cannot overflow it.
+    final steps = cycle - _seatFastCycles + 1;
+    final scaled = pollInterval * (1 << (steps > 8 ? 8 : steps));
+    final ceiling = pollInterval * _seatCeilingFactor;
+    return scaled > ceiling ? ceiling : scaled;
   }
 
   /// A CANCELLABLE pause — the loop's only timer.

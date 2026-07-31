@@ -173,6 +173,40 @@ void main() {
       expect(presence, [true]);
     });
 
+    test('the seat wait BACKS OFF instead of billing a flat cadence forever',
+        () async {
+      // "Create a match, then go and tell your friend" is the longest idle
+      // window in the product, and every cycle of this wait bills TWICE against
+      // the free tier (the read, plus the `matchOf(code)` rules-get it
+      // evaluates). A flat cadence with no ceiling turns an unattended lobby
+      // into an unbounded meter. The screen's own lobby wait has backed off for
+      // this reason since v0.11; this loop had not.
+      final at = <DateTime>[];
+      final api = await apiFor((req) async {
+        if (req.method == 'GET') {
+          at.add(DateTime.now());
+          return matchRow(guestUid: null, status: 'waiting');
+        }
+        return quiet(req);
+      });
+      const poll = Duration(milliseconds: 10);
+      final t = FirestoreTransport(api: api, code: 'C', pollInterval: poll);
+      addTearDown(t.dispose);
+      // Nobody ever joins, so this never completes; the teardown ends it.
+      unawaited(t.connect().then<void>((_) {}, onError: (Object _) {}));
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      // A flat 10ms cadence would be ~100 reads in that second. The backoff
+      // settles at the ceiling long before then.
+      expect(at.length, greaterThan(3), reason: 'it must still be polling');
+      expect(at.length, lessThan(40),
+          reason: 'a flat cadence would have billed ~100 reads by now');
+      // And it is CAPPED, not still doubling: the last gap is nowhere near the
+      // half-second a runaway doubling would have reached by read ~10.
+      final last = at.last.difference(at[at.length - 2]);
+      expect(last, lessThan(const Duration(milliseconds: 400)));
+    });
+
     test('a device with no seat in the match is rejected', () async {
       final api = await apiFor(quiet, uid: 'uid-stranger');
       final stranger = FirestoreTransport(api: api, code: 'C', match: seated);
