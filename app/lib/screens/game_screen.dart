@@ -14,6 +14,7 @@ import '../game/match_controller.dart';
 import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
 import '../tutor/tutor_service.dart';
+import 'game/dice_presenter.dart';
 import 'history_screen.dart';
 import 'metric_explainer.dart';
 
@@ -65,41 +66,16 @@ import 'metric_explainer.dart';
 /// rotated action bar at the top edge for the player sitting opposite. Nothing
 /// rotates between turns; only which of the two bars is live changes.
 ///
-/// ## The dice presentation (this screen owns it)
+/// ## The dice presentation
 ///
 /// Every roll — the opening roll, the local player's, the opponent's — is
-/// PRESENTED: the roller's pair tumbles through [AnimationTimings.diceFrames]
-/// pseudo-random faces, settles on the real roll, and is held readable for a
-/// settle pause before anything else moves. The screen owns the whole beat
-/// ([_startRollBeat]) because only it sees the [RollEvent]s; the board is a pure
-/// renderer, fed the tumbling faces as [BoardView.diceOverride] and the emphasis
-/// as [BoardView.activeDiceSide].
-///
-/// Three things are derived from ONE piece of state — [_presentingSide], the
-/// roller of the beat currently running (`null` between beats):
-///
-/// * **which pair is lit** — [_activeDiceSide]: the presenting roller while a
-///   beat runs, else the side whose move is being entered, else NOBODY (both
-///   pairs dim). Bright therefore means exactly "this roll is live", so the local
-///   pair goes dim the instant a move is confirmed and stays dim until it is
-///   rolled again — the reported "after my turn is over, my dice gets enabled
-///   while the opponent moves". It is never derived from `state.turn`, which is
-///   already back on the human while the opponent's roll is still tumbling (see
-///   [BoardPainter.activeDiceSide]).
-/// * **when the opponent's checkers may travel** — [_dicePresenting], handed to
-///   the board as [BoardView.holdMoveAnimation]: a move that lands mid-beat is
-///   queued and starts when the dice are readable.
-/// * **when the local player may start entering** — [_entryHeld]: while your own
-///   roll is still tumbling the board is not interactive and the action bar shows
-///   no move affordances, so nothing can be staged against dice that have not
-///   settled. The settle pause is HALVED for your own roll (see
-///   [_startRollBeat]): the presentation is the same beat, but you are waiting on
-///   yourself, and the full pause read as lag.
-///
-/// The presentation is disabled outright by the "Dice roll animation" setting and
-/// by animation speed "None" — both land as
-/// [AnimationTimings.diceBeatEnabled] `== false`, in which case rolls settle
-/// instantly and only the move-entry emphasis remains.
+/// PRESENTED: the roller's pair tumbles through pseudo-random faces, settles on
+/// the real roll, and is held readable for a settle pause before anything else
+/// moves. The whole beat lives in [DicePresenter], which this screen owns and
+/// listens to; the board is a pure renderer, fed the tumbling faces as
+/// [BoardView.diceOverride] and the emphasis as [BoardView.activeDiceSide]. See
+/// that class for what the presentation drives (which pair is lit, when a queued
+/// move may travel, and when move entry opens).
 class GameScreen extends StatefulWidget {
   const GameScreen({
     super.key,
@@ -492,64 +468,26 @@ class _GameScreenState extends State<GameScreen> {
 
   // --- Dice-roll beat --------------------------------------------------------
 
-  /// Event cursor for the roll-beat detector, tracked SEPARATELY from the
-  /// tutor's [_lastEventCount] so the two event-growth hooks advance
-  /// independently.
-  late int _lastRollEventCount = _c.game.events.length;
-
-  /// The live roll beat: the ROLLER whose pair is tumbling, plus the cycling
-  /// faces to paint on it. `null` when no beat is active (the board then shows
-  /// both persisted pairs). Passed straight through to the [BoardView] as its
-  /// `diceOverride`.
-  ///
-  /// The roller is stored HERE, taken from the [RollEvent] that started the
-  /// beat, because it cannot be recovered from the state the beat is painted
-  /// against: by the first override frame the turn may already have advanced
-  /// past the roller (see [BoardView.diceOverride] and [AppliedMove]).
-  ({Player roller, Dice faces})? _rollBeat;
-
-  /// The current beat's frame timer, cancelled on a new beat / dispose.
-  Timer? _rollBeatTimer;
-
-  /// Monotonic guard so a superseded beat (a rapid second roll) cannot clear or
-  /// advance a fresher one.
-  int _rollBeatSeq = 0;
-
-  /// Whether a roll is currently being PRESENTED — true from the moment a roll
-  /// beat begins until its tumble frames AND the settle pause have elapsed.
-  /// Handed to the [BoardView] as `holdMoveAnimation` so a move that lands during
-  /// the presentation is deferred until the dice are readable.
-  ///
-  /// A [ValueNotifier] rather than plain state because the board LISTENS to it
-  /// (the queued move starts on the flip, between rebuilds). Kept exactly in step
-  /// with [_presentingSide]: `value == (_presentingSide != null)`.
-  final ValueNotifier<bool> _dicePresenting = ValueNotifier<bool>(false);
-
-  /// The roller whose dice are being presented right now (the beat's tumble
-  /// frames plus its settle pause), or `null` when no presentation is running.
-  ///
-  /// The identity half of [_dicePresenting], and the state the whole presentation
-  /// is derived from — see the class doc. Taken from the [RollEvent] that started
-  /// the beat, never from `state.turn`, which may already have advanced past the
-  /// roller (see [_rollBeat]).
-  Player? _presentingSide;
-
-  /// The side whose move is currently TRAVELLING on the board (its cosmetic
-  /// animation), or `null` when nothing is animating. Reported by the
-  /// [BoardView] through [BoardView.onMoveAnimation], because the board owns
-  /// that timeline (its length depends on the hop count) and this screen must
-  /// not duplicate it.
-  ///
-  /// Keeps the mover's dice lit for as long as their play is being presented:
-  /// the roll settles, then the checkers move, and only when both are done does
-  /// the pair go dim. Only ever set for a move that ANIMATES — a hand-entered
-  /// local move is never replayed, so confirming still dims your pair at once.
-  Player? _animatingSide;
+  /// The dice presentation state machine (the roll beat, which pair is lit, and
+  /// whether move entry is still held). Owned here and listened to, so a beat
+  /// frame rebuilds the screen exactly as it did when the beat lived inline.
+  late final DicePresenter _dice;
 
   @override
   void initState() {
     super.initState();
     _seedAssessmentCursor();
+    _dice = DicePresenter(
+      controller: _c,
+      timings: () => widget.timings,
+      // Entry just opened at the end of a beat, without a controller
+      // notification: the two things that wait for exactly those affordances
+      // have to be re-offered or they would sit out the whole move.
+      onEntryOpened: () {
+        _syncDancePass();
+        _maybeShowDragHint();
+      },
+    )..addListener(_onDiceChange);
     _observable = Listenable.merge([_c, ..._humanNotifiers(), _entryControl]);
     _observable.addListener(_onChange);
     widget.analytics.logScreenView(AnalyticsScreens.game);
@@ -593,11 +531,11 @@ class _GameScreenState extends State<GameScreen> {
         if (messenger.mounted) messenger.removeCurrentSnackBar();
       });
     }
-    _rollBeatTimer?.cancel();
     _tapHintTimer?.cancel();
     _cancelDancePass();
     _observable.removeListener(_onChange);
-    _dicePresenting.dispose();
+    _dice.removeListener(_onDiceChange);
+    _dice.dispose();
     _stagedMove.dispose();
     _sheetRevision.dispose();
     _sheetScroll.dispose();
@@ -621,10 +559,17 @@ class _GameScreenState extends State<GameScreen> {
     _reportMatchCompletion();
     _updatePassDevice();
     _closeSurrenderIfOutranked();
-    _syncRollBeat();
+    _dice.syncRollBeat();
     _syncDancePass();
     _syncTutor();
     _maybeShowDragHint();
+    setState(() {});
+  }
+
+  /// The dice presentation moved: repaint. [DicePresenter] notifies exactly
+  /// where this screen used to call [setState] inline.
+  void _onDiceChange() {
+    if (!mounted) return;
     setState(() {});
   }
 
@@ -712,7 +657,7 @@ class _GameScreenState extends State<GameScreen> {
   /// it and skip the wait; either route commits the same [Move.none].
   ///
   /// The hold begins only once the mover's own roll has finished being presented
-  /// — [_entryHeld] keeps `moveSide` null until then — so the dice are always
+  /// — [DicePresenter.entryHeld] keeps `moveSide` null until then — so the dice are always
   /// legible before the turn goes.
   ///
   /// Applies wherever the danced side is locally human: vs-AI, hot-seat, and the
@@ -720,7 +665,7 @@ class _GameScreenState extends State<GameScreen> {
   /// has no pending move request).
   void _syncDancePass() {
     final pending = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
-    final moveSide = _entryHeld(pending) ? null : pending;
+    final moveSide = _dice.entryHeld(pending) ? null : pending;
     final dancing = moveSide != null && _entryControl.isDance;
     if (!dancing) {
       _cancelDancePass();
@@ -796,7 +741,7 @@ class _GameScreenState extends State<GameScreen> {
     // The affordances the hint talks about appear only once the mover's own roll
     // has finished being presented, so the tip must not arrive a beat early.
     final pending = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
-    if (pending == null || _entryHeld(pending)) return;
+    if (pending == null || _dice.entryHeld(pending)) return;
     _dragHintScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -825,187 +770,6 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  // --- Dice-roll beat -------------------------------------------------------
-
-  /// Detects a fresh roll in the event log and kicks off its presentation beat
-  /// before the settled roll shows. EVERY roll beats — the opening roll, the
-  /// local player's own, and the opponent's (AI or remote) alike: "there is no
-  /// dice animation now, not for me, not for the opponent, please add it back".
-  /// Only the settle pause differs, being halved for a local roller (see
-  /// [_startRollBeat]).
-  ///
-  /// A shorter event list means a new game began: reset the cursor and cancel any
-  /// live beat.
-  ///
-  /// The beat is gated on [GameScreen.timings]: with the [AnimationTimings.off]
-  /// preset (animation off — the widget-test default) or the dice-roll animation
-  /// setting turned off, no beat ever runs and the board shows the real roll
-  /// immediately. Called from [_onChange] before its [setState], so the first
-  /// override frame it sets is painted by that rebuild.
-  void _syncRollBeat() {
-    final events = _c.game.events;
-    final len = events.length;
-    if (len < _lastRollEventCount) {
-      _lastRollEventCount = len; // a new game reset the event log
-      _cancelRollBeat();
-      return;
-    }
-    if (len == _lastRollEventCount) return;
-    for (var i = _lastRollEventCount; i < len; i++) {
-      // Both the roller AND the settled faces come from the EVENT — never from
-      // `_c.state` (whose turn/dice may already have moved on). The opening roll
-      // is one die each, and both belong to the first mover (who plays them as
-      // their opening move), exactly as `persistentDice` folds it.
-      switch (events[i]) {
-        case OpeningRollEvent(
-            :final whiteDie,
-            :final blackDie,
-            :final firstPlayer
-          ):
-          _startRollBeat(firstPlayer, Dice(whiteDie, blackDie));
-        case RollEvent(:final player, :final die1, :final die2):
-          _startRollBeat(player, Dice(die1, die2));
-        default:
-          break;
-      }
-    }
-    _lastRollEventCount = len;
-  }
-
-  /// Begins (or restarts) [roller]'s roll beat toward [realRoll]:
-  /// [AnimationTimings.diceFrames] cycling frames [AnimationTimings.diceFrame]
-  /// apart of deterministic pseudo-random faces, after which the override clears
-  /// and the real roll shows through the roller's own persisted pair (see
-  /// [_persistentDice], which has already folded this [RollEvent]). The faces are
-  /// seeded off [realRoll] so the sequence is stable under test, and each cycling
-  /// face differs from the real roll (the dice visibly tumble). No-op when
-  /// animation is off. The first frame is set synchronously; the [_onChange]
-  /// `setState` that follows paints it.
-  ///
-  /// While the beat runs — AND for the settle pause after the dice settle —
-  /// [_presentingSide] is [roller] and [_dicePresenting] is `true`, which lights
-  /// the roller's pair ([_activeDiceSide]), holds any queued move animation, and
-  /// (for a local roller) withholds move entry ([_entryHeld]).
-  ///
-  /// The settle pause is [AnimationTimings.diceSettlePause] for a remote/AI roll
-  /// and HALF that for a local one. The pause exists so a roll is readable before
-  /// the checkers move; when the roller is you, you already know what you rolled
-  /// and the wait is between you and your own move, where the full pause reads as
-  /// the app being slow. Same beat, half the dwell.
-  ///
-  /// [roller] is the roll event's player, carried through every frame so the
-  /// tumbling faces land on the pair that actually rolled them regardless of
-  /// how far the turn has advanced meanwhile (see [_rollBeat]).
-  void _startRollBeat(Player roller, Dice realRoll) {
-    if (!widget.timings.diceBeatEnabled) return;
-    _cancelRollBeat();
-    final seq = ++_rollBeatSeq;
-    final frameCount = widget.timings.diceFrames;
-    final frameDuration = widget.timings.diceFrame;
-    final settlePause = _c.isLocalHuman(roller)
-        ? widget.timings.diceSettlePause ~/ 2
-        : widget.timings.diceSettlePause;
-    _beginPresenting(roller); // hold move animation + entry until dice settle
-    _rollBeat = (roller: roller, faces: _beatFace(realRoll, 0));
-    var frame = 0;
-    void nextFrame() {
-      if (!mounted || seq != _rollBeatSeq) return;
-      frame++;
-      if (frame >= frameCount) {
-        // Dice settle to the real roll now; keep presenting for one more settle
-        // pause so the roll is legible before anything moves.
-        setState(() => _rollBeat = null);
-        _rollBeatTimer = Timer(settlePause, () {
-          if (!mounted || seq != _rollBeatSeq) return;
-          _rollBeatTimer = null;
-          // Release: a queued move animation begins, and a local roller's move
-          // entry affordances appear. A rebuild is needed for the latter (the
-          // notifier alone only wakes the board's own listener).
-          setState(_endPresenting);
-          // Entry just opened without a controller notification, so the two
-          // things that wait for exactly these affordances have to be re-offered
-          // here or they would sit out the whole move: the one-time drag/tap
-          // tip, and the dance hold.
-          //
-          // The dance hold DID already start without this call — the board's
-          // [BoardEntryController] defers its notify to the next frame, which
-          // lands back in [_onChange] — but relying on another object's
-          // scheduling for a turn to advance itself is emergent, not designed.
-          // Arming it on the same line that opens entry makes the beat start
-          // when the dice become readable, by construction. [_syncDancePass] is
-          // idempotent while a hold is already pending, so the later
-          // notification is a no-op.
-          _syncDancePass();
-          _maybeShowDragHint();
-        });
-        return;
-      }
-      _rollBeatTimer = Timer(frameDuration, nextFrame);
-      setState(() =>
-          _rollBeat = (roller: roller, faces: _beatFace(realRoll, frame)));
-    }
-
-    _rollBeatTimer = Timer(frameDuration, nextFrame);
-  }
-
-  /// Marks [roller]'s roll as being presented, keeping [_presentingSide] and
-  /// [_dicePresenting] in step (the board listens to the notifier).
-  void _beginPresenting(Player roller) {
-    _presentingSide = roller;
-    _dicePresenting.value = true;
-  }
-
-  /// Ends the presentation (no roll is live until the next one).
-  void _endPresenting() {
-    _presentingSide = null;
-    _dicePresenting.value = false;
-  }
-
-  /// Cancels any live beat and clears the override (fencing pending callbacks by
-  /// bumping [_rollBeatSeq]), and ends the presentation. Does not call
-  /// [setState]; callers are already in a rebuild path (or disposing).
-  void _cancelRollBeat() {
-    _rollBeatTimer?.cancel();
-    _rollBeatTimer = null;
-    _rollBeatSeq++;
-    _rollBeat = null;
-    _endPresenting();
-  }
-
-  /// The dice pair to light this frame, or `null` to dim BOTH — the presentation
-  /// state machine's single output (see the class doc).
-  ///
-  /// Precedence, strongest first:
-  ///
-  /// 1. the presenting roller — a roll being rolled is always the live pair;
-  /// 2. [moveSide], the local side whose move is being ENTERED — a play the user
-  ///    is making by hand outranks a replay finishing in the background, so their
-  ///    own dice (with per-die spent dimming) stay lit while they use them;
-  /// 3. [_animatingSide], the side whose checkers are travelling, so an
-  ///    opponent's roll stays readable for the whole of their play.
-  ///
-  /// With none of the three — the pre-roll gate, the moment after a confirm, a
-  /// finished turn — nothing is live and both pairs dim.
-  Player? _activeDiceSide(Player? moveSide) =>
-      _presentingSide ?? moveSide ?? _animatingSide;
-
-  /// Records the board's animation state (see [_animatingSide]).
-  ///
-  /// Reached from the board's own listener paths — including the one where
-  /// releasing the presentation hold synchronously starts a queued move — all of
-  /// which run outside a build, so a plain [setState] is safe here.
-  void _onMoveAnimation(Player? player) {
-    if (!mounted || _animatingSide == player) return;
-    setState(() => _animatingSide = player);
-  }
-
-  /// Whether move entry is WITHHELD because the local mover's own dice are still
-  /// being presented. The board is left non-interactive and the action bar shows
-  /// no move affordances until the roll settles, so no hop can be staged against
-  /// dice that are still tumbling.
-  bool _entryHeld(Player? moveSide) =>
-      moveSide != null && _presentingSide == moveSide;
-
   /// Folds the CURRENT game's event log into each player's most recent roll, so
   /// every player keeps their OWN persistent dice pair (the fix for "the
   /// opponent dice is not perceivable"). The opening roll seeds the FIRST mover's
@@ -1018,15 +782,6 @@ class _GameScreenState extends State<GameScreen> {
   (Dice?, Dice?) _persistentDice() {
     _refoldEvents();
     return _foldedDice;
-  }
-
-  /// A deterministic dice pair for beat [frame], derived from the settled
-  /// [realRoll]. Both faces are offset off the real roll (die1 always differs
-  /// from the real die1), so the whole pair reads as different from the settled
-  /// roll on every frame.
-  Dice _beatFace(Dice realRoll, int frame) {
-    int face(int real, int salt) => ((real + frame + salt) % 6) + 1;
-    return Dice(face(realRoll.die1, 1), face(realRoll.die2, 3));
   }
 
   // --- Tutor synchronisation -------------------------------------------------
@@ -1283,10 +1038,10 @@ class _GameScreenState extends State<GameScreen> {
     final state = _c.state;
     final pendingSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
     // The side whose move may be ENTERED right now: nobody while that side's own
-    // roll is still being presented (see [_entryHeld]). Everything downstream —
+    // roll is still being presented (see [DicePresenter.entryHeld]). Everything downstream —
     // the board's interactivity, the action bar's affordances — reads this, so
     // entry appears as one piece the moment the dice settle.
-    final moveSide = _entryHeld(pendingSide) ? null : pendingSide;
+    final moveSide = _dice.entryHeld(pendingSide) ? null : pendingSide;
     final cubeSide = _humanSideWith((s) => _c.pendingCubeOf(s).value != null);
     final resignSide =
         _humanSideWith((s) => _c.pendingResignOf(s).value != null);
@@ -1341,7 +1096,7 @@ class _GameScreenState extends State<GameScreen> {
                         whiteAtBottom: whiteAtBottom,
                         externalMove: _stagedMove,
                         lastMove: _c.lastMove,
-                        holdMoveAnimation: _dicePresenting,
+                        holdMoveAnimation: _dice.dicePresenting,
                         entryControl: _entryControl,
                         hopDuration: widget.timings.hop,
                         interHopDuration: widget.timings.interHop,
@@ -1352,17 +1107,17 @@ class _GameScreenState extends State<GameScreen> {
                         // it shows no header chip and no Double button — the
                         // three cube surfaces are suppressed together.
                         showCube: !_c.cubeless,
-                        diceOverride: _rollBeat,
+                        diceOverride: _dice.rollBeat,
                         // Emphasis follows the PRESENTATION, never `state.turn`:
                         // the roller while a roll is live, the mover while a move
                         // is entered, nobody in between (both pairs dim).
-                        activeDiceSide: _activeDiceSide(moveSide),
+                        activeDiceSide: _dice.activeDiceSide(moveSide),
                         // Tapping the dice is a second, on-board route to the
                         // Roll button — wired under exactly the condition that
                         // enables that button, and null otherwise so dice-area
                         // taps fall through to normal move entry.
                         onDiceTap: _canRoll(moveSide) ? _rollDice : null,
-                        onMoveAnimation: _onMoveAnimation,
+                        onMoveAnimation: _dice.onMoveAnimation,
                         onNoLegalSourceTap: _showNoLegalSourceHint,
                       ),
                       // Both banners are PURELY informational and float over the
@@ -2038,7 +1793,7 @@ class _GameScreenState extends State<GameScreen> {
   String _statusText() {
     // Your own roll is on screen being rolled: say so, rather than reporting
     // whatever the engine happens to be chewing on in the background.
-    final presenting = _presentingSide;
+    final presenting = _dice.presentingSide;
     if (presenting != null && _c.isLocalHuman(presenting)) return 'Rolling…';
     if (_c.isThinking) return 'Thinking…';
     if (_c.matchOver || _c.awaitingNextGame) return '';
