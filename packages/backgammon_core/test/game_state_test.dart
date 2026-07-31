@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:test/test.dart';
 
@@ -150,6 +152,114 @@ void main() {
           .play(Move(const [CheckerMove(7, 4), CheckerMove(5, 4)]));
       expect(s.phase, GamePhase.awaitingRoll);
       expect(s.canonicalPlay(Move.none), isNull);
+    });
+
+    test('the packed hop-set key answers exactly what sorted strings did', () {
+      // `Move.sameAs` used to build two lists of '$from>$to' strings and sort
+      // them on EVERY comparison — and canonicalPlay compares the submission
+      // against every legal move and then against every decomposition of every
+      // legal move. It now compares one packed integer per move instead.
+      //
+      // This is the equivalence proof: the string-sorting comparison is kept
+      // here as the oracle, a reference canonicalPlay is built on top of it,
+      // and the two must agree — answer for answer, character for character —
+      // over every decomposition of every legal move in every hop order, in
+      // real positions from a random game. It covers the reversed transit
+      // chain the fallback exists for (see the reverse-order test above),
+      // which arises many times over in a full game.
+      bool sameAsBySortedStrings(Move a, Move b) {
+        if (a.checkerMoves.length != b.checkerMoves.length) return false;
+        List<String> key(Move m) =>
+            [for (final c in m.checkerMoves) '${c.from}>${c.to}']..sort();
+        final x = key(a);
+        final y = key(b);
+        for (var i = 0; i < x.length; i++) {
+          if (x[i] != y[i]) return false;
+        }
+        return true;
+      }
+
+      // canonicalPlay's algorithm, verbatim, on the old comparison.
+      Move? reference(GameState s, Move move) {
+        if (s.phase != GamePhase.moving) return null;
+        final legal = s.legalMoves;
+        if (legal.isEmpty) {
+          return move.checkerMoves.isEmpty ? Move.none : null;
+        }
+        for (final m in legal) {
+          if (sameAsBySortedStrings(m, move)) return m;
+        }
+        if (move.checkerMoves.length != legal.first.checkerMoves.length) {
+          return null;
+        }
+        for (final v in s.legalVariants) {
+          for (final d in v.decompositions) {
+            if (sameAsBySortedStrings(d, move)) return v.canonical;
+          }
+        }
+        return null;
+      }
+
+      Iterable<List<CheckerMove>> permutations(List<CheckerMove> hops) sync* {
+        if (hops.length <= 1) {
+          yield List.of(hops);
+          return;
+        }
+        for (var i = 0; i < hops.length; i++) {
+          final rest = [...hops.sublist(0, i), ...hops.sublist(i + 1)];
+          for (final tail in permutations(rest)) {
+            yield [hops[i], ...tail];
+          }
+        }
+      }
+
+      final rng = Random(20260731);
+      Dice roll() => Dice(rng.nextInt(6) + 1, rng.nextInt(6) + 1);
+      var opening = roll();
+      while (opening.isDouble) {
+        opening = roll();
+      }
+      var state = GameState.opening(
+        firstPlayer: opening.die1 > opening.die2 ? Player.white : Player.black,
+        openingDice: opening,
+      );
+      var compared = 0;
+      var acceptedTransits = 0;
+      var turns = 0;
+      while (state.phase != GamePhase.gameOver && turns < 200) {
+        turns++;
+        if (state.phase == GamePhase.awaitingRoll) {
+          state = state.roll(roll());
+          continue;
+        }
+        final legal = state.legalMoves;
+        // Every way a peer could word every legal play, plus two submissions
+        // that must be REFUSED: a bogus hop, and a truncated play.
+        final submissions = <Move>[
+          for (final v in state.legalVariants)
+            for (final d in v.decompositions)
+              for (final perm in permutations(d.checkerMoves)) Move(perm),
+          Move(const [CheckerMove(2, 99)]),
+          if (legal.isNotEmpty && legal.first.checkerMoves.length > 1)
+            Move([legal.first.checkerMoves.first]),
+        ];
+        for (final submission in submissions) {
+          final mine = state.canonicalPlay(submission);
+          final theirs = reference(state, submission);
+          expect(mine?.toString(), theirs?.toString(),
+              reason: 'canonicalPlay disagreed on $submission');
+          if (mine != null &&
+              !legal.any((m) => m.toString() == submission.toString())) {
+            acceptedTransits++; // accepted although not literally a legal move
+          }
+          compared++;
+        }
+        state = state.play(
+            legal.isEmpty ? Move.none : legal[rng.nextInt(legal.length)]);
+      }
+      expect(compared, greaterThan(500), reason: 'the probe actually ran');
+      expect(acceptedTransits, greaterThan(0),
+          reason: 'reordered/decomposed submissions were actually exercised');
     });
   });
 

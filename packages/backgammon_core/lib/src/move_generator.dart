@@ -153,28 +153,16 @@ class _Variants {
   final bool collect;
   final Map<int, Move> _byHops = {};
 
-  /// Records [m] unless a permutation of its hops is already known.
+  /// Records [m] unless a permutation of its hops is already known. Keyed by
+  /// [Move.hopSetKey], which is order-insensitive by construction. The search
+  /// only ever produces on-board hops, so the key is never null here.
   void add(Move m) {
     if (!collect) return;
-    _byHops.putIfAbsent(_hopSetKey(m), () => m);
+    _byHops.putIfAbsent(m.hopSetKey!, () => m);
   }
 
   List<Move> get decompositions =>
       collect ? _byHops.values.toList() : [canonical];
-
-  /// Order-insensitive key for a hop list. Each hop packs into
-  /// `(from + 1) * 100 + (to + 1)` (0..2500, bar == 24 and off == -1 included),
-  /// and up to four SORTED hop codes pack into one 64-bit int.
-  static int _hopSetKey(Move m) {
-    final codes = [
-      for (final h in m.checkerMoves) (h.from + 1) * 100 + (h.to + 1),
-    ]..sort();
-    var key = 0;
-    for (final code in codes) {
-      key = key * 2600 + code;
-    }
-    return key;
-  }
 }
 
 class MoveGenerator {
