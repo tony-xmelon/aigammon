@@ -264,12 +264,12 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           // and mutually exclusive with the board rotation (which keeps the
           // acting player at the bottom, where the one bottom bar already is).
           tabletop: !widget.vsComputer && !settings.rotateBoardHotSeat,
-          // One-time drag/tap hint: shown on the first human move when drag is on
-          // and it has not been shown before. Persist the flag fire-and-forget.
+          // One-time drag/tap hint: shown on the first human move when drag is
+          // on and it has not been shown before. The latch is a targeted
+          // single-column write, NOT a save of `settings` — that snapshot was
+          // read when the match started and this fires arbitrarily later.
           dragHintShown: settings.dragHintShown,
-          onDragHintShown: () => ref
-              .read(settingsRepositoryProvider)
-              .save(settings.copyWith(dragHintShown: true)),
+          onDragHintShown: () => latchDragHintShown(ref),
         ),
       ),
     );

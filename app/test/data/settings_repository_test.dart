@@ -125,6 +125,52 @@ void main() {
     expect((await repo.load()).tutorOverride, isNull);
   });
 
+  group('markDragHintShown', () {
+    test('latches the flag', () async {
+      expect((await repo.load()).dragHintShown, isFalse);
+      await repo.markDragHintShown();
+      expect((await repo.load()).dragHintShown, isTrue);
+    });
+
+    test('does not clobber a field changed since the snapshot was read',
+        () async {
+      // What the game screen actually holds: the settings as they were when
+      // the match STARTED.
+      final snapshot = await repo.load();
+
+      // Meanwhile the player visits the settings screen and changes things.
+      await repo.save(snapshot.copyWith(
+        themeMode: ThemeMode.dark,
+        defaultDifficulty: Difficulty.expert,
+        enableDrag: false,
+      ));
+
+      // Only now does the hint fire, from that stale snapshot's screen.
+      await repo.markDragHintShown();
+
+      final after = await repo.load();
+      expect(after.dragHintShown, isTrue, reason: 'the latch still landed');
+      expect(after.themeMode, ThemeMode.dark);
+      expect(after.defaultDifficulty, Difficulty.expert);
+      expect(after.enableDrag, isFalse,
+          reason: 'the concurrent change survived the latch');
+
+      // For contrast, the write this replaced: a full-row save of the stale
+      // snapshot puts every one of those fields back.
+      await repo.save(snapshot.copyWith(dragHintShown: true));
+      final clobbered = await repo.load();
+      expect(clobbered.themeMode, ThemeMode.system);
+      expect(clobbered.defaultDifficulty, Difficulty.medium);
+      expect(clobbered.enableDrag, isTrue);
+    });
+
+    test('is idempotent', () async {
+      await repo.markDragHintShown();
+      await repo.markDragHintShown();
+      expect((await repo.load()).dragHintShown, isTrue);
+    });
+  });
+
   test('watch emits the current settings and re-emits on save', () async {
     final emissions = <AppSettings>[];
     final sub = repo.watch().listen(emissions.add);

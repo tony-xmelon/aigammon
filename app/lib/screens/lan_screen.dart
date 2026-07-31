@@ -1127,10 +1127,10 @@ Future<void> _openGame({
           enableCombinedTaps: settings.enableCombinedTaps,
         ),
         showScoring: settings.showScoring,
+        // A targeted single-column latch, not a save of this long-lived
+        // `settings` snapshot — see [latchDragHintShown].
         dragHintShown: settings.dragHintShown,
-        onDragHintShown: () => ref
-            .read(settingsRepositoryProvider)
-            .save(settings.copyWith(dragHintShown: true)),
+        onDragHintShown: () => latchDragHintShown(ref),
       ),
     ),
   );

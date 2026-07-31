@@ -492,12 +492,10 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
             enableCombinedTaps: settings.enableCombinedTaps,
           ),
           showScoring: settings.showScoring,
-          // One-time drag/tap hint: shown on the first human move when drag is on
-          // and it has not been shown before. Persist the flag fire-and-forget.
+          // One-time drag/tap hint. A targeted single-column latch, not a save
+          // of this long-lived `settings` snapshot — see [latchDragHintShown].
           dragHintShown: settings.dragHintShown,
-          onDragHintShown: () => ref
-              .read(settingsRepositoryProvider)
-              .save(settings.copyWith(dragHintShown: true)),
+          onDragHintShown: () => latchDragHintShown(ref),
         ),
       ),
     );
