@@ -418,11 +418,40 @@ class HostServer {
 
   void _send(_GuestConnection c, Envelope message) {
     if (c.closing) return;
+    final String raw;
     try {
-      c.socket.add(message.encode());
+      raw = message.encode();
+    } on ProtocolError catch (e) {
+      // Too big for the peer to accept, so putting it on the wire would be a
+      // SILENT drop at the far end — and if it is the `welcome`, the guest sits
+      // out its handshake timeout with no idea it was ever answered. Say so and
+      // close instead: pre-welcome the guest reports the reason as a terminal
+      // handshake failure, post-welcome its transport surfaces it. Nothing
+      // legitimate reaches here — the roll store is bounded
+      // ([MatchRelay.maxRollIndex]) — so this is the diagnostic for a bug or a
+      // peer that provoked one, not a path a real match takes.
+      unawaited(_rejectOversized(c, e));
+      return;
+    }
+    try {
+      c.socket.add(raw);
     } catch (_) {
       // Racing a close; the socket's onDone will clean up.
     }
+  }
+
+  /// Tell the guest why nothing is coming, then close. The reject is tiny, so
+  /// it cannot hit the same cap; if it somehow does, the close still happens.
+  Future<void> _rejectOversized(
+      _GuestConnection c, ProtocolError error) async {
+    try {
+      c.socket
+          .add(RejectMessage(reason: error.message, lastSeq: _lastSeq())
+              .encode());
+    } catch (_) {
+      // Nothing more to try; the close below is what the guest needs anyway.
+    }
+    await _close(c, WebSocketStatus.internalServerError, 'frame too large');
   }
 
   Future<void> _close(_GuestConnection c, int status, String reason) async {

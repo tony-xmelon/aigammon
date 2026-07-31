@@ -332,6 +332,59 @@ void main() {
     });
   });
 
+  group('encoding refuses what the peer would silently drop', () {
+    test('an oversized welcome is refused at ENCODE time', () {
+      // [maxMessageLength] is enforced on the RECEIVING side, where an
+      // oversized frame is simply dropped: no error, no diagnostic, and for a
+      // welcome that means a guest sitting out its handshake timeout with no
+      // idea it was answered. The sender is the one end that still knows what
+      // it was trying to say, so the refusal belongs here.
+      final huge = WelcomeMessage(
+        config: const MatchConfig(length: 5),
+        side: Player.black,
+        resume: 'TOKEN',
+        log: [
+          for (var seq = 1; seq <= 6000; seq++)
+            EventFrame(
+              seq: seq,
+              gameNo: 1,
+              event: const OpeningRollEvent(whiteDie: 6, blackDie: 1),
+              author: 'host',
+            ),
+        ],
+      );
+      expect(huge.toJson, returnsNormally);
+      Object? thrown;
+      try {
+        huge.encode();
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, isA<ProtocolError>());
+      expect((thrown! as ProtocolError).kind, ProtocolErrorKind.tooLarge);
+      expect('$thrown', contains('welcome'),
+          reason: 'the diagnostic names the frame that could not be sent');
+    });
+
+    test('a frame that fits still encodes', () {
+      final fine = WelcomeMessage(
+        config: const MatchConfig(length: 5),
+        side: Player.black,
+        resume: 'TOKEN',
+        log: [
+          for (var seq = 1; seq <= 200; seq++)
+            EventFrame(
+              seq: seq,
+              gameNo: 1,
+              event: const OpeningRollEvent(whiteDie: 6, blackDie: 1),
+              author: 'host',
+            ),
+        ],
+      );
+      expect(ok(fine.encode()), isA<WelcomeMessage>());
+    });
+  });
+
   group('strict decoding', () {
     test('unknown FIELDS are ignored (forward compatibility)', () {
       final raw = jsonEncode({

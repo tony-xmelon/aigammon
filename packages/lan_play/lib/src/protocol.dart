@@ -196,7 +196,31 @@ sealed class Envelope {
         if (payload != null) 'payload': payload,
       };
 
-  String encode() => jsonEncode(toJson());
+  /// The wire text, refusing a frame the PEER would silently drop.
+  ///
+  /// [maxMessageLength] is enforced on the RECEIVING side by [decode] and by
+  /// the two socket readers, all of which simply discard an oversized frame:
+  /// no error, no diagnostic, nothing to see. For a `welcome` that is the
+  /// worst possible failure — the guest sits out its handshake timeout while
+  /// the host believes it answered — and there is no way to tell it apart from
+  /// a dead network afterwards.
+  ///
+  /// The sender is the one end that still knows what it was trying to say, so
+  /// the cap is checked HERE too and an oversized frame is refused loudly
+  /// rather than emitted to be dropped. Callers on the send path turn this into
+  /// a `reject` for the peer (see `HostServer._send`); nothing legitimate
+  /// reaches it, because the log and the roll store are both bounded
+  /// ([MatchRelay.maxRollIndex]).
+  String encode() {
+    final raw = jsonEncode(toJson());
+    if (raw.length > maxMessageLength) {
+      throw ProtocolError(
+          ProtocolErrorKind.tooLarge,
+          'refusing to send a "$type" frame of ${raw.length} characters: the '
+              'peer drops anything over $maxMessageLength');
+    }
+    return raw;
+  }
 
   /// Parse one frame. Returns [DecodeOk] or [DecodeFailure]; never throws.
   ///

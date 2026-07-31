@@ -92,6 +92,29 @@ class MatchRelay {
   /// The identity every write that arrived over the guest socket is stamped with.
   static const String guestAuthor = 'guest';
 
+  /// Hard ceiling on a roll INDEX, and so on how many roll documents one relay
+  /// will ever hold.
+  ///
+  /// `n` is the roll's position in the match — a controller creates
+  /// `rollCount + 1` — so it is bounded by the match itself: the longest match
+  /// the protocol carries runs to on the order of a thousand rolls, and 4096
+  /// leaves several times that in headroom while staying trivially small to
+  /// keep in memory.
+  ///
+  /// It was not bounded here at all, and `n` arrives from the GUEST SOCKET. A
+  /// peer walking it upward did two things at once: filled [_rolls] without
+  /// limit in the host's process, and grew every subsequent [welcome] without
+  /// limit — past [maxMessageLength] the peer silently drops that welcome, so
+  /// the match dies with no diagnostic at either end. (The second half of that
+  /// is now caught by [Envelope.encode] as well, but a bound that keeps a
+  /// legitimate welcome nowhere near the cap is the actual fix.)
+  ///
+  /// The relay is still not a referee: this is a resource bound, not a rule.
+  /// A roll index inside the window is accepted from either peer, in any order,
+  /// exactly as before — including the FUTURE indices a lookahead-squatting
+  /// peer creates, which the honest controller refuses entropy for.
+  static const int maxRollIndex = 4096;
+
   /// The match parameters the host fixed; the guest adopts them.
   final MatchConfig config;
 
@@ -200,6 +223,20 @@ class MatchRelay {
     required String commit,
   }) {
     _ensureOpen();
+    if (n < 1 || n > maxRollIndex) {
+      throw TransportRejected('roll-index-out-of-range',
+          'roll index $n is outside 1..$maxRollIndex',
+          peerLastSeq: lastSeq);
+    }
+    // Implied by the index bound above (distinct indices in a window of
+    // [maxRollIndex] cannot exceed it), and kept anyway: the CAPACITY is the
+    // invariant that matters, and stating it separately means widening the
+    // window later cannot quietly unbound the store.
+    if (_rolls.length >= maxRollIndex) {
+      throw TransportRejected('roll-store-full',
+          'this match already holds $maxRollIndex roll documents',
+          peerLastSeq: lastSeq);
+    }
     if (_rolls.containsKey(n)) {
       throw TransportContested('roll-taken', 'rolls/$n already exists',
           peerLastSeq: lastSeq);

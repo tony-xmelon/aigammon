@@ -124,6 +124,43 @@ void main() {
       expect(relay.roll(1)!.reveal, reveal);
     });
 
+    test('the roll index is BOUNDED, so the store cannot grow without limit',
+        () {
+      // `n` arrives from the guest socket and used to be accepted as-is. A peer
+      // walking it upward filled this map without limit AND grew every
+      // subsequent welcome() without limit — a frame the peer then silently
+      // drops, so the match dies with no diagnostic anywhere. `n` is the roll's
+      // position in the match, so it is bounded by the match itself.
+      final relay = newRelay();
+      expect(
+        () => relay.createRoll(
+            author: MatchRelay.guestAuthor,
+            n: MatchRelay.maxRollIndex + 1,
+            commit: commit),
+        throwsA(isA<TransportRejected>()),
+      );
+      expect(
+        () => relay.createRoll(
+            author: MatchRelay.guestAuthor, n: 0, commit: commit),
+        throwsA(isA<TransportRejected>()),
+        reason: 'roll indices are 1-based (the controller creates count + 1)',
+      );
+      expect(
+        () => relay.createRoll(
+            author: MatchRelay.guestAuthor, n: -1, commit: commit),
+        throwsA(isA<TransportRejected>()),
+      );
+      expect(relay.rollFrames, isEmpty,
+          reason: 'a refused index leaves nothing behind');
+      // The last index in range still works, so the bound is a ceiling and not
+      // an off-by-one.
+      relay.createRoll(
+          author: MatchRelay.guestAuthor,
+          n: MatchRelay.maxRollIndex,
+          commit: commit);
+      expect(relay.rollFrames, hasLength(1));
+    });
+
     test('a taken roll index is CONTESTED', () {
       final relay = newRelay();
       relay.createRoll(author: MatchRelay.hostAuthor, n: 1, commit: commit);
