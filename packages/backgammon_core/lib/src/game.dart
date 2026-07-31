@@ -38,6 +38,17 @@ class Game {
   Game append(GameEvent event) =>
       Game._(List.unmodifiable([...events, event]), _apply(state, event));
 
+  /// Folds ONE [event] onto [state], throwing exactly as [replay] would on an
+  /// illegal or out-of-turn one — the single step [replay] is built from.
+  ///
+  /// For callers that walk a log forward and only need the state at each point,
+  /// so they can carry it rather than re-fold the whole prefix per step: the
+  /// difference between one pass over the log and one pass per event. [append]
+  /// is the wrong tool for that — it copies the event list every time, which
+  /// keeps the quadratic term even though the state no longer has one.
+  static GameState applyEvent(GameState state, GameEvent event) =>
+      _apply(state, event);
+
   static GameState _apply(GameState s, GameEvent e) => switch (e) {
         OpeningRollEvent() =>
           throw StateError('opening roll must be the first event'),

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:test/test.dart';
@@ -101,6 +102,74 @@ void main() {
       ]),
       throwsStateError,
     );
+  });
+
+  test('walking a log with applyEvent equals replaying every prefix', () {
+    // The equivalence the game screen's incremental assessment cache rests on:
+    // carrying one running state forward must land, at EVERY prefix, on
+    // exactly the state a from-scratch `Game.replay` of that prefix produces.
+    // A random game supplies the log, so rolls, moves, doubles and takes all
+    // pass through.
+    final rng = Random(20260731);
+    Dice roll() => Dice(rng.nextInt(6) + 1, rng.nextInt(6) + 1);
+    var opening = roll();
+    while (opening.isDouble) {
+      opening = roll();
+    }
+    final log = <GameEvent>[
+      OpeningRollEvent(whiteDie: opening.die1, blackDie: opening.die2),
+    ];
+    var game = Game.replay(log);
+    var turns = 0;
+    while (game.state.phase != GamePhase.gameOver && turns < 300) {
+      turns++;
+      final s = game.state;
+      switch (s.phase) {
+        case GamePhase.awaitingRoll:
+          final canDouble = s.cube.owner == null || s.cube.owner == s.turn;
+          if (canDouble && s.cube.value < 8 && rng.nextInt(15) == 0) {
+            log.add(DoubleEvent(s.turn));
+          } else {
+            final d = roll();
+            log.add(RollEvent(s.turn, d.die1, d.die2));
+          }
+        case GamePhase.moving:
+          final legal = s.legalMoves;
+          log.add(MoveEvent(s.turn,
+              legal.isEmpty ? Move.none : legal[rng.nextInt(legal.length)]));
+        case GamePhase.cubeOffered:
+          log.add(rng.nextInt(5) == 0
+              ? DropEvent(s.turn)
+              : TakeEvent(s.turn));
+        case GamePhase.resignOffered:
+        case GamePhase.gameOver:
+          fail('unexpected phase ${s.phase}');
+      }
+      game = Game.replay(log);
+    }
+    expect(log.length, greaterThan(20), reason: 'the probe actually ran');
+
+    // The incremental walk, checked against the replay oracle at every prefix.
+    var running = Game.replay(log.sublist(0, 1)).state;
+    for (var i = 1; i < log.length; i++) {
+      expect(running, Game.replay(log.sublist(0, i)).state,
+          reason: 'running state diverged before event $i');
+      running = Game.applyEvent(running, log[i]);
+    }
+    expect(running, Game.replay(log).state);
+  });
+
+  test('applyEvent refuses what replay refuses', () {
+    final start = Game.replay(events).state;
+    // Out of turn.
+    expect(
+        () => Game.applyEvent(start, RollEvent(start.turn.opponent, 1, 2)),
+        throwsStateError);
+    // An opening roll can never be folded onto a running game.
+    expect(
+        () => Game.applyEvent(
+            start, const OpeningRollEvent(whiteDie: 2, blackDie: 1)),
+        throwsStateError);
   });
 
   test('append does not expose a mutable event log', () {

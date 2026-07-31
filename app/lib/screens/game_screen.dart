@@ -299,7 +299,33 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Count of game events observed at the last change, so a fresh MoveEvent can
   /// be detected (and a new game — a shorter event list — resets the tutor).
-  late int _lastEventCount = _c.game.events.length;
+  int _lastEventCount = 0;
+
+  /// The game state the log has reached after its first [_lastEventCount]
+  /// events — the running prefix [_syncAssessment] carries forward instead of
+  /// replaying the log from scratch for every move it assesses.
+  GameState? _assessPrefix;
+
+  /// The event object the assessed log STARTS with, so a log that was replaced
+  /// rather than appended to is detected even when it is no shorter than the
+  /// old one. `Game.append` carries the same event objects forward, so an
+  /// identity check on the first event is exactly "still the same log".
+  GameEvent? _assessLogRoot;
+
+  /// Points the assessment cursor at the log as it stands NOW: nothing before
+  /// this point will be assessed, and the running prefix is the state the whole
+  /// of it has reached.
+  ///
+  /// The three fields are seeded together and never apart — a count without the
+  /// state that belongs to it would fold later events onto the wrong position.
+  /// (They were `late` initialisers once, and that is exactly what went wrong:
+  /// each initialised on its own first read, at a different point in the log.)
+  void _seedAssessmentCursor() {
+    final events = _c.game.events;
+    _lastEventCount = events.length;
+    _assessPrefix = _c.game.state;
+    _assessLogRoot = events.isEmpty ? null : events.first;
+  }
 
   /// Post-move assessments for EVERY move of the current game — both sides,
   /// human or not — keyed by the source [MoveEvent]'s index in the event log
@@ -454,6 +480,7 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
+    _seedAssessmentCursor();
     _observable = Listenable.merge([_c, ..._humanNotifiers(), _entryControl]);
     _observable.addListener(_onChange);
     widget.analytics.logScreenView(AnalyticsScreens.game);
@@ -941,11 +968,13 @@ class _GameScreenState extends State<GameScreen> {
   void _syncAssessment() {
     final events = _c.game.events;
     final len = events.length;
+    final root = events.isEmpty ? null : events.first;
 
-    if (len < _lastEventCount) {
+    if (len < _lastEventCount || !identical(root, _assessLogRoot)) {
       // A new game started (the event log reset). Discard the old game's
-      // assessments and abandon any in-flight ones.
-      _lastEventCount = len;
+      // assessments and abandon any in-flight ones, and re-seed the cursor on
+      // the new log.
+      _seedAssessmentCursor();
       _assessmentsByEventIndex.clear();
       _revealedBest.clear();
       _gameGeneration++;
@@ -955,15 +984,20 @@ class _GameScreenState extends State<GameScreen> {
 
     // One or more events appended since last time: assess every move among
     // them. In practice the loop notifies per-append, so this is usually one.
+    //
+    // The state each move was played FROM is the running prefix, carried one
+    // event at a time. It used to be `Game.replay(events.sublist(0, i))` — a
+    // fold of the whole log, per move, which makes reviewing a game of n moves
+    // cost O(n²) folds (and n list copies) for information one forward pass
+    // already has. `Game.applyEvent` is the single step `replay` is built from,
+    // so the state handed to the tutor is the same state, event for event.
+    var before = _assessPrefix!;
     for (var i = _lastEventCount; i < len; i++) {
       final event = events[i];
-      if (event is! MoveEvent) continue;
-      final before = Game.replay(
-        events.sublist(0, i),
-        isCrawfordGame: _c.state.isCrawfordGame,
-      ).state;
-      _fireAssessment(i, before, event.move);
+      if (event is MoveEvent) _fireAssessment(i, before, event.move);
+      before = Game.applyEvent(before, event);
     }
+    _assessPrefix = before;
     _lastEventCount = len;
   }
 

@@ -239,6 +239,39 @@ class RealRankEngine implements EngineFacade {
       throw UnimplementedError();
 }
 
+/// [RealRankEngine] that also records the state of every ranking it is asked
+/// for, in order — which is the state the tutor was handed as the position a
+/// move was played FROM. Lets a test check the screen's running assessment
+/// cursor against a from-scratch [Game.replay] of the same prefix.
+class RecordingRankEngine implements EngineFacade {
+  final List<({BoardState board, Player mover, Dice dice})> asked = [];
+
+  static const _flat = Probabilities(
+    win: 0.5,
+    winGammon: 0,
+    winBackgammon: 0,
+    loseGammon: 0,
+    loseBackgammon: 0,
+  );
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) async => _flat;
+
+  @override
+  Future<List<ScoredMove>> rankMoves(
+      BoardState board, Player mover, Dice dice) async {
+    asked.add((board: board, mover: mover, dice: dice));
+    return [
+      for (final move in MoveGenerator.legalMoves(board, mover, dice))
+        ScoredMove(move: move, probabilities: _flat),
+    ];
+  }
+
+  @override
+  Future<CubeAdvice> cubeInfo(BoardState board, Player mover) async =>
+      throw UnimplementedError();
+}
+
 /// A NETWORKED match ready to play, over the in-process transport pair.
 ///
 /// The seeded opening roll is a SOUND commit-reveal document plus the event it
@@ -3558,6 +3591,58 @@ void main() {
         expect(
             find.descendant(of: side, matching: find.textContaining('−0.060')),
             findsOneWidget);
+      }
+
+      c.disposeController();
+    });
+
+    testWidgets('every assessment is fed exactly the state a from-scratch '
+        'replay of its prefix produces', (t) async {
+      // The screen used to rebuild `Game.replay(events.sublist(0, i))` for
+      // every move it assessed — one fold of the whole log per move, so a full
+      // game cost O(n²) folds for information one forward pass already has. It
+      // now carries a running prefix state instead. This is the equivalence
+      // proof: `Game.replay` of each prefix is the oracle, and the state the
+      // tutor is actually handed must match it board for board, mover for
+      // mover, roll for roll, in order.
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final engine = RecordingRankEngine();
+      final human = LocalHumanAgent();
+      final c = whiteFirst(human);
+      await t.pumpWidget(_tutorHarness(c, TutorService(engine)));
+      // White won the opening and MOVES first (no pre-roll gate), so the
+      // opening move is submitted before the roll-then-move loop takes over.
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+      await playTurns(t, c, human, 6);
+
+      final events = c.game.events;
+      final expected = <GameState>[];
+      for (var i = 0; i < events.length; i++) {
+        if (events[i] is! MoveEvent) continue;
+        final before = Game.replay(events.sublist(0, i),
+                isCrawfordGame: c.state.isCrawfordGame)
+            .state;
+        // A dance is answered without ever reaching the engine.
+        if (before.legalMoves.isEmpty) continue;
+        expected.add(before);
+      }
+      expect(expected.length, greaterThan(6),
+          reason: 'the probe covered a real stretch of the game');
+
+      await pumpUntil(t, () => engine.asked.length >= expected.length,
+          maxFrames: 4000);
+      expect(engine.asked.length, expected.length,
+          reason: 'one assessment per played move, no more and no fewer');
+      for (var k = 0; k < expected.length; k++) {
+        expect(engine.asked[k].board, expected[k].board,
+            reason: 'assessment $k was fed the wrong board');
+        expect(engine.asked[k].mover, expected[k].turn,
+            reason: 'assessment $k was fed the wrong mover');
+        expect(engine.asked[k].dice, expected[k].dice,
+            reason: 'assessment $k was fed the wrong roll');
       }
 
       c.disposeController();
