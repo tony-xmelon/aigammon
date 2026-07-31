@@ -44,6 +44,31 @@ void dyingWorker(List<Object?> args) {
   throw StateError('worker died right after the handshake');
 }
 
+/// Completes the handshake, answers `evaluate`, and then dies a few
+/// milliseconds later — long enough after the reply that the death is OBSERVED
+/// before the caller's next request is issued.
+void diesLaterWorker(List<Object?> args) {
+  final handshake = args[0] as SendPort;
+  final commands = ReceivePort();
+  handshake.send(['ready', commands.sendPort]);
+  SendPort? reply;
+  commands.listen((message) {
+    final list = message as List;
+    if (list[0] == 'bind') {
+      reply = list[1] as SendPort;
+      return;
+    }
+    if (list[0] == 'dispose') {
+      commands.close();
+      return;
+    }
+    reply?.send([list[0], 'ok', <double>[0.6, 0.2, 0.05, 0.1, 0.01]]);
+  });
+  Timer(const Duration(milliseconds: 5), () {
+    throw StateError('worker died a moment after the handshake');
+  });
+}
+
 /// A well-behaved worker with no engine behind it: answers `evaluate` with a
 /// fixed distribution. Present so the misbehaviour tests are read against a
 /// baseline that proves the same seam carries a NORMAL round trip.
@@ -157,5 +182,44 @@ void main() {
     final inFlight = service.evaluate(BoardState.initial(), Player.white);
     await expectLater(inFlight, throwsA(isA<StateError>()));
     await ready.future;
+  });
+
+  // The supervisor (the app's EngineManager) decides whether to drop and
+  // re-spawn by MATCHING THE MESSAGE of the StateError. A death that is already
+  // observed by the time the next call is made must therefore still say
+  // "died" — saying "disposed" instead makes the supervisor rethrow without
+  // dropping, and the dead service stays cached for the rest of the session.
+  test('a call made AFTER the death is observed still reports a death',
+      () async {
+    final service = await EngineService.spawn(
+      netsPath: 'unused',
+      workerEntry: diesLaterWorker,
+      callTimeout: const Duration(seconds: 20),
+    );
+    addTearDown(service.dispose);
+
+    // One good round trip, so the failure below cannot be a startup problem.
+    await service.evaluate(BoardState.initial(), Player.white);
+    // Long enough that _onDeath has certainly run before the next call.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    await expectLater(
+      service.evaluate(BoardState.initial(), Player.white),
+      throwsA(isA<StateError>().having(
+          (e) => e.message, 'message', contains('isolate died'))),
+    );
+  });
+
+  test('a call after a deliberate dispose() reports a disposal, not a death',
+      () async {
+    final service =
+        await EngineService.spawn(netsPath: 'unused', workerEntry: echoWorker);
+    service.dispose();
+
+    await expectLater(
+      service.evaluate(BoardState.initial(), Player.white),
+      throwsA(isA<StateError>().having(
+          (e) => e.message, 'message', contains('disposed'))),
+    );
   });
 }

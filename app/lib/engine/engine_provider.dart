@@ -149,6 +149,16 @@ class EngineManager {
     }
   }
 
+  /// The death signal is a MESSAGE match, so it is a contract with
+  /// [EngineService], not an implementation detail of it: the service reports
+  /// `engine isolate died` for a worker that died on us — whether the death was
+  /// seen mid-call or before the call was even issued — and
+  /// `EngineService disposed` for one WE shut down. Only the former is worth
+  /// re-spawning for; re-spawning after a deliberate disposal would resurrect an
+  /// engine something else just decided to end.
+  /// `app/test/engine/engine_manager_death_recovery_test.dart` pins both halves
+  /// against a real isolate, because a fake engine chooses the string itself and
+  /// so can never catch a drift here.
   static bool _isIsolateDeath(StateError e) =>
       e.message.contains('isolate died');
 

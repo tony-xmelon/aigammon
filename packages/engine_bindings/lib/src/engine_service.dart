@@ -51,6 +51,18 @@ class EngineService {
   int _nextId = 0;
   bool _dead = false;
 
+  /// True when [_dead] was set by [_onDeath] — the worker died on us — rather
+  /// than by [dispose] — we shut it down on purpose.
+  ///
+  /// The distinction is the OWNER's recovery signal, and it has to survive the
+  /// call that observes it. A supervisor re-spawns on a death and must not on a
+  /// disposal (something already decided that engine was finished), so [_call]
+  /// reports the two differently. Without this flag both collapsed into
+  /// "disposed" as soon as the death was seen before the next call — which is
+  /// the ordinary case, since a crash rarely coincides with a request — and the
+  /// dead service stayed cached for the rest of the session.
+  bool _diedUnexpectedly = false;
+
   /// Called with an uncaught error from inside the worker isolate.
   ///
   /// Isolate errors reach NEITHER `FlutterError.onError` NOR
@@ -200,6 +212,7 @@ class EngineService {
     _reportIsolateError(_onIsolateError, message);
     if (_dead) return;
     _dead = true;
+    _diedUnexpectedly = true;
     final pending = List.of(_pending.values);
     _pending.clear();
     for (final c in pending) {
@@ -211,7 +224,10 @@ class EngineService {
 
   Future<Object?> _call(String verb, Map<String, Object?> payload) {
     if (_dead) {
-      throw StateError('EngineService disposed');
+      // Same state, two causes, two audiences: see [_diedUnexpectedly].
+      throw StateError(_diedUnexpectedly
+          ? 'engine isolate died'
+          : 'EngineService disposed');
     }
     final id = _nextId++;
     final completer = Completer<Object?>();
