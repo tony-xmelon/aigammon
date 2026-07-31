@@ -286,9 +286,12 @@ class _ScoreSheetPanelState extends State<ScoreSheetPanel> {
       markColor = color;
       markLabel = label;
       final loss = assessment.equityLoss;
-      // A best play has no number worth printing; the word carries it (and the
-      // dot is already green).
-      lossText = loss >= 0.001 ? '−${loss.toStringAsFixed(3)}' : 'best';
+      // A best play has no number worth printing; the mark WORD carries it (and
+      // the dot is already green). It is the mark word itself rather than a
+      // lowercase copy of it, so the column and the dot's label cannot disagree
+      // about their own casing — see below, where the dot then keeps quiet
+      // rather than have a reader hear "Best … best".
+      lossText = loss >= 0.001 ? '−${loss.toStringAsFixed(3)}' : label;
     }
 
     final line = Row(
@@ -301,8 +304,10 @@ class _ScoreSheetPanelState extends State<ScoreSheetPanel> {
             // to a screen reader (or to a colour-blind eye reading green against
             // amber). The mark word rides with it as the node's label — the
             // column has no room to print it, but nothing stops it being said.
+            // Except on a best play, where the loss slot IS printing that word:
+            // there the dot stays silent rather than echo the line beside it.
             child: Semantics(
-              label: markLabel,
+              label: lossText == markLabel ? null : markLabel,
               child: Icon(Icons.circle, size: 8, color: markColor),
             ),
           ),
