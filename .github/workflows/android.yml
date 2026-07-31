@@ -132,6 +132,72 @@ jobs:
             echo "::warning::Android signing secrets not set — the release APK will be signed with the DEBUG keystore and cannot be published. See app/android/KEYSTORE_SETUP.md"
           fi
 
+      # Android telemetry config file, generated — never committed.
+      #
+      # `google-services.json` is what the com.google.gms.google-services Gradle
+      # plugin reads, and that plugin is the prerequisite for the Crashlytics
+      # and Performance Gradle plugins (Crashlytics v3 resolves the app id from
+      # the `google_app_id` string resource google-services generates; there is
+      # no way to feed it a --dart-define). Those plugins are what buy NDK crash
+      # capture for the Rust engine `.so` and automatic network/screen traces.
+      #
+      # Its contents are NOT secret — project id, project number, app id and the
+      # Web API key all ship inside every APK already, and three of the four are
+      # repo *Variables* rather than secrets for exactly that reason. It is
+      # generated rather than committed for the same reason `key.properties` is:
+      # a fork that inherited a real file would silently report ITS crashes into
+      # THIS project. See app/android/app/build.gradle.kts and firebase/DEPLOY.md.
+      #
+      # Gated all-or-nothing on the same four values as the telemetry defines
+      # below. Absent -> no file -> app/build.gradle.kts skips all three Firebase
+      # Gradle plugins and the build stays green with Dart-only reporting.
+      - name: Configure Firebase Android config
+        env:
+          FB_PROJECT: ${{ vars.AIGAMMON_FIREBASE_PROJECT }}
+          FB_API_KEY: ${{ vars.AIGAMMON_FIREBASE_API_KEY }}
+          FB_SENDER_ID: ${{ vars.AIGAMMON_FIREBASE_SENDER_ID }}
+          FB_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+        run: |
+          set -eu
+          if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ] \
+             && [ -n "$FB_SENDER_ID" ] && [ -n "$FB_ANDROID_APP_ID" ]; then
+            # jq rather than a heredoc: every one of these values is
+            # externally supplied, and jq is the only thing here that cannot be
+            # talked into emitting invalid JSON. --arg also keeps the numeric
+            # project_number a STRING, which is what the schema wants.
+            #
+            # package_name MUST equal `applicationId` in
+            # app/android/app/build.gradle.kts — the plugin fails the build with
+            # "No matching client found for package name" when it does not.
+            jq -n \
+              --arg project_number "$FB_SENDER_ID" \
+              --arg project_id "$FB_PROJECT" \
+              --arg app_id "$FB_ANDROID_APP_ID" \
+              --arg package_name "com.xmelon.aigammon_app" \
+              --arg api_key "$FB_API_KEY" \
+              '{
+                 project_info: {
+                   project_number: $project_number,
+                   project_id: $project_id
+                 },
+                 client: [{
+                   client_info: {
+                     mobilesdk_app_id: $app_id,
+                     android_client_info: { package_name: $package_name }
+                   },
+                   oauth_client: [],
+                   api_key: [{ current_key: $api_key }],
+                   services: {
+                     appinvite_service: { other_platform_oauth_client: [] }
+                   }
+                 }],
+                 configuration_version: "1"
+               }' > app/android/app/google-services.json
+            echo "Firebase Android config WRITTEN — Crashlytics/Performance Gradle plugins will apply"
+          else
+            echo "::warning::Firebase telemetry config incomplete — no google-services.json; the Crashlytics/Performance Gradle plugins will NOT apply and Android native (NDK) crashes will go unreported. See firebase/DEPLOY.md."
+          fi
+
       # Every CI build gets a unique, monotonically increasing build number
       # (the workflow run number), so testers can tell releases apart in
       # Firebase App Distribution. The semantic version comes from pubspec.

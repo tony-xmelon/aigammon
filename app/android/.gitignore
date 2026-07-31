@@ -17,3 +17,11 @@ key.properties
 # generated store/key password. Same secrecy class as the .jks itself.
 **/*.jks.base64.txt
 aigammon-upload.credentials.txt
+
+# The Firebase Android config the google-services / Crashlytics / Performance
+# Gradle plugins read. NOT a secret — every value in it already ships inside the
+# APK — but generated, not authored: CI writes it from the AIGAMMON_FIREBASE_*
+# repo variables and the FIREBASE_ANDROID_APP_ID secret, and a developer drops
+# their own copy in by hand. Same tier as key.properties; committing one would
+# point every fork's crash reports at this project. See firebase/DEPLOY.md.
+app/google-services.json
