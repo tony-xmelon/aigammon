@@ -15,7 +15,8 @@ dependencies:
 
 dev_dependencies:
   lints: ^4.0.0
-  # A dev dependency even though lib/testing.dart imports it: that library is
-  # the test-only sibling barrel, never reachable from lib/match_transport.dart,
-  # and every package that imports it has `test` of its own.
+  # A dev dependency even though lib/transport_contract.dart imports it: that
+  # library is a test-only sibling entrypoint, never reachable from
+  # lib/match_transport.dart or lib/testing.dart, and every package that
+  # imports it has `test` of its own.
   test: ^1.25.0

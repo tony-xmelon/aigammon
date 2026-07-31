@@ -799,6 +799,12 @@ class _GuestSocketTransport with TransportChannels implements SocketTransport {
     if (_disposed) return;
     // Recorded before the side effects and announced after them, so a listener
     // woken by the presence event already reads the new [status].
+    //
+    // `changed` only gates [emitStatus] — a repeated identical (status,
+    // reason) no longer fires a redundant status event, but `_failPending`
+    // and `setOpponentPresent` below still run on every call regardless, so a
+    // caller relying on either side effect (e.g. re-opening a submit gate)
+    // is never starved by the dedup.
     final changed = updateStatus(_map(state.status), state.reason);
     if (state.status != GuestConnectionStatus.connected) {
       // Nothing can answer a write over a link that is not there.
