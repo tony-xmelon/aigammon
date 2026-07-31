@@ -176,7 +176,7 @@ class MoveGenerator {
   /// All distinct legal full-turn moves for [player] with [dice], in real
   /// (White-perspective) coordinates. Implements: play the maximum number
   /// of dice possible; doubles allow four moves. Returns an empty list on a
-  /// dance. The higher-die tiebreak is added in Task 9.
+  /// dance. The higher-die rule is applied by the search below.
   ///
   /// One move per distinct RESULTING POSITION — see [legalVariants] when the
   /// several ways of entering the same position matter (hop-by-hop move entry).

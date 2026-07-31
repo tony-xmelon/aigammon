@@ -39,7 +39,9 @@ engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
   [**Deploying online play**](#deploying-online-play) below.
 - **Play Nearby (LAN)** — two devices on the same Wi-Fi, no internet and no
   account: one hosts (UDP discovery beacon + a WebSocket relay), the other joins
-  from a discovered list or a room code. It runs the **same** commit-reveal dice
+  from a discovered list, by typing the room code, or by **scanning the host's
+  QR code** (the host shows one; address, port and code travel together, so
+  there is nothing to read out loud). It runs the **same** commit-reveal dice
   and the same mutual validation as online play, because both go through one
   **`MatchTransport`** seam and one match controller — the host binds a socket,
   it does not referee the game.
@@ -67,7 +69,7 @@ file).
 | [`native/engine_shim`](native/engine_shim) | Thin C shim (`cdylib`, `aigammon_engine`) — a verbatim copy of wildbg's `wildbg-c` crate plus a `wildbg_new_with_path` constructor that loads nets from disk at runtime. Windows/Android/iOS build scripts live here. |
 | [`native/wildbg-nets`](native/wildbg-nets) | The **production** neural nets (`contact.onnx`, `race.onnx`) from wildbg's `nets` branch. The submodule itself ships only weak demo nets. |
 | [`docs/superpowers/`](docs/superpowers/) | Architecture spec and the per-phase implementation plans. |
-| [`.github/workflows/`](.github/workflows/) | CI (`ci.yml`) and the Android APK / Firebase distribution workflow (`android.yml`). |
+| [`.github/workflows/`](.github/workflows/) | CI (`ci.yml`), the Android APK workflow (`android.yml`) and the iOS `.app`/IPA workflow (`ios.yml`) — the latter two gated on CI passing, both distributing through Firebase App Distribution. See [`.github/workflows/README.md`](.github/workflows/README.md). |
 
 See [`native/README.md`](native/README.md) and
 [`packages/engine_bindings/README.md`](packages/engine_bindings/README.md) for
@@ -159,18 +161,26 @@ building a production release with the online defines are documented in
   - **`goldens`** (Windows): `flutter test --tags golden`. A Windows runner
     because the golden PNGs are Windows-generated and Linux antialiasing drifts
     just enough to need a tolerance that would hide real regressions.
-  - **`rules`** (Linux): the `firestore.rules` unit tests against a
-    firestore-only emulator. Fast, and first — `online` waits on it.
-  - **`online`** (Linux): `online_client` analyze + unit tests, then three
-    emulator legs inside a `firebase emulators:exec` — `online_client -P
-    emulator`, the app's two-client E2E on the real-time listener path, and the
-    same E2E once more with the listener forced off so the poll fallback is
-    actually exercised.
+  - **`rules`** (Linux): emulator leg 1 — the `firestore.rules` unit tests
+    (mocha, `@firebase/rules-unit-testing`) against a firestore-only emulator.
+    Seconds, and FIRST: `online` `needs:` it, so a broken rules file is red
+    before four toolchains are installed.
+  - **`online`** (Linux): `online_client` analyze + unit tests, then emulator
+    legs 2–4 inside one `firebase emulators:exec` — `online_client -P emulator`
+    (the REST transport against the real rules), the app's two-client E2E on the
+    real-time listener path, and that same E2E once more with the listener
+    forced off so the poll fallback is actually exercised.
 - **`android.yml`** (`workflow_dispatch`, CI success on `master`):
   cross-compiles the engine for the two device ABIs with `cargo-ndk`, builds
   per-ABI release APKs, and — when the Firebase secrets are configured —
   distributes the `arm64-v8a` one to testers via Firebase App Distribution.
-  Setup instructions: [`.github/workflows/README.md`](.github/workflows/README.md).
+- **`ios.yml`** (`workflow_dispatch`, CI success on `master`): builds the engine
+  staticlib for `aarch64-apple-ios`, links it into `Runner`, and uploads an
+  unsigned `Runner.app`; when the signing secrets are configured it also builds
+  a signed ad-hoc IPA and distributes it to the same testers group.
+- Setup instructions for both distribution workflows, and the debug-symbol
+  artifacts every release build uploads:
+  [`.github/workflows/README.md`](.github/workflows/README.md).
 
 ## Releasing
 

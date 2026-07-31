@@ -1,5 +1,29 @@
 # Online Play Implementation Plan (Plan 5 of 5)
 
+**Status:** SUPERSEDED in its backend and controller chapters — HISTORICAL
+RECORD of the v1 online design.
+
+> ### ⚠️ Read this first: the backend below is no longer what ships
+>
+> Online play shipped from this plan and then was rebuilt twice: **Plan 16**
+> (`2026-07-27-serverless-online.md`) removed the server, and **Plan 17**
+> (`2026-07-27-unify-multiplayer.md`) removed the online-only controller. What
+> survives from this document is the **event-log-as-truth** model, the
+> **pure-Dart REST** decision (no FlutterFire in the match path) and the
+> emulator-first workflow. The rest is kept for the reasoning behind the pivots.
+>
+> | This plan says | What actually ships |
+> |---|---|
+> | Cloud Functions (`createMatch`/`joinMatch`/`rollDice`/`submitEvent`) are the write path (Tasks 2, 6, 7) | **No Cloud Functions at all** — free **Spark** plan. Clients write Firestore documents directly and `firebase/firestore.rules` is the entire backend (Plan 16). |
+> | Server-authoritative dice | **Commit-reveal between the two clients** (`packages/match_transport/lib/src/fair_dice.dart`): commitment, opponent entropy, reveal. Nobody is an authority; each peer re-validates the other with the full rules engine and **freezes** on a proven violation (Plan 16). |
+> | `OnlineMatchController` (Task 6) | Merged into ONE `NetMatchController` (`app/lib/net/net_match_controller.dart`) shared with LAN play, driving a `MatchTransport` (Plan 17). The online implementation is `FirestoreTransport` in `packages/online_client`. |
+> | 2s polling, "a FlutterFire realtime upgrade is deferred" (decision 2) | Frames arrive on Firestore's **real-time `Listen` gRPC stream**, still over pure-Dart REST/protobuf — no FlutterFire in the match path. The **poll loop is the documented fallback** for a network that cannot open the stream (Plan 17 Task 5). |
+> | `MatchController` interface with a `HumanInteraction` view-model (Task 5) | The interface landed and is still in force (`app/lib/game/match_controller.dart`); the online side of it now comes from the unified controller. |
+>
+> The normative, current description of the seam is the library doc of
+> `packages/match_transport/lib/src/match_transport.dart`; for the deployed
+> backend and its cost model, `firebase/DEPLOY.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Play a friend on another device: create a match, share a 6-char code, play a full match with server-authoritative dice, resilient turn sync, and the same board/tutor UX — built and verified entirely against the local Firebase Emulator Suite (production deploy is a documented, user-run step).

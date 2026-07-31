@@ -8,7 +8,8 @@ import 'position_codec.dart';
 import 'scored_move.dart';
 
 /// Synchronous engine facade over the native wildbg library. Blocking —
-/// wrap in EngineService (next task) for UI use.
+/// UI code drives `EngineService` instead, which hosts one of these in an
+/// isolate so a rank/eval never stalls a frame.
 ///
 /// NOT thread-safe: a single reused pips buffer is shared across calls, so a
 /// single [Engine] instance must only be used from one isolate at a time.

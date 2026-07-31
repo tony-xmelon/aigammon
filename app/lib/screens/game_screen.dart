@@ -1441,8 +1441,9 @@ class _GameScreenState extends State<GameScreen> {
         children: [
           // TABLETOP ONLY: Double belongs to the player whose gate is open, so
           // in this layout it lives at their EDGE rather than in the shared
-          // header — see [_ownsTheVerbs]. Far left, away from Roll: it is the
-          // irreversible one of the two verbs on offer at this gate.
+          // header — the two players sit at opposite edges of one device and
+          // each reaches only their own bar. Far left, away from Roll: it is
+          // the irreversible one of the two verbs on offer at this gate.
           if (_tabletopBars && !_c.cubeless)
             OutlinedButton.icon(
               onPressed: live && _doublingLegal(_c.state) ? _offerDouble : null,

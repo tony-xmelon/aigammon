@@ -2,9 +2,25 @@
 
 | Workflow | File | Trigger | Purpose |
 |---|---|---|---|
-| CI | `ci.yml` | push to `master`, all PRs | `backgammon_core` + `engine_bindings` + Flutter app tests (Linux) |
+| CI | `ci.yml` | push to `master`, all PRs | Six jobs — see the breakdown below |
 | Android | `android.yml` | `workflow_dispatch`, **CI success on `master`** | Cross-compile the Rust engine for Android ABIs, build a release APK, and (when configured) push it to Firebase App Distribution |
 | iOS | `ios.yml` | `workflow_dispatch`, **CI success on `master`** | Build the Rust engine staticlib, statically link it into `Runner`, produce an unsigned `Runner.app`, and (when configured) build a signed IPA and push it to Firebase App Distribution |
+
+## `ci.yml` — the six jobs
+
+Five run in parallel from the start; `online` waits on `rules`.
+
+| Job | Runner | What it does |
+|---|---|---|
+| `packages` | Linux | One job definition, **three matrix legs** — `backgammon_core`, `lan_play`, `match_transport` — each `dart analyze --fatal-infos` + `dart test`. `fail-fast: false`, so a push that breaks two packages reports both. `lan_play` alone runs under its `-P ci` retry preset: it is the only suite that binds real sockets. |
+| `engine` | Linux | `cargo fmt --check`, `cargo clippy -p aigammon_engine -- -D warnings`, `cargo build --release` and `cargo test --release` in `native/engine_shim`, then `engine_bindings` analyze, unit tests, and `dart test -P engine` against the freshly built `.so` with the production nets. |
+| `app` | Linux | `flutter analyze` + `flutter test -x golden`. The goldens are excluded here on purpose and run in `goldens` instead; between the two jobs the app suite is covered whole. |
+| `goldens` | **Windows** | `flutter test --tags golden`, on a **pinned** Flutter version. The golden PNGs are Windows-generated and the comparison is byte-for-byte, so the runner compares like with like rather than needing a tolerance wide enough to swallow a real regression. |
+| `rules` | Linux | **Emulator leg 1**, and first: the `firestore.rules` mocha suite against a firestore-only emulator. Seconds. `online` `needs:` this, so a broken rules file goes red before four toolchains are installed. |
+| `online` | Linux | `online_client` analyze + unit tests, then **emulator legs 2–4** inside one `firebase emulators:exec` (`firebase/ci-emulator-suites.sh`): the `online_client -P emulator` transport suite, the app's two-client E2E on the real-time listener path, and that same E2E once more with `AIGAMMON_E2E_LISTEN=0` so the polling fallback is actually exercised. The heaviest leg — Node + Java + Dart + Flutter. |
+
+`firebase-tools` is pinned to the same major.minor in `rules` and `online`; the
+two must not drift onto different emulator versions.
 
 ## Distribution is gated on CI
 

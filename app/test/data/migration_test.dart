@@ -168,6 +168,16 @@ CREATE TABLE "settings" (
 /// migration every real upgrade actually takes. v8 adds no settings column at
 /// all — it creates the `online_session` table — which is exactly why it is
 /// worth pinning: a branch that silently did nothing would look like a pass.
+///
+/// The column ORDER here is the fresh-install one. A device that arrived at v7
+/// by upgrading has the same columns in a different physical order, because
+/// SQLite's `ALTER TABLE ... ADD COLUMN` appends and drift's generated DDL
+/// sorts: `rotate_board_hot_seat` lands AFTER `drag_hint_shown` on an upgraded
+/// database, not before it. That difference is deliberately not modelled,
+/// because nothing downstream can see it — drift addresses every column by
+/// name, and the INSERT below names all fourteen. It would start to matter only
+/// if a future migration reached for a positional API (`SELECT *` folded by
+/// index, a `PRAGMA table_info` ordinal), which is a reason not to write one.
 const _v7SettingsDdl = '''
 CREATE TABLE "settings" (
   "id" INTEGER NOT NULL DEFAULT 1,

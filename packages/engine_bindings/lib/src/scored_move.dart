@@ -46,8 +46,9 @@ class ScoredMove {
 /// wildbg cube advice (Janowski-based internally, including the
 /// too-good-to-double branch). MONEY GAME ONLY: wildbg's cube_info takes no
 /// away scores, so match context (score, Crawford) is not reflected here.
-/// Match-aware cube decisions are a deferred Plan-3 concern (Janowski + MET
-/// adapter in Dart) if the tutor needs them at a match score.
+/// Match-aware cube decisions have their own path in Dart: `MatchCubeAdvisor`
+/// (Janowski cubeful equities over a match-equity table) is what the tutor
+/// consults at a match score; this type is the money-game answer.
 class CubeAdvice {
   final bool shouldDouble;
   final bool shouldAccept;

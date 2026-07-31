@@ -424,9 +424,9 @@ Two properties keep it bounded:
   **15s ceiling**. Five minutes of waiting for a friend to answer their phone is
   therefore about 25 poll *cycles* — 10s of fast ones, then 4s, 8s and 15s,
   15s, 15s… — and at ~2 reads per cycle that is about **50 reads, not 300**. The
-  flat-2s version ran 150 cycles for the same five minutes, which is roughly a
-  whole game's worth of budget for nobody doing anything, and was the largest
-  remaining hole in the numbers above.
+  flat-2s version ran 150 cycles for the same five minutes: 300 reads, a sixth
+  of what the whole 5-point match above costs, spent on nobody doing anything.
+  It was the largest remaining hole in those numbers.
 
 The poll loop cost several thousand for the same match, and most of it was spent
 on nothing happening: two queries per client every 2s (500ms while a dice
