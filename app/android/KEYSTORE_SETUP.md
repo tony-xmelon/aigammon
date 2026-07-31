@@ -112,6 +112,30 @@ keytool -printcert -jarfile app/build/app/outputs/flutter-apk/app-release.apk
 The debug key shows `CN=Android Debug, O=Android, C=US`. The upload key shows
 the `-dname` you supplied above.
 
+## 6. The other file you drop in by hand: `google-services.json`
+
+`key.properties` is not the only git-ignored, generated file `app/android`
+expects. `app/google-services.json` is the second, and it is the same tier: not
+committed, written by CI from repo variables/secrets, supplied by hand on a
+developer machine.
+
+It is **not** a credential — project id, project number, Android app id and the
+Web API key all ship inside every APK already — but it is what the
+`com.google.gms.google-services`, `com.google.firebase.crashlytics` and
+`com.google.firebase.firebase-perf` Gradle plugins read, and those plugins are
+what capture a native crash in the Rust engine `.so`.
+
+**Get it, do not write it:** Firebase console → ⚙ *Project settings* → *Your
+apps* → the Android app (`com.xmelon.aigammon_app`) → **google-services.json**.
+Save it at `app/android/app/google-services.json`. A hand-assembled file whose
+`package_name` does not match `applicationId` exactly fails the build with *"No
+matching client found for package name"*.
+
+Without it the Android build still succeeds — Gradle logs a `NOTE:` and skips
+all three plugins, leaving Dart-only crash reporting and no automatic
+performance traces. Full details, including the CI generation step and the
+still-open native-symbol-upload gap, are in `firebase/DEPLOY.md`.
+
 ---
 
 **Related:** `app/test/android_signing_test.dart` asserts this wiring stays in

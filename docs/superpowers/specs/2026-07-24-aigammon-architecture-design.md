@@ -87,9 +87,18 @@ aigammon/
   Two guardrails make that safe: initialization is guarded to Android/iOS and
   returns all-no-op sinks everywhere else (enforced by
   `app/test/analytics/desktop_guard_test.dart`), and `FirebaseOptions` is built
-  programmatically from dart-defines — no `google-services.json`, no
+  programmatically from dart-defines — no committed `google-services.json`, no
   `GoogleService-Info.plist`, same discipline as online play. See
   `firebase/DEPLOY.md` for the values.
+
+  **Android carve-out, added later.** Native (NDK) crash capture for the Rust
+  engine `.so` and automatic performance traces come from Gradle plugins, and
+  those plugins read the app id from a resource generated out of
+  `google-services.json` — a dart-define is invisible to Gradle, so there is no
+  substitute. The discipline is kept where it counts: the file is still not
+  committed. CI generates it from the same repo variables and secret the
+  dart-defines use, and its absence degrades to Dart-only reporting rather than
+  failing the build. See `app/android/app/build.gradle.kts`.
 
 ## 2. Domain model (`backgammon_core`)
 

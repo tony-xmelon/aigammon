@@ -158,10 +158,15 @@ crashes** to the same Firebase project, through the real FlutterFire SDKs
   initialize Firebase on Windows/Linux/macOS, so a desktop build never loads a
   Firebase plugin and never sends anything. This is enforced by
   `test/analytics/desktop_guard_test.dart`.
-- **No `google-services.json` / `GoogleService-Info.plist`.** As with online
-  play, every value is a build-time `--dart-define` sourced from a repo Variable
-  or an existing secret. A fork, or any local `flutter run`, simply has no
-  telemetry.
+- **No committed `google-services.json` / `GoogleService-Info.plist`.** As with
+  online play, every value the Dart side needs is a build-time `--dart-define`
+  sourced from a repo Variable or an existing secret. A fork, or any local
+  `flutter run`, simply has no telemetry.
+  **Android is a documented exception on the Gradle side**: it needs a real
+  `android/app/google-services.json` at build time, and CI *generates* one from
+  those same values rather than committing it. See
+  [Android: the generated `google-services.json`](#android-the-generated-google-servicesjson)
+  below.
 - **All four values are required together.** A partial set is treated as
   "unconfigured": the app runs normally with the no-op sinks and reports
   nothing. There is no half-configured failure mode.
@@ -186,6 +191,75 @@ The two App IDs are **deliberately reused** from the Firebase App Distribution
 secrets configured earlier; the app being distributed and the app reporting
 telemetry are the same Firebase app, so a second copy of the value could only
 ever drift.
+
+### Android: the generated `google-services.json`
+
+Three Firebase **Gradle** plugins are wired into `app/android`:
+
+| Plugin | Version | What it buys |
+|---|---|---|
+| `com.google.gms.google-services` | 4.5.0 | Prerequisite for the other two — it turns the JSON into a `google_app_id` string resource |
+| `com.google.firebase.crashlytics` | 3.0.7 | **NDK crash capture** — a SIGSEGV in the Rust engine `.so` becomes a Crashlytics report — plus native symbol generation |
+| `com.google.firebase.firebase-perf` | 2.0.2 | **Automatic** network and screen-rendering traces |
+
+They read the app id out of a resource generated from
+`android/app/google-services.json`. A `--dart-define` is a Dart compile-time
+constant and is invisible to Gradle, so there is no way to feed these plugins
+the values the rest of the telemetry uses — the file is the only channel. This
+is why the "no config file" rule has an Android carve-out.
+
+**The file is not committed, and not a secret.** Everything in it — project id,
+project number, Android app id, Web API key — already ships inside every APK,
+which is why three of the four live in repo *Variables*. It is generated for the
+same reason `android/key.properties` is: a fork that inherited a real one would
+silently report *its* crashes into *this* project. `android/.gitignore` has the
+entry.
+
+- **CI** — `android.yml`'s *Configure Firebase Android config* step writes it
+  with `jq` from `AIGAMMON_FIREBASE_PROJECT` / `_API_KEY` / `_SENDER_ID` and the
+  `FIREBASE_ANDROID_APP_ID` secret, immediately before the build. Same
+  all-or-nothing gate as the dart-defines: any one missing and the file is not
+  written, the plugins are not applied, and the build stays green with Dart-only
+  crash reporting and no automatic traces (the log says so, as a warning).
+- **Locally** — download the real file: Firebase console → ⚙ *Project settings*
+  → *Your apps* → the **Android** app (`com.xmelon.aigammon_app`) →
+  **google-services.json**. Drop it at `app/android/app/google-services.json`.
+  Do not hand-assemble one; `package_name` must match `applicationId` exactly or
+  Gradle fails with *"No matching client found for package name"*. Without the
+  file the Android build still works — it just logs a `NOTE:` and skips all
+  three plugins. Same tier as `key.properties`; see `app/android/KEYSTORE_SETUP.md`.
+
+#### Native symbols: capture is wired, symbolication is not
+
+`nativeSymbolUploadEnabled = true` with `unstrippedNativeLibsDir` pointed at the
+cargo-ndk output (`app/android/app/src/main/jniLibs`) makes the Crashlytics
+plugin *generate* symbol files during a release build. Two things still stand
+between that and a readable Rust stack trace, and both are open:
+
+1. **Nothing uploads them.** Generation and upload are separate Gradle tasks,
+   and only the generation one is hooked into `assemble`. Upload needs an
+   explicit run with Firebase credentials:
+   ```sh
+   cd app/android
+   GOOGLE_APPLICATION_CREDENTIALS=<service-account.json> \
+     ./gradlew uploadCrashlyticsSymbolFileRelease
+   ```
+   Not added to `android.yml`: the APK is built by `flutter build apk`, which
+   drives Gradle with its own property set, and a bare second `./gradlew`
+   invocation would reconfigure the project differently. Wiring it needs a
+   verified CI run, which this repo cannot do from a Windows dev machine.
+2. **The `.so` carries no debug info to symbolicate from.**
+   `native/engine_shim/Cargo.toml` declares no `[profile.release]`, so Rust's
+   default applies and release builds emit no DWARF. The unstripped `.so` still
+   has an ELF symbol table, so symbolication would reach *function names* but
+   never file/line. Full fidelity needs `[profile.release] debug = 1` in that
+   crate — deliberately not added here, because it changes the native build for
+   iOS as well and would ship unverified.
+
+So today an Android native crash **is captured and does arrive** — signal,
+thread, and an address-level stack — which is strictly more than the nothing
+that arrived before. It is not yet readable without manual `addr2line` work
+against the matching `jniLibs` artifact.
 
 ### Console steps
 
@@ -228,11 +302,17 @@ flutter build apk --release \
   --dart-define=AIGAMMON_FIREBASE_ANDROID_APP_ID=<1:...:android:...>
 ```
 
+On Android those four defines light up Analytics, custom traces and Dart crash
+reporting. Native (NDK) crash capture and automatic performance traces
+additionally need `app/android/app/google-services.json` in place — see
+[Android: the generated `google-services.json`](#android-the-generated-google-servicesjson).
+
 ### What this telemetry does NOT capture
 
 Read this before concluding from a quiet console that nothing is going wrong.
-Every limit below is a consequence of the no-config-file design, and every one
-is a deliberate accepted trade, not an oversight.
+Limits 1 and 2 follow from initializing Firebase in Dart `main()` rather than
+natively; 3 and 4 are symbolication gaps that survive the Gradle-plugin wiring.
+Every one is a deliberate accepted trade, not an oversight.
 
 **1. Anything that fails before Dart runs.** `Firebase.initializeApp` is called
 from Dart `main()`, not from a native `Application`/`AppDelegate`, because the
@@ -251,28 +331,20 @@ before that point are simply not emitted. **The app's own manual `screen_view`
 and custom events are unaffected** — they are all logged from Dart, after
 init, and are the events the dashboards are actually built on.
 
-**3. Android native (NDK) crashes are NOT reported.** A SIGSEGV inside the
-Rust engine `.so` reaches Crashlytics on iOS but not on Android. NDK capture
-needs the `firebase-crashlytics-ndk` artifact plus the Crashlytics Gradle
-plugin; that plugin resolves the Firebase app id from a string resource that
-`com.google.gms.google-services` generates out of `google-services.json`, and
-this project has no such file by design. Applying the plugin without it fails
-the build. The same prerequisite is why the `com.google.firebase.firebase-perf`
-Gradle plugin is not applied either — which costs only the *automatic*
-network/screen traces; the app's custom traces need no instrumentation and
-work as documented.
+**3. Native crashes are captured but arrive UNSYMBOLICATED — and only in
+builds that carry the config file.** A SIGSEGV inside the Rust engine `.so`
+now reaches Crashlytics on both platforms, but as a signal, a thread and a
+stack of raw addresses. On Android that capture depends on the generated
+`google-services.json`: a build without it applies none of the three Firebase
+Gradle plugins, so it has Dart-only crash reporting *and* no automatic
+performance traces (the app's own custom traces need no instrumentation and
+work regardless). See
+[Android: the generated `google-services.json`](#android-the-generated-google-servicesjson)
+for the file, and *Native symbols* under it for exactly what stands between
+capture and a readable Rust stack.
 
-> **Open decision, needs a call before 1.0.** Either add
-> `android/app/google-services.json` (and `ios/Runner/GoogleService-Info.plist`
-> for symmetry), breaking the no-config-file convention that has held since
-> Plan 5, and get native crash capture plus automatic perf traces; or accept
-> Dart-level crash reporting on Android and leave it as it is. Note the file is
-> not a secret — it holds the same project id, api key and app id already
-> shipping in the binary as defines — so the objection is to the duplication
-> and the fork-inherits-our-project failure mode, not to leaking anything.
-
-**4. iOS crash reports arrive unsymbolicated.** The `FirebaseCrashlytics` pod
-does install its handlers at init, so native iOS crashes *are* captured — but
+**4. iOS symbol upload specifically.** The `FirebaseCrashlytics` pod
+installs its handlers at init, so native iOS crashes *are* captured — but
 `Runner.xcodeproj` has no run-script build phase invoking
 `${PODS_ROOT}/FirebaseCrashlytics/upload-symbols`, so no dSYM ever reaches
 Firebase and stacks show raw addresses. **Manual follow-up, needs Xcode:** open

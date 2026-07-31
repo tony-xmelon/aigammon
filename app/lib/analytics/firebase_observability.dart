@@ -239,28 +239,30 @@ class _FirebaseTrace implements AppTrace {
 /// **What this actually captures, precisely.** Everything that reaches
 /// [recordError] is a Dart-level error the process survived. Native crashes —
 /// a SIGSEGV inside the Rust engine `.so`, which no Dart handler can ever
-/// see — are a different mechanism entirely, and they are captured on ONE of
-/// the two platforms:
+/// see — are a different mechanism entirely, and on both platforms they are
+/// captured by machinery that has nothing to do with this class:
 ///
-///  * **iOS: yes.** The `FirebaseCrashlytics` pod installs its signal and
+///  * **iOS.** The `FirebaseCrashlytics` pod installs its signal and
 ///    NSException handlers when `Firebase.initializeApp` runs, so a native
-///    crash after that point is reported. It arrives UNSYMBOLICATED, though:
-///    that needs an `upload-symbols` run-script build phase in
-///    `Runner.xcodeproj`, which this project does not have — see the Telemetry
-///    section of `firebase/DEPLOY.md`.
-///  * **Android: no.** NDK capture requires the `firebase-crashlytics-ndk`
-///    artifact and the Crashlytics Gradle plugin, and the Gradle plugin reads
-///    the app id out of the resource that `com.google.gms.google-services`
-///    generates from `google-services.json`. This project deliberately ships
-///    no `google-services.json` (every Firebase value is a `--dart-define`;
-///    see `firebase_config.dart`), so applying the plugin would break the
-///    Android build rather than fix anything. A native crash in the engine
-///    `.so` on Android is therefore NOT reported to Crashlytics today. The
-///    trade-off — adopt the config file, or accept Dart-only reporting — is
-///    written up in `firebase/DEPLOY.md`.
+///    crash after that point is reported.
+///  * **Android.** The `firebase-crashlytics-ndk` artifact plus the
+///    `com.google.firebase.crashlytics` Gradle plugin, both wired in
+///    `android/app/build.gradle.kts` and both gated on the generated
+///    `android/app/google-services.json` being present. A build without that
+///    file — a plain local `flutter build apk` — has NO native capture and
+///    falls back to Dart-only reporting.
 ///
-/// So on Android this sink is not a second-best copy of native capture; it is
-/// the ONLY remote crash reporting there is.
+/// Both arrive **unsymbolicated** today: capture and symbolication are separate
+/// steps, and neither platform's symbol upload is wired into CI (iOS needs an
+/// `upload-symbols` run-script build phase; Android needs a
+/// `uploadCrashlyticsSymbolFileRelease` invocation, and the Rust release
+/// profile emits no debug info to symbolicate *from*). So a native report names
+/// the signal and the thread but shows raw addresses. See the Telemetry section
+/// of `firebase/DEPLOY.md` for both gaps.
+///
+/// So this sink is not a copy of native capture and never overlaps it: it is
+/// the only channel for Dart errors, and the native handlers are the only
+/// channel for process-killing crashes.
 class FirebaseAppCrashReporter implements AppCrashReporter {
   FirebaseAppCrashReporter(this._crashlytics);
 
@@ -272,8 +274,8 @@ class FirebaseAppCrashReporter implements AppCrashReporter {
       // `fatal: false` throughout: these are Dart-level errors the process
       // survived, and marking a survived error fatal would corrupt the
       // crash-free-users metric. Genuine process-killing crashes are the
-      // native layer's business — see the class doc for exactly which platform
-      // reports those and which does not.
+      // native layer's business — see the class doc for what captures those
+      // and how far the reports get symbolicated.
       unawaited(_crashlytics
           .recordError(error, stack, reason: reason, fatal: false)
           .catchError((Object _) {}));
