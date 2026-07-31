@@ -5030,4 +5030,77 @@ void main() {
       c.disposeController();
     });
   });
+
+  group('rebuild scoping', () {
+    /// The same stranded 5-5 position the hint group uses: Black opens 6-1 and
+    /// replies, White then rolls 5-5 and the 24-point cannot move — so a tap on
+    /// it raises the transient hint, which is a `setState` on the SCREEN with no
+    /// controller notification behind it.
+    (GameController, LocalHumanAgent) strandedFives() {
+      final human = LocalHumanAgent();
+      return (
+        GameController(
+          white: human,
+          black: FakeAgent(),
+          matchLength: 5,
+          diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(5, 5), Dice(4, 3)]),
+        ),
+        human,
+      );
+    }
+
+    testWidgets('a screen-only rebuild leaves the header and the score sheet '
+        'untouched, and a real event still moves them', (t) async {
+      // The header and the sheet are held as ONE widget instance each and
+      // scoped to what they read, so the constant traffic that concerns only
+      // the board — roll-beat frames, the tap hint, an animation starting —
+      // does not rebuild them. Widget identity is the observable: an identical
+      // widget in the same slot is exactly what makes the framework skip a
+      // subtree, so if these instances are unchanged the subtrees were not
+      // rebuilt, and the whole-log folds behind them were not re-run.
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final (c, human) = strandedFives();
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      await t.pump();
+
+      final hudBefore = t.widget(find.byKey(const ValueKey('hud')));
+      final sheetBefore =
+          t.widget(find.byKey(const ValueKey('scoreSheetList')));
+
+      await tapBoardPoint(t, 23);
+      expect(
+          find.text('No legal move for that checker with the remaining dice'),
+          findsOneWidget,
+          reason: 'the screen-only rebuild really did happen');
+
+      expect(identical(t.widget(find.byKey(const ValueKey('hud'))), hudBefore),
+          isTrue,
+          reason: 'the header rebuilt for something it does not read');
+      expect(
+          identical(t.widget(find.byKey(const ValueKey('scoreSheetList'))),
+              sheetBefore),
+          isTrue,
+          reason: 'the score sheet re-folded the log for a tap hint');
+
+      // …and the scoping is not simply freezing them: an appended event moves
+      // both, because both read the log.
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t,
+          () => !identical(
+              t.widget(find.byKey(const ValueKey('scoreSheetList'))),
+              sheetBefore),
+          maxFrames: 1200);
+      expect(identical(t.widget(find.byKey(const ValueKey('hud'))), hudBefore),
+          isFalse, reason: 'the header must follow the match');
+
+      c.disposeController();
+    });
+  });
 }

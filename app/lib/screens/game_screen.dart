@@ -404,6 +404,69 @@ class _GameScreenState extends State<GameScreen> {
   /// real event.
   int _sheetScrolledCount = -1;
 
+  // --- Rebuild scoping -------------------------------------------------------
+  //
+  // Most of what makes this screen rebuild concerns the BOARD: a roll-beat
+  // frame, an animation starting, a tap hint appearing and clearing. The header
+  // and the score sheet do not care about any of it, and the sheet in
+  // particular re-folds the whole event log to build its rows. Both are
+  // therefore held as ONE widget instance and handed back unchanged: an
+  // identical widget in the same slot short-circuits the element update, so the
+  // subtree is not rebuilt at all. Each listens to what it actually depends on
+  // instead.
+
+  /// Ticks when the SCORE SHEET's content changes: a new (or replaced) event
+  /// log, an assessment landing, a best-play line revealed. Nothing else moves
+  /// a row, so nothing else needs to rebuild the sheet.
+  final ValueNotifier<int> _sheetRevision = ValueNotifier<int>(0);
+
+  /// The event log [_sheetRevision] last accounted for, by identity — `Game`
+  /// hands out a fresh unmodifiable list per append and never mutates one, so
+  /// the same instance IS the same content, and a replaced log of equal length
+  /// is still caught.
+  List<GameEvent>? _sheetSeenEvents;
+
+  /// The header and the sheet, built once each. Cleared by [didUpdateWidget]:
+  /// they close over `widget`'s labels and flags, which a caller may replace.
+  Widget? _hudWidget;
+  Widget? _scoreSheetWidget;
+
+  /// [buildScoreSheet] / [persistentDice] of the current log. Both are folds of
+  /// the WHOLE log and both were re-run on every rebuild — many times a second
+  /// while the dice tumble — for a log that had not changed. Keyed by the same
+  /// list identity as [_sheetSeenEvents].
+  List<GameEvent>? _foldedEvents;
+  List<ScoreSheetRow> _foldedRows = const [];
+  (Dice?, Dice?) _foldedDice = (null, null);
+
+  void _refoldEvents() {
+    final events = _c.game.events;
+    if (identical(events, _foldedEvents)) return;
+    _foldedEvents = events;
+    _foldedRows = buildScoreSheet(events);
+    _foldedDice = persistentDice(events);
+  }
+
+  /// The sheet's rows for the current log (folded once per log).
+  List<ScoreSheetRow> _scoreSheetRows() {
+    _refoldEvents();
+    return _foldedRows;
+  }
+
+  /// Ticks [_sheetRevision] when the sheet's content has moved. Called from
+  /// [_onChange] for the log, and directly from the two places that change an
+  /// assessment or a revealed line.
+  void _markSheetDirty() {
+    _sheetRevision.value++;
+  }
+
+  void _syncSheetLog() {
+    final events = _c.game.events;
+    if (identical(events, _sheetSeenEvents)) return;
+    _sheetSeenEvents = events;
+    _markSheetDirty();
+  }
+
   /// Whether the hint bottom panel is open, plus its loading/result state.
   bool _hintOpen = false;
   bool _hintLoading = false;
@@ -496,6 +559,15 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   @override
+  void didUpdateWidget(GameScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The cached header and sheet close over this widget's labels, flags and
+    // callbacks. A replaced widget may carry different ones, so the caches go.
+    _hudWidget = null;
+    _scoreSheetWidget = null;
+  }
+
+  @override
   void dispose() {
     // The one-time drag hint is scoped to THIS screen: a floating SnackBar
     // outlives its route, so without this it follows the user onto whatever
@@ -521,6 +593,7 @@ class _GameScreenState extends State<GameScreen> {
     _observable.removeListener(_onChange);
     _dicePresenting.dispose();
     _stagedMove.dispose();
+    _sheetRevision.dispose();
     _sheetScroll.dispose();
     _entryControl.dispose();
     _c.disposeController();
@@ -538,6 +611,7 @@ class _GameScreenState extends State<GameScreen> {
 
   void _onChange() {
     if (!mounted) return;
+    _syncSheetLog();
     _reportMatchCompletion();
     _updatePassDevice();
     _closeSurrenderIfOutranked();
@@ -932,7 +1006,13 @@ class _GameScreenState extends State<GameScreen> {
   /// pair (they play the opening dice); each later [RollEvent] overwrites its
   /// roller's pair. Both are `null` before a player's first roll (a blank dimmed
   /// die), and reset automatically when a new game replaces the event log.
-  (Dice?, Dice?) _persistentDice() => persistentDice(_c.game.events);
+  ///
+  /// Folded once per log rather than once per rebuild (see [_refoldEvents]) —
+  /// the board asks for it on every frame of a roll beat.
+  (Dice?, Dice?) _persistentDice() {
+    _refoldEvents();
+    return _foldedDice;
+  }
 
   /// A deterministic dice pair for beat [frame], derived from the settled
   /// [realRoll]. Both faces are offset off the real roll (die1 always differs
@@ -1009,6 +1089,7 @@ class _GameScreenState extends State<GameScreen> {
     unawaited(_tutor!.assess(before, played).then((assessment) {
       if (!mounted || gen != _gameGeneration) return;
       setState(() => _assessmentsByEventIndex[eventIndex] = assessment);
+      _markSheetDirty(); // a cell gained its mark dot and equity loss
     }));
   }
 
@@ -1164,6 +1245,25 @@ class _GameScreenState extends State<GameScreen> {
     return null;
   }
 
+  /// The header, scoped to [_observable] — the controller plus the local
+  /// players' pending-decision notifiers, which between them are every input it
+  /// reads. Held as one widget instance so the screen's own rebuilds (a
+  /// roll-beat frame, a tap hint, an assessment landing) do not reach it.
+  Widget _hudScope() => _hudWidget ??= ListenableBuilder(
+        listenable: _observable,
+        builder: (context, _) => _Hud(
+          controller: _c,
+          showScoring: widget.showScoring,
+          opponentLabel: widget.opponentLabel,
+          opponentDetail: widget.opponentDetail,
+          onSurrender: _hasLocalHuman ? _openSurrender : null,
+          // Tabletop moves Double to the players' own edges — the shared
+          // header cannot tell which of the two people pressed it.
+          showDouble: !_tabletopBars,
+          onDoubled: _logCubeOffered,
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final state = _c.state;
@@ -1191,17 +1291,7 @@ class _GameScreenState extends State<GameScreen> {
           children: [
             Column(
               children: [
-                _Hud(
-                  controller: _c,
-                  showScoring: widget.showScoring,
-                  opponentLabel: widget.opponentLabel,
-                  opponentDetail: widget.opponentDetail,
-                  onSurrender: _hasLocalHuman ? _openSurrender : null,
-                  // Tabletop moves Double to the players' own edges — the shared
-                  // header cannot tell which of the two people pressed it.
-                  showDouble: !_tabletopBars,
-                  onDoubled: _logCubeOffered,
-                ),
+                _hudScope(),
                 // TABLETOP hot-seat only: the second player's action bar, at
                 // THEIR edge (directly under the header) and upside-down so it
                 // reads right-way-up from across the device. Present for the
@@ -1291,7 +1381,7 @@ class _GameScreenState extends State<GameScreen> {
                     ],
                   ),
                 ),
-                _scoreSheet(),
+                _scoreSheetScope(),
                 // In the tabletop layout the bottom bar belongs to ONE player
                 // (the side the board faces) and goes inert on the other's turn;
                 // everywhere else it is the screen's only bar and serves whoever
@@ -2000,9 +2090,18 @@ class _GameScreenState extends State<GameScreen> {
   /// opening / cube / resignation events. Newest row at the BOTTOM, auto-pinned
   /// there as events append (see [_sheetScrolledCount] for how a manual
   /// scroll-up is respected).
+  ///
+  /// Scoped to [_sheetRevision] and held as one widget instance, so the rows
+  /// are rebuilt when a row actually changes and not when the dice tumble. See
+  /// the rebuild-scoping note on [_sheetRevision].
+  Widget _scoreSheetScope() => _scoreSheetWidget ??= ListenableBuilder(
+        listenable: _sheetRevision,
+        builder: (context, _) => _scoreSheet(),
+      );
+
   Widget _scoreSheet() {
     final scheme = Theme.of(context).colorScheme;
-    final rows = buildScoreSheet(_c.game.events);
+    final rows = _scoreSheetRows();
     final count = _c.game.events.length;
     // Re-pin to the newest row on any new event, but NOT on unrelated rebuilds
     // (a tutor assessment landing, the thinking dot flickering) — so a user who
@@ -2218,13 +2317,16 @@ class _GameScreenState extends State<GameScreen> {
 
     return InkWell(
       key: key,
-      onTap: () => setState(() {
-        if (revealed) {
-          _revealedBest.remove(cell.eventIndex);
-        } else {
-          _revealedBest.add(cell.eventIndex);
-        }
-      }),
+      onTap: () {
+        setState(() {
+          if (revealed) {
+            _revealedBest.remove(cell.eventIndex);
+          } else {
+            _revealedBest.add(cell.eventIndex);
+          }
+        });
+        _markSheetDirty();
+      },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
