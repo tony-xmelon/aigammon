@@ -25,7 +25,7 @@ plugins {
 //   * Performance Monitoring loses its AUTOMATIC network and screen traces
 //     (the app's own custom traces need no instrumentation and work regardless).
 //
-// The gate mirrors the signing gate above and the AIGAMMON_FIREBASE_* gates in
+// The gate mirrors the signing gate below and the AIGAMMON_FIREBASE_* gates in
 // the workflows: file absent -> plugins are simply not applied and the build
 // succeeds with Dart-only crash reporting. It must not be a hard failure, or a
 // fresh clone could not build the Android app at all.

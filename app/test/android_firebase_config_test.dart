@@ -35,10 +35,17 @@ void main() {
         reason: 'a committed google-services.json points forks at our project');
   });
 
-  test('the real config file is not in the working tree', () {
-    expect(File('android/app/google-services.json').existsSync(), isFalse,
-        reason: 'this file is generated, never committed — if it is here, '
-            'check it did not sneak past .gitignore');
+  test('the real config file is never committed to git', () {
+    // A developer following KEYSTORE_SETUP.md's local-dev instructions is
+    // expected to have the real file on disk (that's the whole point of the
+    // gate above) — so this checks it isn't TRACKED, not that it's absent.
+    final result = Process.runSync(
+      'git',
+      ['ls-files', '--error-unmatch', 'android/app/google-services.json'],
+    );
+    expect(result.exitCode, isNot(0),
+        reason: 'google-services.json is committed to git — it must stay '
+            'generated/downloaded only, see .gitignore');
   });
 
   test('all three Firebase Gradle plugins are on the build classpath', () {
