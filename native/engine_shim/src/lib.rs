@@ -293,7 +293,7 @@ pub unsafe extern "C" fn wildbg_new_with_path(path: *const c_char) -> *mut Wildb
 
 #[cfg(test)]
 mod tests {
-    use crate::{BgConfig, CCubeInfo, CMove, CMoveDetail, CProbabilities, best_move, wildbg_new};
+    use crate::{best_move, wildbg_new, BgConfig, CCubeInfo, CMove, CMoveDetail, CProbabilities};
     use engine::position::X_BAR;
     use engine::{dice::Dice, pos};
     use logic::cube::CubeInfo;

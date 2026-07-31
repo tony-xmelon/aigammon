@@ -14,63 +14,62 @@ permissions:
 
 # One live run per branch. A force-push or a rapid second push supersedes the
 # first: the older run's result is about code nobody is looking at any more, and
-# these six jobs are the bulk of the repo's CI minutes.
+# these jobs are the bulk of the repo's CI minutes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  core:
-    name: backgammon_core tests
+  # The three pure-Dart packages. One job definition, three legs: they were three
+  # near-identical copies of the same six steps, and every change to the shape
+  # (a cache, an analyzer flag) had to be made three times or silently drift.
+  #
+  # `fail-fast: false` is load-bearing: the default would cancel the other two
+  # legs the moment one fails, so a push that breaks two packages would report
+  # only one of them and the second failure would surface a round trip later.
+  # Each leg still gets its own named entry in the checks list, so a red X points
+  # at a package exactly as it did before.
+  packages:
+    name: ${{ matrix.package }} tests
     runs-on: ubuntu-latest
-    # Pure-Dart unit suite; about a minute in practice. The ceiling only ever
+    # Pure-Dart unit suites; about a minute in practice. The ceiling only ever
     # fires on a hang (a stuck pub fetch, a test awaiting a future that never
-    # lands) rather than on slow-but-working CI.
+    # lands) rather than on slow-but-working CI. lan_play binds real sockets and
+    # timers — the likeliest suite to deadlock rather than fail.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: backgammon_core
+          # `-P ci` is the retry preset in packages/lan_play/dart_test.yaml, and
+          # it is deliberately NOT given to the other two legs: their suites are
+          # pure computation, so a retry there could only ever hide a real
+          # order-dependent or nondeterminism bug. See that file for why the
+          # retry is a preset rather than a top-level setting.
+          - package: lan_play
+            test_args: -P ci
+          - package: match_transport
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
-      - run: dart pub get
-        working-directory: packages/backgammon_core
-      - run: dart analyze --fatal-infos
-        working-directory: packages/backgammon_core
-      - run: dart test
-        working-directory: packages/backgammon_core
-
-  lan:
-    name: lan_play tests
-    runs-on: ubuntu-latest
-    # Real sockets and timers - the likeliest suite to deadlock rather than fail.
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dart-lang/setup-dart@v1
+      # dart-lang/setup-dart has no cache input of its own (its inputs are
+      # sdk / architecture / flavor / problem-matcher), so the pub package cache
+      # is cached directly. Keyed on the lockfile: a dependency bump writes a new
+      # key, anything else reuses the entry.
+      - uses: actions/cache@v4
         with:
-          sdk: stable
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ matrix.package }}-${{ hashFiles(format('packages/{0}/pubspec.lock', matrix.package)) }}
+          restore-keys: pub-${{ runner.os }}-${{ matrix.package }}-
       - run: dart pub get
-        working-directory: packages/lan_play
+        working-directory: packages/${{ matrix.package }}
       - run: dart analyze --fatal-infos
-        working-directory: packages/lan_play
-      - run: dart test
-        working-directory: packages/lan_play
-
-  match_transport:
-    name: match_transport tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dart-lang/setup-dart@v1
-        with:
-          sdk: stable
-      - run: dart pub get
-        working-directory: packages/match_transport
-      - run: dart analyze --fatal-infos
-        working-directory: packages/match_transport
-      - run: dart test
-        working-directory: packages/match_transport
+        working-directory: packages/${{ matrix.package }}
+      - run: dart test ${{ matrix.test_args }}
+        working-directory: packages/${{ matrix.package }}
 
   engine:
     name: engine build + integration tests (linux)
@@ -84,15 +83,45 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both are in the stable profile already; naming them makes the job
+          # fail loudly at setup rather than at the first `cargo fmt` if that
+          # ever stops being true.
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native/engine_shim
+
+      # The Rust side had a build step and nothing else: the shim's own unit
+      # tests (the C-ABI conversions) and its `tests/smoke.rs` — which loads the
+      # PRODUCTION nets and evaluates a real position — only ever ran on the
+      # developer's machine, and no lint ran anywhere. The cache is already warm
+      # from the build below, so all three cost minutes of nothing.
+      - name: Rust format check
+        run: cargo fmt --check
+        working-directory: native/engine_shim
+      # `-p aigammon_engine` scopes `-D warnings` to OUR crate. Without it the
+      # deny would also apply to the vendored wildbg path dependencies, where a
+      # new clippy release inventing a new lint would turn this job red over code
+      # this repo does not own and must not patch.
+      - name: Clippy
+        run: cargo clippy -p aigammon_engine --all-targets -- -D warnings
+        working-directory: native/engine_shim
       - name: Build engine shim (cdylib)
         run: cargo build --release
         working-directory: native/engine_shim
+      - name: Rust tests
+        run: cargo test --release
+        working-directory: native/engine_shim
+
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-engine_bindings-${{ hashFiles('packages/engine_bindings/pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-engine_bindings-
       - run: dart pub get
         working-directory: packages/engine_bindings
       - run: dart analyze --fatal-infos
@@ -116,35 +145,114 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
       - run: flutter pub get
         working-directory: app
       - run: flutter analyze
         working-directory: app
-      # -x golden: golden PNGs are generated on the Windows dev machine and
-      # differ by <0.1% antialiasing on Linux; they run locally instead.
+      # -x golden: the golden PNGs were generated on Windows and Linux
+      # antialiasing drifts by <0.1%, so they run in the `goldens` job below on a
+      # Windows runner instead. Between the two jobs the suite is covered whole.
       - run: flutter test -x golden
         working-directory: app
+
+  goldens:
+    name: golden comparisons (windows)
+    runs-on: windows-latest
+    # One test file, three PNG comparisons — but on a Windows runner, which is
+    # slower to provision than Linux and pays for the Flutter SDK download.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: app
+      # Goldens ran NOWHERE automated: `flutter test -x golden` skips them in the
+      # `app` job and nothing else touched them, so a board-painting regression
+      # was caught only if a developer happened to run the suite locally without
+      # the flag.
+      #
+      # A Windows runner rather than a pixel tolerance on Linux, because the
+      # goldens are Windows-generated (see the header of
+      # app/test/board/board_painter_test.dart) and this repo's dev machine is
+      # Windows: the runner compares like with like, so a diff means the painting
+      # really changed. A Linux job would need a tolerance wide enough to swallow
+      # the antialiasing drift, and a tolerance that wide swallows a real
+      # one-pixel regression too — while still leaving the numbers a developer
+      # sees locally different from the numbers CI sees.
+      - run: flutter test --tags golden
+        working-directory: app
+
+  # The security rules, on their own and FIRST. This leg is seconds of mocha
+  # against a firestore-only emulator, and it is the one that decides whether the
+  # backend is correct at all; it used to be step 1 of four inside the `online`
+  # job, behind a Node + Java + Dart + Flutter toolchain install, so a broken
+  # rules file was reported many minutes later than it was known. `online` now
+  # `needs:` this, so a rules failure costs one short job instead of one long
+  # one.
+  rules:
+    name: firestore rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: firebase/rules-tests/package-lock.json
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      # Pinned to a major.minor. `firebase-tools` publishes often and the
+      # emulator is a moving target underneath these suites: an unpinned `latest`
+      # meant a release cut on a Tuesday could turn this job red on Wednesday
+      # with nothing in the repo having changed. 15.25 is the version the suites
+      # are developed against locally (firebase/run-emulator-tests.ps1).
+      - run: npm install -g firebase-tools@15.25
+      # Firestore only — @firebase/rules-unit-testing mints its own auth
+      # contexts, so the auth emulator is not needed here.
+      - name: Rules unit tests
+        run: |
+          firebase emulators:exec --project demo-aigammon --only firestore \
+            "bash -c 'cd rules-tests && npm ci && npm test'"
+        working-directory: firebase
 
   online:
     name: online play (emulator)
     runs-on: ubuntu-latest
-    # The heaviest leg: Node + Java + Flutter + Dart toolchains, then the whole
-    # Firestore-emulator suite (rules + two-client E2E) behind emulators:exec.
+    # Fails fast on the rules: there is no point standing up four toolchains to
+    # play a two-client match against a rules file that already failed its own
+    # unit tests.
+    needs: rules
+    # The heaviest leg: Node + Java + Flutter + Dart toolchains, then the
+    # Firestore-emulator E2E legs behind emulators:exec.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      # Node is here for the Firebase CLI and for the rules suite's
-      # @firebase/rules-unit-testing (firebase/rules-tests). The backend itself
-      # is rules-only — Spark plan, no Cloud Functions — so nothing is built.
+      # Node is here for the Firebase CLI. The backend itself is rules-only —
+      # Spark plan, no Cloud Functions — so nothing is built.
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with:
+          node-version: 22
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
-      - run: npm install -g firebase-tools
+      # Same pin as the `rules` job — the two must not drift onto different
+      # emulator versions.
+      - run: npm install -g firebase-tools@15.25
       - uses: dart-lang/setup-dart@v1
         with: { sdk: stable }
       - uses: subosito/flutter-action@v2
-        with: { channel: stable }
+        with:
+          channel: stable
+          cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-online_client-${{ hashFiles('packages/online_client/pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-online_client-
       # online_client is the largest package on the online side and was the one
       # package CI never analysed. It passes locally, so the step is free.
       - name: online_client analyze

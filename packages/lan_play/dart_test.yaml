@@ -1,0 +1,20 @@
+# A CI-only retry preset.
+#
+# This is the one suite in the repo that binds real sockets, races real timers
+# and waits on real discovery datagrams. On a shared, oversubscribed GitHub
+# runner a handshake that normally lands in milliseconds can miss its window,
+# and the failure says nothing about the code — Task 8's investigation of a
+# LAN welcome-frame flake is the standing example.
+#
+# `dart test` has no `--retry=<n>` flag (only `--no-retry`), so the retry has to
+# come from configuration, and it is scoped to a PRESET rather than declared at
+# the top level on purpose: a blanket `retry: 2` would also hide flakes on the
+# developer's machine, where a LAN test failing twice in a row is exactly the
+# signal worth chasing. CI runs `dart test -P ci`; a bare `dart test` retries
+# nothing.
+#
+# Two retries, not more: a genuine regression fails all three attempts, so this
+# absorbs scheduling noise without turning a 1-in-3 real bug green.
+presets:
+  ci:
+    retry: 2

@@ -6,14 +6,17 @@
 # Firebase project dir). Paths below are therefore relative to firebase/.
 set -euo pipefail
 
-# 1. Firestore security-rules unit tests (@firebase/rules-unit-testing + mocha).
-(cd rules-tests && npm ci && npm test)
+# NOTE: the rules unit tests used to be step 1 here. They now run as their own
+# `rules` job in .github/workflows/ci.yml, which this job `needs:` — seconds of
+# mocha against a firestore-only emulator, ahead of the four toolchains and the
+# two E2E legs below, so a broken firestore.rules is red before any of this
+# starts. run-emulator-tests.ps1 still runs all of it in one sitting locally.
 
-# 2. online_client transport integration suite — the real REST transport
+# 1. online_client transport integration suite — the real REST transport
 #    (anonymous auth + direct Firestore documents) against firestore.rules.
 (cd ../packages/online_client && dart test -P emulator)
 
-# 3. The app's two-client E2E — two real NetMatchControllers (the unified
+# 2. The app's two-client E2E — two real NetMatchControllers (the unified
 #    controller), each over its own FirestoreTransport and anonymous user,
 #    playing a whole match over real documents, plus the adversarial legs
 #    (rules-blocked forgeries, illegal event, cube-in-cubeless, tampered reveal,
@@ -37,7 +40,7 @@ set -euo pipefail
   AIGAMMON_EMULATOR=1 AIGAMMON_E2E_POLL_MS=100 \
   flutter test --tags emulator test/online/emulator_e2e_test.dart)
 
-# 4. The DEGRADED path, for real: the same E2E with the listener switched off, so
+# 3. The DEGRADED path, for real: the same E2E with the listener switched off, so
 #    a client that can never open a gRPC stream (a network blocking HTTP/2, a
 #    proxy, an outage) is proven to still play a whole match on the poll loop.
 #
