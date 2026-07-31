@@ -174,6 +174,31 @@ class EngineService {
       // between `ready` completing and this function resuming. Hold the death
       // and hand it over the moment there is something to hand it to —
       // dropping it here is what used to leave a dead service looking alive.
+      //
+      // UNREACHABLE TODAY, DELIBERATELY KEPT, AND UNTESTED — all three on
+      // purpose, so nobody has to re-derive this:
+      //
+      //  * Unreachable, because there is no seam to fall into. `ready` can only
+      //    be completed from the handshake handler, which runs as an EVENT;
+      //    `await ready.future` resumes as a MICROTASK, and microtasks drain
+      //    before the next event. The resumed code builds the service and
+      //    assigns `service` synchronously, so any later death finds it set.
+      //    The one ordering that could break that — a death delivered while
+      //    `await Isolate.spawn` is still suspended — does not happen either:
+      //    measured over 200 spawns of a worker that handshakes and immediately
+      //    throws, the spawn future resolved first every time, which is what the
+      //    VM's spawn protocol implies.
+      //  * Kept, because "unreachable" is a property of the CURRENT control
+      //    flow, not of the class. Inserting one `await` between `ready.future`
+      //    and the constructor reopens the seam, and losing a death there is
+      //    exactly the bug this port's rework was written to fix: a service that
+      //    believes it is alive and hangs every call. This is the cheapest
+      //    possible insurance against reintroducing it.
+      //  * Untested, because forcing the ordering needs a hook INSIDE spawn()
+      //    that exists only to make this branch run. A test that fabricates its
+      //    own seam would prove that a two-line assignment works, not that the
+      //    real race is handled — and would then have to be maintained as if it
+      //    meant something. This comment is the honest version of that test.
       deathHeld = true;
       heldDeath = err;
     });
@@ -312,6 +337,24 @@ class EngineService {
   /// cycle.) All in-flight requests error with
   /// `StateError('EngineService disposed')`; subsequent verb calls throw
   /// synchronously.
+  ///
+  /// **What this does NOT do: stop a worker that is stuck in native code.**
+  /// Both halves of the sequence need the worker to reach a point where it is
+  /// running Dart — the 'dispose' message is delivered by the worker's own event
+  /// loop, and a kill is honoured when the isolate next checks, not by
+  /// interrupting it. A worker blocked inside an FFI call into the engine is
+  /// doing neither, and [Isolate.immediate] does not change that: the priorities
+  /// order the kill against the isolate's PENDING EVENTS, and an isolate that is
+  /// not processing events is not ordered by either. The kill takes effect if
+  /// and when the native call returns — which, for the case that motivates the
+  /// caller's timeout, it does not.
+  ///
+  /// So `dispose()` on a wedged worker returns promptly and cleans up THIS
+  /// side — the ports, the pending futures, the caller's view — while the
+  /// isolate and its native engine handle stay alive out of reach. The owner
+  /// re-spawns beside it. That is the accepted residual cost of recovering at
+  /// all; `EngineManager.wedgedEngineDrops` in the app counts the occurrences so
+  /// a repeating native hang is visible rather than merely expensive.
   void dispose() {
     if (_dead) return;
     _dead = true;

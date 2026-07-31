@@ -91,23 +91,60 @@ class EngineManager {
   /// replied — is treated the SAME way, because a wedged isolate is a dead one
   /// that has not noticed yet: it never recovers on its own, so leaving it in
   /// place would cost every later call a full timeout before failing the same
-  /// way. Dropping it disposes it, which kills the isolate.
+  /// way.
+  ///
+  /// The recovery is not free, and the cost is NOT symmetric with the death
+  /// case. Dropping disposes, and dispose asks the isolate to stop — but a
+  /// worker genuinely blocked inside a native FFI call is not running Dart, so
+  /// it reaches neither the queued `dispose` message nor the kill until that
+  /// call returns, which by assumption it never does. See [EngineService.dispose]
+  /// for why no isolate priority changes that. So the new engine is spawned
+  /// BESIDE the old one, and the old one keeps its native handle. That is still
+  /// the right trade — one leaked worker beats a session where every engine call
+  /// costs 30s and then fails — but it is a leak, and [wedgedEngineDrops]
+  /// makes it countable instead of silent.
   Future<T> withEngine<T>(Future<T> Function(EngineApi) fn) async {
     var engine = await _ensureEngine();
     try {
       return await fn(engine);
     } on StateError catch (e) {
       if (!_isIsolateDeath(e)) rethrow;
-      // The isolate died mid-call. Drop it and re-spawn exactly once.
+      // The isolate died mid-call. Drop it and re-spawn exactly once. Nothing
+      // is leaked here: the worker is already gone, which is how we found out.
       _dropIfCurrent(engine);
       engine = await _ensureEngine();
       return await fn(engine);
     } on TimeoutException {
-      // The isolate is wedged. Same recovery, same single retry.
+      // The isolate is wedged. Same recovery, same single retry — but the old
+      // worker may well still be alive and holding a native engine.
+      _noteWedgedDrop();
       _dropIfCurrent(engine);
       engine = await _ensureEngine();
       return await fn(engine);
     }
+  }
+
+  /// How many engines this manager has dropped because a call TIMED OUT rather
+  /// than because the isolate was confirmed dead.
+  ///
+  /// Each one is a SUSPECTED leaked isolate plus its native engine handle — see
+  /// [withEngine]. Zero is the expected value for a whole session; anything
+  /// climbing means a worker is wedging repeatedly, which is a native-engine bug
+  /// worth chasing and, until it is chased, a per-occurrence leak. Surfaced two
+  /// ways because they answer different questions: this counter for a test or a
+  /// live probe, and a [CrashLog] entry for the diagnostics report a tester can
+  /// actually copy out of Settings.
+  int get wedgedEngineDrops => _wedgedEngineDrops;
+  int _wedgedEngineDrops = 0;
+
+  void _noteWedgedDrop() {
+    _wedgedEngineDrops++;
+    CrashLog.instance.record(
+      StateError('engine isolate wedged: dropped without confirmed death '
+          '(occurrence $_wedgedEngineDrops). Its worker and native engine may '
+          'still be alive — a blocked native call cannot be preempted.'),
+      source: 'engine-wedged',
+    );
   }
 
   /// Returns the live engine, spawning (or awaiting an in-flight spawn) if

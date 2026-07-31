@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:aigammon_app/diagnostics/crash_log.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
@@ -144,6 +145,39 @@ void main() {
       expect(first.disposed, isTrue,
           reason: 'the wedged engine is disposed, which kills its isolate');
       expect(rec.spawned[1].rankMovesCalls, 1);
+    });
+
+    test('counts and records each timeout-driven drop as a suspected leak',
+        () async {
+      final rec = SpawnRecorder();
+      final manager = EngineManager(spawner: rec.spawn);
+      final recorded = <String>[];
+      void sink(Object error, StackTrace? stack, String source) {
+        if (source == 'engine-wedged') recorded.add(error.toString());
+      }
+
+      CrashLog.instance.addSink(sink);
+      addTearDown(() => CrashLog.instance.removeSink(sink));
+
+      expect(manager.wedgedEngineDrops, 0);
+
+      await manager
+          .withEngine((e) => e.rankMoves(_board, Player.white, Dice(3, 1)));
+      rec.spawned[0].failWith = TimeoutException('did not reply');
+      await manager
+          .withEngine((e) => e.rankMoves(_board, Player.white, Dice(3, 1)));
+
+      expect(manager.wedgedEngineDrops, 1,
+          reason: 'a wedged worker may outlive the drop; count it');
+      expect(recorded, hasLength(1));
+      expect(recorded.single, contains('wedged'));
+
+      // A plain death is NOT a suspected leak: the isolate is already gone.
+      rec.spawned[1].dieOnNextCall = true;
+      await manager
+          .withEngine((e) => e.rankMoves(_board, Player.white, Dice(3, 1)));
+      expect(manager.wedgedEngineDrops, 1);
+      expect(recorded, hasLength(1));
     });
 
     test('rethrows when calls time out twice in one call (single retry)',
