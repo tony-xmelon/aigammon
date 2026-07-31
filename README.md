@@ -147,21 +147,59 @@ building a production release with the online defines are documented in
 
 ## Continuous integration
 
-- **`ci.yml`** (push to `master`, all PRs, Linux): runs six jobs —
-  `backgammon_core` (`dart analyze --fatal-infos` + `dart test`), `lan_play` and
-  `match_transport` (the same pair each), `engine_bindings` (builds the Rust
-  cdylib, then `dart test` + `dart test -P engine` against the real `.so`), the
-  Flutter app (`flutter analyze` + `flutter test`), and **online play**
-  (`online_client` analyze + unit tests, then four emulator legs inside a
-  `firebase emulators:exec` — the `firestore.rules` unit tests,
-  `online_client -P emulator`, the app's two-client E2E on the real-time listener
-  path, and the same E2E once more with the listener forced off so the poll
-  fallback is actually exercised).
-- **`android.yml`** (`workflow_dispatch`, push to `master`): cross-compiles the
-  engine for the Android ABIs with `cargo-ndk`, builds a release APK, and — when
-  the Firebase secrets are configured — distributes it to testers via Firebase
-  App Distribution. Setup instructions:
-  [`.github/workflows/README.md`](.github/workflows/README.md).
+- **`ci.yml`** (push to `master`, all PRs) runs:
+  - **`packages`** (Linux, matrixed over `backgammon_core`, `lan_play`,
+    `match_transport`): `dart analyze --fatal-infos` + `dart test` each.
+    `lan_play` runs under its `ci` preset, which retries twice — it is the only
+    suite here that binds real sockets.
+  - **`engine`** (Linux): `cargo fmt --check`, `clippy`, the Rust shim's own
+    tests, then the cdylib build followed by `dart test` and
+    `dart test -P engine` against the real `.so`.
+  - **`app`** (Linux): `flutter analyze` + `flutter test -x golden`.
+  - **`goldens`** (Windows): `flutter test --tags golden`. A Windows runner
+    because the golden PNGs are Windows-generated and Linux antialiasing drifts
+    just enough to need a tolerance that would hide real regressions.
+  - **`rules`** (Linux): the `firestore.rules` unit tests against a
+    firestore-only emulator. Fast, and first — `online` waits on it.
+  - **`online`** (Linux): `online_client` analyze + unit tests, then three
+    emulator legs inside a `firebase emulators:exec` — `online_client -P
+    emulator`, the app's two-client E2E on the real-time listener path, and the
+    same E2E once more with the listener forced off so the poll fallback is
+    actually exercised.
+- **`android.yml`** (`workflow_dispatch`, CI success on `master`):
+  cross-compiles the engine for the two device ABIs with `cargo-ndk`, builds
+  per-ABI release APKs, and — when the Firebase secrets are configured —
+  distributes the `arm64-v8a` one to testers via Firebase App Distribution.
+  Setup instructions: [`.github/workflows/README.md`](.github/workflows/README.md).
+
+## Releasing
+
+Every release is a merge to `master` that bumps `version:` in `app/pubspec.yaml`
+and adds a section to [`CHANGELOG.md`](CHANGELOG.md). From v0.13.0 onward it also
+gets an **annotated tag**:
+
+```bash
+# on master, at the merge commit
+git tag -a v0.13.0 -m "AIGammon v0.13.0 — <one line, the same one the merge used>"
+git push origin v0.13.0
+```
+
+Annotated (`-a`), not lightweight: an annotated tag is a real object carrying a
+tagger, a date and a message, so `git describe` names builds sensibly and the
+release's own summary survives independently of the merge commit. The name is
+`v` + the exact `pubspec.yaml` version, with no build number — the `+n` suffix is
+CI's run counter and changes on every rebuild of the same source.
+
+Releases before v0.13.0 are **not** tagged retroactively. Their merge commits all
+carry the version in the subject line (`Merge feature/… (v0.11.0)`), which is
+enough to find them, and inventing tags after the fact would put dates on objects
+that never had them.
+
+Gating `android.yml` on `pubspec.yaml`'s version matching the tag was considered
+and **deferred**: that workflow is already gated on `workflow_run` from CI and
+checks out `workflow_run.head_sha`, and a tag-equality check on top of that has
+to answer what a `workflow_dispatch` run — which has no tag — should do. It is
+worth doing once tagging has actually been in use for a few releases.
 
 ## Licensing
 
