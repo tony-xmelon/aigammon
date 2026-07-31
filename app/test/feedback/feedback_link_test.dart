@@ -86,7 +86,7 @@ void main() {
   });
 
   group('currentPlatformName', () {
-    test('names the running platform in lowercase', () {
+    test("names the running platform with Flutter's own spelling", () {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       expect(currentPlatformName(), 'windows');
       debugDefaultTargetPlatformOverride = TargetPlatform.android;

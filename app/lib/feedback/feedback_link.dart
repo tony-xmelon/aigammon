@@ -19,7 +19,9 @@ const String kFeedbackRepository = 'tony-xmelon/aigammon';
 /// what this returns.
 ///
 /// [appVersion] is `appVersion` from `branding/app_version.dart`; [platform] is
-/// a short lowercase platform name (`android`, `ios`, `windows`, …).
+/// a short platform name from [currentPlatformName] (`android`, `iOS`,
+/// `windows`, …) — Flutter's own spelling, mixed case and all, since a report
+/// is read by a human and `iOS` is what that human calls it.
 /// [diagnosticsExcerpt], when given, is appended verbatim in a fenced block —
 /// the Diagnostics screen passes the on-device error log so a crash report
 /// carries its own stack trace.
@@ -72,7 +74,12 @@ String _clampExcerpt(String excerpt) => excerpt.length <= _maxExcerptChars
     : '${excerpt.substring(0, _maxExcerptChars)}\n… (truncated — use Copy to '
         'clipboard on the Diagnostics screen for the full log)';
 
-/// A short, lowercase name for the platform the app is running on.
+/// A short name for the platform the app is running on.
+///
+/// Flutter's own spelling, NOT normalized: `android`, `windows`, `macOS`,
+/// `iOS`. It is [TargetPlatform]'s enum name, and it goes into an issue title
+/// a person reads, so `iOS` is a feature rather than an inconsistency. Nothing
+/// matches on this string, so there is nothing for the mixed case to break.
 ///
 /// [defaultTargetPlatform] rather than `dart:io`'s `Platform` so this works on
 /// every target and can be overridden in a test.

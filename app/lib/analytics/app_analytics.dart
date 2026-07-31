@@ -7,8 +7,8 @@ import 'analytics_events.dart';
 /// The app's observability seam: usage analytics.
 ///
 /// **Why an interface at all.** The concrete backend is FlutterFire, which
-/// exists only on Android and iOS in this app (see `observability.dart` for the
-/// platform guard and the reasoning). Every caller therefore talks to THIS,
+/// exists only on Android and iOS in this app (see `firebase_config.dart` for
+/// the platform guard and the reasoning). Every caller therefore talks to THIS,
 /// never to `FirebaseAnalytics`, and gets a [NoopAnalytics] on Windows/Linux/
 /// macOS and in every widget test. Two consequences worth stating plainly:
 ///
