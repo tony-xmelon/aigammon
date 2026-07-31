@@ -96,7 +96,6 @@ void main() {
       final s = fresh();
       expect(s.canonicalPlay(Move(const [CheckerMove(23, 20)])), isNull,
           reason: 'one hop when two dice are playable');
-      expect(s.isLegalPlay(Move(const [CheckerMove(23, 20)])), isFalse);
       expect(s.canonicalPlay(Move.none), isNull,
           reason: 'a pass while moves exist');
       // Out-of-range hops are refused before the board ever sees them.

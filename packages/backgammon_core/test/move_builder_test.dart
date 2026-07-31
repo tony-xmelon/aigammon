@@ -3,25 +3,46 @@ import 'dart:math';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:test/test.dart';
 
+/// A builder standing on [board] with [player] to play [dice]. The only
+/// constructor is position-aware, so every test goes through a [GameState].
+MoveBuilder builderFor(BoardState board, Player player, Dice dice) =>
+    MoveBuilder.forState(GameState.testState(
+      board: board,
+      turn: player,
+      phase: GamePhase.moving,
+      dice: dice,
+    ));
+
 void main() {
   group('MoveBuilder opening 3-1 (White, initial board)', () {
     final legal =
         MoveGenerator.legalMoves(BoardState.initial(), Player.white, Dice(3, 1));
+    MoveBuilder newBuilder() =>
+        builderFor(BoardState.initial(), Player.white, Dice(3, 1));
 
-    test('selectableSources equals the generator-derived first-hop sources', () {
-      // With no hops chosen, any hop of any legal move can start the turn
-      // (reorderings allowed), so the expected sources are the union of every
-      // hop's from-value across all legal moves.
-      final expected = <int>{
+    test('selectableSources are the occupied points a legal move starts from',
+        () {
+      final b = newBuilder();
+      final board = BoardState.initial();
+      // Every offered source holds one of White's checkers RIGHT NOW. The union
+      // of all hop from-values is larger — it also lists transit points, e.g.
+      // the empty 23-point a back checker only passes through on its way to 20.
+      for (final s in b.selectableSources) {
+        expect(board.points[s], greaterThan(0),
+            reason: 'source $s holds no White checker');
+      }
+      final anyHopSource = <int>{
         for (final m in legal)
           for (final cm in m.checkerMoves) cm.from,
       };
-      final b = MoveBuilder(legal);
-      expect(b.selectableSources, equals(expected));
+      expect(anyHopSource, containsAll(b.selectableSources));
+      // Concretely, on the opening board with 3-1 that is White's four stacks:
+      // the 24-, 13-, 8- and 6-points.
+      expect(b.selectableSources, equals(<int>{23, 12, 7, 5}));
     });
 
     test('golden point 8/5 6/5 entered as (7,4) then (5,4) completes', () {
-      final b = MoveBuilder(legal);
+      final b = newBuilder();
       b.addHop(7, 4);
       expect(b.destinationsFor(5), contains(4));
       b.addHop(5, 4);
@@ -33,7 +54,7 @@ void main() {
     });
 
     test('reordering: (5,4) then (7,4) also completes to the same move', () {
-      final b = MoveBuilder(legal);
+      final b = newBuilder();
       expect(b.selectableSources, contains(5));
       b.addHop(5, 4);
       expect(b.destinationsFor(7), contains(4));
@@ -46,7 +67,7 @@ void main() {
     });
 
     test('addHop with an unoffered pair throws and leaves state unchanged', () {
-      final b = MoveBuilder(legal);
+      final b = newBuilder();
       final beforeSources = b.selectableSources;
       final beforeChosen = List.of(b.chosenHops);
       expect(() => b.addHop(0, 0), throwsArgumentError);
@@ -59,7 +80,7 @@ void main() {
 
     test('undoHop then re-add works; reset clears; chosenHops reflects order',
         () {
-      final b = MoveBuilder(legal);
+      final b = newBuilder();
       b.addHop(7, 4);
       b.addHop(5, 4);
       expect(b.chosenHops.map((c) => '${c.from}>${c.to}').toList(),
@@ -77,7 +98,7 @@ void main() {
       b.reset();
       expect(b.chosenHops, isEmpty);
       expect(b.isComplete, isFalse);
-      expect(b.selectableSources, equals(MoveBuilder(legal).selectableSources));
+      expect(b.selectableSources, equals(newBuilder().selectableSources));
 
       // undoHop on empty is a no-op.
       b.undoHop();
@@ -88,6 +109,8 @@ void main() {
   group('MoveBuilder doubles (1-1, initial board)', () {
     final legal =
         MoveGenerator.legalMoves(BoardState.initial(), Player.white, Dice(1, 1));
+    MoveBuilder newBuilder() =>
+        builderFor(BoardState.initial(), Player.white, Dice(1, 1));
 
     test('all legal moves have length four', () {
       expect(legal, isNotEmpty);
@@ -95,7 +118,7 @@ void main() {
     });
 
     test('four hops enterable one at a time to completion', () {
-      final b = MoveBuilder(legal);
+      final b = newBuilder();
       var guard = 0;
       while (!b.isComplete) {
         expect(b.selectableSources, isNotEmpty,
@@ -111,7 +134,7 @@ void main() {
     });
 
     test('partial prefixes offer only generator-backed continuations', () {
-      final b = MoveBuilder(legal);
+      final b = newBuilder();
       final source = b.selectableSources.first;
       final dest = b.destinationsFor(source).first;
       b.addHop(source, dest);
@@ -132,7 +155,20 @@ void main() {
 
   group('MoveBuilder dance (no legal moves)', () {
     test('empty legal set: no sources, not complete, build throws', () {
-      final b = MoveBuilder(const []);
+      // White is on the bar and Black owns every entry point, so 1-1 dances.
+      final board = BoardState(
+        points: [
+          14, 0, 0, 0, 0, 0, //  1-6
+          0, 0, 0, 0, 0, 0, //  7-12
+          0, 0, 0, 0, 0, -2, // 13-18
+          -2, -2, -2, -2, -2, -3, // 19-24 (every entry point owned)
+        ],
+        whiteBar: 1,
+      );
+      expect(MoveGenerator.legalMoves(board, Player.white, Dice(1, 1)), isEmpty,
+          reason: 'precondition: this really is a dance');
+
+      final b = builderFor(board, Player.white, Dice(1, 1));
       expect(b.selectableSources, isEmpty);
       expect(b.isComplete, isFalse);
       expect(b.build, throwsStateError);
@@ -156,7 +192,7 @@ void main() {
           MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
       expect(legal, isNotEmpty);
 
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(6, 5));
       expect(b.selectableSources, contains(5));
       expect(b.destinationsFor(5), contains(CheckerMove.off));
 
@@ -183,7 +219,7 @@ void main() {
           MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
       expect(legal, isNotEmpty);
 
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(6, 5));
       expect(b.selectableSources, contains(CheckerMove.bar));
       // Entering from the bar is offered, and destinations are real entry
       // points (24 - die => index 18 or 19).
@@ -228,10 +264,14 @@ void main() {
       final canonical = legal.single;
       final expected = board.applyMove(Player.white, canonical);
 
-      final b = MoveBuilder(legal);
-      // Enter REVERSED: 22/18 (21->17) first, then 24/22 (23->21).
-      b.addHop(21, 17);
+      final b = MoveBuilder.forState(state);
+      // The REVERSED entry — 22/18 (21->17) before 24/22 (23->21) — is not even
+      // offered: index 21 is empty until the 24-point checker arrives there.
+      expect(b.selectableSources, equals(<int>{23}));
+      expect(() => b.addHop(21, 17), throwsArgumentError);
+
       b.addHop(23, 21);
+      b.addHop(21, 17);
       expect(b.isComplete, isTrue);
       // build() emits the canonical playable order, not the tap order.
       expect(
@@ -259,7 +299,7 @@ void main() {
         final legal = MoveGenerator.legalMoves(
             BoardState.initial(), Player.white, dice);
         for (var trial = 0; trial < 25; trial++) {
-          final b = MoveBuilder(legal);
+          final b = builderFor(BoardState.initial(), Player.white, dice);
           var guard = 0;
           while (!b.isComplete) {
             expect(b.selectableSources, isNotEmpty,
@@ -283,9 +323,7 @@ void main() {
       // Index 23 is White's 24-point (two back checkers). With 3-1 a single
       // checker may run both dice: 24/23/20 or 24/21/20 — both land on the
       // 20-point (index 19). The chained landing is deduped to 19.
-      final legal = MoveGenerator.legalMoves(
-          BoardState.initial(), Player.white, Dice(3, 1));
-      final b = MoveBuilder(legal);
+      final b = builderFor(BoardState.initial(), Player.white, Dice(3, 1));
 
       final chained = b.chainedDestinationsFor(23);
       expect(chained, contains(19),
@@ -306,7 +344,7 @@ void main() {
     test('chainFor yields a sequence the builder can enter hop-by-hop', () {
       final legal = MoveGenerator.legalMoves(
           BoardState.initial(), Player.white, Dice(3, 1));
-      final b = MoveBuilder(legal);
+      final b = builderFor(BoardState.initial(), Player.white, Dice(3, 1));
       final chain = b.chainFor(23, 19);
       expect(chain, isNotEmpty);
       // Entering the chain hop-by-hop never throws and leaves a legal prefix.
@@ -336,8 +374,7 @@ void main() {
         whiteOff: 13,
         blackOff: 13,
       );
-      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(6, 5));
       // The 6-point (index 5) can bear off (6) or move to 1 (5) — both single
       // hops. There is no chain (a chain would need the same checker to play
       // both dice, but a 6-5 from index 5 overshoots).
@@ -358,8 +395,7 @@ void main() {
         whiteBar: 1,
         whiteOff: 5,
       );
-      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(6, 5));
       // bar/19 (index 18, the 6) then 19/14... is blocked; bar/18 (index 19,
       // the 5) then 18/12 (index 17->11? no). Compute what the builder actually
       // offers: any chain must start from the bar and be enterable.
@@ -370,7 +406,7 @@ void main() {
         expect(chain.length, greaterThanOrEqualTo(2));
         expect(chain.first.from, CheckerMove.bar);
         expect(chain.last.to, landing);
-        final probe = MoveBuilder(legal);
+        final probe = builderFor(board, Player.white, Dice(6, 5));
         for (final h in chain) {
           probe.addHop(h.from, h.to);
         }
@@ -394,7 +430,7 @@ void main() {
       );
       final legal = MoveGenerator.legalMoves(board, Player.white, Dice(1, 1));
       expect(legal, isNotEmpty);
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(1, 1));
       final chained = b.chainedDestinationsFor(23);
       // The back checker can walk 23->22->21->20->19; the deepest chain lands
       // on 19 (four hops = the whole move).
@@ -415,9 +451,7 @@ void main() {
       // the same prefix and source, so the answer is cached per source and
       // dropped whenever the prefix moves. This pins both halves: the cached
       // answer is the same answer, and it is computed once.
-      final legal = MoveGenerator.legalMoves(
-          BoardState.initial(), Player.white, Dice(3, 1));
-      final b = MoveBuilder(legal);
+      final b = builderFor(BoardState.initial(), Player.white, Dice(3, 1));
       expect(b.chainSearches, 0);
 
       final first = b.chainedDestinationsFor(23);
@@ -437,7 +471,7 @@ void main() {
       b.addHop(7, 4);
       final afterHop = b.chainedDestinationsFor(23);
       expect(b.chainSearches, 3);
-      final reference = MoveBuilder(legal)..addHop(7, 4);
+      final reference = builderFor(BoardState.initial(), Player.white, Dice(3, 1))..addHop(7, 4);
       expect(afterHop, equals(reference.chainedDestinationsFor(23)));
 
       // Undo restores the original prefix — and the original answer.
@@ -452,9 +486,7 @@ void main() {
     });
 
     test('the cached set is unmodifiable, so a caller cannot poison it', () {
-      final legal = MoveGenerator.legalMoves(
-          BoardState.initial(), Player.white, Dice(3, 1));
-      final b = MoveBuilder(legal);
+      final b = builderFor(BoardState.initial(), Player.white, Dice(3, 1));
       expect(() => b.chainedDestinationsFor(23).add(99),
           throwsUnsupportedError);
     });
@@ -511,9 +543,7 @@ void main() {
     });
 
     test('chainedDestinationsFor is empty for a non-source', () {
-      final legal = MoveGenerator.legalMoves(
-          BoardState.initial(), Player.white, Dice(3, 1));
-      final b = MoveBuilder(legal);
+      final b = builderFor(BoardState.initial(), Player.white, Dice(3, 1));
       // Index 0 has no White checker in the opening / is not a first hop source.
       expect(b.chainedDestinationsFor(0), isEmpty);
       expect(b.chainFor(0, 5), isEmpty);
@@ -542,7 +572,7 @@ void main() {
       final board = home({3: 1}, whiteOff: 14);
       final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 5));
       expect(legal, isNotEmpty);
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(6, 5));
       expect(b.selectableSources, contains(3));
       expect(b.destinationsFor(3), contains(CheckerMove.off),
           reason: 'overshoot bear-off from the highest point is offered '
@@ -561,8 +591,7 @@ void main() {
       // but DOES surface it as a same-checker two-die chain, which the BoardView
       // enters at once when combined taps are on.
       final board = home({3: 1}, whiteOff: 14);
-      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 2));
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(6, 2));
       expect(b.destinationsFor(3), isNot(contains(CheckerMove.off)),
           reason: 'the 6 cannot bear off first under the maximal-dice rule');
       expect(b.destinationsFor(3), contains(1)); // the 2: 4-point -> 2-point
@@ -591,29 +620,41 @@ void main() {
         expect(m.checkerMoves.first.from, 4,
             reason: 'every legal turn bears the highest (5-)point off first');
       }
-      // The builder tolerates reordered ENTRY (it permutes a listed move), so
-      // tapping the lower checker off first is accepted; build() still emits the
-      // canonical, rule-legal ordering (5/off then 4/off). This is NOT a rule
-      // violation: the board result is identical and correct.
-      final b = MoveBuilder(legal);
-      b.addHop(3, CheckerMove.off); // user taps the 4-point checker first
-      b.addHop(4, CheckerMove.off);
+      // The builder never OFFERS the reordering either: while the 5-point is
+      // occupied a 6 may not lift the 4-point checker, so that tap is refused
+      // and the user is walked through the rule-legal order.
+      final b = builderFor(board, Player.white, Dice(6, 6));
+      expect(b.destinationsFor(3), isNot(contains(CheckerMove.off)));
+      expect(() => b.addHop(3, CheckerMove.off), throwsArgumentError);
+
+      b.addHop(4, CheckerMove.off); // the highest point comes off first
+      expect(b.destinationsFor(3), contains(CheckerMove.off),
+          reason: 'the 4-point is now the furthest back');
+      b.addHop(3, CheckerMove.off);
       expect(b.isComplete, isTrue);
       expect(b.build().checkerMoves.first.from, 4,
           reason: 'canonical build bears the highest point off first');
     });
 
-    test('(b2) non-double: the 6 bears off whichever point is highest after the '
-        '2 is played (off offered from both bear-off sources)', () {
+    test('(b2) non-double: the 6 bears off whichever point is highest ONCE the '
+        '2 has been played', () {
       // idx3 + idx4, dice 6-2. Two legal turns exist — 5/3 then 4/off, and
       // 4/2 then 3/off — so a bear-off with the 6 is reachable from either
-      // point (as the point that is highest once the 2 has been played). The
-      // builder therefore offers off from both idx3 and idx4.
+      // point, but only as the point that is highest AT THAT MOMENT. Up front
+      // that is idx4 alone.
       final board = home({3: 1, 4: 1}, whiteOff: 13);
       final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 2));
-      final b = MoveBuilder(legal);
-      expect(b.destinationsFor(4), contains(CheckerMove.off));
-      expect(b.destinationsFor(3), contains(CheckerMove.off));
+      expect(legal, isNotEmpty);
+      final b = builderFor(board, Player.white, Dice(6, 2));
+      expect(b.destinationsFor(4), contains(CheckerMove.off),
+          reason: 'the 5-point is the furthest back, so the 6 overshoots it');
+      expect(b.destinationsFor(3), isNot(contains(CheckerMove.off)),
+          reason: 'the 4-point may not overshoot while the 5-point stands');
+
+      // Play the 2 from the 5-point instead: the 4-point is now furthest back.
+      final other = builderFor(board, Player.white, Dice(6, 2));
+      other.addHop(4, 2); // 5/3
+      expect(other.destinationsFor(3), contains(CheckerMove.off));
     });
 
     test('(d) multi-checker: two on the 4-point bear off sequentially on 6-6',
@@ -623,8 +664,7 @@ void main() {
       // the second bears off too. The builder offers off from idx3, and keeps
       // offering it after the first hop is entered.
       final board = home({3: 2}, whiteOff: 13);
-      final legal = MoveGenerator.legalMoves(board, Player.white, Dice(6, 6));
-      final b = MoveBuilder(legal);
+      final b = builderFor(board, Player.white, Dice(6, 6));
       expect(b.destinationsFor(3), contains(CheckerMove.off));
       b.addHop(3, CheckerMove.off);
       expect(b.destinationsFor(3), contains(CheckerMove.off),

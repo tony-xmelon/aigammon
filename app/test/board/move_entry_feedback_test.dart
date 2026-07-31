@@ -249,7 +249,7 @@ void main() {
         phase: GamePhase.moving,
         dice: Dice(6, 1),
       );
-      final sources = MoveBuilder(state.legalMoves).selectableSources;
+      final sources = MoveBuilder.forState(state).selectableSources;
       expect(sources, contains(8), reason: 'precondition: the blot is a source');
       expect(sources, isNot(contains(7)),
           reason: 'precondition: the 1-destination is NOT itself a source');
@@ -381,7 +381,7 @@ void main() {
   group('the 7-point investigation (regression guard)', () {
     test('with the 5- and 6-points open, the 7-point IS offered', () {
       final state = _sevenPointState(blockSeven: false);
-      final builder = MoveBuilder(state.legalMoves);
+      final builder = MoveBuilder.forState(state);
       expect(builder.selectableSources, contains(6),
           reason: 'both 7/5 (the 2) and 7/6 (the 1) are available');
       expect(builder.destinationsFor(6), containsAll(<int>{4, 5}));
@@ -406,7 +406,7 @@ void main() {
         dice: Dice(2, 1),
       );
 
-      final builder = MoveBuilder(state.legalMoves);
+      final builder = MoveBuilder.forState(state);
       expect(builder.selectableSources, contains(6),
           reason: 'before anything is staged the 7-point can play the 2');
 
@@ -424,7 +424,7 @@ void main() {
     });
 
     test('with both landing points blocked the 7-point is never a source', () {
-      final builder = MoveBuilder(_sevenPointState(blockSeven: true).legalMoves);
+      final builder = MoveBuilder.forState(_sevenPointState(blockSeven: true));
       expect(builder.selectableSources, isNot(contains(6)));
       expect(builder.selectableSources, isNotEmpty,
           reason: 'the turn is playable — just not with those checkers');

@@ -298,10 +298,6 @@ class GameState {
     return null;
   }
 
-  /// Whether [move] is a legal play in this state — [canonicalPlay] without the
-  /// answer.
-  bool isLegalPlay(Move move) => canonicalPlay(move) != null;
-
   GameState play(Move move) {
     _require(phase == GamePhase.moving, 'not in the moving phase');
     final canonical = canonicalPlay(move);

@@ -94,7 +94,7 @@ void main() {
     test('prefers the bigger die when both are legal from the checker', () {
       final state =
           GameState.opening(firstPlayer: Player.white, openingDice: Dice(3, 1));
-      final builder = MoveBuilder(state.legalMoves);
+      final builder = MoveBuilder.forState(state);
       // The 8-point can play either die: 8/5 (the 3) or 8/7 (the 1).
       expect(builder.destinationsFor(7), containsAll(<int>{4, 6}));
       expect(highestDieDestination(builder, 7, Player.white), 4,
@@ -114,7 +114,7 @@ void main() {
         phase: GamePhase.moving,
         dice: Dice(6, 1),
       );
-      final builder = MoveBuilder(state.legalMoves);
+      final builder = MoveBuilder.forState(state);
       expect(builder.destinationsFor(CheckerMove.bar), {23});
       expect(highestDieDestination(builder, CheckerMove.bar, Player.white), 23);
     });
@@ -122,7 +122,7 @@ void main() {
     test('returns null for a location that offers no hop', () {
       final state =
           GameState.opening(firstPlayer: Player.white, openingDice: Dice(3, 1));
-      final builder = MoveBuilder(state.legalMoves);
+      final builder = MoveBuilder.forState(state);
       expect(highestDieDestination(builder, 0, Player.white), isNull);
     });
   });

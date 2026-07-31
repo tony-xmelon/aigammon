@@ -7,11 +7,12 @@ import 'player.dart';
 
 /// Builds a full-turn [Move] hop by hop, always staying inside the legal set.
 ///
-/// Construct with [MoveBuilder.forState] (what the board does) or, position-free,
-/// with the current position's legal moves. The builder narrows candidates as
-/// hops are chosen: a candidate survives while some permutation of its hops
-/// starts with the chosen hops (compared by from/to, ignoring hit flags).
-/// Because turns are at most 4 hops, permutation matching is brute-force.
+/// Construct with [MoveBuilder.forState] — the only constructor, so the builder
+/// always knows the position it is entering moves from. The builder narrows
+/// candidates as hops are chosen: a candidate survives while some permutation of
+/// its hops starts with the chosen hops (compared by from/to, ignoring hit
+/// flags). Because turns are at most 4 hops, permutation matching is
+/// brute-force.
 ///
 /// The builder offers only hops that appear in surviving candidates, so a
 /// completed sequence always corresponds to a legal move (possibly entered as
@@ -20,9 +21,9 @@ import 'player.dart';
 /// user's tap order — because `BoardState.applyMove` is order-dependent for a
 /// single checker transiting a point it vacates (see [build]).
 ///
-/// ## Position awareness ([MoveBuilder.forState])
+/// ## Position awareness
 ///
-/// The plain constructor can only offer what the supplied move list spells out,
+/// A builder fed only `legalMoves` could offer just what that list spells out,
 /// and `legalMoves` lists ONE representative decomposition per resulting
 /// position. That stranded checkers mid-turn: after 13/9 of a 4-1 the same
 /// checker could not play the 1, because the listed representative of that
@@ -35,8 +36,7 @@ import 'player.dart';
 /// right now: a permutation may reorder a transit chain into a hop whose source
 /// is empty (offering the empty 12-point as a "source" and previewing a phantom
 /// checker). Such hops are filtered out, so [selectableSources] is exactly what
-/// the user can pick up. Both refinements are additive — the position-free
-/// constructor behaves exactly as it always did.
+/// the user can pick up.
 ///
 /// Hits: chosen hops are recorded with `isHit == false` and compared to
 /// candidates by (from, to) only. [build] resolves back to the matching legal
@@ -69,23 +69,23 @@ import 'player.dart';
 ///   generator already satisfied at that point of the canonical ordering.
 ///
 /// `move_entry_property_test.dart` proves all of this empirically over hundreds
-/// of real positions, in both modes, including that no offered hop is illegal at
-/// the moment it is offered.
+/// of real positions, including that no offered hop is illegal at the moment it
+/// is offered.
 class MoveBuilder {
   final List<Move> _legal;
 
   /// Every enterable hop sequence, each mapped to the legal move it commits.
-  /// One per legal move for the position-free constructor; one per
-  /// [MoveVariants.decompositions] entry when the position is known.
+  /// One per [MoveVariants.decompositions] entry.
   final List<_Candidate> _candidates;
 
-  /// The position the turn starts from, when known: enables the playability
-  /// filter in [_computeNextHops]. `null` for the position-free constructor.
-  final BoardState? _board;
-  final Player? _player;
+  /// The position the turn starts from: the base for the playability filter in
+  /// [_computeNextHops].
+  final BoardState _board;
+  final Player _player;
 
-  /// The roll, known exactly when [_board] is (both come from the same state).
-  /// Only the bear-off filter needs it — see [_canBearOff].
+  /// The roll. `null` only outside the moving phase, where there are no
+  /// candidates at all and so nothing ever asks — see [_canBearOff], the one
+  /// place that needs it.
   final Dice? _dice;
 
   final List<CheckerMove> _chosen = [];
@@ -111,23 +111,9 @@ class MoveBuilder {
   int get chainSearches => _chainSearches;
   int _chainSearches = 0;
 
-  /// The board the CHOSEN prefix has reached, when the position is known — the
-  /// base for the playability filter and for the chain DFS, which carries it
-  /// forward hop by hop. `null` for the position-free constructor.
-  BoardState? _position;
-
-  /// Position-free: offers exactly the decompositions listed in [legalMoves]
-  /// (plus their reorderings). Prefer [MoveBuilder.forState] for live entry.
-  MoveBuilder(List<Move> legalMoves)
-      : _legal = List.of(legalMoves),
-        _candidates = [
-          for (final m in legalMoves) _Candidate(m.checkerMoves, m),
-        ],
-        _board = null,
-        _player = null,
-        _dice = null {
-    _recompute();
-  }
+  /// The board the CHOSEN prefix has reached — the base for the playability
+  /// filter and for the chain DFS, which carries it forward hop by hop.
+  late BoardState _position;
 
   /// Position-aware builder for [state]'s moving phase: every playable way to
   /// enter each legal move is offered, and only hops playable from the live
@@ -142,8 +128,8 @@ class MoveBuilder {
           state.dice,
         );
 
-  MoveBuilder._variants(List<MoveVariants> variants, BoardState board,
-      Player player, Dice? dice)
+  MoveBuilder._variants(
+      List<MoveVariants> variants, BoardState board, Player player, Dice? dice)
       : _legal = [for (final v in variants) v.canonical],
         _candidates = [
           for (final v in variants)
@@ -210,10 +196,10 @@ class MoveBuilder {
   /// DFS from [currentPos] (the same checker's current location) collecting the
   /// landings of every enterable chain of length ≥ 2 into [out]. [prefix] is the
   /// hypothetical chosen sequence (real prefix + chain so far), [position] the
-  /// board it produces (null when the position is unknown), and [chain] the
-  /// same-checker hops accumulated from [source]. The position is carried down
-  /// one hop at a time rather than rebuilt per node.
-  void _collectChains(List<CheckerMove> prefix, BoardState? position,
+  /// board it produces, and [chain] the same-checker hops accumulated from
+  /// [source]. The position is carried down one hop at a time rather than
+  /// rebuilt per node.
+  void _collectChains(List<CheckerMove> prefix, BoardState position,
       int currentPos, List<CheckerMove> chain, Set<int> out) {
     for (final h in _computeNextHops(prefix, position)) {
       if (h.from != currentPos) continue; // must continue the SAME checker
@@ -226,7 +212,7 @@ class MoveBuilder {
 
   /// DFS variant returning the first enterable chain (length ≥ 2) whose final
   /// hop lands on [landing], or `null`.
-  List<CheckerMove>? _findChain(List<CheckerMove> prefix, BoardState? position,
+  List<CheckerMove>? _findChain(List<CheckerMove> prefix, BoardState position,
       int currentPos, int landing, List<CheckerMove> chain) {
     for (final h in _computeNextHops(prefix, position)) {
       if (h.from != currentPos) continue;
@@ -302,10 +288,8 @@ class MoveBuilder {
   void _recompute() {
     _chainCache.clear();
     var position = _board;
-    if (position != null) {
-      for (final hop in _chosen) {
-        position = _advance(position, hop);
-      }
+    for (final hop in _chosen) {
+      position = _advance(position, hop);
     }
     _position = position;
     _nextHops = _computeNextHops(_chosen, position);
@@ -314,18 +298,17 @@ class MoveBuilder {
   /// The next-hop options for an arbitrary [prefix]: for every candidate
   /// decomposition and every permutation of its hops whose first `prefix.length`
   /// hops equal [prefix] (by from/to), the next hop is offered (deduped by
-  /// from/to). When the position is known, a hop whose source holds no checker of
-  /// the mover's at this point in the turn is skipped — a permutation may reorder
-  /// a transit chain into an unplayable order.
+  /// from/to). A hop whose source holds no checker of the mover's at this point
+  /// in the turn is skipped — a permutation may reorder a transit chain into an
+  /// unplayable order.
   ///
-  /// [position] is the board [prefix] produces (`null` when this builder does not
-  /// know the position, which switches the playability filter off).
+  /// [position] is the board [prefix] produces.
   ///
   /// Used both for the live prefix (via [_recompute]) and for the hypothetical
   /// prefixes explored while enumerating combined-move chains, so chain hops are
   /// exactly the hops the builder would offer when they are played.
   List<CheckerMove> _computeNextHops(
-      List<CheckerMove> prefix, BoardState? position) {
+      List<CheckerMove> prefix, BoardState position) {
     final k = prefix.length;
     final result = <CheckerMove>[];
     final seen = <int>{};
@@ -340,16 +323,16 @@ class MoveBuilder {
         if (!seen.add(key)) continue; // already decided about this hop
         // Playability does not depend on WHICH candidate offered the hop, so a
         // rejected hop stays rejected for this prefix (hence the seen key above).
-        if (position != null && !_isPlayable(hop, position, prefix)) continue;
+        if (!_isPlayable(hop, position, prefix)) continue;
         result.add(hop);
       }
     }
     return result;
   }
 
-  /// [position] with [hop] played, or `null` when the position is unknown.
-  BoardState? _advance(BoardState? position, CheckerMove hop) =>
-      position?.applyMove(_player!, Move([hop]));
+  /// [position] with [hop] played.
+  BoardState _advance(BoardState position, CheckerMove hop) =>
+      position.applyMove(_player, Move([hop]));
 
   /// Whether [hop] is legal to play RIGHT NOW — at [position], the board the
   /// already-chosen [prefix] has reached.
@@ -366,7 +349,7 @@ class MoveBuilder {
   /// legal in any order.
   bool _isPlayable(
       CheckerMove hop, BoardState position, List<CheckerMove> prefix) {
-    final player = _player!;
+    final player = _player;
     final onBar = position.barFor(player);
     if (hop.from == CheckerMove.bar) {
       if (onBar == 0) return false;
@@ -389,7 +372,7 @@ class MoveBuilder {
   /// straggler comes home, and `4/off 2/off` on a 6-4 reordered overshoots the
   /// 2-point while the 4-point is still occupied. Neither is offered.
   bool _canBearOff(int from, BoardState position, List<CheckerMove> prefix) {
-    final player = _player!;
+    final player = _player;
     if (position.barFor(player) > 0) return false;
     final white = player == Player.white;
     // Every checker inside the mover's home board (White 0-5, Black 18-23).

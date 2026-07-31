@@ -33,9 +33,8 @@ import 'package:test/test.dart';
 /// "landing" targets: every chain [MoveBuilder.chainFor] returns is enterable
 /// hop by hop and really lands where it claims.
 ///
-/// Both builder modes are exercised: the position-free [MoveBuilder] (which can
-/// only offer the decompositions it was handed) and [MoveBuilder.forState] (what
-/// the board uses).
+/// Everything runs through [MoveBuilder.forState] — the only constructor, and
+/// what the board uses.
 ///
 /// The DFS over offered paths is bounded by a node budget per position, so a
 /// doubles turn with many movable checkers is sampled rather than exhausted.
@@ -74,25 +73,22 @@ void main() {
             'shape the P0 lived in');
   });
 
-  for (final positionAware in [false, true]) {
-    final mode = positionAware ? 'MoveBuilder.forState' : 'MoveBuilder(legal)';
-    test('$mode: entry never dead-ends, over sampled real positions', () {
-      final rng = Random(4242);
-      for (final c in positions) {
-        _checkEntry(c, rng, positionAware: positionAware);
-      }
-    });
+  test('entry never dead-ends, over sampled real positions', () {
+    final rng = Random(4242);
+    for (final c in positions) {
+      _checkEntry(c, rng);
+    }
+  });
 
-    test('$mode: crafted tight positions still complete', () {
-      final rng = Random(7);
-      for (final c in _craftedPositions()) {
-        expect(c.board.checkerCount(Player.white), 15, reason: 'setup: $c');
-        expect(c.board.checkerCount(Player.black), 15, reason: 'setup: $c');
-        expect(c.state.legalMoves, isNotEmpty, reason: 'setup: $c is playable');
-        _checkEntry(c, rng, positionAware: positionAware);
-      }
-    });
-  }
+  test('crafted tight positions still complete', () {
+    final rng = Random(7);
+    for (final c in _craftedPositions()) {
+      expect(c.board.checkerCount(Player.white), 15, reason: 'setup: $c');
+      expect(c.board.checkerCount(Player.black), 15, reason: 'setup: $c');
+      expect(c.state.legalMoves, isNotEmpty, reason: 'setup: $c is playable');
+      _checkEntry(c, rng);
+    }
+  });
 
   group('the P0 shape: the checker just moved keeps playing', () {
     /// White with two checkers on the 13-point (index 12) and a 4-1 to play.
@@ -157,8 +153,8 @@ void main() {
 
     test('no phantom source: the empty 12-point is not selectable', () {
       final s = state();
-      expect(MoveBuilder(s.legalMoves).selectableSources, contains(11),
-          reason: 'the position-free builder used to offer this empty point');
+      // A permutation of the listed 13/12 12/8 run starts from the empty
+      // 12-point; without the playability filter that used to be offered.
       expect(MoveBuilder.forState(s).selectableSources, isNot(contains(11)),
           reason: 'no checker sits there, so it cannot be picked up');
     });
@@ -305,12 +301,11 @@ List<_Case> _craftedPositions() {
   ];
 }
 
-/// Asserts properties (a)-(f) for one position, in one builder mode.
-void _checkEntry(_Case c, Random rng, {required bool positionAware}) {
+/// Asserts properties (a)-(f) for one position.
+void _checkEntry(_Case c, Random rng) {
   final legal = c.state.legalMoves;
-  final reason = 'position: $c (${positionAware ? "position-aware" : "listed"})';
-  MoveBuilder make() =>
-      positionAware ? MoveBuilder.forState(c.state) : MoveBuilder(legal);
+  final reason = 'position: $c';
+  MoveBuilder make() => MoveBuilder.forState(c.state);
 
   if (legal.isEmpty) {
     final builder = make();
@@ -328,12 +323,9 @@ void _checkEntry(_Case c, Random rng, {required bool positionAware}) {
 
   // Every enterable hop sequence, with the move it must commit to.
   final entries = <({Move decomposition, Move canonical})>[
-    if (positionAware)
-      for (final v in c.state.legalVariants)
-        for (final d in v.decompositions)
-          (decomposition: d, canonical: v.canonical)
-    else
-      for (final m in legal) (decomposition: m, canonical: m),
+    for (final v in c.state.legalVariants)
+      for (final d in v.decompositions)
+        (decomposition: d, canonical: v.canonical),
   ];
   for (final e in entries) {
     expect(e.decomposition.checkerMoves.length, len, reason: reason);
@@ -356,15 +348,13 @@ void _checkEntry(_Case c, Random rng, {required bool positionAware}) {
       final after = c.board.applyMove(c.player, built);
       expect(after.checkerCount(Player.white), 15, reason: reason);
       expect(after.checkerCount(Player.black), 15, reason: reason);
-      if (positionAware) {
-        var stepped = c.board;
-        for (final hop in prefix) {
-          stepped = stepped.applyMove(c.player, Move([hop]));
-        }
-        expect(stepped, after,
-            reason: 'entering ${Move(prefix)} hop by hop must reach the same '
-                'position as committing $built — $reason');
+      var stepped = c.board;
+      for (final hop in prefix) {
+        stepped = stepped.applyMove(c.player, Move([hop]));
       }
+      expect(stepped, after,
+          reason: 'entering ${Move(prefix)} hop by hop must reach the same '
+              'position as committing $built — $reason');
       return;
     }
     // (a) An incomplete prefix ALWAYS offers a continuation.
@@ -375,7 +365,7 @@ void _checkEntry(_Case c, Random rng, {required bool positionAware}) {
     // (f) Every offered hop is one the rules allow AT THIS MOMENT: its source
     // holds a checker of the mover's, and a bear-off really is available (all
     // home, and an overshoot only from the furthest-back checker).
-    if (positionAware) {
+    {
       var position = c.board;
       for (final hop in prefix) {
         position = position.applyMove(c.player, Move([hop]));
