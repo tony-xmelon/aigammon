@@ -167,6 +167,12 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned, unlike the other two `flutter-action` uses in this file: the
+          # golden comparisons below are a byte-for-byte PNG match with zero
+          # tolerance, so a stable-channel Skia/text-rendering change on an
+          # unpinned SDK would redden this job with nothing in the repo having
+          # changed. Bump deliberately, alongside regenerating the PNGs locally.
+          flutter-version: 3.44.8
           cache: true
       - run: flutter pub get
         working-directory: app
