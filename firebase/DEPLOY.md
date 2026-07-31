@@ -228,6 +228,73 @@ flutter build apk --release \
   --dart-define=AIGAMMON_FIREBASE_ANDROID_APP_ID=<1:...:android:...>
 ```
 
+### What this telemetry does NOT capture
+
+Read this before concluding from a quiet console that nothing is going wrong.
+Every limit below is a consequence of the no-config-file design, and every one
+is a deliberate accepted trade, not an oversight.
+
+**1. Anything that fails before Dart runs.** `Firebase.initializeApp` is called
+from Dart `main()`, not from a native `Application`/`AppDelegate`, because the
+options come from `--dart-define`s that only exist on the Dart side. So the
+window between process start and the first Dart frame — native library
+loading, the engine `.so` failing to load at all, an early ANR — is invisible
+to all three products. A crash there produces no Crashlytics report, no
+Analytics session, nothing.
+
+**2. Android automatic Analytics events fire late, and some are lost.** The
+Analytics SDK normally starts with the process (via its ContentProvider) and
+attributes the session and the first `screen_view` from that instant. Here it
+only becomes live once Dart has initialized it, so the automatic
+`session_start`/`first_open`/`screen_view` events that would have been emitted
+before that point are simply not emitted. **The app's own manual `screen_view`
+and custom events are unaffected** — they are all logged from Dart, after
+init, and are the events the dashboards are actually built on.
+
+**3. Android native (NDK) crashes are NOT reported.** A SIGSEGV inside the
+Rust engine `.so` reaches Crashlytics on iOS but not on Android. NDK capture
+needs the `firebase-crashlytics-ndk` artifact plus the Crashlytics Gradle
+plugin; that plugin resolves the Firebase app id from a string resource that
+`com.google.gms.google-services` generates out of `google-services.json`, and
+this project has no such file by design. Applying the plugin without it fails
+the build. The same prerequisite is why the `com.google.firebase.firebase-perf`
+Gradle plugin is not applied either — which costs only the *automatic*
+network/screen traces; the app's custom traces need no instrumentation and
+work as documented.
+
+> **Open decision, needs a call before 1.0.** Either add
+> `android/app/google-services.json` (and `ios/Runner/GoogleService-Info.plist`
+> for symmetry), breaking the no-config-file convention that has held since
+> Plan 5, and get native crash capture plus automatic perf traces; or accept
+> Dart-level crash reporting on Android and leave it as it is. Note the file is
+> not a secret — it holds the same project id, api key and app id already
+> shipping in the binary as defines — so the objection is to the duplication
+> and the fork-inherits-our-project failure mode, not to leaking anything.
+
+**4. iOS crash reports arrive unsymbolicated.** The `FirebaseCrashlytics` pod
+does install its handlers at init, so native iOS crashes *are* captured — but
+`Runner.xcodeproj` has no run-script build phase invoking
+`${PODS_ROOT}/FirebaseCrashlytics/upload-symbols`, so no dSYM ever reaches
+Firebase and stacks show raw addresses. **Manual follow-up, needs Xcode:** open
+`app/ios/Runner.xcworkspace`, select the *Runner* target → *Build Phases* → **+
+→ New Run Script Phase**, name it `Upload Crashlytics dSYMs`, place it last,
+untick *Based on dependency analysis*, and set the script to
+`"${PODS_ROOT}/FirebaseCrashlytics/run"` with Input Files
+`${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}`
+and `$(SRCROOT)/$(BUILT_PRODUCTS_DIR)/$(INFOPLIST_PATH)`. This was left to the
+GUI deliberately: hand-editing `project.pbxproj` to add a build phase risks
+corrupting the project file for a benefit that only materializes once someone
+has a Mac in front of them anyway.
+
+**5. First Windows build now downloads ~900 MB.** `firebase_core` ships a
+Windows plugin whose `CMakeLists.txt` fetches the Firebase C++ SDK zip, so the
+first `flutter build windows` after a checkout or a `flutter clean` pays that
+download and unpack before it compiles anything. It is *harmless* —
+`isFirebaseSupportedPlatform` refuses to initialize Firebase off Android/iOS,
+so no Dart code ever reaches the plugin — but it is a real cost in time and
+bandwidth on a machine that will never use it, and worth knowing about before
+assuming a Windows build has hung.
+
 ## Free-tier budget
 
 Spark's daily Firestore quota is **50,000 document reads, 20,000 writes and
