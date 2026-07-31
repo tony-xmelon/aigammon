@@ -15,6 +15,7 @@ import '../game/player_agent.dart';
 import '../tutor/move_assessment.dart';
 import '../tutor/tutor_service.dart';
 import 'game/dice_presenter.dart';
+import 'game/game_dialogs.dart';
 import 'game/game_hud.dart';
 import 'history_screen.dart';
 import 'metric_explainer.dart';
@@ -1178,11 +1179,62 @@ class _GameScreenState extends State<GameScreen> {
   /// moment anything above it wants the screen, so it can never sit on top of a
   /// decision the match is waiting for.
   List<Widget> _buildModals(Player? cubeSide, Player? resignSide) {
-    if (_c.matchOver) return [_matchEndDialog()];
-    if (_c.awaitingNextGame) return [_gameEndDialog()];
-    if (_passDevicePending) return [_passDeviceOverlay()];
-    if (cubeSide != null) return [_cubeDialog(cubeSide)];
-    if (resignSide != null) return [_resignDialog(resignSide)];
+    if (_c.matchOver) {
+      return [
+        matchEndDialog(
+          winner: _c.match.winner,
+          score: scoreLine(_c),
+          savedToHistory: _canShowSummary,
+          summaryAction: _canShowSummary ? _summaryAction('Match summary') : null,
+          onDone: () => Navigator.of(context).maybePop(),
+        ),
+      ];
+    }
+    if (_c.awaitingNextGame) {
+      return [
+        gameEndDialog(
+          result: _c.state.result!,
+          score: scoreLine(_c),
+          summaryAction: _canShowSummary ? _summaryAction('Analyze game') : null,
+          onNextGame: _c.continueToNextGame,
+        ),
+      ];
+    }
+    if (_passDevicePending) {
+      return [
+        passDeviceOverlay(
+          context,
+          turn: _c.state.turn,
+          onDismiss: _dismissPassDevice,
+        ),
+      ];
+    }
+    if (cubeSide != null) {
+      // The decider is `state.turn`; the doubler is the opponent.
+      final state = _c.pendingCubeOf(cubeSide).value!;
+      final advice = _cubeResponseAdvice;
+      return [
+        cubeDialog(
+          state: state,
+          tutorLine: _tutor == null || advice == null
+              ? ''
+              : '\nTutor: ${advice.advice.shouldTake ? 'Take' : 'Pass'}',
+          onPass: () => _answerCube(cubeSide, CubeAction.drop),
+          onTake: () => _answerCube(cubeSide, CubeAction.take),
+        ),
+      ];
+    }
+    if (resignSide != null) {
+      final (state, value) = _c.pendingResignOf(resignSide).value!;
+      return [
+        resignDialog(
+          state: state,
+          value: value,
+          onDecline: () => _c.submitResignResponse(resignSide, false),
+          onAccept: () => _c.submitResignResponse(resignSide, true),
+        ),
+      ];
+    }
     if (_surrenderOpen) return [_surrenderDialog()];
     return const [];
   }
@@ -1335,20 +1387,20 @@ class _GameScreenState extends State<GameScreen> {
     if (_surrenderFor == null) return _surrenderSideChooser();
     final ready = _surrenderReady;
     final side = _surrenderFor!;
-    return _ModalCard(
+    return ModalCard(
       title: 'Surrender',
       message: _surrenderNeedsSideChoice
           // Name the side back to the user: on a shared device the sheet is the
           // only place that says WHO this concession costs.
-          ? '${_playerName(side)} concedes the current game.'
+          ? '${playerName(side)} concedes the current game.'
           : 'Concedes the current game.',
       footnote: ready
           ? null
           : _surrenderNeedsSideChoice
-              ? "Available at the start of ${_playerName(side)}'s turn"
+              ? "Available at the start of ${playerName(side)}'s turn"
               : 'Available at the start of your turn',
       actions: [
-        _CardAction(
+        CardAction(
           label: 'Cancel',
           onPressed: () => setState(_closeSurrender),
         ),
@@ -1357,7 +1409,7 @@ class _GameScreenState extends State<GameScreen> {
           (ResignValue.gammon, 'Gammon (2)'),
           (ResignValue.backgammon, 'Backgammon (3)'),
         ])
-          _CardAction(
+          CardAction(
             label: label,
             onPressed: ready ? () => _surrender(value) : null,
           ),
@@ -1373,17 +1425,17 @@ class _GameScreenState extends State<GameScreen> {
   /// holds the values shut until THAT side's own pre-roll gate — so a choice
   /// made during the opponent's turn simply waits rather than firing against
   /// whoever happens to be on turn.
-  Widget _surrenderSideChooser() => _ModalCard(
+  Widget _surrenderSideChooser() => ModalCard(
         title: 'Surrender',
         message: 'Who is conceding this game?',
         actions: [
-          _CardAction(
+          CardAction(
             label: 'Cancel',
             onPressed: () => setState(_closeSurrender),
           ),
           for (final side in [Player.white, Player.black])
-            _CardAction(
-              label: _playerName(side),
+            CardAction(
+              label: playerName(side),
               onPressed: () => setState(() => _surrenderFor = side),
             ),
         ],
@@ -1403,57 +1455,6 @@ class _GameScreenState extends State<GameScreen> {
     _c.offerResign(value);
   }
 
-  Widget _passDeviceOverlay() {
-    final name = _playerName(_c.state.turn);
-    return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _dismissPassDevice,
-        child: ColoredBox(
-          color: Theme.of(context).colorScheme.surface,
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Pass the device', style: _titleStyle),
-                const SizedBox(height: 12),
-                Text("$name's turn", style: _titleStyle),
-                const SizedBox(height: 24),
-                const Text('Tap to continue'),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _cubeDialog(Player side) {
-    final state = _c.pendingCubeOf(side).value!;
-    // The decider is `state.turn`; the doubler is the opponent.
-    final doubler = _playerName(state.turn.opponent);
-    final newValue = state.cube.value * 2;
-    final advice = _cubeResponseAdvice;
-    final tutorLine = _tutor == null || advice == null
-        ? ''
-        : '\nTutor: ${advice.advice.shouldTake ? 'Take' : 'Pass'}';
-    return _ModalCard(
-      title: 'Double offered',
-      message: '$doubler offers a double to $newValue. Take or pass?$tutorLine',
-      actions: [
-        _CardAction(
-          label: 'Pass',
-          onPressed: () => _answerCube(side, CubeAction.drop),
-        ),
-        _CardAction(
-          label: 'Take',
-          filled: true,
-          onPressed: () => _answerCube(side, CubeAction.take),
-        ),
-      ],
-    );
-  }
-
   /// Answers a double, reporting the choice before submitting it — the cube
   /// value is read from the CURRENT state, which the submission is about to
   /// change.
@@ -1466,63 +1467,6 @@ class _GameScreenState extends State<GameScreen> {
     _c.submitCubeResponse(side, action);
   }
 
-  Widget _resignDialog(Player side) {
-    final (state, value) = _c.pendingResignOf(side).value!;
-    final resigner = _playerName(state.turn.opponent);
-    return _ModalCard(
-      title: 'Resignation offered',
-      message: '$resigner offers to resign a ${_resignName(value)}. '
-          'Accept or decline?',
-      actions: [
-        _CardAction(
-          label: 'Decline',
-          onPressed: () => _c.submitResignResponse(side, false),
-        ),
-        _CardAction(
-          label: 'Accept',
-          filled: true,
-          onPressed: () => _c.submitResignResponse(side, true),
-        ),
-      ],
-    );
-  }
-
-  Widget _gameEndDialog() {
-    final result = _c.state.result!;
-    return _ModalCard(
-      title: 'Game over',
-      message: '${_gameEndSummary(result)}\n${_scoreLine(_c)}',
-      actions: [
-        if (_canShowSummary) _summaryAction('Analyze game'),
-        _CardAction(
-          label: 'Next game',
-          filled: true,
-          onPressed: _c.continueToNextGame,
-        ),
-      ],
-    );
-  }
-
-  Widget _matchEndDialog() {
-    final winner = _c.match.winner;
-    return _ModalCard(
-      title: 'Match over',
-      message: '${winner == null ? 'Nobody' : _playerName(winner)} wins the '
-          'match.\n${_scoreLine(_c)}',
-      // A subtle reassurance that a finished match can be revisited later from
-      // the home screen's History, even after this dialog is dismissed.
-      footnote: _canShowSummary ? 'Saved to History' : null,
-      actions: [
-        if (_canShowSummary) _summaryAction('Match summary'),
-        _CardAction(
-          label: 'Done',
-          filled: true,
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-      ],
-    );
-  }
-
   /// The post-game analysis link is offered whenever the match is PERSISTED
   /// ([GameScreen.persistedMatchId] set) — regardless of the live [GameScreen.tutor]
   /// setting. Analysis runs off the engine (the [AnalysisScreen] builds its own
@@ -1530,7 +1474,7 @@ class _GameScreenState extends State<GameScreen> {
   /// not hide the entry point. Same gate for both end dialogs.
   bool get _canShowSummary => widget.persistedMatchId != null;
 
-  _CardAction _summaryAction(String label) => _CardAction(
+  CardAction _summaryAction(String label) => CardAction(
         label: label,
         busy: _summaryLoading,
         onPressed: _summaryLoading ? null : _openMatchSummary,
@@ -1798,7 +1742,7 @@ class _GameScreenState extends State<GameScreen> {
     if (presenting != null && _c.isLocalHuman(presenting)) return 'Rolling…';
     if (_c.isThinking) return 'Thinking…';
     if (_c.matchOver || _c.awaitingNextGame) return '';
-    return "${_playerName(_c.state.turn)}'s turn";
+    return "${playerName(_c.state.turn)}'s turn";
   }
 
   // --- Score sheet -----------------------------------------------------------
@@ -2365,49 +2309,7 @@ class _GameScreenState extends State<GameScreen> {
       ),
     );
   }
-
-  TextStyle get _titleStyle =>
-      Theme.of(context).textTheme.headlineSmall ?? const TextStyle(fontSize: 20);
 }
-
-// --- Shared formatting -------------------------------------------------------
-
-String _playerName(Player p) => p == Player.white ? 'White' : 'Black';
-
-String _resignName(ResignValue v) => switch (v) {
-      ResignValue.single => 'single',
-      ResignValue.gammon => 'gammon',
-      ResignValue.backgammon => 'backgammon',
-    };
-
-/// The game-end dialog's one-line summary, in plain language.
-///
-/// Replaces the old jargon fold ("Black wins 1 (drop).", which read as a score
-/// of 1 and a mystery word) with what actually happened and what it was worth:
-/// "Black wins this game (+1) — White declined the double." / "White wins this
-/// game (+2, gammon)." Terse by design — the running match score follows on the
-/// next line.
-String _gameEndSummary(GameResult result) {
-  final winner = _playerName(result.winner);
-  final loser = _playerName(result.winner.opponent);
-  final points = '+${result.points}';
-  return switch (result.outcome) {
-    GameOutcome.single => '$winner wins this game ($points).',
-    GameOutcome.gammon => '$winner wins this game ($points, gammon).',
-    GameOutcome.backgammon =>
-      '$winner wins this game ($points, backgammon).',
-    GameOutcome.drop =>
-      '$winner wins this game ($points) — $loser declined the double.',
-    GameOutcome.resignation =>
-      '$winner wins this game ($points) — $loser resigned.',
-  };
-}
-
-String _scoreLine(MatchController c) {
-  final m = c.match;
-  return 'White ${m.whiteScore} — ${m.blackScore} Black  (to ${m.matchLength})';
-}
-
 
 // --- Error banner ------------------------------------------------------------
 
@@ -2472,114 +2374,6 @@ class _TapHintBanner extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-// --- Declarative modal card --------------------------------------------------
-
-class _CardAction {
-  const _CardAction({
-    required this.label,
-    required this.onPressed,
-    this.filled = false,
-    this.busy = false,
-  });
-
-  final String label;
-
-  /// Null disables the button (e.g. while [busy] awaits an async action).
-  final VoidCallback? onPressed;
-  final bool filled;
-
-  /// When true the button shows a small spinner in place of its label.
-  final bool busy;
-}
-
-/// A declarative modal: an opaque [ModalBarrier] plus a centred [Material] card.
-/// No route, no animation — visibility is a pure function of the caller's state.
-class _ModalCard extends StatelessWidget {
-  const _ModalCard({
-    required this.title,
-    required this.message,
-    required this.actions,
-    this.footnote,
-  });
-
-  final String title;
-  final String message;
-  final List<_CardAction> actions;
-
-  /// An optional subtle line (bodySmall) shown between the message and the
-  /// action row — e.g. the match-end "Saved to History" reassurance.
-  final String? footnote;
-
-  /// Renders one action as a filled or text button, showing a small spinner in
-  /// place of the label while [_CardAction.busy].
-  Widget _actionButton(_CardAction action) {
-    final child = action.busy
-        ? const SizedBox(
-            height: 18,
-            width: 18,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
-        : Text(action.label);
-    return action.filled
-        ? FilledButton(onPressed: action.onPressed, child: child)
-        : TextButton(onPressed: action.onPressed, child: child);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        const Positioned.fill(
-          child: ModalBarrier(color: Colors.black54, dismissible: false),
-        ),
-        Center(
-          child: Material(
-            borderRadius: BorderRadius.circular(12),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 360),
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 12),
-                    Text(message),
-                    if (footnote != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        footnote!,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color:
-                                  Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
-                      ),
-                    ],
-                    const SizedBox(height: 24),
-                    // Wrap (not Row) so a second action — e.g. the post-match
-                    // "Match summary" link alongside "Next game" / "Done" — flows
-                    // onto a new line rather than overflowing the narrow card.
-                    Wrap(
-                      alignment: WrapAlignment.end,
-                      spacing: 12,
-                      runSpacing: 4,
-                      children: [
-                        for (final action in actions) _actionButton(action),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }
