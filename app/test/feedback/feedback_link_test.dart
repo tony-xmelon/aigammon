@@ -22,7 +22,7 @@ void main() {
         '&body=%23%23%23+What+happened%3F%0A%0A%3C%21--+Describe+the+problem+'
         'or+the+idea.+--%3E%0A%0A%23%23%23+Details%0A%0A-+App+version%3A+0.12.0'
         '%0A-+Platform%3A+android%0A'
-        '&labels=feedback',
+        '&labels=enhancement',
       );
     });
 
@@ -32,7 +32,11 @@ void main() {
       expect(uri.scheme, 'https');
       expect(uri.host, 'github.com');
       expect(uri.path, '/tony-xmelon/aigammon/issues/new');
-      expect(uri.queryParameters['labels'], 'feedback');
+      // `enhancement` and not `feedback`: GitHub silently drops a `labels=`
+      // value that does not exist on the repository, and `feedback` does not
+      // exist on tony-xmelon/aigammon while `enhancement` (a default label)
+      // does. A label that vanishes on submit is worse than no label.
+      expect(uri.queryParameters['labels'], 'enhancement');
     });
 
     test('the decoded body carries the version and platform', () {

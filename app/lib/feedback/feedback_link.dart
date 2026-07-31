@@ -54,7 +54,11 @@ Uri buildFeedbackIssueUri({
   return Uri.https('github.com', '/$kFeedbackRepository/issues/new', {
     'title': '[Feedback] AIGammon $appVersion ($platform)',
     'body': body.toString(),
-    'labels': 'feedback',
+    // Must name a label that EXISTS on the repository: GitHub applies the ones
+    // it recognizes and silently drops the rest, so an invented label is a
+    // no-op that looks like it worked. `enhancement` is one of GitHub's default
+    // labels and is present on tony-xmelon/aigammon; `feedback` is not.
+    'labels': 'enhancement',
   });
 }
 
