@@ -236,18 +236,26 @@ class AppSettings {
   /// Whether the one-time drag/tap discoverability hint has already been shown.
   final bool dragHintShown;
 
-  /// The [AnimationTimings] preset for the current [animationSpeed], with the
   /// Whether a NETWORKED match (LAN or online) starts with live tutor mode.
   ///
   /// [tutorOverride] rules when the user set it explicitly; Auto (null) keeps
   /// the networked default, ON. Networked play has no per-mode default to
   /// derive — the opponent is a person, so there is no AI level to key on the
   /// way the new-match screen does for vs-computer — and the tutor has always
-  /// been available there, so Auto keeps that behaviour unchanged. The tutor is
-  /// local and read-only either way: it evaluates the LOCAL player's own moves
-  /// with the on-device engine and never touches the shared match state.
+  /// been available there, so Auto keeps that behaviour unchanged.
+  ///
+  /// The tutor is local and read-only either way: it runs on the on-device
+  /// engine and never touches the shared match state. It does NOT confine
+  /// itself to your own moves — the score sheet marks BOTH columns, so every
+  /// completed move is assessed on the same terms, yours and the opponent's
+  /// alike. What stays local to you is the PROSPECTIVE help: hints and cube
+  /// advice are only ever offered for your own pending decision, never for the
+  /// opponent's. Retrospective for both, prospective for you alone — which is
+  /// also why turning the tutor off can only cost you help and never hand you
+  /// an advantage.
   bool get networkedTutorEnabled => tutorOverride ?? true;
 
+  /// The [AnimationTimings] preset for the current [animationSpeed], with the
   /// dice beat stripped out when [diceRollAnimation] is off.
   AnimationTimings get timings => diceRollAnimation
       ? animationSpeed.timings

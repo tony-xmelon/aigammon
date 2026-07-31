@@ -169,8 +169,9 @@ class SettingsScreen extends ConsumerWidget {
                     Text(
                       'Auto follows the per-mode default: on for easy/medium vs '
                       'computer and for nearby/online play, off otherwise. On '
-                      'and Off apply to every mode. The tutor only ever reads '
-                      'your own moves, on this device.',
+                      'and Off apply to every mode. The tutor runs on this '
+                      'device: it hints only your own decisions, and scores '
+                      'both players’ moves once they are played.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant),
                     ),

@@ -498,9 +498,13 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       if (live && failure != null) _say(_errorText(failure));
       return;
     }
-    // The tutor is local and read-only online: it keys post-move chips on the
-    // local side. Built only when the setting has it on ([tutorEnabled]); null
-    // is what turns every tutor surface off on the board.
+    // The tutor is local and read-only online. It marks BOTH columns of the
+    // score sheet — the opponent's completed moves are assessed on the same
+    // terms as your own — but everything PROSPECTIVE (hints, cube advice) is
+    // offered for the local player's own pending decision alone. Retrospective
+    // for both, prospective for you: that is what keeps it fair, and why an
+    // off-switch can only cost you help. Built only when the setting has it on
+    // ([tutorEnabled]); null is what turns every tutor surface off on the board.
     final tutor =
         tutorEnabled ? TutorService(ref.read(engineFacadeProvider)) : null;
     await Navigator.of(context).push(

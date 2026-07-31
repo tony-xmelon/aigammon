@@ -184,9 +184,11 @@ state.
   produces per-move equity loss, a blunder list, and overall error rates per
   player (gnubg-style). Results are stored locally and browsable in an
   analysis screen with step-through board replay.
-- Online, tutor analyzes only the local player's own moves. No ratings exist in
-  v1, so live hints raise no fairness concerns yet; revisit if rated play is
-  added.
+- Online, the tutor marks both players' completed moves (the score sheet scores
+  both columns), but offers prospective help — hints and cube advice — only for
+  the local player's own pending decision. It is local and read-only either way.
+  No ratings exist in v1, so live hints raise no fairness concerns yet; revisit
+  if rated play is added.
 
 ## 6. Persistence
 

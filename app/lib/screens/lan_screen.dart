@@ -1142,11 +1142,15 @@ Future<void> _openGame({
   required String opponentLabel,
 }) async {
   final settings = ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
-  // The tutor is local and read-only on the LAN exactly as it is online: it
-  // keys its post-move chips on the local side, and the peer is a person, not
-  // the AI. Whether it is built at all is the user's setting — see
-  // [AppSettings.networkedTutorEnabled] for what Auto means here — and a null
-  // tutor is what turns every tutor surface off on the board.
+  // The tutor is local and read-only on the LAN exactly as it is online. It
+  // marks BOTH columns of the score sheet — the peer's completed moves are
+  // assessed on the same terms as your own — but everything PROSPECTIVE (hints,
+  // cube advice) is offered for the local player's own pending decision alone.
+  // Retrospective for both, prospective for you: that is what keeps it fair,
+  // and why an off-switch can only cost you help. Whether it is built at all is
+  // the user's setting — see [AppSettings.networkedTutorEnabled] for what Auto
+  // means here — and a null tutor is what turns every tutor surface off on the
+  // board.
   final tutor = settings.networkedTutorEnabled
       ? TutorService(ref.read(engineFacadeProvider))
       : null;
