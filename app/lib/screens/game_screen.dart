@@ -1092,8 +1092,11 @@ class _GameScreenState extends State<GameScreen> {
   /// (a [_gameGeneration] mismatch) or the screen unmounted.
   void _fireAssessment(int eventIndex, GameState before, Move played) {
     final gen = _gameGeneration;
-    unawaited(_tutor!.assess(before, played).then((assessment) {
+    unawaited(_tutor!.assessOrNull(before, played).then((assessment) {
       if (!mounted || gen != _gameGeneration) return;
+      // Null = the engine could not answer (already recorded by the tutor).
+      // The cell stays unmarked rather than claiming a verdict.
+      if (assessment == null) return;
       setState(() => _assessmentsByEventIndex[eventIndex] = assessment);
       _markSheetDirty(); // a cell gained its mark dot and equity loss
     }));
@@ -1116,9 +1119,11 @@ class _GameScreenState extends State<GameScreen> {
     final seq = ++_cubeAdviceSeq;
     _cubeAdvice = null;
     unawaited(_tutor!
-        .assessCube(s, _c.contextFor(s.turn), playerDoubled: false)
+        .assessCubeOrNull(s, _c.contextFor(s.turn), playerDoubled: false)
         .then((advice) {
-      if (!mounted || seq != _cubeAdviceSeq) return;
+      // A null advice leaves the row absent, which is what it already looks
+      // like before the answer lands — no error over the board.
+      if (!mounted || seq != _cubeAdviceSeq || advice == null) return;
       setState(() => _cubeAdvice = advice);
     }));
   }
@@ -1139,9 +1144,9 @@ class _GameScreenState extends State<GameScreen> {
     _cubeResponseAdvice = null;
     final state = _c.pendingCubeOf(cubeSide).value!;
     unawaited(_tutor!
-        .assessCubeResponse(state, _c.contextFor(state.turn))
+        .assessCubeResponseOrNull(state, _c.contextFor(state.turn))
         .then((advice) {
-      if (!mounted || seq != _cubeResponseSeq) return;
+      if (!mounted || seq != _cubeResponseSeq || advice == null) return;
       setState(() => _cubeResponseAdvice = advice);
     }));
   }
@@ -1165,7 +1170,10 @@ class _GameScreenState extends State<GameScreen> {
     final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
     final state =
         (moveSide != null ? _c.pendingMoveOf(moveSide).value : null) ?? _c.state;
-    unawaited(_tutor!.hint(state).then((moves) {
+    // An engine failure comes back as an empty list, which the panel already
+    // renders as "no suggestion" — the spinner stops either way, so the panel
+    // cannot be left loading forever.
+    unawaited(_tutor!.hintOrNone(state).then((moves) {
       if (!mounted || seq != _hintSeq) return;
       setState(() {
         _hintLoading = false;

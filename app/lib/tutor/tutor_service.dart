@@ -1,6 +1,7 @@
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
 
+import '../diagnostics/crash_log.dart';
 import '../game/player_agent.dart';
 import 'move_assessment.dart';
 
@@ -149,5 +150,77 @@ class TutorService {
       cubeLife: cubeLife,
     );
     return CubeAssessment(actionWasDouble: true, advice: advice);
+  }
+
+  // --- Live-tutor variants ---------------------------------------------------
+  //
+  // The same four questions, asked from the GAME SCREEN rather than from
+  // post-game analysis. The difference is what a failure may cost.
+  //
+  // Analysis awaits its answers and has a place to put a failure — the screen
+  // shows "Failed to analyse game" — so the methods above throw, and must keep
+  // throwing. The live tutor has neither: it is fired off mid-move and nobody
+  // is waiting, so an engine failure (a dead isolate, a call that timed out)
+  // becomes an unhandled async error with the whole game screen behind it. And
+  // there is nothing useful to say about it anyway: the tutor is an aid, and a
+  // silent one for a turn is a far smaller harm than an error over the board.
+  //
+  // So these absorb it — the mark, the advice or the hint simply does not
+  // appear — and record the cause, which is where a repeating engine failure
+  // becomes visible.
+
+  /// [hint] for the live tutor: an empty list rather than a throw.
+  ///
+  /// Empty already means "nothing to suggest" to the hint panel (a dance, a
+  /// state that is not moving), so a failure lands on a path the caller
+  /// handles.
+  Future<List<ScoredMove>> hintOrNone(GameState state) async {
+    try {
+      return await hint(state);
+    } catch (error, stack) {
+      _recordTutorFailure('hint', error, stack);
+      return const [];
+    }
+  }
+
+  /// [assess] for the live tutor: null rather than a throw.
+  ///
+  /// Null, not a zero-loss assessment: an unanswered move must leave the score
+  /// sheet cell blank, never award it the "best play" dot it did not earn.
+  Future<MoveAssessment?> assessOrNull(GameState before, Move played) async {
+    try {
+      return await assess(before, played);
+    } catch (error, stack) {
+      _recordTutorFailure('assess', error, stack);
+      return null;
+    }
+  }
+
+  /// [assessCube] for the live tutor: null rather than a throw.
+  Future<CubeAssessment?> assessCubeOrNull(GameState state, MatchContext ctx,
+      {required bool playerDoubled, double cubeLife = 0.7}) async {
+    try {
+      return await assessCube(state, ctx,
+          playerDoubled: playerDoubled, cubeLife: cubeLife);
+    } catch (error, stack) {
+      _recordTutorFailure('assessCube', error, stack);
+      return null;
+    }
+  }
+
+  /// [assessCubeResponse] for the live tutor: null rather than a throw.
+  Future<CubeAssessment?> assessCubeResponseOrNull(
+      GameState state, MatchContext deciderCtx,
+      {double cubeLife = 0.7}) async {
+    try {
+      return await assessCubeResponse(state, deciderCtx, cubeLife: cubeLife);
+    } catch (error, stack) {
+      _recordTutorFailure('assessCubeResponse', error, stack);
+      return null;
+    }
+  }
+
+  void _recordTutorFailure(String verb, Object error, StackTrace stack) {
+    CrashLog.instance.record(error, stack: stack, source: 'tutor-$verb');
   }
 }

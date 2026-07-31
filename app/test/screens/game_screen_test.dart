@@ -153,6 +153,30 @@ class HangingMoveAgent implements PlayerAgent {
 /// commits resolves to a second-best entry — a known `error`-band loss of
 /// `0.10 - 0.04 = 0.06`. [evalProbs] drives the cube advice (default gammonful:
 /// 5a/5a doubles & takes).
+/// An engine that fails every call — a dead isolate, or a reply that timed out.
+/// The live tutor must absorb it rather than let it surface as an unhandled
+/// async error behind the game screen.
+class BrokenTutorEngine implements EngineFacade {
+  int calls = 0;
+
+  Never _fail() {
+    calls++;
+    throw StateError('engine isolate died');
+  }
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) async =>
+      _fail();
+
+  @override
+  Future<List<ScoredMove>> rankMoves(
+          BoardState board, Player mover, Dice dice) async =>
+      _fail();
+
+  @override
+  Future<CubeAdvice> cubeInfo(BoardState board, Player mover) async => _fail();
+}
+
 class TutorEngine implements EngineFacade {
   TutorEngine({this.evalProbs = _gammonful});
 
@@ -5162,6 +5186,98 @@ void main() {
           maxFrames: 1200);
       expect(identical(t.widget(find.byKey(const ValueKey('hud'))), hudBefore),
           isFalse, reason: 'the header must follow the match');
+
+      c.disposeController();
+    });
+  });
+
+  group('a broken tutor engine does not disturb the game', () {
+    // flutter_test fails a test on any unhandled async error in its zone, so
+    // these are as much about what does NOT happen as what does: every one of
+    // these tutor calls is fired off with nobody awaiting it.
+
+    testWidgets('the gate still opens with the cube advice simply absent',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final engine = BrokenTutorEngine();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_tutorHarness(c, TutorService(engine)));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+      // On through Black's reply to White's next PRE-ROLL gate, which is where
+      // the cube advice is computed.
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 2000);
+      await t.pump();
+      await t.pump();
+
+      expect(engine.calls, greaterThan(0),
+          reason: 'the tutor really did ask, and really did fail');
+      expect(find.byType(BoardView), findsOneWidget,
+          reason: 'the board is still there and the gate still open');
+      expect(c.awaitingHumanTurn, isTrue);
+      expect(find.textContaining('Tutor:'), findsNothing,
+          reason: 'no advice, rather than a fabricated one');
+
+      c.disposeController();
+    });
+
+    testWidgets('the hint panel stops loading and says so', (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: HangingMoveAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_tutorHarness(c, TutorService(BrokenTutorEngine())));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      await t.tap(find.widgetWithText(OutlinedButton, 'Hint'));
+      await pumpUntil(t, () => find.text('Top plays').evaluate().isNotEmpty);
+      // The panel must not be left spinning forever on a failed ranking.
+      await pumpUntil(
+          t, () => find.byType(CircularProgressIndicator).evaluate().isEmpty,
+          maxFrames: 2000);
+      expect(find.text('No hints available.'), findsOneWidget);
+
+      c.disposeController();
+    });
+
+    testWidgets('a played move leaves its score-sheet cell unmarked',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_tutorHarness(c, TutorService(BrokenTutorEngine())));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(t, () => c.game.events.length >= 3, maxFrames: 2000);
+      await t.pump();
+      await t.pump();
+
+      // An unanswered assessment must leave the cell blank, never award it the
+      // best-play dot a fabricated zero-loss verdict would have earned.
+      expect(find.byIcon(Icons.circle), findsNothing);
+      expect(find.byKey(const ValueKey('sheetLeft1')), findsOneWidget,
+          reason: 'the move itself is still scored on the sheet');
 
       c.disposeController();
     });

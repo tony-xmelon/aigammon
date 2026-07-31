@@ -7,6 +7,7 @@ import '../analytics/analytics_events.dart';
 import '../analytics/analytics_screen_view.dart';
 import '../data/database.dart';
 import '../data/match_repository.dart';
+import '../diagnostics/crash_log.dart';
 import 'analysis_screen.dart';
 
 /// The match-history list: every recorded match, newest first, tapping through
@@ -50,8 +51,12 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     super.initState();
     // Fire-and-forget purge of the empty abandoned matches. The watch stream
     // re-emits when rows go, so no explicit refresh is needed; a failure just
-    // leaves the rows listed (they are deletable by hand).
-    unawaited(ref.read(matchRepositoryProvider).deleteEmptyAbandonedMatches());
+    // leaves the rows listed (they are deletable by hand) — so it is recorded
+    // rather than shown, but recorded rather than dropped.
+    recordFailures(
+      ref.read(matchRepositoryProvider).deleteEmptyAbandonedMatches(),
+      source: 'history-purge',
+    );
   }
 
   @override
@@ -119,7 +124,21 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
       ),
     );
     if (confirmed != true) return false;
-    await ref.read(matchRepositoryProvider).deleteMatch(match.id);
+    try {
+      await ref.read(matchRepositoryProvider).deleteMatch(match.id);
+    } catch (error, stack) {
+      // The user asked for this and watched the row swipe away, so a failure
+      // has to be said out loud — silently leaving the match listed reads as
+      // the delete not having taken.
+      CrashLog.instance
+          .record(error, stack: stack, source: 'history-delete');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not delete that match.')),
+        );
+      }
+      return false;
+    }
     if (mounted) setState(() => _deleted.add(match.id));
     return false;
   }

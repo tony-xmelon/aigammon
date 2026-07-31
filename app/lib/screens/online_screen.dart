@@ -17,6 +17,7 @@ import '../data/app_settings.dart';
 import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
 import '../data/settings_repository.dart';
+import '../diagnostics/crash_log.dart';
 import '../engine/engine_provider.dart';
 import '../net/net_match_controller.dart';
 import '../online/online_providers.dart';
@@ -163,7 +164,9 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
   @override
   void initState() {
     super.initState();
-    unawaited(_loadResume());
+    // The resume pointer is a convenience: if it will not load, the screen
+    // simply offers no Rejoin card. Recorded, not shown.
+    recordFailures(_loadResume(), source: 'online-resume');
   }
 
   @override
@@ -284,7 +287,7 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
         _createdCode = doc.code;
         _cancelled = false;
       });
-      unawaited(_pollUntilActive(api, doc.code));
+      recordFailures(_pollUntilActive(api, doc.code), source: 'online-poll');
     } catch (e) {
       if (!mounted) return;
       setState(() => _createError = _errorText(e));
@@ -314,7 +317,18 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       }
       if (!mounted || _cancelled) return;
       if (doc.isActive) {
-        await _launch(api, doc);
+        // The other two flows (join, rejoin) reach _launch inside their own
+        // try/catch; this one is reached from a loop nobody awaits, so a throw
+        // here — a history row that will not insert, a pointer that will not
+        // write — had no owner at all. Same inline slot the fetch failures
+        // above use, so the create card still says what happened.
+        try {
+          await _launch(api, doc);
+        } catch (e, stack) {
+          CrashLog.instance.record(e, stack: stack, source: 'online-launch');
+          if (!mounted || _cancelled) return;
+          setState(() => _createError = _errorText(e));
+        }
         return;
       }
       await _wait();

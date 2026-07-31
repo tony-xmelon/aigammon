@@ -317,3 +317,22 @@ class CrashLog {
     }
   }
 }
+
+/// Starts a future nobody is waiting on, with its failure routed to
+/// [CrashLog.instance] under [source].
+///
+/// The alternative at these call sites is `unawaited(...)`, which says only
+/// that the RESULT is not needed. A failure still has to go somewhere: with no
+/// handler attached it becomes an unhandled async error, which in a Flutter app
+/// means a console dump in debug and, in a release zone, whatever the zone's
+/// error handler decides — never anything the user or a bug report can use.
+///
+/// This is for the background work whose failure genuinely costs the user
+/// nothing to ignore: a resume pointer that will not load, a socket that will
+/// not close, a housekeeping delete. Anything a user is WAITING on belongs in a
+/// try/catch that says so on screen instead.
+void recordFailures(Future<void> work, {required String source}) {
+  unawaited(work.catchError((Object error, StackTrace stack) {
+    CrashLog.instance.record(error, stack: stack, source: source);
+  }));
+}

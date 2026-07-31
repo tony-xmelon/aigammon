@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/tutor/move_assessment.dart';
 import 'package:aigammon_app/tutor/tutor_service.dart';
@@ -42,6 +44,32 @@ class FakeEngine implements EngineFacade {
   @override
   Future<CubeAdvice> cubeInfo(BoardState board, Player mover) async =>
       throw UnimplementedError();
+}
+
+/// An engine that fails every call — a dead isolate, or one whose reply timed
+/// out. What the live tutor must survive.
+class BrokenEngine implements EngineFacade {
+  BrokenEngine([this.failure]);
+
+  final Object? failure;
+  int calls = 0;
+
+  Never _fail() {
+    calls++;
+    throw failure ?? StateError('engine isolate died');
+  }
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) async =>
+      _fail();
+
+  @override
+  Future<List<ScoredMove>> rankMoves(
+          BoardState board, Player mover, Dice dice) async =>
+      _fail();
+
+  @override
+  Future<CubeAdvice> cubeInfo(BoardState board, Player mover) async => _fail();
 }
 
 /// A gammonless [ScoredMove] whose cubeless equity equals [equity]
@@ -442,6 +470,72 @@ void main() {
           closeTo(advice.equityDoubleDrop, 1e-12));
       expect(round.equityLoss, closeTo(original.equityLoss, 1e-12));
       expect(round.mark, original.mark);
+    });
+  });
+
+  group('live-tutor variants degrade instead of throwing', () {
+    // Analysis awaits its answers and shows a failure; the live tutor is fired
+    // off mid-move with nobody waiting, so a throw there is an unhandled async
+    // error behind the whole game screen. These four absorb it.
+
+    test('the throwing methods still throw — analysis needs them to', () async {
+      final tutor = TutorService(BrokenEngine());
+      await expectLater(tutor.hint(_movingState()), throwsStateError);
+      await expectLater(
+          tutor.assess(_movingState(), _movingState().legalMoves.first),
+          throwsStateError);
+      await expectLater(
+          tutor.assessCube(_awaitingRollState(), _ctx(5, 5),
+              playerDoubled: false),
+          throwsStateError);
+      await expectLater(
+          tutor.assessCubeResponse(_cubeOfferedState(), _ctx(5, 5)),
+          throwsStateError);
+    });
+
+    test('hintOrNone comes back empty', () async {
+      final engine = BrokenEngine();
+      final tutor = TutorService(engine);
+      expect(await tutor.hintOrNone(_movingState()), isEmpty);
+      expect(engine.calls, 1, reason: 'it really did reach the engine');
+    });
+
+    test('assessOrNull comes back null, not a zero-loss verdict', () async {
+      final tutor = TutorService(BrokenEngine());
+      final played = _movingState().legalMoves.first;
+      // Null matters more than "no throw": a fabricated zero-loss assessment
+      // would award the move a best-play dot it never earned.
+      expect(await tutor.assessOrNull(_movingState(), played), isNull);
+    });
+
+    test('the cube variants come back null', () async {
+      final tutor = TutorService(BrokenEngine());
+      expect(
+          await tutor.assessCubeOrNull(_awaitingRollState(), _ctx(5, 5),
+              playerDoubled: false),
+          isNull);
+      expect(
+          await tutor.assessCubeResponseOrNull(_cubeOfferedState(), _ctx(5, 5)),
+          isNull);
+    });
+
+    test('a timed-out call degrades the same way as a dead isolate', () async {
+      final tutor =
+          TutorService(BrokenEngine(TimeoutException('did not reply')));
+      expect(await tutor.hintOrNone(_movingState()), isEmpty);
+      expect(
+          await tutor.assessOrNull(
+              _movingState(), _movingState().legalMoves.first),
+          isNull);
+    });
+
+    test('a working engine is untouched by the variants', () async {
+      final best = _movingState().legalMoves.first;
+      final tutor = TutorService(FakeEngine(ranked: [_scored(best, 0.1)]));
+      expect(await tutor.hintOrNone(_movingState()), hasLength(1));
+      final assessment = await tutor.assessOrNull(_movingState(), best);
+      expect(assessment, isNotNull);
+      expect(assessment!.equityLoss, closeTo(0, 1e-12));
     });
   });
 }

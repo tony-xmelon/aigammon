@@ -16,6 +16,7 @@ import '../data/app_settings.dart';
 import '../data/match_repository.dart';
 import '../data/persistence_hooks.dart';
 import '../data/settings_repository.dart';
+import '../diagnostics/crash_log.dart';
 import '../engine/engine_provider.dart';
 import '../lan/join_qr_code.dart';
 import '../lan/lan_transport.dart';
@@ -152,10 +153,11 @@ class _HostTabState extends ConsumerState<_HostTab> {
 
   @override
   void dispose() {
-    // Leaving the screen releases the port, the beacon and the match log. The
-    // future is deliberately unawaited: dispose cannot wait, and stop() is
-    // self-contained.
-    unawaited(_session?.stop());
+    // Leaving the screen releases the port, the beacon and the match log.
+    // dispose cannot wait, and there is nobody left to tell if the socket
+    // refuses to close — but the crash log still wants to know.
+    final leaving = _session?.stop();
+    if (leaving != null) recordFailures(leaving, source: 'lan-stop-hosting');
     _session = null;
     super.dispose();
   }
@@ -179,7 +181,9 @@ class _HostTabState extends ConsumerState<_HostTab> {
       }
       setState(() => _session = session);
       session.guestConnected.addListener(_onGuestPresence);
-      unawaited(_lookupAddress(transport));
+      // Cosmetic: the card shows the address so a guest can type it. If the
+      // lookup fails the card simply omits it and the QR code still works.
+      recordFailures(_lookupAddress(transport), source: 'lan-local-address');
       // A guest may already have claimed the slot between the bind and here.
       _onGuestPresence();
     } catch (e) {
@@ -223,7 +227,14 @@ class _HostTabState extends ConsumerState<_HostTab> {
     // that never became ready) latched it forever and no later presence flap
     // could open a board: the same "stuck true" shape as the drops this
     // transport has been bitten by twice.
-    unawaited(_launch(session).whenComplete(() => _launching = false));
+    unawaited(_launch(session).catchError((Object e, StackTrace stack) {
+      // Nobody awaits this — it is fired from a presence listener — so a throw
+      // on the way to the board (a history row that will not insert, a
+      // teardown that fails) had no owner. The host is still hosting, so it
+      // goes to the same slot a controller that never became ready uses.
+      CrashLog.instance.record(e, stack: stack, source: 'lan-host-launch');
+      if (mounted) setState(() => _error = _launchErrorText(e));
+    }).whenComplete(() => _launching = false));
   }
 
   /// Build the host's controller, wait for game 1 to fold, and open the board.
@@ -414,7 +425,8 @@ class _HostTabState extends ConsumerState<_HostTab> {
           ),
           const SizedBox(height: 8),
           TextButton(
-            onPressed: () => unawaited(_stopHosting()),
+            onPressed: () =>
+                recordFailures(_stopHosting(), source: 'lan-stop-hosting'),
             child: const Text('Stop hosting'),
           ),
           if (_error != null) _ErrorRow(_error!),
@@ -568,12 +580,13 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
 
   void _startSweeping() {
     _sweep?.cancel();
-    _sweep = Timer.periodic(_probeInterval, (_) => unawaited(_probe()));
+    _sweep = Timer.periodic(
+        _probeInterval, (_) => recordFailures(_probe(), source: 'lan-probe'));
     // A microtask, not a direct call: this runs from initState and from
     // didUpdateWidget, where the first thing [_probe] does — setState — is not
     // yet legal.
     scheduleMicrotask(() {
-      if (mounted) unawaited(_probe());
+      if (mounted) recordFailures(_probe(), source: 'lan-probe');
     });
   }
 
@@ -637,7 +650,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
           'device.');
       return;
     }
-    unawaited(_connect(_target!, code));
+    _startConnect(_target!, code);
   }
 
   /// Validate and start the connection for the typed-in address.
@@ -659,10 +672,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
           'device.');
       return;
     }
-    unawaited(_connect(
-      _Target(name: address, address: address, port: port),
-      code,
-    ));
+    _startConnect(_Target(name: address, address: address, port: port), code);
   }
 
   bool _validCode(String code) => validRoomCode(code);
@@ -708,20 +718,45 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
             _scanError = null;
             _formError = null;
           });
-          unawaited(_connect(
+          _startConnect(
             _Target(
               name: payload.address,
               address: payload.address,
               port: payload.port,
             ),
             payload.code,
-          ));
+          );
+      }
+    } catch (e, stack) {
+      // The scanner is a platform channel and a camera: it can fail in ways
+      // the QrScanUnavailable result does not cover. The user tapped Scan and
+      // is owed an answer, and the typing form below still works.
+      CrashLog.instance.record(e, stack: stack, source: 'lan-scan');
+      if (mounted) {
+        setState(() => _scanError = 'The scanner could not be opened. '
+            'Enter the address and code below instead.');
       }
     } finally {
       // Guards the ROUTE, so it is released as soon as the route is gone —
       // long before the join it may have started finishes.
       _scanning = false;
     }
+  }
+
+  /// Fires [_connect] from a tap. The three entry points — a discovered host,
+  /// a typed address, a scanned code — all land here so the join has exactly
+  /// one error owner.
+  ///
+  /// [_connect] guards the handshake itself, but everything around it (opening
+  /// the socket, and the launch that follows a successful welcome) could still
+  /// throw into nobody: this is a tap, not an await. The connecting card is
+  /// where a join failure belongs, and it already carries Try again and Back.
+  void _startConnect(_Target target, String code) {
+    unawaited(_connect(target, code).catchError((Object e, StackTrace stack) {
+      CrashLog.instance.record(e, stack: stack, source: 'lan-join');
+      _releaseSession();
+      if (mounted) setState(() => _failure = _joinErrorText(e));
+    }));
   }
 
   Future<void> _connect(_Target target, String code) async {
@@ -756,7 +791,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       return;
     }
     if (!mounted || !identical(_session, session)) {
-      unawaited(session.dispose());
+      recordFailures(session.dispose(), source: 'lan-release');
       return;
     }
     await _launch(session);
@@ -775,8 +810,10 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
     final sub = _statesSub;
     _session = null;
     _statesSub = null;
-    unawaited(sub?.cancel());
-    unawaited(session?.dispose());
+    if (sub != null) recordFailures(sub.cancel(), source: 'lan-release');
+    if (session != null) {
+      recordFailures(session.dispose(), source: 'lan-release');
+    }
   }
 
   /// Build the guest's controller and open the board.
@@ -884,7 +921,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: () => unawaited(_scan()),
+          onPressed: () => recordFailures(_scan(), source: 'lan-scan'),
           icon: const Icon(Icons.qr_code_scanner),
           label: const Text('Scan QR code'),
           style: FilledButton.styleFrom(

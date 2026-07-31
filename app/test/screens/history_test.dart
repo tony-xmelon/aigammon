@@ -44,6 +44,17 @@ MatchRow _unfinishedRow(int id) => MatchRow(
       completed: false,
     );
 
+/// A repository whose delete always fails — a disk that has gone away under a
+/// user who is watching the row swipe.
+class _FailingDeleteRepo extends MatchRepository {
+  _FailingDeleteRepo(super.db);
+
+  @override
+  Future<void> deleteMatch(int matchId) async {
+    throw StateError('database is gone');
+  }
+}
+
 late AppDatabase _db;
 late MatchRepository _repo;
 
@@ -53,10 +64,13 @@ late MatchRepository _repo;
 /// keeps the widget test off drift's watch-timer (which otherwise lingers past
 /// tree disposal in the fake-async test binding). Drill-down still hits the
 /// real db via `gamesFor`.
-Widget _app(Widget home, {required List<MatchRow> matches}) => ProviderScope(
+Widget _app(Widget home,
+        {required List<MatchRow> matches, MatchRepository? repo}) =>
+    ProviderScope(
       overrides: [
         databaseProvider.overrideWithValue(_db),
         matchesProvider.overrideWith((ref) => Stream.value(matches)),
+        if (repo != null) matchRepositoryProvider.overrideWithValue(repo),
       ],
       child: MaterialApp(home: home),
     );
@@ -254,6 +268,27 @@ void main() {
       expect(rows, isEmpty, reason: 'the match row is gone from the database');
       games = await t.runAsync(() => _repo.gamesFor(matchId));
       expect(games, isEmpty, reason: 'its games cascade away with it');
+    });
+    testWidgets('a delete that fails says so and leaves the row listed',
+        (t) async {
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      // The user asked for this and watched the row swipe away, so a silent
+      // failure reads as the delete having taken when it has not.
+      await t.pumpWidget(_app(const HistoryScreen(),
+          matches: [_matchRow(1)], repo: _FailingDeleteRepo(_db)));
+      await _settle(t);
+
+      await t.drag(find.textContaining('White 1 — 0 Black'),
+          const Offset(-600, 0));
+      await t.pumpAndSettle();
+      await t.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await _settle(t);
+
+      expect(find.text('Could not delete that match.'), findsOneWidget);
+      expect(find.textContaining('White 1 — 0 Black'), findsOneWidget,
+          reason: 'the row is still there, because the match still is');
     });
   });
 }

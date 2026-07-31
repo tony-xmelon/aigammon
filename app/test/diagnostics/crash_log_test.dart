@@ -164,4 +164,26 @@ void main() {
       expect(CrashLog().asText(), contains('No errors'));
     });
   });
+
+  group('recordFailures', () {
+    test('routes a rejected background future to the process-wide log', () async {
+      final before = CrashLog.instance.entries.length;
+      recordFailures(Future<void>.error(StateError('disk went away')),
+          source: 'a-background-chore');
+      // The handler is attached synchronously; the rejection lands next turn.
+      await Future<void>.delayed(Duration.zero);
+
+      final added = CrashLog.instance.entries.skip(before).toList();
+      expect(added, hasLength(1));
+      expect(added.single.source, 'a-background-chore');
+      expect(added.single.error, contains('disk went away'));
+    });
+
+    test('a future that succeeds records nothing', () async {
+      final before = CrashLog.instance.entries.length;
+      recordFailures(Future<void>.value(), source: 'a-background-chore');
+      await Future<void>.delayed(Duration.zero);
+      expect(CrashLog.instance.entries.length, before);
+    });
+  });
 }
