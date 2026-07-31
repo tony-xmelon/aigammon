@@ -17,6 +17,7 @@ import 'game/dice_presenter.dart';
 import 'game/game_dialogs.dart';
 import 'game/game_hud.dart';
 import 'game/hint_panel.dart';
+import 'game/tutor_sync.dart';
 import 'history_screen.dart';
 
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
@@ -274,63 +275,9 @@ class _GameScreenState extends State<GameScreen> {
 
   // --- Tutor state -----------------------------------------------------------
 
-  /// Count of game events observed at the last change, so a fresh MoveEvent can
-  /// be detected (and a new game — a shorter event list — resets the tutor).
-  int _lastEventCount = 0;
-
-  /// The game state the log has reached after its first [_lastEventCount]
-  /// events — the running prefix [_syncAssessment] carries forward instead of
-  /// replaying the log from scratch for every move it assesses.
-  GameState? _assessPrefix;
-
-  /// The event object the assessed log STARTS with, so a log that was replaced
-  /// rather than appended to is detected even when it is no shorter than the
-  /// old one. `Game.append` carries the same event objects forward, so an
-  /// identity check on the first event is exactly "still the same log".
-  GameEvent? _assessLogRoot;
-
-  /// Points the assessment cursor at the log as it stands NOW: nothing before
-  /// this point will be assessed, and the running prefix is the state the whole
-  /// of it has reached.
-  ///
-  /// The three fields are seeded together and never apart — a count without the
-  /// state that belongs to it would fold later events onto the wrong position.
-  /// (They were `late` initialisers once, and that is exactly what went wrong:
-  /// each initialised on its own first read, at a different point in the log.)
-  void _seedAssessmentCursor() {
-    final events = _c.game.events;
-    _lastEventCount = events.length;
-    _assessPrefix = _c.game.state;
-    _assessLogRoot = events.isEmpty ? null : events.first;
-  }
-
-  /// Post-move assessments for EVERY move of the current game — both sides,
-  /// human or not — keyed by the source [MoveEvent]'s index in the event log
-  /// (the same index [ScoreCell.eventIndex] carries). Each entry enriches its
-  /// cell in the score sheet with a mark dot + equity loss, which is why the
-  /// opponent's moves are assessed too: the sheet's second column would
-  /// otherwise be scoreless. Cleared when a new game begins.
-  final Map<int, MoveAssessment> _assessmentsByEventIndex = {};
-
-  /// Event indices whose score-sheet cell has its best-move line revealed
-  /// (tap-to-reveal). Cleared when a new game begins.
-  final Set<int> _revealedBest = {};
-
-  /// Bumped when a new game starts, so an in-flight [TutorService.assess] from
-  /// the previous game is discarded rather than written into a fresh log's map.
-  int _gameGeneration = 0;
-
-  /// Cube advice for the human's currently-open pre-roll gate, or `null`. Keyed
-  /// by [_cubeAdviceKey] so it is computed once per gate, not per rebuild.
-  CubeAssessment? _cubeAdvice;
-  int? _cubeAdviceKey;
-  int _cubeAdviceSeq = 0;
-
-  /// Take/pass advice for a human facing an opponent's double, or `null`. Keyed
-  /// by [_cubeResponseKey] so it is computed once per offer.
-  CubeAssessment? _cubeResponseAdvice;
-  int? _cubeResponseKey;
-  int _cubeResponseSeq = 0;
+  /// The live tutor's bookkeeping: per-move assessments, the pre-roll cube
+  /// advice, and the take/pass advice at an incoming double.
+  late final TutorSync _tutorSync;
 
   /// Whether the post-match "Match summary" link is awaiting the persisted match
   /// id (a brief spinner in the dialog button until the row insert resolves).
@@ -470,7 +417,14 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
-    _seedAssessmentCursor();
+    _tutorSync = TutorSync(
+      controller: _c,
+      tutor: () => widget.tutor,
+      doublingLegal: _doublingLegal,
+      pendingCubeSide: () =>
+          _humanSideWith((s) => _c.pendingCubeOf(s).value != null),
+      onSheetDirty: _markSheetDirty,
+    )..addListener(_repaint);
     _dice = DicePresenter(
       controller: _c,
       timings: () => widget.timings,
@@ -531,6 +485,8 @@ class _GameScreenState extends State<GameScreen> {
     _observable.removeListener(_onChange);
     _dice.removeListener(_repaint);
     _dice.dispose();
+    _tutorSync.removeListener(_repaint);
+    _tutorSync.dispose();
     _hint.removeListener(_repaint);
     _hint.dispose();
     _sheetRevision.dispose();
@@ -557,7 +513,7 @@ class _GameScreenState extends State<GameScreen> {
     _closeSurrenderIfOutranked();
     _dice.syncRollBeat();
     _syncDancePass();
-    _syncTutor();
+    _tutorSync.sync();
     _maybeShowDragHint();
     setState(() {});
   }
@@ -783,126 +739,6 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   // --- Tutor synchronisation -------------------------------------------------
-
-  /// Reacts to controller changes when tutor mode is on: fires a post-move
-  /// assessment for every newly-landed move, keeps the pre-roll cube advice in
-  /// sync with the open gate, and clears everything on game end / a new game.
-  void _syncTutor() {
-    if (_tutor == null) return;
-    _syncAssessment();
-    _syncCubeAdvice();
-    _syncCubeResponse();
-  }
-
-  /// Detects new [MoveEvent]s in the current game's event log and kicks off an
-  /// async assessment for EACH of them, stored under the move's event index
-  /// (see [_assessmentsByEventIndex]). A shorter event list means a new game
-  /// began: reset and clear the accumulated assessments.
-  ///
-  /// Deliberately NOT gated on [MatchController.isLocalHuman]: the score sheet
-  /// scores both columns, so the AI's / the remote player's / the other hot-seat
-  /// side's moves are assessed on exactly the same terms as your own. The extra
-  /// cost is one 0-ply `rankMoves` per opponent turn — the same call the tutor
-  /// already makes for your own move, on the same engine isolate.
-  void _syncAssessment() {
-    final events = _c.game.events;
-    final len = events.length;
-    final root = events.isEmpty ? null : events.first;
-
-    if (len < _lastEventCount || !identical(root, _assessLogRoot)) {
-      // A new game started (the event log reset). Discard the old game's
-      // assessments and abandon any in-flight ones, and re-seed the cursor on
-      // the new log.
-      _seedAssessmentCursor();
-      _assessmentsByEventIndex.clear();
-      _revealedBest.clear();
-      _gameGeneration++;
-      return;
-    }
-    if (len == _lastEventCount) return;
-
-    // One or more events appended since last time: assess every move among
-    // them. In practice the loop notifies per-append, so this is usually one.
-    //
-    // The state each move was played FROM is the running prefix, carried one
-    // event at a time. It used to be `Game.replay(events.sublist(0, i))` — a
-    // fold of the whole log, per move, which makes reviewing a game of n moves
-    // cost O(n²) folds (and n list copies) for information one forward pass
-    // already has. `Game.applyEvent` is the single step `replay` is built from,
-    // so the state handed to the tutor is the same state, event for event.
-    var before = _assessPrefix!;
-    for (var i = _lastEventCount; i < len; i++) {
-      final event = events[i];
-      if (event is MoveEvent) _fireAssessment(i, before, event.move);
-      before = Game.applyEvent(before, event);
-    }
-    _assessPrefix = before;
-    _lastEventCount = len;
-  }
-
-  /// Assesses the [played] move (whose event sits at [eventIndex]) and, on
-  /// resolution, files it under that index — unless the game has since reset
-  /// (a [_gameGeneration] mismatch) or the screen unmounted.
-  void _fireAssessment(int eventIndex, GameState before, Move played) {
-    final gen = _gameGeneration;
-    unawaited(_tutor!.assessOrNull(before, played).then((assessment) {
-      if (!mounted || gen != _gameGeneration) return;
-      // Null = the engine could not answer (already recorded by the tutor).
-      // The cell stays unmarked rather than claiming a verdict.
-      if (assessment == null) return;
-      setState(() => _assessmentsByEventIndex[eventIndex] = assessment);
-      _markSheetDirty(); // a cell gained its mark dot and equity loss
-    }));
-  }
-
-  /// Recomputes the pre-roll cube advice exactly when a human's turn gate is
-  /// open and doubling is legal; clears it otherwise. Keyed by the event count
-  /// so it is computed once per gate.
-  void _syncCubeAdvice() {
-    final s = _c.state;
-    final showAdvice = _c.awaitingHumanTurn && _doublingLegal(s);
-    if (!showAdvice) {
-      _cubeAdvice = null;
-      _cubeAdviceKey = null;
-      return;
-    }
-    final key = _c.game.events.length;
-    if (_cubeAdviceKey == key) return; // already computed for this gate
-    _cubeAdviceKey = key;
-    final seq = ++_cubeAdviceSeq;
-    _cubeAdvice = null;
-    unawaited(_tutor!
-        .assessCubeOrNull(s, _c.contextFor(s.turn), playerDoubled: false)
-        .then((advice) {
-      // A null advice leaves the row absent, which is what it already looks
-      // like before the answer lands — no error over the board.
-      if (!mounted || seq != _cubeAdviceSeq || advice == null) return;
-      setState(() => _cubeAdvice = advice);
-    }));
-  }
-
-  /// Recomputes the take/pass advice while a human faces an opponent's double
-  /// (a pending cube request); clears it otherwise. Keyed by the event count.
-  void _syncCubeResponse() {
-    final cubeSide = _humanSideWith((s) => _c.pendingCubeOf(s).value != null);
-    if (cubeSide == null) {
-      _cubeResponseAdvice = null;
-      _cubeResponseKey = null;
-      return;
-    }
-    final key = _c.game.events.length;
-    if (_cubeResponseKey == key) return;
-    _cubeResponseKey = key;
-    final seq = ++_cubeResponseSeq;
-    _cubeResponseAdvice = null;
-    final state = _c.pendingCubeOf(cubeSide).value!;
-    unawaited(_tutor!
-        .assessCubeResponseOrNull(state, _c.contextFor(state.turn))
-        .then((advice) {
-      if (!mounted || seq != _cubeResponseSeq || advice == null) return;
-      setState(() => _cubeResponseAdvice = advice);
-    }));
-  }
 
   bool _doublingLegal(GameState s) =>
       !s.isCrawfordGame && (s.cube.owner == null || s.cube.owner == s.turn);
@@ -1195,7 +1031,7 @@ class _GameScreenState extends State<GameScreen> {
     if (cubeSide != null) {
       // The decider is `state.turn`; the doubler is the opponent.
       final state = _c.pendingCubeOf(cubeSide).value!;
-      final advice = _cubeResponseAdvice;
+      final advice = _tutorSync.cubeResponseAdvice;
       return [
         cubeDialog(
           state: state,
@@ -1503,7 +1339,7 @@ class _GameScreenState extends State<GameScreen> {
   /// pre-roll gate resolves its advice).
   Widget _bottomRegion(Player? moveSide, Player? owner) {
     final showCube =
-        _tutor != null && _cubeAdvice != null && _c.awaitingHumanTurn;
+        _tutor != null && _tutorSync.cubeAdvice != null && _c.awaitingHumanTurn;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1515,7 +1351,7 @@ class _GameScreenState extends State<GameScreen> {
           SizedBox(
             key: const ValueKey('adviceLine'),
             height: _adviceLineHeight,
-            child: showCube ? _cubeAdviceLine(_cubeAdvice!) : null,
+            child: showCube ? _cubeAdviceLine(_tutorSync.cubeAdvice!) : null,
           ),
       ],
     );
@@ -1960,8 +1796,8 @@ class _GameScreenState extends State<GameScreen> {
   Widget _sheetCell(ScoreCell? cell, Key key) {
     if (cell == null) return SizedBox(key: key);
     final scheme = Theme.of(context).colorScheme;
-    final assessment = _assessmentsByEventIndex[cell.eventIndex];
-    final revealed = _revealedBest.contains(cell.eventIndex);
+    final assessment = _tutorSync.assessmentsByEventIndex[cell.eventIndex];
+    final revealed = _tutorSync.revealedBest.contains(cell.eventIndex);
     final base = TextStyle(
       fontSize: 12,
       color: scheme.onSurface,
@@ -2017,9 +1853,9 @@ class _GameScreenState extends State<GameScreen> {
       onTap: () {
         setState(() {
           if (revealed) {
-            _revealedBest.remove(cell.eventIndex);
+            _tutorSync.revealedBest.remove(cell.eventIndex);
           } else {
-            _revealedBest.add(cell.eventIndex);
+            _tutorSync.revealedBest.add(cell.eventIndex);
           }
         });
         _markSheetDirty();
