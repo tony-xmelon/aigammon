@@ -4,6 +4,9 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `online_client` deliberately does not re-export the transport surface, and
+// the only transport type this screen names is the failure a launch reports.
+import 'package:match_transport/match_transport.dart' show TransportException;
 import 'package:online_client/online_client.dart';
 
 import '../analytics/analytics_events.dart';
@@ -205,6 +208,10 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       return 'That match is not open to you.';
     }
     if (e is OnlineException) return e.message;
+    // A launch that never connected reports the transport's own reason (the
+    // REST failure, wrapped): more use than "something went wrong", and this is
+    // the only place a transport exception reaches this screen.
+    if (e is TransportException) return e.message;
     return 'Something went wrong. Please try again.';
   }
 
@@ -449,7 +456,16 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
         .read(appPerformanceProvider)
         .trace(PerfTraces.onlineConnect, () => controller.ready);
     if (!mounted || _cancelled || !controller.isReady) {
+      // `ready` also completes when the controller gives up — a `connect()`
+      // that failed leaves isReady false with the reason on `error`. Read it
+      // BEFORE disposing and say so: three flows funnel through here (create,
+      // join, rejoin) and each has its own inline error slot, so the message
+      // goes where a message about a card that may be gone belongs — the same
+      // snackbar the dead-rejoin case uses.
+      final failure = controller.error;
+      final live = mounted && !_cancelled;
       controller.disposeController();
+      if (live && failure != null) _say(_errorText(failure));
       return;
     }
     // Tutor stays available online; it keys post-move chips on the local side.

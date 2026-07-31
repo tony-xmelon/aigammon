@@ -158,6 +158,11 @@ class FakeHostSession implements HostSession {
 
   bool stopped = false;
 
+  /// A failure the next controller's `connect()` throws — the link dying inside
+  /// the handshake, which leaves [NetMatchController.isReady] false with
+  /// [NetMatchController.error] set. The screen's bail path.
+  Object? connectError;
+
   InMemoryTransport? _peer;
 
   @override
@@ -165,7 +170,8 @@ class FakeHostSession implements HostSession {
     MatchPersistence persistence = const NoopPersistence(),
   }) =>
       NetMatchController(
-        transport: InMemoryTransport.host(backend),
+        transport: _RefusingConnect(
+            InMemoryTransport.host(backend), () => connectError),
         persistence: persistence,
       );
 
@@ -185,6 +191,84 @@ class FakeHostSession implements HostSession {
     backend.seedOpening(whiteDie: 6, blackDie: 1);
     guestConnected.value = true;
   }
+}
+
+/// An [InMemoryTransport] whose `connect()` throws whatever [failure] answers
+/// at the moment it is called. Everything else is the real thing, so a
+/// controller built on it behaves normally once the fault is cleared.
+class _RefusingConnect implements MatchTransport {
+  _RefusingConnect(this.inner, this.failure);
+
+  final InMemoryTransport inner;
+  final Object? Function() failure;
+
+  @override
+  Future<TransportSession> connect() async {
+    final f = failure();
+    if (f != null) throw f;
+    return inner.connect();
+  }
+
+  @override
+  Stream<InboundFrame> get inbound => inner.inbound;
+
+  @override
+  Future<void> sendEvent({
+    required int seq,
+    required int gameNo,
+    required GameEvent event,
+  }) =>
+      inner.sendEvent(seq: seq, gameNo: gameNo, event: event);
+
+  @override
+  Future<void> createRoll(int n, String commit) => inner.createRoll(n, commit);
+
+  @override
+  Future<void> sendEntropy(int n, String entropy) =>
+      inner.sendEntropy(n, entropy);
+
+  @override
+  Future<void> sendReveal(int n, String reveal) => inner.sendReveal(n, reveal);
+
+  @override
+  Future<List<EventFrame>> eventsSince(int afterSeq) =>
+      inner.eventsSince(afterSeq);
+
+  @override
+  Future<RollFrame?> fetchRoll(int n) => inner.fetchRoll(n);
+
+  @override
+  Future<List<RollFrame>> rollsSince(int from) => inner.rollsSince(from);
+
+  @override
+  Future<void> complete() => inner.complete();
+
+  @override
+  Stream<TransportStatusEvent> get statusStream => inner.statusStream;
+
+  @override
+  TransportStatus get status => inner.status;
+
+  @override
+  String? get statusReason => inner.statusReason;
+
+  @override
+  bool get opponentPresent => inner.opponentPresent;
+
+  @override
+  Stream<bool> get opponentPresence => inner.opponentPresence;
+
+  @override
+  Capabilities get capabilities => inner.capabilities;
+
+  @override
+  Duration get inboundCadence => inner.inboundCadence;
+
+  @override
+  void setPaceHint({required bool fast}) => inner.setPaceHint(fast: fast);
+
+  @override
+  Future<void> dispose() => inner.dispose();
 }
 
 /// A guest session the test drives: it never connects to anything.
@@ -359,6 +443,40 @@ void main() {
       expect(find.byType(GameScreen), findsOneWidget);
       // A real match, folded from the relay's own log.
       expect(find.textContaining('Game 1'), findsWidgets);
+    });
+
+    testWidgets(
+        'a launch that never connects says so, and does not jam the launcher',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.text('4271'));
+
+      final session = transport.hostSession!;
+      session.connectError =
+          const TransportUnavailable('link-lost', 'the guest went away');
+      session.guestArrives();
+      await pumpUntil(t, find.textContaining('could not be started'));
+
+      // (1) The failure reaches the user. Before, the spinner simply stopped
+      //     and the host was left looking at a room code that would never open
+      //     a board, with nothing said about why.
+      expect(find.textContaining('the guest went away'), findsOneWidget);
+      expect(find.byType(GameScreen), findsNothing);
+
+      // (2) …and the launch guard is CLEAR, so the next presence flap launches.
+      //     It used to be left latched on this exact path, which made the
+      //     failure permanent for as long as the screen stayed open.
+      session.connectError = null;
+      session.guestConnected.value = false;
+      await t.pump();
+      session.guestConnected.value = true;
+      await pumpUntil(t, find.byType(GameScreen));
+      expect(find.byType(GameScreen), findsOneWidget);
     });
 
     testWidgets('the launched match is persisted as a lan match', (t) async {

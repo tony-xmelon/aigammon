@@ -353,7 +353,13 @@ class FakeMatchApi implements MatchApi {
   }
 
   @override
-  Future<String> signIn() async => uid;
+  Future<String> signIn() async {
+    // Ticked like every other operation so a test can fail the ONE call
+    // `FirestoreTransport.connect()` makes before anything else — the way a
+    // launch that never connects is provoked.
+    _tick('signIn');
+    return uid;
+  }
 
   @override
   void close() {}

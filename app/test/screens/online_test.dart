@@ -183,6 +183,31 @@ void main() {
     expect(api.joinCodes, ['ABC123']); // trimmed + uppercased
   });
 
+  testWidgets('a launch whose transport never connects says why', (t) async {
+    // The bail path after `connect()` failed: the controller answers `ready`
+    // but stays not-ready, with the failure on `error`. It used to be dropped
+    // on the floor — the spinner stopped, no board opened, and nothing at all
+    // was said.
+    await t.binding.setSurfaceSize(surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final api = screenApi(backend);
+    _waitingMatch(backend, 'ABC123');
+    await t.pumpWidget(_app(api, db: db));
+    await t.pumpAndSettle();
+
+    api.intercept = (op) => op == 'signIn'
+        ? const OnlineException('UNAVAILABLE', 'the network is gone')
+        : null;
+    await t.enterText(find.byType(TextField), 'abc123');
+    await t.pump();
+    await t.tap(find.widgetWithText(FilledButton, 'Join'));
+
+    await _pumpUntil(t, find.byType(SnackBar));
+    expect(find.byType(GameScreen), findsNothing);
+    expect(find.textContaining('the network is gone'), findsOneWidget);
+  });
+
   testWidgets('join flow persists an online match row (joiner is Black)',
       (t) async {
     await t.binding.setSurfaceSize(surface);

@@ -218,7 +218,12 @@ class _HostTabState extends ConsumerState<_HostTab> {
     if (session == null || _launching) return;
     if (!session.guestConnected.value) return;
     _launching = true;
-    unawaited(_launch(session));
+    // Cleared on EVERY exit — success, failure and throw alike. It used to be
+    // cleared only where the launch succeeded, so the bail below (a controller
+    // that never became ready) latched it forever and no later presence flap
+    // could open a board: the same "stuck true" shape as the drops this
+    // transport has been bitten by twice.
+    unawaited(_launch(session).whenComplete(() => _launching = false));
   }
 
   /// Build the host's controller, wait for game 1 to fold, and open the board.
@@ -252,7 +257,16 @@ class _HostTabState extends ConsumerState<_HostTab> {
         .read(appPerformanceProvider)
         .trace(PerfTraces.lanConnect, () => controller.ready);
     if (!mounted || !identical(_session, session) || !controller.isReady) {
+      // `ready` also completes when the controller gives up, leaving isReady
+      // false and the reason on `error` — read it BEFORE disposing. Silently
+      // stopping the spinner left the host staring at a room code that would
+      // never open a board, with nothing said about why.
+      final failure = controller.error;
+      final live = mounted && identical(_session, session);
       controller.disposeController();
+      if (live && failure != null) {
+        setState(() => _error = _launchErrorText(failure));
+      }
       return;
     }
     await _openGame(
@@ -267,6 +281,15 @@ class _HostTabState extends ConsumerState<_HostTab> {
     // its form.
     controller.disposeController();
     await _stopHosting();
+  }
+
+  /// A controller that never became ready — the link died inside the handshake,
+  /// or the guest went away again before the first state folded. The host is
+  /// still hosting, so the copy points at the retry that actually exists.
+  String _launchErrorText(Object e) {
+    final reason = e is TransportException ? e.message : '$e';
+    return 'The game could not be started: $reason. The other device can try '
+        'joining again.';
   }
 
   String _hostErrorText(Object e) => e is SocketException
@@ -785,8 +808,16 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
         .read(appPerformanceProvider)
         .trace(PerfTraces.lanConnect, () => controller.ready);
     if (!mounted || !identical(_session, session) || !controller.isReady) {
+      // As on the host side: the reason lives on `error` and dies with the
+      // controller, so it is read first and shown on the connecting card, which
+      // already carries a Try-again and a Back.
+      final failure = controller.error;
+      final live = mounted && identical(_session, session);
       controller.disposeController();
       _releaseSession();
+      if (live && failure != null) {
+        setState(() => _failure = _joinErrorText(failure));
+      }
       return;
     }
     await _openGame(
