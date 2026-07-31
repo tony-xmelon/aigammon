@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:backgammon_core/backgammon_core.dart';
-import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 
 import '../board/board_theme.dart';
@@ -17,8 +16,8 @@ import '../tutor/tutor_service.dart';
 import 'game/dice_presenter.dart';
 import 'game/game_dialogs.dart';
 import 'game/game_hud.dart';
+import 'game/hint_panel.dart';
 import 'history_screen.dart';
-import 'metric_explainer.dart';
 
 /// The playing screen. Assembles the [BoardView], a top HUD, a bottom action
 /// bar (plus, in tabletop hot-seat, a second one rotated 180° at the top edge —
@@ -451,16 +450,9 @@ class _GameScreenState extends State<GameScreen> {
     _markSheetDirty();
   }
 
-  /// Whether the hint bottom panel is open, plus its loading/result state.
-  bool _hintOpen = false;
-  bool _hintLoading = false;
-  List<ScoredMove>? _hintMoves;
-  int _hintSeq = 0;
-
-  /// Full move to STAGE into the interactive board (tap-to-apply hint). Fired
-  /// when a hint row is tapped; the [BoardView] resets its builder and re-enters
-  /// the move's hops, leaving it complete but uncommitted for the user's Confirm.
-  final ValueNotifier<Move?> _stagedMove = ValueNotifier<Move?>(null);
+  /// The tutor hint panel's open/loading/result state, and the staged move it
+  /// hands to the board when a hint row is tapped.
+  final HintController _hint = HintController();
 
   /// Bridges the interactive [BoardView]'s move-entry builder to the bottom
   /// action bar: it mirrors the live Undo/Confirm/Pass affordances and forwards
@@ -489,7 +481,8 @@ class _GameScreenState extends State<GameScreen> {
         _syncDancePass();
         _maybeShowDragHint();
       },
-    )..addListener(_onDiceChange);
+    )..addListener(_repaint);
+    _hint.addListener(_repaint);
     _observable = Listenable.merge([_c, ..._humanNotifiers(), _entryControl]);
     _observable.addListener(_onChange);
     widget.analytics.logScreenView(AnalyticsScreens.game);
@@ -536,9 +529,10 @@ class _GameScreenState extends State<GameScreen> {
     _tapHintTimer?.cancel();
     _cancelDancePass();
     _observable.removeListener(_onChange);
-    _dice.removeListener(_onDiceChange);
+    _dice.removeListener(_repaint);
     _dice.dispose();
-    _stagedMove.dispose();
+    _hint.removeListener(_repaint);
+    _hint.dispose();
     _sheetRevision.dispose();
     _sheetScroll.dispose();
     _entryControl.dispose();
@@ -568,9 +562,11 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {});
   }
 
-  /// The dice presentation moved: repaint. [DicePresenter] notifies exactly
-  /// where this screen used to call [setState] inline.
-  void _onDiceChange() {
+  /// A presentation-only collaborator moved (the dice beat, the hint panel):
+  /// repaint. Both notify exactly where this screen used to call [setState]
+  /// inline, and neither is merged into [_observable] — the header and the score
+  /// sheet must not rebuild for a tumbling die or an opened hint sheet.
+  void _repaint() {
     if (!mounted) return;
     setState(() {});
   }
@@ -915,37 +911,18 @@ class _GameScreenState extends State<GameScreen> {
 
   void _openHint() {
     widget.analytics.logTutorHintUsed(mode: widget.analyticsMode);
-    setState(() {
-      _hintOpen = true;
-      _hintLoading = true;
-      _hintMoves = null;
-      // Clear any prior staged move so re-tapping the same play in a later panel
-      // is a fresh null→move transition (and thus fires the board listener).
-      _stagedMove.value = null;
-    });
-    final seq = ++_hintSeq;
     final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
     final state =
         (moveSide != null ? _c.pendingMoveOf(moveSide).value : null) ?? _c.state;
-    // An engine failure comes back as an empty list, which the panel already
-    // renders as "no suggestion" — the spinner stops either way, so the panel
-    // cannot be left loading forever.
-    unawaited(_tutor!.hintOrNone(state).then((moves) {
-      if (!mounted || seq != _hintSeq) return;
-      setState(() {
-        _hintLoading = false;
-        _hintMoves = moves;
-      });
-    }));
+    _hint.open(() => _tutor!.hintOrNone(state));
   }
 
-  void _closeHint() {
-    setState(() {
-      _hintOpen = false;
-      _hintLoading = false;
-      _hintMoves = null;
-      _hintSeq++;
-    });
+  /// Stages [move] onto the interactive board and closes the hint panel. Only
+  /// stages when a human move is actually pending — otherwise the board is not
+  /// interactive and would ignore it, so we simply close.
+  void _applyHint(Move move) {
+    final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
+    _hint.apply(move, stage: moveSide != null);
   }
 
   /// Tracks the acting side and — when [GameScreen.showPassDevice] is on —
@@ -1096,7 +1073,7 @@ class _GameScreenState extends State<GameScreen> {
                           }
                         },
                         whiteAtBottom: whiteAtBottom,
-                        externalMove: _stagedMove,
+                        externalMove: _hint.stagedMove,
                         lastMove: _c.lastMove,
                         holdMoveAnimation: _dice.dicePresenting,
                         entryControl: _entryControl,
@@ -1166,7 +1143,13 @@ class _GameScreenState extends State<GameScreen> {
               ],
             ),
             ..._buildModals(cubeSide, resignSide),
-            if (_hintOpen) _hintPanel(),
+            if (_hint.isOpen)
+              HintPanel(
+                loading: _hint.isLoading,
+                moves: _hint.moves,
+                onClose: _hint.close,
+                onApply: _applyHint,
+              ),
           ],
         ),
       ),
@@ -2140,154 +2123,6 @@ class _GameScreenState extends State<GameScreen> {
       ],
     );
   }
-
-  /// The in-tree hint bottom panel: top-5 plays with equity and delta, or a
-  /// loading spinner while the ranking resolves.
-  Widget _hintPanel() {
-    final moves = _hintMoves ?? const <ScoredMove>[];
-    final bestEq = moves.isEmpty ? 0.0 : moves.first.equity;
-    final top = moves.take(5).toList();
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _closeHint,
-            child: const ColoredBox(color: Colors.black54),
-          ),
-        ),
-        Align(
-          alignment: Alignment.bottomCenter,
-          child: Material(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 480),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text('Top plays',
-                              style:
-                                  Theme.of(context).textTheme.titleMedium),
-                        ),
-                        IconButton(
-                          tooltip: 'What do these numbers mean?',
-                          icon: const Icon(Icons.info_outline, size: 20),
-                          onPressed: () => showMetricExplainer(context),
-                        ),
-                        IconButton(
-                          tooltip: 'Close',
-                          icon: const Icon(Icons.close, size: 20),
-                          onPressed: _closeHint,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (_hintLoading)
-                      const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    else if (top.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Text('No hints available.'),
-                      )
-                    else ...[
-                      _hintColumnHeader(),
-                      for (var i = 0; i < top.length; i++)
-                        _hintRow(i, top[i], bestEq),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Names the hint sheet's two bare number columns ("Equity" / "Loss"), right-
-  /// aligned over them at the same widths the rows use, so the figures are not
-  /// left for the reader to guess at. The ⓘ in the sheet header explains what
-  /// they mean.
-  Widget _hintColumnHeader() {
-    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        );
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Row(
-        children: [
-          const Spacer(),
-          SizedBox(
-            width: _hintNumberColumn,
-            child: Text('Equity', style: style, textAlign: TextAlign.right),
-          ),
-          SizedBox(
-            width: _hintNumberColumn,
-            child: Text('Loss', style: style, textAlign: TextAlign.right),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Width of each of the hint sheet's number columns, shared by the header and
-  /// the rows so the labels sit exactly over their figures.
-  static const double _hintNumberColumn = 64;
-
-  Widget _hintRow(int i, ScoredMove sm, double bestEq) {
-    final delta = i == 0 ? '—' : (sm.equity - bestEq).toStringAsFixed(3);
-    final mono = Theme.of(context)
-        .textTheme
-        .bodyMedium
-        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
-    // Tap-to-apply: stage the play onto the interactive board and close the
-    // panel. Guarded to the human's own moving phase (where the board is
-    // interactive); if no move is pending it degrades to just closing the panel.
-    return InkWell(
-      onTap: () => _applyHint(sm.move),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 20,
-              child: Text('${i + 1}.', style: mono),
-            ),
-            Expanded(child: Text('${sm.move}', style: mono)),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: _hintNumberColumn,
-              child: Text(sm.equity.toStringAsFixed(3),
-                  style: mono, textAlign: TextAlign.right),
-            ),
-            SizedBox(
-              width: _hintNumberColumn,
-              child: Text(delta, style: mono, textAlign: TextAlign.right),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Stages [move] onto the interactive board (via [_stagedMove]) and closes the
-  /// hint panel. Only stages when a human move is actually pending — otherwise
-  /// the board is not interactive and would ignore it, so we simply close.
-  void _applyHint(Move move) {
-    final moveSide = _humanSideWith((s) => _c.pendingMoveOf(s).value != null);
-    if (moveSide != null) _stagedMove.value = move;
-    _closeHint();
-  }
-
 
   /// A small leading dot in the actor's checker colour (ivory for White, ebony
   /// for Black), or an empty transparent slot for a neutral line (the opening).
