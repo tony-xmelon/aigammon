@@ -6,6 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+/// An additional destination for a recorded error — see [CrashLog.addSink].
+///
+/// `source` is the same label [CrashLogEntry.source] carries (`flutter`,
+/// `platform`, `engine-isolate`, …), which is what lets a remote reporter say
+/// WHERE an error came from without a second wiring path per source.
+typedef CrashSink = void Function(
+    Object error, StackTrace? stack, String source);
+
 /// One recorded unhandled error.
 @immutable
 class CrashLogEntry {
@@ -62,14 +70,15 @@ class CrashLogEntry {
 /// don't reach either of those even when they are installed. A tester could
 /// only report "it froze", with nothing to attach.
 ///
-/// **What it is not.** There is no remote reporting. This is an on-device MVP:
-/// the user has to reach Settings → Diagnostics and copy the log out. Adding
-/// `firebase_crashlytics` would collect crashes automatically, symbolicate
-/// them, and — the part that matters most for this app — capture *native*
-/// crashes in the Rust engine `.so`, which a Dart-level handler can never see
-/// because the process is already gone. That is deliberately deferred (it
-/// costs a plugin plus an NDK symbol-upload step in CI); this closes the
-/// "shipped build tells you nothing" gap in the meantime.
+/// **What it is not.** It is not the only sink any more, and it is not a
+/// remote one. Since v0.13 Crashlytics is attached ALONGSIDE it (see [addSink]
+/// and `main.dart`), because a remote pipeline can do two things this cannot:
+/// collect and symbolicate automatically, and capture *native* crashes in the
+/// Rust engine `.so`, which no Dart-level handler ever sees because the process
+/// is already gone. What this log keeps is everything the remote one lacks: it
+/// works offline, on Windows, with no Firebase config compiled in and no
+/// account, and the user can read it and copy it out by hand from Settings →
+/// Diagnostics. Neither replaces the other.
 ///
 /// **Shape.** Entries live in memory (so the viewer is synchronous and a crash
 /// before storage is ready is still captured) and are mirrored to a single
@@ -95,6 +104,7 @@ class CrashLog {
   final int maxStackChars;
 
   final List<CrashLogEntry> _entries = [];
+  final List<CrashSink> _sinks = [];
   File? _file;
   Future<void> _flushChain = Future.value();
 
@@ -118,6 +128,44 @@ class CrashLog {
     ));
     _applyCaps();
     _scheduleFlush();
+    _fanOut(error, stack, source);
+  }
+
+  /// Attaches an additional sink, notified on every subsequent [record].
+  ///
+  /// **Why the fan-out lives here rather than in the handlers.** The three
+  /// sources of an unhandled error — `FlutterError.onError`,
+  /// `PlatformDispatcher.onError` and the engine isolate's `onIsolateError`
+  /// (which reaches NEITHER of the other two) — already funnel through
+  /// [record]. Adding a second sink at that funnel means a remote reporter
+  /// picks up all three with one line of wiring and cannot be attached to two
+  /// of them by accident.
+  ///
+  /// It also gets the ORDERING right for free: the handlers are installed
+  /// synchronously at the very top of `main()`, while Crashlytics only exists
+  /// after an async `Firebase.initializeApp`. A sink registered later starts
+  /// receiving from that point on, and everything before it is already safe in
+  /// the on-device log.
+  ///
+  /// Sinks are called synchronously and their errors are swallowed — see
+  /// [_fanOut].
+  void addSink(CrashSink sink) => _sinks.add(sink);
+
+  /// Detaches a previously added [sink]. Used by tests.
+  void removeSink(CrashSink sink) => _sinks.remove(sink);
+
+  void _fanOut(Object error, StackTrace? stack, String source) {
+    // A copy, so a sink that adds or removes one while being notified cannot
+    // corrupt the iteration.
+    for (final sink in List<CrashSink>.of(_sinks)) {
+      try {
+        sink(error, stack, source);
+      } catch (_) {
+        // Same contract as the rest of this class: a diagnostics path that
+        // throws while reporting a crash turns one bug into two. A broken sink
+        // must not cost the on-device entry that was just written.
+      }
+    }
   }
 
   /// Points the log at [file], merging whatever it already holds.

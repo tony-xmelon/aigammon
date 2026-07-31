@@ -34,6 +34,20 @@ Future<void> main() async {
   // providers are always overridden, just sometimes with no-ops.
   final observability = await initializeObservability();
 
+  // Crashlytics becomes a SECOND sink on the crash funnel, never a
+  // replacement. All three sources — FlutterError.onError,
+  // PlatformDispatcher.onError and the engine isolate's onIsolateError — go
+  // through CrashLog.record, so this one line covers all of them, and the
+  // on-device log keeps working offline and on desktop exactly as before.
+  // Attached only when there is a real reporter behind it: registering a no-op
+  // sink would just add a call per error for nothing.
+  if (observability.isEnabled) {
+    final reporter = observability.crashReporter;
+    CrashLog.instance.addSink((error, stack, source) {
+      reporter.recordError(error, stack, reason: source);
+    });
+  }
+
   runApp(ProviderScope(
     overrides: [
       appAnalyticsProvider.overrideWithValue(observability.analytics),
