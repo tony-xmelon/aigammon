@@ -50,10 +50,15 @@ jobs:
           # different tree than the one CI validated.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      # Two ABIs, not three. `x86_64-linux-android` is an EMULATOR target: no
+      # phone or tablet in the testers group runs it, and every build paid for a
+      # third full Rust cross-compile plus a third copy of the engine .so inside
+      # a universal APK. Re-add it (here and in the cargo-ndk step below) if the
+      # app ever has to run on an x86_64 emulator or a Chromebook.
       - name: Rust toolchain (Android targets)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -68,8 +73,11 @@ jobs:
             cargo install cargo-ndk --locked
           fi
 
-      # Flutter pins NDK 28.2.13676358 (see app/android/app/build.gradle.kts ->
-      # flutter.ndkVersion). The ubuntu-latest image ships several NDKs under
+      # NDK 28.2.13676358 is pinned LITERALLY in app/android/app/build.gradle.kts
+      # (`ndkVersion = "28.2.13676358"`, no longer `flutter.ndkVersion`), and this
+      # step is the other half of that pin: the two must be edited together, or
+      # cargo-ndk cross-compiles the engine against one NDK while Gradle packages
+      # it for another. The ubuntu-latest image ships several NDKs under
       # $ANDROID_SDK_ROOT/ndk, but not necessarily this exact revision, and both
       # cargo-ndk (engine .so) and Flutter's gradle build must agree on the NDK.
       # Simplest reliable path: install the exact version via sdkmanager and
@@ -88,7 +96,7 @@ jobs:
         working-directory: native/engine_shim
         run: |
           cargo ndk \
-            -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            -t arm64-v8a -t armeabi-v7a \
             -o ../../app/android/app/src/main/jniLibs \
             build --release
 
@@ -217,6 +225,18 @@ jobs:
       #     only uses in this repo are diagnostic message interpolation
       #     (net_match_controller, match_transport, online_client) — degraded
       #     text, no behaviour change. Nothing here dispatches on it.
+      #
+      # --split-per-abi, not a universal APK and not an app bundle:
+      #   * a universal APK carried every ABI's copy of the ~MB engine .so to
+      #     every tester, and no device can use more than one of them;
+      #   * an .aab is the smaller artifact on paper, but Firebase App
+      #     Distribution can only accept one for an app that is LINKED TO GOOGLE
+      #     PLAY — it needs Play App Signing to derive installable APKs from the
+      #     bundle. This project has no Play listing and distributes straight to
+      #     a testers group, so an .aab here would be rejected at upload.
+      # That leaves two per-ABI APKs (arm64-v8a, armeabi-v7a). Flutter gives them
+      # distinct version codes automatically (it prefixes the ABI index), which
+      # is what keeps two uploads of the same build from colliding.
       - name: Build release APK
         working-directory: app
         env:
@@ -246,14 +266,20 @@ jobs:
           else
             echo "Telemetry config incomplete — building with analytics/performance/crashlytics disabled"
           fi
-          flutter build apk --release --build-number=${{ github.run_number }} \
+          flutter build apk --release --split-per-abi \
+            --build-number=${{ github.run_number }} \
             --obfuscate --split-debug-info=build/symbols/android \
             $DEFINES
+          ls -l build/app/outputs/flutter-apk/*.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: aigammon-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          # Both per-ABI APKs. A tester on a 32-bit device installs the
+          # armeabi-v7a one by hand from here; the App Distribution step below
+          # pushes the arm64-v8a build, which is what every device made in the
+          # last several years actually runs.
+          path: app/build/app/outputs/flutter-apk/app-*-release.apk
           if-no-files-found: error
 
       # Keyed by run number: the build number in the APK is the same value, so
@@ -291,7 +317,12 @@ jobs:
           appId: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           groups: testers
-          file: app/build/app/outputs/flutter-apk/app-release.apk
+          # arm64-v8a only. The action uploads ONE file, and App Distribution
+          # does no ABI matching — it would show testers two indistinguishable
+          # releases. arm64-v8a is the 64-bit ABI every device Google Play has
+          # required since 2019 supports; the armeabi-v7a APK stays available as
+          # the build artifact above for the rare 32-bit tester.
+          file: app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 
       - name: Skip Firebase distribution (secrets not set)
         if: steps.fb.outputs.has_firebase != 'true'

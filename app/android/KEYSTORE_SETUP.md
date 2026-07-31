@@ -106,7 +106,7 @@ debug-key fallback and its warning apply.
 ## 5. Verifying what a build was signed with
 
 ```bash
-keytool -printcert -jarfile app/build/app/outputs/flutter-apk/app-release.apk
+keytool -printcert -jarfile app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
 
 The debug key shows `CN=Android Debug, O=Android, C=US`. The upload key shows

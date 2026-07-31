@@ -90,7 +90,14 @@ if (!hasReleaseSigning) {
 android {
     namespace = "com.xmelon.aigammon_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // Pinned rather than `flutter.ndkVersion`, and it must stay in lockstep with
+    // the revision `.github/workflows/android.yml` installs via sdkmanager. The
+    // engine arrives as PREBUILT .so files cross-compiled by cargo-ndk against
+    // that exact NDK; if a Flutter upgrade moved `flutter.ndkVersion` on its own
+    // schedule, Gradle would package libraries built by one NDK into an APK
+    // configured for another — an ABI mismatch that shows up as a runtime
+    // dlopen failure on a tester's device, not as a build error here.
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

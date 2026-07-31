@@ -38,18 +38,29 @@ distribution mid-upload.
 ## `android.yml` — how it builds
 
 1. Checks out with `submodules: recursive` (the engine needs `native/wildbg`).
-2. Installs the Rust Android targets + `cargo-ndk`, then installs the exact NDK
-   Flutter pins (`28.2.13676358`) via `sdkmanager` and points `ANDROID_NDK_HOME`
-   at it.
-3. `cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o app/android/app/src/main/jniLibs build --release`
+2. Installs the Rust Android targets + `cargo-ndk`, then installs NDK
+   `28.2.13676358` via `sdkmanager` and points `ANDROID_NDK_HOME` at it. That
+   revision is also pinned literally as `ndkVersion` in
+   `app/android/app/build.gradle.kts` — **edit the two together**, or the engine
+   is cross-compiled against one NDK and packaged for another.
+3. `cargo ndk -t arm64-v8a -t armeabi-v7a -o app/android/app/src/main/jniLibs build --release`
    cross-compiles `libaigammon_engine.so` straight into the Flutter jniLibs
    layout. At runtime the app loads it with
-   `DynamicLibrary.open('libaigammon_engine.so')`.
-4. `flutter build apk --release`. Flutter automatically packages every ABI
-   present under `src/main/jniLibs/<abi>/` into `lib/<abi>/` inside the APK, so
-   **no `abiFilters` / `ndk.abiFilters` block is needed** in `build.gradle.kts` —
-   the set of ABIs is exactly the set `cargo ndk` produced.
-5. Uploads the APK as the `aigammon-apk` artifact.
+   `DynamicLibrary.open('libaigammon_engine.so')`. **Two ABIs, not three:**
+   `x86_64` is an emulator-only target and no tester device runs it.
+4. `flutter build apk --release --split-per-abi`, producing
+   `app-arm64-v8a-release.apk` and `app-armeabi-v7a-release.apk`. Flutter
+   packages every ABI present under `src/main/jniLibs/<abi>/` into `lib/<abi>/`,
+   so **no `abiFilters` / `ndk.abiFilters` block is needed** in
+   `build.gradle.kts` — the set of ABIs is exactly the set `cargo ndk` produced,
+   and `--split-per-abi` then gives each its own APK instead of shipping every
+   tester a copy of the engine they cannot run. An `.aab` was the alternative and
+   is not usable here: Firebase App Distribution only accepts a bundle for an app
+   linked to Google Play (it needs Play App Signing to derive the APKs), and this
+   project has no Play listing.
+5. Uploads **both** per-ABI APKs as the `aigammon-apk` artifact, and distributes
+   the `arm64-v8a` one to the testers group (App Distribution takes one file and
+   does no ABI matching; `armeabi-v7a` stays available from the artifact).
 
 ### Signing
 
