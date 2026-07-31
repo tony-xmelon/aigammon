@@ -448,6 +448,31 @@ describe('events: create', () => {
     );
   });
 
+  it('denies a participant appending to a COMPLETE match', async () => {
+    // The log closes with the match. Without this the two seats keep an
+    // unbounded, billable write channel open for as long as either client
+    // holds the code — long after there is any game to write about.
+    await seedActiveMatch('DONE0001', { status: 'complete' });
+    await assertFails(
+      setDoc(eventDoc(hostDb, 'DONE0001', '00000000'), newEventPayload()),
+    );
+    await assertFails(
+      setDoc(
+        eventDoc(guestDb, 'DONE0001', '00000001'),
+        newEventPayload({ seq: 1, author: GUEST }),
+      ),
+    );
+  });
+
+  it('denies the host appending to a match nobody has JOINED yet', async () => {
+    // There is no opponent to play against, so an event here is either a bug
+    // or a client spending the free tier on a match that has not begun.
+    await seedMatch('WAIT0001');
+    await assertFails(
+      setDoc(eventDoc(hostDb, 'WAIT0001', '00000000'), newEventPayload()),
+    );
+  });
+
   it('denies a non-participant append', async () => {
     await assertFails(
       setDoc(
@@ -645,6 +670,27 @@ describe('rolls: full commit-reveal dance', () => {
 
 describe('rolls: create (commit phase)', () => {
   beforeEach(() => seedActiveMatch('ABCD1234'));
+
+  it('denies a participant committing a roll in a COMPLETE match', async () => {
+    // Same reasoning as the events log: a finished match takes no more writes.
+    await seedActiveMatch('DONE0001', { status: 'complete' });
+    await assertFails(
+      setDoc(rollDoc(hostDb, 'DONE0001', '00000000'), newRollPayload()),
+    );
+    await assertFails(
+      setDoc(
+        rollDoc(guestDb, 'DONE0001', '00000001'),
+        newRollPayload({ n: 1, roller: GUEST }),
+      ),
+    );
+  });
+
+  it('denies committing a roll before anyone has JOINED', async () => {
+    await seedMatch('WAIT0001');
+    await assertFails(
+      setDoc(rollDoc(hostDb, 'WAIT0001', '00000000'), newRollPayload()),
+    );
+  });
 
   it('denies a non-participant committing', async () => {
     await assertFails(

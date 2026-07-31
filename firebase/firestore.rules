@@ -53,6 +53,20 @@ service cloud.firestore {
       return signedIn() && (uid() == m.hostUid || uid() == m.guestUid);
     }
 
+    // A participant of a match that is actually BEING PLAYED.
+    //
+    // The gate on every append (events and rolls alike). Reads stay open to
+    // participants for the match's whole life — the post-match summary replays
+    // the log — but the write channel opens when the second seat is claimed and
+    // closes when the match completes. Without it the two seats keep an
+    // unbounded, billable append channel open for as long as either client
+    // holds the code, long after there is any game left to write about; and a
+    // host could spend the free tier on a match nobody has joined. This is the
+    // one place the rules bound COST rather than shape.
+    function isPlayingParticipant(m) {
+      return isParticipant(m) && m.status == 'active';
+    }
+
     function matchOf(code) {
       return get(/databases/$(database)/documents/matches/$(code)).data;
     }
@@ -144,8 +158,9 @@ service cloud.firestore {
 
       allow get, list: if isParticipant(matchOf(code));
 
-      // CREATE-ONLY. Shape + authorship + id/seq binding + payload cap.
-      allow create: if isParticipant(matchOf(code))
+      // CREATE-ONLY. Shape + authorship + id/seq binding + payload cap, and
+      // only while the match is ACTIVE (see [isPlayingParticipant]).
+      allow create: if isPlayingParticipant(matchOf(code))
         && request.resource.data.keys().hasOnly(['seq', 'gameNo', 'event', 'author'])
         && request.resource.data.keys().hasAll(['seq', 'gameNo', 'event', 'author'])
         && request.resource.data.author == uid()
@@ -172,8 +187,9 @@ service cloud.firestore {
 
       allow get, list: if isParticipant(matchOf(code));
 
-      // PHASE 1 — the roller commits.
-      allow create: if isParticipant(matchOf(code))
+      // PHASE 1 — the roller commits. Only while the match is ACTIVE, as with
+      // the event log (see [isPlayingParticipant]).
+      allow create: if isPlayingParticipant(matchOf(code))
         && request.resource.data.keys().hasOnly(['n', 'roller', 'commit'])
         && request.resource.data.keys().hasAll(['n', 'roller', 'commit'])
         && request.resource.data.roller == uid()

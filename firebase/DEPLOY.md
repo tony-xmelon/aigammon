@@ -452,7 +452,20 @@ no server — but it is no longer a budget that a single long game can eat.
   endgame that is ~300 reads (~600 with the rules-gets), i.e. a rejoin costs
   roughly a third of the match it is rejoining. It is bounded and it is paid
   once per rejoin, but it is not free, and a player who force-quits and rejoins
-  repeatedly is the most expensive thing a single user can do to the quota.
+  repeatedly is now the most expensive thing a single user can do to the quota.
+
+  *"Now"* is load-bearing. Until the P18 rules change it was NOT the most
+  expensive thing, because the append rules gated only on participation, not on
+  the match's status: either seat could keep creating `events/{seq}` and
+  `rolls/{n}` documents indefinitely after the match completed (or before anyone
+  had even joined), each one billing a write plus its `matchOf(code)` rules-get.
+  That is unbounded, and unbounded beats any bounded figure on this page. Both
+  `create` rules now require `matchOf(code).status == 'active'`
+  (`isPlayingParticipant`), so the write channel opens when the second seat is
+  claimed and closes when the match completes — which is what makes every
+  bounded number above the real ceiling. Reads are deliberately NOT gated this
+  way: the post-match summary replays the log, so participants keep read access
+  for the match's whole life.
 * **A degraded client pays the old price.** If the gRPC stream cannot be
   established at all (a network that blocks HTTP/2, a proxy, an outage), the
   transport falls back to the poll loop and keeps the match alive at the old
@@ -467,7 +480,9 @@ no server — but it is no longer a budget that a single long game can eat.
   transient errors); the remedies are unchanged — play less, or move to Blaze.
 
 Writes are negligible by comparison and unaffected: one document per event and
-three phase writes per roll, a few hundred per match.
+three phase writes per roll, a few hundred per match — and, since the
+`status == 'active'` gate above, a few hundred is also the CEILING rather than
+merely the expected value.
 
 Measured side effect of the same change: one 1-point match through the local
 emulator went from **26.7s to 4.5s** of wall clock, because a roll's three-message
