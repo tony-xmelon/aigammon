@@ -239,6 +239,8 @@ class _HostTabState extends ConsumerState<_HostTab> {
 
   /// Build the host's controller, wait for game 1 to fold, and open the board.
   Future<void> _launch(HostSession session) async {
+    final settings = await _launchSettings(ref);
+    if (!mounted || !identical(_session, session)) return;
     final repo = ref.read(matchRepositoryProvider);
     final side = session.localSide;
     // The local seat is 'human', the peer 'remote' — the same shape online
@@ -253,9 +255,9 @@ class _HostTabState extends ConsumerState<_HostTab> {
           mode: AnalyticsModes.lan,
           matchLength: session.config.length,
           cubeless: session.config.cubeless,
-          // The tutor default is the user's setting (see _openGame).
-          tutor: (ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults)
-              .networkedTutorEnabled,
+          // The tutor default is the user's setting (see _openGame), read
+          // once for the whole launch above.
+          tutor: settings.networkedTutorEnabled,
         );
     final controller = session.controller(
       persistence: RepositoryPersistence(repo, matchIdFuture),
@@ -286,6 +288,7 @@ class _HostTabState extends ConsumerState<_HostTab> {
       ref: ref,
       controller: controller,
       matchIdFuture: matchIdFuture,
+      settings: settings,
       opponentLabel: _shortName(session.guestName),
     );
     // Back from the game: the controller goes first (and takes its transport
@@ -819,6 +822,8 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
 
   /// Build the guest's controller and open the board.
   Future<void> _launch(GuestSession session) async {
+    final settings = await _launchSettings(ref);
+    if (!mounted || !identical(_session, session)) return;
     final repo = ref.read(matchRepositoryProvider);
     final side = session.localSide;
     final matchIdFuture = repo.startMatch(
@@ -831,9 +836,9 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
           mode: AnalyticsModes.lan,
           matchLength: session.config.length,
           cubeless: session.config.cubeless,
-          // The tutor default is the user's setting (see _openGame).
-          tutor: (ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults)
-              .networkedTutorEnabled,
+          // The tutor default is the user's setting (see _openGame), read
+          // once for the whole launch above.
+          tutor: settings.networkedTutorEnabled,
         );
     final controller = session.controller(
       persistence: RepositoryPersistence(repo, matchIdFuture),
@@ -864,6 +869,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       ref: ref,
       controller: controller,
       matchIdFuture: matchIdFuture,
+      settings: settings,
       opponentLabel: _shortName(_target?.name),
     );
     controller.disposeController();
@@ -1132,6 +1138,29 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
 
 // --- shared ------------------------------------------------------------------
 
+/// The settings a launch runs on: read ONCE, at the top of `_launch`, and
+/// AWAITED rather than peeked at.
+///
+/// Both tabs pass this one snapshot on to the analytics event and to
+/// [_openGame], so the tutor flag that is reported and the board that is built
+/// cannot disagree. Awaited, because nothing on this screen watches the stream:
+/// a peek would hand out the defaults for as long as the first value is in
+/// flight, and Nearby is the FASTEST board to reach from a cold start — two
+/// taps — so that window is precisely where a user's "tutor off" would be
+/// ignored. A settings store that cannot be read at all falls back to the
+/// defaults, the same as everywhere else.
+///
+/// (The host tab's `initState` still peeks, deliberately: it seeds the
+/// match-length selector, which the user then looks at and can change before it
+/// means anything.)
+Future<AppSettings> _launchSettings(WidgetRef ref) async {
+  try {
+    return await ref.read(settingsProvider.future);
+  } catch (_) {
+    return AppSettings.defaults;
+  }
+}
+
 /// Push the game screen with the full production parameter set, pinned to the
 /// local side. Shared by both tabs so host and guest get an identical board.
 Future<void> _openGame({
@@ -1140,8 +1169,8 @@ Future<void> _openGame({
   required NetMatchController controller,
   required Future<int> matchIdFuture,
   required String opponentLabel,
+  required AppSettings settings,
 }) async {
-  final settings = ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
   // The tutor is local and read-only on the LAN exactly as it is online. It
   // marks BOTH columns of the score sheet — the peer's completed moves are
   // assessed on the same terms as your own — but everything PROSPECTIVE (hints,

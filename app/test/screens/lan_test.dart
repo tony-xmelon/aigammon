@@ -365,15 +365,19 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Widget app({AppSettings? settings}) => ProviderScope(
+  /// [settingsStream] serves the settings on the test's own schedule — for the
+  /// launch that must WAIT for them rather than peek. Everything else takes the
+  /// immediate [settings] value.
+  Widget app({AppSettings? settings, Stream<AppSettings>? settingsStream}) =>
+      ProviderScope(
         overrides: [
           nearbyTransportProvider.overrideWithValue(transport),
           qrScannerProvider.overrideWithValue(scanner),
           engineFacadeProvider.overrideWithValue(const FakeFacade()),
           databaseProvider.overrideWithValue(db),
           // A plain stream keeps the test off drift's watch-timer.
-          settingsProvider.overrideWith(
-              (ref) => Stream.value(settings ?? AppSettings.defaults)),
+          settingsProvider.overrideWith((ref) =>
+              settingsStream ?? Stream.value(settings ?? AppSettings.defaults)),
         ],
         child: const MaterialApp(home: LanScreen()),
       );
@@ -495,6 +499,40 @@ void main() {
       await pumpUntil(t, find.byType(GameScreen));
 
       expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNotNull);
+    });
+
+    // The launch reads the settings ONCE and AWAITS them; it does not peek at a
+    // stream that may not have delivered yet. Nearby is the FASTEST board to
+    // reach from a cold start — two taps, Nearby then Start hosting — so the
+    // very first launch of a run is exactly where a peek would hand out the
+    // defaults and quietly ignore a user's tutor-off.
+    testWidgets('the launch waits for the settings instead of peeking at them',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final slowSettings = Completer<AppSettings>();
+      await t.pumpWidget(
+          app(settingsStream: Stream.fromFuture(slowSettings.future)));
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.text('4271'));
+      transport.hostSession!.guestArrives();
+
+      // Frames pass with the settings still in flight: no board yet. A peek
+      // would have opened one here, on the defaults.
+      for (var i = 0; i < 10; i++) {
+        await t.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.byType(GameScreen), findsNothing);
+
+      slowSettings
+          .complete(AppSettings.defaults.copyWith(tutorOverride: false));
+      await pumpUntil(t, find.byType(GameScreen));
+
+      expect(find.byType(GameScreen), findsOneWidget);
+      expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNull,
+          reason: 'the awaited setting ruled, not the default');
     });
 
     testWidgets(
