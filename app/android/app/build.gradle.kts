@@ -1,9 +1,49 @@
+import com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension
 import java.util.Properties
 
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// --- Firebase telemetry, config-file-gated -----------------------------------
+//
+// `android/app/google-services.json` is GIT-IGNORED and generated, exactly like
+// `key.properties`: CI writes it in android.yml from the AIGAMMON_FIREBASE_*
+// repo variables plus the FIREBASE_ANDROID_APP_ID secret, and a developer who
+// wants telemetry from a local build downloads the real one from the Firebase
+// console (⚙ Project settings → Your apps → Android app). See firebase/DEPLOY.md.
+//
+// Why the file has to exist at all, given every Firebase value also arrives as
+// a --dart-define: the three Gradle plugins below read the app id from the
+// `google_app_id` string RESOURCE that `com.google.gms.google-services`
+// generates out of this file. A dart-define is a Dart compile-time constant and
+// is invisible to Gradle, so there is no substitute. Without the plugins:
+//   * a SIGSEGV in the Rust engine `.so` produces no Crashlytics report at all
+//     (NDK capture is a Gradle-plugin feature, not an SDK one), and
+//   * Performance Monitoring loses its AUTOMATIC network and screen traces
+//     (the app's own custom traces need no instrumentation and work regardless).
+//
+// The gate mirrors the signing gate above and the AIGAMMON_FIREBASE_* gates in
+// the workflows: file absent -> plugins are simply not applied and the build
+// succeeds with Dart-only crash reporting. It must not be a hard failure, or a
+// fresh clone could not build the Android app at all.
+val googleServicesFile = file("google-services.json")
+val hasFirebaseConfig = googleServicesFile.exists()
+
+if (hasFirebaseConfig) {
+    apply(plugin = "com.google.gms.google-services")
+    apply(plugin = "com.google.firebase.crashlytics")
+    apply(plugin = "com.google.firebase.firebase-perf")
+} else {
+    logger.lifecycle(
+        "NOTE: android/app/google-services.json is missing — the Firebase " +
+            "Gradle plugins are not applied. Crash reporting from this build " +
+            "will be DART-ONLY (a native crash in the engine .so goes " +
+            "unreported) and Performance Monitoring gets no automatic traces. " +
+            "See firebase/DEPLOY.md."
+    )
 }
 
 // --- Release signing, credential-gated ---------------------------------------
@@ -89,7 +129,43 @@ android {
                 // Documented, warned-about fallback — see the gate above.
                 signingConfigs.getByName("debug")
             }
+
+            if (hasFirebaseConfig) {
+                // Turns on generation of the Breakpad symbol files Crashlytics
+                // needs to turn a native stack of raw addresses into function
+                // names. Generation is not upload: the plugin creates the
+                // symbols during assembly, but they only reach Firebase when
+                // `uploadCrashlyticsSymbolFileRelease` is run. See the
+                // "Native symbols" note in firebase/DEPLOY.md.
+                //
+                // `unstrippedNativeLibsDir` is required here rather than
+                // optional because the engine arrives as PREBUILT .so files
+                // staged into jniLibs by cargo-ndk, not through an
+                // externalNativeBuild the plugin could locate on its own. This
+                // is the directory cargo-ndk writes and it is unstripped;
+                // AGP strips its own copy on the way into the APK, which is why
+                // the plugin must be pointed at the source rather than the
+                // packaged artifact.
+                configure<CrashlyticsExtension> {
+                    nativeSymbolUploadEnabled = true
+                    unstrippedNativeLibsDir = file("src/main/jniLibs")
+                }
+            }
         }
+    }
+}
+
+dependencies {
+    if (hasFirebaseConfig) {
+        // `firebase-crashlytics-ndk` is the artifact that installs the native
+        // signal handlers. The firebase_crashlytics Flutter plugin depends only
+        // on `firebase-crashlytics` (Dart/JVM), so without this line the
+        // Crashlytics Gradle plugin would generate symbols for crashes that are
+        // never captured. The BOM version tracks `FirebaseSDKVersion` in
+        // firebase_core's android/gradle.properties — bump both together when
+        // firebase_core is upgraded, or Gradle reports a version conflict.
+        implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
+        implementation("com.google.firebase:firebase-crashlytics-ndk")
     }
 }
 
