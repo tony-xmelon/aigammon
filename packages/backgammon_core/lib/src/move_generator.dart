@@ -3,6 +3,26 @@ import 'dice.dart';
 import 'move.dart';
 import 'player.dart';
 
+/// A search position packed into five small ints — the key the search dedupes
+/// resulting positions by, and the one it memoizes expanded doubles nodes by.
+///
+/// A record, so structural `==` and `hashCode` come for free and hashing costs
+/// five int mixes. It replaced a `'${points.join(",")}|…'` string, which
+/// allocated 24 substrings plus a join buffer EVERY time a node was keyed —
+/// once per leaf and once per memo probe.
+///
+/// The encoding is a bijection over the reachable range, so distinct positions
+/// cannot collide: a point holds -15..15 checkers (15 per side is the whole
+/// army), which fits the 5 bits of `value + 15` (0..30), and six points fit one
+/// 30-bit int — under the 2^31 that stays exact on every Dart backend,
+/// including the web's doubles. The four point words carry indices 0-5, 6-11,
+/// 12-17 and 18-23; the fifth carries bar, opponent bar and off (0..15 each).
+typedef _Sig = (int, int, int, int, int);
+
+/// One leaf of the search: the hop sequence reaching it (relative to the node
+/// it was expanded from) and the packed position it lands on.
+typedef _Leaf = ({List<CheckerMove> hops, _Sig sig});
+
 /// Mutable position used only inside the search. Always normalized: the
 /// moving player is positive and moves toward index 0.
 class _Pos {
@@ -18,7 +38,24 @@ class _Pos {
 
   _Pos clone() => _Pos(List.of(points), bar, oppBar, off);
 
-  String signature() => '${points.join(",")}|$bar|$oppBar|$off';
+  /// This position's packed key — see [_Sig].
+  _Sig signature() => (
+        _word(0),
+        _word(6),
+        _word(12),
+        _word(18),
+        bar | (oppBar << 5) | (off << 10),
+      );
+
+  /// Six points from [start], five bits each (`checkers + 15`, so an empty
+  /// point is 15 and the sign survives).
+  int _word(int start) {
+    var word = 0;
+    for (var i = start + 5; i >= start; i--) {
+      word = (word << 5) | (points[i] + 15);
+    }
+    return word;
+  }
 
   bool get allHome {
     if (bar > 0) return false;
@@ -173,10 +210,6 @@ class MoveGenerator {
   static List<_Variants> _search(BoardState board, Player player, Dice dice,
       {required bool collect}) {
     final normalized = player == Player.white ? board : board.mirrored();
-    // TODO(perf): for doubles, memoize expanded (dice-remaining, signature)
-    // nodes — permutations of the same source multiset are currently
-    // re-expanded and only collapse at the leaves. Revisit before heavy AI
-    // playout use.
     // Both dice orders are searched. When two orders reach the same
     // resulting position (e.g. 24/23 23/20 vs 24/21 21/20 with a 3-1), the
     // first-searched order supplies the deduped representative, so die2 is
@@ -190,9 +223,33 @@ class MoveGenerator {
           ];
 
     var maxLen = 0;
-    final byResult = <String, _Variants>{};
+    final byResult = <_Sig, _Variants>{};
 
-    void search(_Pos pos, List<int> order, int i, List<CheckerMove> seq) {
+    // DOUBLES MEMO, keyed by (dice remaining, position). All four dice are
+    // equal, so what a node can still reach depends on nothing but how many
+    // are left and where the checkers stand — and permutations of the same
+    // source multiset reach the same node by many routes, each of which used
+    // to re-expand the whole subtree below it. `i` counts dice SPENT, and the
+    // order has fixed length, so it names the dice remaining exactly.
+    //
+    // Non-doubles are not memoized: two dice values in two orders make the
+    // key's "dice remaining" a multiset rather than a count, and a search two
+    // plies deep has nothing worth caching anyway.
+    final memoize = dice.isDouble;
+    final memo = <(int, _Sig), List<_Leaf>>{};
+
+    /// Every leaf reachable from [pos] with the dice from [i] on, in DFS order
+    /// — the same order the recording walk below consumes them in, so the
+    /// first-seen representative of each resulting position is unchanged by
+    /// the memo (a memo hit replays exactly the leaf sequence a fresh
+    /// expansion would have produced).
+    List<_Leaf> expand(_Pos pos, List<int> order, int i) {
+      final key = memoize ? (i, pos.signature()) : null;
+      if (key != null) {
+        final hit = memo[key];
+        if (hit != null) return hit;
+      }
+      final leaves = <_Leaf>[];
       var moved = false;
       if (i < order.length) {
         for (var from = CheckerMove.bar; from >= 0; from--) {
@@ -206,31 +263,37 @@ class MoveGenerator {
           final cm = branch.tryMove(from, order[i]);
           if (cm != null) {
             moved = true;
-            search(branch, order, i + 1, [...seq, cm]);
+            for (final leaf in expand(branch, order, i + 1)) {
+              leaves.add((hops: [cm, ...leaf.hops], sig: leaf.sig));
+            }
           }
         }
       }
       if (!moved) {
-        // Dead end (die unplayable or dice exhausted): candidate turn.
+        // Dead end (die unplayable or dice exhausted): a candidate turn ends
+        // here, with nothing more to play.
+        leaves.add((hops: const <CheckerMove>[], sig: pos.signature()));
+      }
+      if (key != null) memo[key] = leaves;
+      return leaves;
+    }
+
+    for (final order in orders) {
+      for (final leaf in expand(_Pos.of(normalized), order, 0)) {
+        final seq = leaf.hops;
         if (seq.length > maxLen) {
           maxLen = seq.length;
           byResult.clear();
         }
         if (seq.isNotEmpty && seq.length == maxLen) {
-          final signature = pos.signature();
-          final at = byResult[signature];
+          final at = byResult[leaf.sig];
           if (at == null) {
-            byResult[signature] =
-                _Variants(Move(List.of(seq)), collect: collect);
+            byResult[leaf.sig] = _Variants(Move(seq), collect: collect);
           } else if (collect) {
-            at.add(Move(List.of(seq))); // another way to enter the same position
+            at.add(Move(seq)); // another way to enter the same position
           }
         }
       }
-    }
-
-    for (final order in orders) {
-      search(_Pos.of(normalized), order, 0, const []);
     }
 
     // Higher-die rule: when only a single die can be played this turn (and
