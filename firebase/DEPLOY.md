@@ -421,9 +421,11 @@ Two properties keep it bounded:
   transport reads it at `connect` and then never again, because `guestUid` is the
   only field it cares about and it already has the answer;
 * the cadence **backs off**: 2s for the first five cycles, then doubling to a
-  **15s ceiling**. A five-minute wait for a friend to answer their phone is
-  therefore about **25 reads, not 300** — the flat-2s version cost roughly a
-  whole game's worth of budget for nobody doing anything, which was the largest
+  **15s ceiling**. Five minutes of waiting for a friend to answer their phone is
+  therefore about 25 poll *cycles* — 10s of fast ones, then 4s, 8s and 15s,
+  15s, 15s… — and at ~2 reads per cycle that is about **50 reads, not 300**. The
+  flat-2s version ran 150 cycles for the same five minutes, which is roughly a
+  whole game's worth of budget for nobody doing anything, and was the largest
   remaining hole in the numbers above.
 
 The poll loop cost several thousand for the same match, and most of it was spent

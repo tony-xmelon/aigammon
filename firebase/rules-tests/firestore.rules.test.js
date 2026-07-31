@@ -798,6 +798,27 @@ describe('rolls: create (commit phase)', () => {
     );
   });
 
+  // Parity with the event log's `denies a non-int seq` / `denies a negative
+  // seq`. The ceiling test above proves the UPPER bound and nothing else; these
+  // two pin the type and the floor. `n is int` is what denies both writes below
+  // — it is evaluated (and short-circuits) before `idMatchesIndex`, so neither
+  // case ever reaches the id binding — and a negative index is the other end of
+  // the ceiling's own argument: an index outside the range the protocol writes.
+  it('denies a non-int n', async () => {
+    await assertFails(
+      setDoc(rollDoc(hostDb, 'ABCD1234', '00000000'), newRollPayload({ n: '0' })),
+    );
+    await assertFails(
+      setDoc(rollDoc(hostDb, 'ABCD1234', '00000001'), newRollPayload({ n: 1.5 })),
+    );
+  });
+
+  it('denies a negative n', async () => {
+    await assertFails(
+      setDoc(rollDoc(hostDb, 'ABCD1234', '-0000001'), newRollPayload({ n: -1 })),
+    );
+  });
+
   it('denies a doc id that disagrees with n', async () => {
     await assertFails(
       setDoc(rollDoc(hostDb, 'ABCD1234', '00000003'), newRollPayload({ n: 4 })),

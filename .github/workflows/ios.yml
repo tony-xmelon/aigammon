@@ -209,7 +209,25 @@ jobs:
           PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
           mkdir -p "$PROFILES_DIR"
           cp "$RUNNER_TEMP/profile.mobileprovision" "$PROFILES_DIR/$UUID.mobileprovision"
-          echo "Installed profile '$PROFILE_NAME' ($UUID), team $TEAM_ID"
+
+          # Register all three with the runner's log scrubber BEFORE anything
+          # can print them. These are derived from a SECRET (the base64
+          # .mobileprovision) but GitHub only masks the secret it was given, not
+          # values computed out of it — so without this the team id, the profile
+          # name and the profile UUID appear in plain text in a public build log
+          # the moment xcodebuild echoes its own command line, which it does.
+          #
+          # None of the three is a credential on its own: signing needs the
+          # private key in the .p12. But the team id is the account identifier
+          # Apple support and App Store Connect treat as knowing-something, and a
+          # profile UUID plus a team id is exactly the pair a social-engineering
+          # attempt against an Apple Developer account wants. The Firebase
+          # project id and API key in these workflows are deliberately public
+          # (they ship inside every binary); these are not in that class.
+          echo "::add-mask::$TEAM_ID"
+          echo "::add-mask::$PROFILE_NAME"
+          echo "::add-mask::$UUID"
+          echo "Installed provisioning profile (name, UUID and team id masked)"
 
           # --- ExportOptions.plist for an ad-hoc export (manual signing) ---
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST_EOF
