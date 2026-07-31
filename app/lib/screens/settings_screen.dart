@@ -167,8 +167,10 @@ class SettingsScreen extends ConsumerWidget {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Auto follows the per-mode default (on for easy/medium vs '
-                      'computer, off otherwise).',
+                      'Auto follows the per-mode default: on for easy/medium vs '
+                      'computer and for nearby/online play, off otherwise. On '
+                      'and Off apply to every mode. The tutor only ever reads '
+                      'your own moves, on this device.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant),
                     ),

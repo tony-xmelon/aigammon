@@ -365,15 +365,15 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Widget app() => ProviderScope(
+  Widget app({AppSettings? settings}) => ProviderScope(
         overrides: [
           nearbyTransportProvider.overrideWithValue(transport),
           qrScannerProvider.overrideWithValue(scanner),
           engineFacadeProvider.overrideWithValue(const FakeFacade()),
           databaseProvider.overrideWithValue(db),
           // A plain stream keeps the test off drift's watch-timer.
-          settingsProvider
-              .overrideWith((ref) => Stream.value(AppSettings.defaults)),
+          settingsProvider.overrideWith(
+              (ref) => Stream.value(settings ?? AppSettings.defaults)),
         ],
         child: const MaterialApp(home: LanScreen()),
       );
@@ -444,6 +444,57 @@ void main() {
       expect(find.byType(GameScreen), findsOneWidget);
       // A real match, folded from the relay's own log.
       expect(find.textContaining('Game 1'), findsWidgets);
+    });
+
+    // The settings screen's tutor default is honoured on the LAN exactly as it
+    // is for a local match: OFF means no tutor is built, so the board carries
+    // no hint button and no post-move marks.
+    testWidgets('the tutor setting OFF opens the board without a tutor',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(
+          app(settings: AppSettings.defaults.copyWith(tutorOverride: false)));
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.text('4271'));
+      transport.hostSession!.guestArrives();
+      await pumpUntil(t, find.byType(GameScreen));
+
+      expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNull);
+    });
+
+    testWidgets('the tutor setting ON opens the board with a tutor', (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(
+          app(settings: AppSettings.defaults.copyWith(tutorOverride: true)));
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.text('4271'));
+      transport.hostSession!.guestArrives();
+      await pumpUntil(t, find.byType(GameScreen));
+
+      expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNotNull);
+    });
+
+    // Auto (the shipped default) keeps the networked default: ON. The peer is a
+    // person, so there is no difficulty to derive a default from.
+    testWidgets('the tutor setting AUTO keeps the networked default (on)',
+        (t) async {
+      await t.binding.setSurfaceSize(surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      await t.pumpWidget(app());
+      await t.pump();
+      await t.tap(find.widgetWithText(FilledButton, 'Start hosting'));
+      await pumpUntil(t, find.text('4271'));
+      transport.hostSession!.guestArrives();
+      await pumpUntil(t, find.byType(GameScreen));
+
+      expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNotNull);
     });
 
     testWidgets(

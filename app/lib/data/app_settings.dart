@@ -237,6 +237,17 @@ class AppSettings {
   final bool dragHintShown;
 
   /// The [AnimationTimings] preset for the current [animationSpeed], with the
+  /// Whether a NETWORKED match (LAN or online) starts with live tutor mode.
+  ///
+  /// [tutorOverride] rules when the user set it explicitly; Auto (null) keeps
+  /// the networked default, ON. Networked play has no per-mode default to
+  /// derive — the opponent is a person, so there is no AI level to key on the
+  /// way the new-match screen does for vs-computer — and the tutor has always
+  /// been available there, so Auto keeps that behaviour unchanged. The tutor is
+  /// local and read-only either way: it evaluates the LOCAL player's own moves
+  /// with the on-device engine and never touches the shared match state.
+  bool get networkedTutorEnabled => tutorOverride ?? true;
+
   /// dice beat stripped out when [diceRollAnimation] is off.
   AnimationTimings get timings => diceRollAnimation
       ? animationSpeed.timings

@@ -415,6 +415,20 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
   /// the lobby: the create-flow poll timer and the resume pointer in
   /// [onlineSessionStoreProvider].
   Future<void> _launch(MatchApi api, MatchDoc doc) async {
+    // Settings, ONCE and for the whole launch: the tutor default below, the
+    // analytics event and the board's own options all read this one snapshot.
+    // Awaited rather than peeked at, because nothing on this screen watches the
+    // stream — a peek here would hand out the defaults on the very first launch
+    // of a run, which is exactly when a user's "tutor off" would be ignored. A
+    // settings store that cannot be read at all falls back to the defaults, the
+    // same as everywhere else.
+    late final AppSettings settings;
+    try {
+      settings = await ref.read(settingsProvider.future);
+    } catch (_) {
+      settings = AppSettings.defaults;
+    }
+    if (!mounted || _cancelled) return;
     final localSide = doc.sideOf(api.uid) ?? Player.white;
     final orientation = localSide == Player.white
         ? BoardOrientationMode.fixedWhite
@@ -430,13 +444,15 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       whiteType: localSide == Player.white ? 'human' : 'remote',
       blackType: localSide == Player.black ? 'human' : 'remote',
     );
+    // The tutor default is the user's setting, exactly as it is for a local
+    // match — see [AppSettings.networkedTutorEnabled] for what Auto means here.
+    final tutorEnabled = settings.networkedTutorEnabled;
     ref.read(appAnalyticsProvider).logMatchStarted(
           mode: AnalyticsModes.online,
           matchLength: doc.length,
-          // Online matches are always played with the cube, and the tutor is
-          // always built for them (see below).
+          // Online matches are always played with the cube.
           cubeless: false,
-          tutor: true,
+          tutor: tutorEnabled,
         );
     // The match document has both seats by now (the create flow waited for the
     // join, the join flow just claimed one), so it is handed to the transport as
@@ -482,10 +498,11 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       if (live && failure != null) _say(_errorText(failure));
       return;
     }
-    // Tutor stays available online; it keys post-move chips on the local side.
-    final tutor = TutorService(ref.read(engineFacadeProvider));
-    final settings =
-        ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
+    // The tutor is local and read-only online: it keys post-move chips on the
+    // local side. Built only when the setting has it on ([tutorEnabled]); null
+    // is what turns every tutor surface off on the board.
+    final tutor =
+        tutorEnabled ? TutorService(ref.read(engineFacadeProvider)) : null;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => GameScreen(

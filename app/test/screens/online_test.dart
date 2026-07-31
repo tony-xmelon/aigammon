@@ -85,7 +85,8 @@ FakeMatch _waitingMatch(FakeBackend backend, String code) {
 /// [db] backs the (now history-persisted) online launch: `_launch` inserts a
 /// match row through the repository over [databaseProvider], so the tests pass
 /// an in-memory db to keep off the real drift store.
-Widget _app(FakeMatchApi api, {bool configured = true, required AppDatabase db}) {
+Widget _app(FakeMatchApi api,
+    {bool configured = true, required AppDatabase db, AppSettings? settings}) {
   return ProviderScope(
     overrides: [
       onlineConfigProvider
@@ -100,7 +101,8 @@ Widget _app(FakeMatchApi api, {bool configured = true, required AppDatabase db})
       databaseProvider.overrideWithValue(db),
       // Launching a game reads settingsProvider (for animation speed); serve a
       // static value so the test avoids the real drift store and its watch-timer.
-      settingsProvider.overrideWith((ref) => Stream.value(AppSettings.defaults)),
+      settingsProvider.overrideWith(
+          (ref) => Stream.value(settings ?? AppSettings.defaults)),
     ],
     child: const MaterialApp(home: OnlineScreen()),
   );
@@ -181,6 +183,66 @@ void main() {
     await _pumpUntil(t, find.byType(GameScreen));
     expect(find.byType(GameScreen), findsOneWidget);
     expect(api.joinCodes, ['ABC123']); // trimmed + uppercased
+  });
+
+  // The settings screen's tutor default is honoured online exactly as it is for
+  // a local match: OFF means no tutor is built, so the board carries no hint
+  // button and no post-move marks.
+  testWidgets('the tutor setting OFF opens the board without a tutor',
+      (t) async {
+    await t.binding.setSurfaceSize(surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final api = screenApi(backend);
+    _waitingMatch(backend, 'ABC123');
+    await t.pumpWidget(_app(api,
+        db: db, settings: AppSettings.defaults.copyWith(tutorOverride: false)));
+    await t.pumpAndSettle();
+
+    await t.enterText(find.byType(TextField), 'ABC123');
+    await t.pump();
+    await t.tap(find.widgetWithText(FilledButton, 'Join'));
+    await _pumpUntil(t, find.byType(GameScreen));
+
+    expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNull);
+  });
+
+  testWidgets('the tutor setting ON opens the board with a tutor', (t) async {
+    await t.binding.setSurfaceSize(surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final api = screenApi(backend);
+    _waitingMatch(backend, 'ABC123');
+    await t.pumpWidget(_app(api,
+        db: db, settings: AppSettings.defaults.copyWith(tutorOverride: true)));
+    await t.pumpAndSettle();
+
+    await t.enterText(find.byType(TextField), 'ABC123');
+    await t.pump();
+    await t.tap(find.widgetWithText(FilledButton, 'Join'));
+    await _pumpUntil(t, find.byType(GameScreen));
+
+    expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNotNull);
+  });
+
+  // Auto (the shipped default) keeps the networked default: ON. The opponent is
+  // a person, so there is no difficulty to derive a default from.
+  testWidgets('the tutor setting AUTO keeps the networked default (on)',
+      (t) async {
+    await t.binding.setSurfaceSize(surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    final api = screenApi(backend);
+    _waitingMatch(backend, 'ABC123');
+    await t.pumpWidget(_app(api, db: db));
+    await t.pumpAndSettle();
+
+    await t.enterText(find.byType(TextField), 'ABC123');
+    await t.pump();
+    await t.tap(find.widgetWithText(FilledButton, 'Join'));
+    await _pumpUntil(t, find.byType(GameScreen));
+
+    expect(t.widget<GameScreen>(find.byType(GameScreen)).tutor, isNotNull);
   });
 
   testWidgets('a launch whose transport never connects says why', (t) async {

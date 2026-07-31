@@ -253,8 +253,9 @@ class _HostTabState extends ConsumerState<_HostTab> {
           mode: AnalyticsModes.lan,
           matchLength: session.config.length,
           cubeless: session.config.cubeless,
-          // The tutor is always available on the LAN (see _openGame).
-          tutor: true,
+          // The tutor default is the user's setting (see _openGame).
+          tutor: (ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults)
+              .networkedTutorEnabled,
         );
     final controller = session.controller(
       persistence: RepositoryPersistence(repo, matchIdFuture),
@@ -830,8 +831,9 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
           mode: AnalyticsModes.lan,
           matchLength: session.config.length,
           cubeless: session.config.cubeless,
-          // The tutor is always available on the LAN (see _openGame).
-          tutor: true,
+          // The tutor default is the user's setting (see _openGame).
+          tutor: (ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults)
+              .networkedTutorEnabled,
         );
     final controller = session.controller(
       persistence: RepositoryPersistence(repo, matchIdFuture),
@@ -1140,9 +1142,14 @@ Future<void> _openGame({
   required String opponentLabel,
 }) async {
   final settings = ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
-  // The tutor stays available on the LAN exactly as it does online: it keys its
-  // post-move chips on the local side, and the peer is a person, not the AI.
-  final tutor = TutorService(ref.read(engineFacadeProvider));
+  // The tutor is local and read-only on the LAN exactly as it is online: it
+  // keys its post-move chips on the local side, and the peer is a person, not
+  // the AI. Whether it is built at all is the user's setting — see
+  // [AppSettings.networkedTutorEnabled] for what Auto means here — and a null
+  // tutor is what turns every tutor surface off on the board.
+  final tutor = settings.networkedTutorEnabled
+      ? TutorService(ref.read(engineFacadeProvider))
+      : null;
   await Navigator.of(context).push(
     MaterialPageRoute(
       builder: (_) => GameScreen(
