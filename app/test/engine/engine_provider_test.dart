@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
@@ -122,6 +124,43 @@ void main() {
       expect(first.disposed, isTrue, reason: 'dead engine is disposed');
       // The retry ran on the new engine.
       expect(rec.spawned[1].rankMovesCalls, 1);
+    });
+
+    test('re-spawns once and retries when a call times out', () async {
+      final rec = SpawnRecorder();
+      final manager = EngineManager(spawner: rec.spawn);
+
+      await manager
+          .withEngine((e) => e.rankMoves(_board, Player.white, Dice(3, 1)));
+      final first = rec.spawned[0];
+      // A wedged isolate: EngineService gave up waiting for a reply.
+      first.failWith = TimeoutException('engine "rankMoves" did not reply');
+
+      final result = await manager
+          .withEngine((e) => e.rankMoves(_board, Player.white, Dice(3, 1)));
+
+      expect(result, isEmpty);
+      expect(rec.count, 2, reason: 'exactly one re-spawn');
+      expect(first.disposed, isTrue,
+          reason: 'the wedged engine is disposed, which kills its isolate');
+      expect(rec.spawned[1].rankMovesCalls, 1);
+    });
+
+    test('rethrows when calls time out twice in one call (single retry)',
+        () async {
+      final spawned = <FakeEngine>[];
+      final manager = EngineManager(spawner: () async {
+        final e = FakeEngine(spawned.length)
+          ..failWith = TimeoutException('did not reply');
+        spawned.add(e);
+        return e;
+      });
+
+      await expectLater(
+        manager.withEngine((e) => e.rankMoves(_board, Player.white, Dice(3, 1))),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(spawned.length, 2, reason: 'one spawn + one re-spawn, no loop');
     });
 
     test('rethrows non-death errors without re-spawning', () async {

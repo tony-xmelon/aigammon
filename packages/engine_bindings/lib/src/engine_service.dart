@@ -15,9 +15,37 @@ import 'scored_move.dart';
 /// dies, all pending requests error and the service is dead — the OWNER
 /// (app layer) supervises and re-spawns; this class stays dumb on purpose.
 class EngineService {
+  /// How long a single verb may take before the caller is failed with a
+  /// [TimeoutException].
+  ///
+  /// The engine does ONE 1-ply neural-net evaluation per request — no rollouts
+  /// at any difficulty (`Difficulty` only changes how the ranked list is
+  /// sampled), so a healthy call settles in milliseconds even on a slow
+  /// phone. This bound is therefore not a performance budget but a liveness
+  /// one: three orders of magnitude of headroom, so it can only ever fire for a
+  /// worker that is genuinely stuck. Without it a wedged native call parks the
+  /// caller's future forever — and the tutor and the AI both await one, so the
+  /// game would simply stop with no error to show.
+  static const Duration defaultCallTimeout = Duration(seconds: 30);
+
   final Isolate _isolate;
   final SendPort _worker;
   final ReceivePort _fromWorker;
+
+  /// The port the worker's uncaught errors and its exit signal arrive on.
+  ///
+  /// This is the SAME port `Isolate.spawn(onError:)` was given in [spawn], kept
+  /// for the service's whole life rather than replaced by a fresh one after the
+  /// handshake. That is deliberate: `onError` is registered atomically by the
+  /// spawn itself, so there is no instant at which the isolate is running and
+  /// unwatched. Handing the service a port registered LATER (via
+  /// [Isolate.addErrorListener]) would reopen exactly that hole — and worse,
+  /// a listener added to an already-dead isolate never fires at all, so a death
+  /// inside the gap is not merely delayed but lost, leaving every pending call
+  /// hanging and the service believing it is alive.
+  final ReceivePort _deathPort;
+
+  final Duration _callTimeout;
 
   final Map<int, Completer<Object?>> _pending = {};
   int _nextId = 0;
@@ -27,8 +55,9 @@ class EngineService {
   ///
   /// Isolate errors reach NEITHER `FlutterError.onError` NOR
   /// `PlatformDispatcher.instance.onError` — they arrive only on a port
-  /// registered with [Isolate.addErrorListener], which this class already owns
-  /// for its own death handling. Without this hook a native-engine failure is
+  /// registered as the isolate's error port, which this class already owns for
+  /// its own death handling (see [_deathPort]). Without this hook a
+  /// native-engine failure is
   /// invisible to the app's diagnostics: callers see `StateError('engine
   /// isolate died')` with the actual cause discarded. The app passes a callback
   /// that writes to its crash log; the package itself stays Flutter-free.
@@ -37,9 +66,18 @@ class EngineService {
   /// throwing observer is swallowed).
   final void Function(Object error, StackTrace? stack)? _onIsolateError;
 
-  EngineService._(this._isolate, this._worker, this._fromWorker,
-      this._onIsolateError) {
+  /// Wires the service to an already-handshaken worker. Everything here is
+  /// SYNCHRONOUS on purpose — the reply port is created, bound and listening,
+  /// and the exit listener attached, within one turn of the event loop — so no
+  /// message can be delivered while the service is half-built.
+  EngineService._(this._isolate, this._worker, this._deathPort,
+      this._onIsolateError, this._callTimeout)
+      : _fromWorker = ReceivePort() {
     _fromWorker.listen(_onReply);
+    _worker.send(['bind', _fromWorker.sendPort]);
+    // The error half of this port was registered by the spawn (see
+    // [_deathPort]); only the clean-exit signal still needs subscribing.
+    _isolate.addOnExitListener(_deathPort.sendPort);
   }
 
   /// Spawns the worker isolate and opens the engine inside it. Completes only
@@ -48,22 +86,39 @@ class EngineService {
   /// [netsPath].
   /// [onIsolateError] observes uncaught worker-isolate errors — including the
   /// ones that kill the isolate during startup. See [_onIsolateError].
+  ///
+  /// [callTimeout] bounds every verb; see [defaultCallTimeout].
+  ///
+  /// [workerEntry] replaces the isolate's entry point and exists ONLY for the
+  /// transport's own tests, which need a worker that misbehaves in a specific
+  /// way (never replies, dies at the handshake) without a native engine to
+  /// misbehave for them. Production callers must leave it unset.
   static Future<EngineService> spawn({
     String? libraryPath,
     required String netsPath,
     void Function(Object error, StackTrace? stack)? onIsolateError,
+    Duration callTimeout = defaultCallTimeout,
+    void Function(List<Object?> args)? workerEntry,
   }) async {
     final handshake = ReceivePort();
+    // `errors` is registered by the spawn below and then NEVER re-registered:
+    // it is handed to the service as its death port. See [_deathPort] for why
+    // swapping in a fresh port after the handshake is not safe.
     final errors = ReceivePort();
 
     final ready = Completer<SendPort>();
+
+    // Set as soon as the service object exists; until then the error port has
+    // nowhere to deliver a death to, so it holds one (see below).
+    EngineService? service;
+    var deathHeld = false;
+    Object? heldDeath;
 
     // The handshake carries ('ready', workerPort) or ('init_error', message).
     // A crash before the worker can send anything surfaces on the error port
     // instead; both feed the single `ready` completer so spawn() never hangs
     // and never leaves a dangling unhandled async error.
     late final StreamSubscription<dynamic> handshakeSub;
-    late final StreamSubscription<dynamic> errorSub;
     handshakeSub = handshake.listen((msg) {
       final list = msg as List;
       if (list[0] == 'ready') {
@@ -74,17 +129,29 @@ class EngineService {
         }
       }
     });
-    errorSub = errors.listen((err) {
-      _reportIsolateError(onIsolateError, err);
+    errors.listen((err) {
+      final live = service;
+      if (live != null) {
+        live._onDeath(err);
+        return;
+      }
       if (!ready.isCompleted) {
+        _reportIsolateError(onIsolateError, err);
         final message = (err is List && err.isNotEmpty) ? err[0] : err;
         ready.completeError(
             StateError('engine isolate failed to start: $message'));
+        return;
       }
+      // Handshake done, service not built yet: the worker died in the seam
+      // between `ready` completing and this function resuming. Hold the death
+      // and hand it over the moment there is something to hand it to —
+      // dropping it here is what used to leave a dead service looking alive.
+      deathHeld = true;
+      heldDeath = err;
     });
 
     final isolate = await Isolate.spawn(
-      _workerMain,
+      workerEntry ?? _workerMain,
       [handshake.sendPort, libraryPath, netsPath],
       errorsAreFatal: true,
       onError: errors.sendPort,
@@ -92,36 +159,26 @@ class EngineService {
 
     try {
       final workerPort = await ready.future;
-      // Handshake done. Tear down the transient ports; the persistent
-      // `fromWorker` port carries replies from here on.
+      // Handshake done. Build the service FIRST — synchronously, in this one
+      // turn — so the error port always has a live destination from here on,
+      // and only then drop the handshake port. `errors` stays open and stays
+      // subscribed: it is the service's death port now.
+      final built = EngineService._(
+          isolate, workerPort, errors, onIsolateError, callTimeout);
+      service = built;
+      if (deathHeld) built._onDeath(heldDeath);
       await handshakeSub.cancel();
-      await errorSub.cancel();
       handshake.close();
-      errors.close();
-
-      final fromWorker = ReceivePort();
-      workerPort.send(['bind', fromWorker.sendPort]);
-
-      final service =
-          EngineService._(isolate, workerPort, fromWorker, onIsolateError);
-      final death = ReceivePort();
-      isolate.addErrorListener(death.sendPort);
-      isolate.addOnExitListener(death.sendPort);
-      death.listen((msg) => service._onDeath(msg));
-      service._deathPort = death;
-      return service;
+      return built;
     } catch (e) {
       // Clean up on init failure so we leak neither ports nor the isolate.
       await handshakeSub.cancel();
-      await errorSub.cancel();
       handshake.close();
       errors.close();
       isolate.kill(priority: Isolate.immediate);
       rethrow;
     }
   }
-
-  ReceivePort? _deathPort;
 
   void _onReply(Object? message) {
     final list = message as List;
@@ -149,7 +206,7 @@ class EngineService {
       c.completeError(StateError('engine isolate died'));
     }
     _fromWorker.close();
-    _deathPort?.close();
+    _deathPort.close();
   }
 
   Future<Object?> _call(String verb, Map<String, Object?> payload) {
@@ -160,7 +217,15 @@ class EngineService {
     final completer = Completer<Object?>();
     _pending[id] = completer;
     _worker.send([id, verb, payload]);
-    return completer.future;
+    // A reply is not guaranteed: a native call can wedge without killing the
+    // isolate, in which case nothing ever settles this completer and the caller
+    // waits forever. The timeout gives that failure a shape the caller can
+    // handle. Dropping the id first means a late reply is discarded by
+    // [_onReply] rather than completing an already-failed future.
+    return completer.future.timeout(_callTimeout, onTimeout: () {
+      _pending.remove(id);
+      throw TimeoutException('engine "$verb" did not reply', _callTimeout);
+    });
   }
 
   /// Evaluates [board] from [mover]'s perspective. See [Engine.evaluate].
@@ -224,7 +289,7 @@ class EngineService {
     }
     _isolate.kill(priority: Isolate.beforeNextEvent);
     _fromWorker.close();
-    _deathPort?.close();
+    _deathPort.close();
     final pending = List.of(_pending.values);
     _pending.clear();
     for (final c in pending) {

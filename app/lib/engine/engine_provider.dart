@@ -86,6 +86,12 @@ class EngineManager {
   /// second death (or any other error) propagates to the caller. Retrying only
   /// on the death signal keeps genuine engine errors (bad input, unknown verb)
   /// visible instead of masking them behind a re-spawn loop.
+  ///
+  /// A [TimeoutException] — [EngineService] giving up on a worker that never
+  /// replied — is treated the SAME way, because a wedged isolate is a dead one
+  /// that has not noticed yet: it never recovers on its own, so leaving it in
+  /// place would cost every later call a full timeout before failing the same
+  /// way. Dropping it disposes it, which kills the isolate.
   Future<T> withEngine<T>(Future<T> Function(EngineApi) fn) async {
     var engine = await _ensureEngine();
     try {
@@ -93,6 +99,11 @@ class EngineManager {
     } on StateError catch (e) {
       if (!_isIsolateDeath(e)) rethrow;
       // The isolate died mid-call. Drop it and re-spawn exactly once.
+      _dropIfCurrent(engine);
+      engine = await _ensureEngine();
+      return await fn(engine);
+    } on TimeoutException {
+      // The isolate is wedged. Same recovery, same single retry.
       _dropIfCurrent(engine);
       engine = await _ensureEngine();
       return await fn(engine);
