@@ -15,10 +15,22 @@ set by CI from the workflow run number and is not tracked here.
 > section. No git tags exist for them either; see "Releasing" in the README for
 > the tagging convention that starts with the next release.
 
-## [Unreleased]
+## [0.13.0] — 2026-08-01
+
+Production readiness: crash visibility, Firebase telemetry, a sweep of live
+correctness/performance/robustness bugs found by a full-codebase review, and a
+`game_screen.dart` split — verified with a full test matrix, the whole Firebase
+emulator pipeline, and a security-lensed review of every trust-boundary change.
 
 ### Added
 
+- Real Android release signing, obfuscated builds with uploaded debug symbols,
+  and an on-device crash log (Settings → Diagnostics) that survives even a
+  release build with no network.
+- Firebase Analytics, Performance Monitoring and Crashlytics — guarded to
+  mobile only, Windows/Linux/macOS never attempt Firebase init. Crashlytics is
+  an additional sink alongside the on-device log, not a replacement.
+- A "Send feedback" button that opens a pre-filled GitHub issue.
 - Golden image comparisons now run in CI, on a Windows runner (they previously
   ran nowhere automated).
 - `cargo fmt --check`, `clippy` and `cargo test` run in the `engine` CI job; the
