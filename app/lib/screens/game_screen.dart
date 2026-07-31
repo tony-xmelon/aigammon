@@ -1653,21 +1653,31 @@ class _ErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Icon(Icons.error_outline, color: scheme.onErrorContainer),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '$error',
-                style: TextStyle(color: scheme.onErrorContainer),
+    // A live region: the banner appears without any action of the user's, so a
+    // screen reader has to ANNOUNCE it rather than wait to be walked into it.
+    // One node carrying the whole sentence (the inner text excluded) — the icon
+    // and the message are one piece of news, not two.
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      excludeSemantics: true,
+      label: 'Error: $error',
+      child: Material(
+        color: scheme.errorContainer,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Icon(Icons.error_outline, color: scheme.onErrorContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$error',
+                  style: TextStyle(color: scheme.onErrorContainer),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1688,22 +1698,31 @@ class _TapHintBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.inverseSurface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          children: [
-            Icon(Icons.info_outline, size: 16, color: scheme.onInverseSurface),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                message,
-                maxLines: 2,
-                style: TextStyle(color: scheme.onInverseSurface, fontSize: 12),
+    // A live region for the same reason the error banner is one: it answers a
+    // tap that did nothing visible, and it clears itself after ~1.2s — a
+    // screen-reader user would otherwise never learn why the checker stayed put.
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      excludeSemantics: true,
+      label: message,
+      child: Material(
+        color: scheme.inverseSurface,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, size: 16, color: scheme.onInverseSurface),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  maxLines: 2,
+                  style: TextStyle(color: scheme.onInverseSurface, fontSize: 12),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

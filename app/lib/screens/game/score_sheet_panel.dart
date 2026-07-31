@@ -278,11 +278,13 @@ class _ScoreSheetPanelState extends State<ScoreSheetPanel> {
     );
 
     Color? markColor;
+    String markLabel = '';
     String lossText = '';
     // A dance offers no choice, so grading it "best" is noise — no mark at all.
     if (assessment != null && assessment.ranked.isNotEmpty) {
-      final (color, _) = _markStyle(assessment.mark);
+      final (color, label) = _markStyle(assessment.mark);
       markColor = color;
+      markLabel = label;
       final loss = assessment.equityLoss;
       // A best play has no number worth printing; the word carries it (and the
       // dot is already green).
@@ -295,7 +297,14 @@ class _ScoreSheetPanelState extends State<ScoreSheetPanel> {
         if (markColor != null) ...[
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: Icon(Icons.circle, size: 8, color: markColor),
+            // The dot carries the verdict in COLOUR, which is no verdict at all
+            // to a screen reader (or to a colour-blind eye reading green against
+            // amber). The mark word rides with it as the node's label — the
+            // column has no room to print it, but nothing stops it being said.
+            child: Semantics(
+              label: markLabel,
+              child: Icon(Icons.circle, size: 8, color: markColor),
+            ),
           ),
           const SizedBox(width: 3),
         ],
@@ -378,9 +387,10 @@ class _ScoreSheetPanelState extends State<ScoreSheetPanel> {
   }
 
   /// Mark → (colour, label): best/good green, dubious amber, error orange,
-  /// blunder red. The label is unused by the score sheet's cells (the dot plus
-  /// the loss number is all that fits) but kept as the single source of truth for
-  /// the mark vocabulary.
+  /// blunder red, and the single source of truth for the mark vocabulary. The
+  /// label is never PRINTED in a cell (the dot plus the loss number is all that
+  /// fits in a ~180pt column) but it is what the dot's semantics node says, so
+  /// the verdict is not colour-only.
   (Color, String) _markStyle(MoveMark mark) => switch (mark) {
         MoveMark.best => (Colors.green.shade700, 'Best'),
         MoveMark.good => (Colors.green.shade600, 'Good'),

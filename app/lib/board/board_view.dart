@@ -1476,7 +1476,9 @@ class _BoardViewState extends State<BoardView>
     final builder = _builder;
     final selected = _selectedSource;
 
-    return _BoardFrame(
+    // The board is one semantics node with a spoken summary (see
+    // [_semanticsLabel]); the painted board itself has no semantics of its own.
+    final board = _BoardFrame(
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -1659,6 +1661,32 @@ class _BoardViewState extends State<BoardView>
         },
       ),
     );
+    return Semantics(container: true, label: _semanticsLabel(), child: board);
+  }
+
+  /// What a screen reader hears for the board as a whole.
+  ///
+  /// The baseline is the two things a sighted player reads off the board first:
+  /// whose turn it is, and what is on the dice. Per-checker semantics (a node
+  /// per point, with counts and colours) is a much larger surface and is
+  /// deliberately NOT attempted here — this label is the floor, not the
+  /// ceiling. The roll named is [BoardView.state]'s, never the cosmetic
+  /// [diceOverride]: a tumbling die is not a fact about the game.
+  String _semanticsLabel() {
+    final state = widget.state;
+    final side = state.turn == Player.white ? 'White' : 'Black';
+    final dice = state.dice;
+    final roll = dice == null ? '' : ', roll ${dice.die1} and ${dice.die2}';
+    final what = switch (state.phase) {
+      GamePhase.awaitingRoll => '$side to roll.',
+      GamePhase.moving => '$side to move$roll.',
+      // The offer is the news in both of these, and the offering side is named
+      // by the dialog that carries it — the board just says one is open.
+      GamePhase.cubeOffered => 'A double is offered.',
+      GamePhase.resignOffered => 'A resignation is offered.',
+      GamePhase.gameOver => 'The game is over.',
+    };
+    return 'Backgammon board. $what';
   }
 }
 

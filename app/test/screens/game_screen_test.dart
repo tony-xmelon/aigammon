@@ -5283,4 +5283,149 @@ void main() {
       c.disposeController();
     });
   });
+
+  // The accessibility baseline (Plan 18 Task 7): the board says whose turn it
+  // is and what was rolled, the two transient banners announce themselves, and
+  // the score sheet's verdict is not carried by colour alone.
+  group('accessibility', () {
+    testWidgets('the board region names the turn and the roll', (t) async {
+      // Disposed inside the test body: the end-of-test check for a live
+      // SemanticsHandle runs BEFORE tearDowns.
+      final handle = t.ensureSemantics();
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: HangingMoveAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+
+      // White won the opening 6-1 and is entering that very roll.
+      expect(t.getSemantics(find.byType(BoardView)).label,
+          'Backgammon board. White to move, roll 6 and 1.');
+
+      handle.dispose();
+      c.disposeController();
+    });
+
+    testWidgets('the board region names a side that has yet to roll', (t) async {
+      // Disposed inside the test body: the end-of-test check for a live
+      // SemanticsHandle runs BEFORE tearDowns.
+      final handle = t.ensureSemantics();
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // Black wins the opening (6 > 1) and replies, so White is parked at the
+        // pre-roll gate with no dice of its own yet.
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+
+      expect(t.getSemantics(find.byType(BoardView)).label,
+          'Backgammon board. White to roll.');
+
+      handle.dispose();
+      c.disposeController();
+    });
+
+    testWidgets('the error banner announces itself', (t) async {
+      // Disposed inside the test body: the end-of-test check for a live
+      // SemanticsHandle runs BEFORE tearDowns.
+      final handle = t.ensureSemantics();
+
+      final c = GameController(
+        white: ThrowingAgent(),
+        black: FakeAgent(),
+        matchLength: 1,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.error != null);
+      await t.pump();
+
+      final node = t.getSemantics(find.textContaining('boom from agent'));
+      expect(node.label, contains('boom from agent'));
+      expect(node.flagsCollection.isLiveRegion, isTrue,
+          reason: 'a screen reader must hear the failure, not find it');
+
+      handle.dispose();
+      c.disposeController();
+    });
+
+    testWidgets('the no-legal-move hint announces itself', (t) async {
+      // Disposed inside the test body: the end-of-test check for a live
+      // SemanticsHandle runs BEFORE tearDowns.
+      final handle = t.ensureSemantics();
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: FakeAgent(),
+        matchLength: 5,
+        // Black opens 6-1 and replies; White then rolls 5-5 with the 24-point
+        // pair stranded — the same shape the hint group uses.
+        diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(5, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 1200);
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 1200);
+      await tapBoardPoint(t, 23);
+
+      final node = t.getSemantics(
+          find.textContaining('No legal move for that checker'));
+      expect(node.label, contains('No legal move for that checker'));
+      expect(node.flagsCollection.isLiveRegion, isTrue);
+
+      handle.dispose();
+      c.disposeController();
+    });
+
+    testWidgets('an assessed cell names its mark, not just its colour',
+        (t) async {
+      // Disposed inside the test body: the end-of-test check for a live
+      // SemanticsHandle runs BEFORE tearDowns.
+      final handle = t.ensureSemantics();
+      await t.binding.setSurfaceSize(_surface);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = GameController(
+        white: human,
+        black: HangingMoveAgent(),
+        matchLength: 5,
+        diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+      );
+      await t.pumpWidget(_tutorHarness(c, TutorService(TutorEngine())));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      await commitFirstMove(t);
+      await pumpUntil(
+          t, () => find.textContaining('−0.060').evaluate().isNotEmpty);
+
+      // The dot is the only carrier of the verdict on screen, and it carries it
+      // in colour — so the verdict has to reach a screen reader as a word.
+      // The cell merges its parts into one node; the dot contributes the mark
+      // WORD to it, so the verdict survives with the colour stripped away.
+      final cell = t.getSemantics(find.byKey(const ValueKey('sheetLeft1')));
+      expect(cell.label, contains('Error'));
+      expect(cell.label, contains('−0.060'));
+
+      handle.dispose();
+      c.disposeController();
+    });
+  });
 }
