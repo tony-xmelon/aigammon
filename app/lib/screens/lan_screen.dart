@@ -244,7 +244,13 @@ class _HostTabState extends ConsumerState<_HostTab> {
       persistence: RepositoryPersistence(repo, matchIdFuture),
     );
     unawaited(controller.playMatch());
-    await controller.ready;
+    // The "connecting…" wait, measured on BOTH peers: the host's clock starts
+    // when the guest is already attached, the guest's when the handshake has
+    // just succeeded, and in each case it ends when the first synchronized
+    // state has folded. That gap is the one a user reads as "is it stuck?".
+    await ref
+        .read(appPerformanceProvider)
+        .trace(PerfTraces.lanConnect, () => controller.ready);
     if (!mounted || !identical(_session, session) || !controller.isReady) {
       controller.disposeController();
       return;
@@ -771,7 +777,13 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       persistence: RepositoryPersistence(repo, matchIdFuture),
     );
     unawaited(controller.playMatch());
-    await controller.ready;
+    // The "connecting…" wait, measured on BOTH peers: the host's clock starts
+    // when the guest is already attached, the guest's when the handshake has
+    // just succeeded, and in each case it ends when the first synchronized
+    // state has folded. That gap is the one a user reads as "is it stuck?".
+    await ref
+        .read(appPerformanceProvider)
+        .trace(PerfTraces.lanConnect, () => controller.ready);
     if (!mounted || !identical(_session, session) || !controller.isReady) {
       controller.disposeController();
       _releaseSession();

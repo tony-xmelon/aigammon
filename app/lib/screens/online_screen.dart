@@ -443,7 +443,11 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
     await store.rememberMatch(doc.code);
     if (mounted) setState(() => _resumeCode = doc.code);
     unawaited(controller.playMatch());
-    await controller.ready;
+    // The online counterpart of the LAN connect trace: transport readiness,
+    // which here means the first Firestore state has arrived and folded.
+    await ref
+        .read(appPerformanceProvider)
+        .trace(PerfTraces.onlineConnect, () => controller.ready);
     if (!mounted || _cancelled || !controller.isReady) {
       controller.disposeController();
       return;

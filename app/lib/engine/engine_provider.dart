@@ -6,6 +6,8 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+import '../analytics/analytics_events.dart';
+import '../analytics/app_analytics.dart';
 import '../diagnostics/crash_log.dart';
 import '../game/player_agent.dart';
 import 'nets_installer.dart';
@@ -234,7 +236,51 @@ class ManagedEngineFacade implements EngineFacade {
       _manager.withEngine((e) => e.cubeInfo(board, mover));
 }
 
-/// The [EngineFacade] for wiring an [AiAgent], backed by the managed engine.
+/// Times every engine call and reports it as a custom performance trace.
+///
+/// **Why here and not inside [EngineService].** The isolate has no idea what a
+/// trace is, and must not: it is pure Dart that also runs on Windows and under
+/// `dart test`. This decorator sits at the provider boundary, so EVERY consumer
+/// of the facade — the bot, the tutor, the post-match analyzer — is measured by
+/// construction, and no call site can forget to.
+///
+/// **Why these three verbs.** [rankMoves] is the "AI is thinking" wait, the one
+/// a player actually feels. [evaluate] and [cubeInfo] are shorter but drive the
+/// bot's cube decisions and the tutor's advice, and a regression in either
+/// shows up as the same symptom (a board that sits there), so telling them
+/// apart in the dashboard is worth three trace names instead of one.
+class TracedEngineFacade implements EngineFacade {
+  TracedEngineFacade(this._inner, this._performance);
+
+  final EngineFacade _inner;
+  final AppPerformance _performance;
+
+  @override
+  Future<Probabilities> evaluate(BoardState board, Player mover) =>
+      _performance.trace(
+          PerfTraces.engineEvaluate, () => _inner.evaluate(board, mover));
+
+  @override
+  Future<List<ScoredMove>> rankMoves(
+          BoardState board, Player mover, Dice dice) =>
+      _performance.trace(PerfTraces.engineRankMoves,
+          () => _inner.rankMoves(board, mover, dice));
+
+  @override
+  Future<CubeAdvice> cubeInfo(BoardState board, Player mover) =>
+      _performance.trace(
+          PerfTraces.engineCubeInfo, () => _inner.cubeInfo(board, mover));
+}
+
+/// The [EngineFacade] for wiring an [AiAgent], backed by the managed engine and
+/// wrapped in the performance decorator.
+///
+/// On desktop and in tests [appPerformanceProvider] is the no-op, whose `trace`
+/// is a straight `await body()` — no allocation, no branch a profiler could
+/// find. The decorator is therefore always in place and never in the way.
 final engineFacadeProvider = Provider<EngineFacade>((ref) {
-  return ManagedEngineFacade(ref.watch(engineManagerProvider));
+  return TracedEngineFacade(
+    ManagedEngineFacade(ref.watch(engineManagerProvider)),
+    ref.watch(appPerformanceProvider),
+  );
 });
