@@ -523,6 +523,16 @@ class _GuestSocketTransport implements SocketTransport {
     if (_disposed) {
       throw const TransportUnavailable('disposed', 'transport disposed');
     }
+    // The welcome may be one this transport has already REFUSED — [_adopt]
+    // validates the log the host sent and, on a fault, deliberately leaves the
+    // mirror untouched and reports the link failed. Minting a session from that
+    // same welcome anyway is the worst of both worlds: the caller gets a live,
+    // seated transport whose mirror is EMPTY, so it primes a match the host has
+    // been playing from a blank log and diverges in silence. The refusal is
+    // deterministic, so it is the same [TransportRejected] [_adopt] published,
+    // raised here rather than swallowed.
+    final fault = _logFault(welcome.log);
+    if (fault != null) throw TransportRejected('bad-welcome', fault);
     return _session ??= _sessionFrom(welcome);
   }
 

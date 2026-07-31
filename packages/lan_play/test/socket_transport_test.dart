@@ -534,6 +534,18 @@ void main() {
             reason: 'the mirror was left alone rather than corrupted');
         expect(frames.whereType<ResetFrame>(), isEmpty,
             reason: 'nothing to replay from, so no replay is ordered');
+        // …and connect() must FAIL on it too. The refusal above deliberately
+        // leaves the mirror alone, so a connect that went on to mint a session
+        // from the very welcome this transport just refused would hand the
+        // controller a live, "connected" seat over an EMPTY log for a match the
+        // host has been playing — a silent divergence instead of a failure.
+        await expectLater(
+          transport.connect(),
+          throwsA(isA<TransportRejected>()
+              .having((e) => e.code, 'code', 'bad-welcome')),
+          reason: 'a refused welcome is no basis for a session',
+        );
+        expect(await mirrorSeqs(transport), isEmpty);
       }
     });
   });
