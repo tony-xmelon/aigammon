@@ -109,6 +109,12 @@ class _RollerDrive {
 
   /// The derived roll has been appended to the event log.
   bool eventSent = false;
+
+  /// One of this drive's writes was REFUSED by the backend. Deterministic, so
+  /// the drive stops dead rather than re-attempting on the roll beat; only a
+  /// deliberate [NetMatchController.rollDice] clears it. See
+  /// [NetMatchController._rejectRoll].
+  bool refused = false;
 }
 
 /// The witness's half of one roll: contribute entropy, then verify the reveal.
@@ -749,6 +755,9 @@ class NetMatchController extends ChangeNotifier implements MatchController {
       _roller =
           _RollerDrive(n: n, opening: false, gameNo: _gameNumber, rng: rng);
     }
+    // A press of Roll is the ONE bounded retry a refused write gets — the
+    // automatic beat never re-attempts one (see [_rejectRoll]).
+    _roller!.refused = false;
     _submitting = true;
     _transientError = null;
     _notify();
@@ -1864,7 +1873,7 @@ class NetMatchController extends ChangeNotifier implements MatchController {
   Future<void> _rollerSteps() async {
     _maybeStartOpeningRoll();
     final d = _roller;
-    if (d == null) return;
+    if (d == null || d.refused) return;
 
     if (!d.committed) {
       final commit = d.session.phase == FairDicePhase.fresh
@@ -1873,6 +1882,16 @@ class NetMatchController extends ChangeNotifier implements MatchController {
       try {
         await transport.createRoll(d.n, commit);
         d.committed = true;
+      } on TransportRejected catch (e) {
+        // Refused on its merits, so an identical retry earns an identical
+        // refusal — exactly the reading [_witnessSteps] takes of a refused
+        // entropy write, and exactly why [_runSubmit] does not retry one
+        // either. Left to the generic handler in [_pumpRolls] this would arm
+        // the roll-retry timer and re-attempt the same write every beat, for
+        // as long as the screen is open: an unbounded write loop against a
+        // METERED backend. So: mark the step done, surface it, stop.
+        _rejectRoll(d, e);
+        return;
       } on TransportContested {
         final existing = await transport.fetchRoll(d.n);
         if (existing != null) _rolls[existing.n] = existing;
@@ -1904,7 +1923,13 @@ class NetMatchController extends ChangeNotifier implements MatchController {
     d.revealValue ??= d.session.reveal();
     if (!d.revealSent) {
       if (doc!.reveal == null) {
-        await transport.sendReveal(d.n, d.revealValue!);
+        try {
+          await transport.sendReveal(d.n, d.revealValue!);
+        } on TransportRejected catch (e) {
+          // Same reading as the commit above: deterministic, so not retryable.
+          _rejectRoll(d, e);
+          return;
+        }
       }
       d.revealSent = true;
       if (_disposed || frozen) return;
@@ -1926,6 +1951,28 @@ class NetMatchController extends ChangeNotifier implements MatchController {
       // new tail (or retire, if the resync shows our event already landed).
       _resync('the log moved while appending roll ${d.n}');
     }
+  }
+
+  /// A roll write the backend REFUSED.
+  ///
+  /// [TransportRejected] means the write was judged and turned down — a rules
+  /// condition that does not hold, a phase already past — so an identical retry
+  /// earns an identical refusal. [_runSubmit] already declines to retry one for
+  /// events and [_witnessSteps] for entropy; this is the same reading for the
+  /// roller's own two writes, and it matters most here because this is the path
+  /// with a TIMER behind it: left to [_pumpRolls]'s generic handler the drive
+  /// re-attempts the refused write every [_retryBeat] for as long as the screen
+  /// is open, which against a metered backend bills forever for a write that
+  /// can never land.
+  ///
+  /// So the drive stops, the refusal is surfaced, and the pre-roll gate is
+  /// re-opened — pressing Roll is a deliberate, bounded retry (see [rollDice]),
+  /// which is the only retry a deterministic refusal deserves.
+  void _rejectRoll(_RollerDrive d, TransportRejected e) {
+    d.refused = true;
+    _submitting = false;
+    _transientError = NetMatchException('roll-rejected', e.message);
+    _notify();
   }
 
   /// The HOST seat is the protocol roller for EVERY opening roll — nobody is on

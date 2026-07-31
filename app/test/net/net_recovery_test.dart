@@ -320,6 +320,78 @@ void main() {
       expect(backend.fetchRoll(4), isNull);
       expect(backend.fetchRoll(3)!.roller, backend.guestAuthor);
     });
+
+    test('a REJECTED createRoll stops instead of retrying forever', () async {
+      // A rejection is deterministic — the backend refused the write on its
+      // merits, so an identical retry earns an identical refusal. Retrying it on
+      // the roll beat is an unbounded write loop against a METERED backend, not
+      // a recovery. Compare the witness's entropy step, which has always marked
+      // the step done and surfaced the error.
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 5, die2: 2),
+      );
+      final c = rig.controller;
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+      rig.scriptSeededTurn();
+      await pumpUntil(() => c.awaitingHumanTurn);
+
+      rig.transport.intercept = (op) => op == 'createRoll'
+          ? const TransportRejected('refused', 'the match is not active')
+          : null;
+      c.rollDice();
+      await pumpUntil(() => c.error != null);
+      final attempts = rig.transport.calls['createRoll'];
+      expect(attempts, isNotNull);
+      // Real time, well past several beats of the 200ms roll-retry timer.
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      expect(rig.transport.calls['createRoll'], attempts,
+          reason: 'a refused create must not be re-attempted on the beat');
+      expect(c.error, isNotNull, reason: 'and the refusal must be surfaced');
+      expect(c.frozen, isFalse);
+      expect(rig.backend.fetchRoll(3), isNull);
+    });
+
+    test('a REJECTED sendReveal stops instead of retrying forever', () async {
+      final rig = await ScriptedRig.guest(
+        openingWhiteDie: 3,
+        openingBlackDie: 6,
+        seed: (b) => b.seedRollDoc(author: b.hostAuthor, die1: 5, die2: 2),
+      );
+      final c = rig.controller;
+      final backend = rig.backend;
+      await pumpUntil(() => c.isReady);
+      c.submitMove(Player.black, c.state.legalMoves.first);
+      await pumpUntil(() => c.state.turn == Player.white);
+      rig.scriptSeededTurn();
+      await pumpUntil(() => c.awaitingHumanTurn);
+
+      // Commit lands; then the (scripted) opponent witnesses it, so the drive
+      // moves on to the reveal — which is the step the backend refuses.
+      c.rollDice();
+      await pumpUntil(() => backend.fetchRoll(3) != null);
+      rig.transport.intercept = (op) => op == 'sendReveal'
+          ? const TransportRejected('refused', 'the match is not active')
+          : null;
+      backend.addEntropy(
+        author: rig.peerAuthor,
+        n: 3,
+        entropy: 'b' * 64,
+      );
+      await pumpUntil(() => (rig.transport.calls['sendReveal'] ?? 0) > 0,
+          reason: 'the drive never reached the reveal step');
+      await pumpUntil(() => c.error != null);
+      final attempts = rig.transport.calls['sendReveal'];
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      expect(rig.transport.calls['sendReveal'], attempts,
+          reason: 'a refused reveal must not be re-attempted on the beat');
+      expect(c.error, isNotNull);
+      expect(c.frozen, isFalse);
+      expect(backend.fetchRoll(3)!.reveal, isNull);
+    });
   });
 
   group('the gate', () {
