@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:online_client/online_client.dart';
 
+import '../analytics/analytics_events.dart';
+import '../analytics/analytics_screen_view.dart';
+import '../analytics/app_analytics.dart';
 import '../board/board_view.dart';
 import '../data/app_settings.dart';
 import '../data/match_repository.dart';
@@ -33,7 +36,13 @@ class OnlineScreen extends ConsumerWidget {
   const OnlineScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context, WidgetRef ref) => AnalyticsScreenView(
+        name: AnalyticsScreens.online,
+        child: _build(context, ref),
+      );
+
+  Widget _build(BuildContext context, WidgetRef ref) {
     final config = ref.watch(onlineConfigProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Play Online')),
@@ -400,6 +409,14 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
       whiteType: localSide == Player.white ? 'human' : 'remote',
       blackType: localSide == Player.black ? 'human' : 'remote',
     );
+    ref.read(appAnalyticsProvider).logMatchStarted(
+          mode: AnalyticsModes.online,
+          matchLength: doc.length,
+          // Online matches are always played with the cube, and the tutor is
+          // always built for them (see below).
+          cubeless: false,
+          tutor: true,
+        );
     // The match document has both seats by now (the create flow waited for the
     // join, the join flow just claimed one), so it is handed to the transport as
     // a seed and connect() costs no extra read.
@@ -442,6 +459,8 @@ class _OnlineBodyState extends ConsumerState<_OnlineBody> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          analytics: ref.read(appAnalyticsProvider),
+          analyticsMode: AnalyticsModes.online,
           // The header names the sides "You … Opp" online (the remote player is
           // not the AI); see GameScreen.opponentLabel.
           opponentLabel: 'Opp',

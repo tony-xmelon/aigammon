@@ -4,6 +4,8 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../analytics/analytics_events.dart';
+import '../analytics/analytics_screen_view.dart';
 import '../board/board_view.dart';
 import '../data/match_repository.dart';
 import '../engine/engine_provider.dart';
@@ -202,7 +204,13 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.analysis,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Analysis'),

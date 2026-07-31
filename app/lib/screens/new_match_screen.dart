@@ -4,6 +4,9 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../analytics/analytics_events.dart';
+import '../analytics/analytics_screen_view.dart';
+import '../analytics/app_analytics.dart';
 import '../board/board_view.dart';
 import '../data/app_settings.dart';
 import '../data/match_repository.dart';
@@ -73,7 +76,13 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
       widget.vsComputer && (d == Difficulty.easy || d == Difficulty.medium);
 
   @override
-  Widget build(BuildContext context) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.newMatch,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.vsComputer ? 'Play vs Computer' : 'Two Players'),
@@ -213,6 +222,18 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
     final tutor = _tutorEnabled
         ? TutorService(ref.read(engineFacadeProvider))
         : null;
+    final mode = widget.vsComputer
+        ? AnalyticsModes.vsComputer
+        : AnalyticsModes.hotSeat;
+    ref.read(appAnalyticsProvider).logMatchStarted(
+          mode: mode,
+          matchLength: _matchLength,
+          // Only meaningful vs the computer; omitted (null) for hot-seat, where
+          // there is no AI level to report.
+          difficulty: widget.vsComputer ? _difficulty : null,
+          cubeless: _cubeless,
+          tutor: _tutorEnabled,
+        );
     Navigator.of(context).push(
       MaterialPageRoute(
         // Key by the controller so a fresh GameScreen State is mounted per
@@ -222,6 +243,8 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           controller: controller,
           orientation: orientation,
           tutor: tutor,
+          analytics: ref.read(appAnalyticsProvider),
+          analyticsMode: mode,
           // The header's detail row names the level you chose ("vs AI · Easy ·
           // Pips …"). Only meaningful against the computer.
           opponentDetail:

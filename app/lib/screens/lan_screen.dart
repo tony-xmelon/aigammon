@@ -8,6 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lan_play/lan_play.dart';
 import 'package:match_transport/match_transport.dart';
 
+import '../analytics/analytics_events.dart';
+import '../analytics/analytics_screen_view.dart';
+import '../analytics/app_analytics.dart';
 import '../board/board_view.dart';
 import '../data/app_settings.dart';
 import '../data/match_repository.dart';
@@ -88,7 +91,13 @@ class _LanScreenState extends State<LanScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.lan,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Play Nearby'),
@@ -224,6 +233,13 @@ class _HostTabState extends ConsumerState<_HostTab> {
       whiteType: side == Player.white ? 'human' : 'remote',
       blackType: side == Player.black ? 'human' : 'remote',
     );
+    ref.read(appAnalyticsProvider).logMatchStarted(
+          mode: AnalyticsModes.lan,
+          matchLength: session.config.length,
+          cubeless: session.config.cubeless,
+          // The tutor is always available on the LAN (see _openGame).
+          tutor: true,
+        );
     final controller = session.controller(
       persistence: RepositoryPersistence(repo, matchIdFuture),
     );
@@ -744,6 +760,13 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       whiteType: side == Player.white ? 'human' : 'remote',
       blackType: side == Player.black ? 'human' : 'remote',
     );
+    ref.read(appAnalyticsProvider).logMatchStarted(
+          mode: AnalyticsModes.lan,
+          matchLength: session.config.length,
+          cubeless: session.config.cubeless,
+          // The tutor is always available on the LAN (see _openGame).
+          tutor: true,
+        );
     final controller = session.controller(
       persistence: RepositoryPersistence(repo, matchIdFuture),
     );
@@ -1049,6 +1072,8 @@ Future<void> _openGame({
             ? BoardOrientationMode.fixedWhite
             : BoardOrientationMode.fixedBlack,
         tutor: tutor,
+        analytics: ref.read(appAnalyticsProvider),
+        analyticsMode: AnalyticsModes.lan,
         opponentLabel: opponentLabel,
         opponentDetail: 'Nearby',
         persistedMatchId: matchIdFuture,

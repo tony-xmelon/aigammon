@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../analytics/analytics_events.dart';
+import '../analytics/analytics_screen_view.dart';
 import '../data/database.dart';
 import '../data/match_repository.dart';
 import 'analysis_screen.dart';
@@ -53,7 +55,13 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.history,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     final matches = ref.watch(matchesProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Match history')),

@@ -2,6 +2,8 @@ import 'package:engine_bindings/engine_bindings.dart' show Difficulty;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../analytics/analytics_events.dart';
+import '../analytics/analytics_screen_view.dart';
 import '../data/app_settings.dart';
 import '../data/settings_repository.dart';
 import 'diagnostics_screen.dart';
@@ -19,7 +21,13 @@ class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context, WidgetRef ref) => AnalyticsScreenView(
+        name: AnalyticsScreens.settings,
+        child: _build(context, ref),
+      );
+
+  Widget _build(BuildContext context, WidgetRef ref) {
     // The row always exists; during the sub-frame initial load fall back to
     // defaults so the controls always have a concrete selection.
     final settings = ref.watch(settingsProvider).valueOrNull ?? AppSettings.defaults;

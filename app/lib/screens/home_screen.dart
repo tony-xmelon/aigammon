@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../analytics/analytics_events.dart';
+import '../analytics/analytics_screen_view.dart';
 import '../branding/app_mark.dart';
 import '../branding/app_version.dart';
 import 'history_screen.dart';
@@ -20,7 +22,15 @@ class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  // Split in two so the analytics wrapper can sit at the root of the screen
+  // without re-indenting the whole tree: [build] names the screen, [_build] is
+  // the screen. Every screen in this app follows the same shape.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.home,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
       body: SafeArea(

@@ -5,6 +5,8 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 
 import '../board/board_theme.dart';
+import '../analytics/analytics_events.dart';
+import '../analytics/app_analytics.dart';
 import '../board/board_view.dart';
 import '../data/app_settings.dart';
 import '../game/game_record.dart';
@@ -114,7 +116,27 @@ class GameScreen extends StatefulWidget {
     this.opponentDetail,
     this.showPassDevice = false,
     this.tabletop = false,
+    this.analytics = const NoopAnalytics(),
+    this.analyticsMode = AnalyticsModes.vsComputer,
   });
+
+  /// Where this screen's usage events go.
+  ///
+  /// Injected rather than read from a provider because this screen is a plain
+  /// [StatefulWidget] that several tests mount WITHOUT a [ProviderScope] above
+  /// it (see `test/net/`). The default no-op keeps every one of those working
+  /// untouched; the four production call sites pass
+  /// `ref.read(appAnalyticsProvider)`.
+  final AppAnalytics analytics;
+
+  /// One of [AnalyticsModes] — how this match is being played, which is the
+  /// dimension every event on this screen is sliced by.
+  ///
+  /// Defaults to `vsComputer` rather than being required for the same reason
+  /// [analytics] is injectable: a telemetry parameter must not force churn on
+  /// harnesses that only care about the board. Production call sites always
+  /// pass it.
+  final String analyticsMode;
 
   final MatchController controller;
 
@@ -434,6 +456,7 @@ class _GameScreenState extends State<GameScreen> {
     super.initState();
     _observable = Listenable.merge([_c, ..._humanNotifiers(), _entryControl]);
     _observable.addListener(_onChange);
+    widget.analytics.logScreenView(AnalyticsScreens.game);
     // Fire-and-forget: the controller catches loop errors and records them on
     // `error`, which the banner surfaces. Nothing here needs the returned future.
     unawaited(_c.playMatch());
@@ -488,6 +511,7 @@ class _GameScreenState extends State<GameScreen> {
 
   void _onChange() {
     if (!mounted) return;
+    _reportMatchCompletion();
     _updatePassDevice();
     _closeSurrenderIfOutranked();
     _syncRollBeat();
@@ -496,6 +520,53 @@ class _GameScreenState extends State<GameScreen> {
     _maybeShowDragHint();
     setState(() {});
   }
+
+  // --- Analytics -------------------------------------------------------------
+
+  /// Whether the match-completed event has already been sent.
+  ///
+  /// [_onChange] fires many times after a match ends (the dialog, the score
+  /// sheet, an animation settling), and `matchOver` stays true for all of them.
+  /// Without this latch one finished match would report dozens of completions
+  /// and every "matches played" figure in the console would be fiction.
+  bool _completionReported = false;
+
+  void _reportMatchCompletion() {
+    if (_completionReported || !_c.matchOver) return;
+    _completionReported = true;
+    final match = _c.match;
+    final winner = match.winner;
+    if (winner == null) return;
+    final winnerScore =
+        winner == Player.white ? match.whiteScore : match.blackScore;
+    final loserScore =
+        winner == Player.white ? match.blackScore : match.whiteScore;
+    widget.analytics.logMatchCompleted(
+      mode: widget.analyticsMode,
+      matchLength: match.matchLength,
+      localWon: _localWon(winner),
+      winnerScore: winnerScore,
+      loserScore: loserScore,
+    );
+  }
+
+  /// Did the person holding this device win?
+  ///
+  /// `null` when the question has no answer: hot-seat and tabletop have TWO
+  /// local humans, so "local won" would be true whoever won and the figure
+  /// would quietly inflate every win rate that includes shared-device play.
+  bool? _localWon(Player winner) {
+    final whiteLocal = _c.isLocalHuman(Player.white);
+    final blackLocal = _c.isLocalHuman(Player.black);
+    if (whiteLocal == blackLocal) return null; // both, or neither (AI vs AI).
+    return winner == (whiteLocal ? Player.white : Player.black);
+  }
+
+  /// Logs the local player's double. Called from BOTH double affordances (the
+  /// header's and the tabletop action bar's) — they are separate widgets, and a
+  /// double is a double whichever one sent it.
+  void _logCubeOffered() => widget.analytics
+      .logCubeOffered(mode: widget.analyticsMode, cubeValue: _c.state.cube.value);
 
   // --- Auto-pass on a dance --------------------------------------------------
 
@@ -960,6 +1031,7 @@ class _GameScreenState extends State<GameScreen> {
   // --- Hint panel ------------------------------------------------------------
 
   void _openHint() {
+    widget.analytics.logTutorHintUsed(mode: widget.analyticsMode);
     setState(() {
       _hintOpen = true;
       _hintLoading = true;
@@ -1094,6 +1166,7 @@ class _GameScreenState extends State<GameScreen> {
                   // Tabletop moves Double to the players' own edges — the shared
                   // header cannot tell which of the two people pressed it.
                   showDouble: !_tabletopBars,
+                  onDoubled: _logCubeOffered,
                 ),
                 // TABLETOP hot-seat only: the second player's action bar, at
                 // THEIR edge (directly under the header) and upside-down so it
@@ -1431,6 +1504,8 @@ class _GameScreenState extends State<GameScreen> {
     final ready = _surrenderReady;
     setState(_closeSurrender);
     if (!ready) return;
+    widget.analytics
+        .logResignOffered(mode: widget.analyticsMode, value: value.name);
     _c.offerResign(value);
   }
 
@@ -1474,15 +1549,27 @@ class _GameScreenState extends State<GameScreen> {
       actions: [
         _CardAction(
           label: 'Pass',
-          onPressed: () => _c.submitCubeResponse(side, CubeAction.drop),
+          onPressed: () => _answerCube(side, CubeAction.drop),
         ),
         _CardAction(
           label: 'Take',
           filled: true,
-          onPressed: () => _c.submitCubeResponse(side, CubeAction.take),
+          onPressed: () => _answerCube(side, CubeAction.take),
         ),
       ],
     );
+  }
+
+  /// Answers a double, reporting the choice before submitting it — the cube
+  /// value is read from the CURRENT state, which the submission is about to
+  /// change.
+  void _answerCube(Player side, CubeAction action) {
+    widget.analytics.logCubeAnswered(
+      mode: widget.analyticsMode,
+      action: action.name,
+      cubeValue: _c.state.cube.value,
+    );
+    _c.submitCubeResponse(side, action);
   }
 
   Widget _resignDialog(Player side) {
@@ -1790,6 +1877,7 @@ class _GameScreenState extends State<GameScreen> {
   /// has already closed the gate or the opponent has taken the cube.
   void _offerDouble() {
     if (!_c.awaitingHumanTurn || !_doublingLegal(_c.state)) return;
+    _logCubeOffered();
     _c.offerDouble();
   }
 
@@ -2490,6 +2578,7 @@ class _Hud extends StatelessWidget {
     this.opponentDetail,
     this.onSurrender,
     this.showDouble = true,
+    this.onDoubled,
   });
 
   /// Height of row 1 (the match context plus the action controls).
@@ -2548,6 +2637,11 @@ class _Hud extends StatelessWidget {
   /// so the shared header is unambiguous and keeps it.
   final bool showDouble;
 
+  /// Called just before the header's Double is submitted, so the screen can
+  /// report it. The header has no analytics sink of its own — it is a
+  /// presentation widget — and the screen owns the one that is injected.
+  final VoidCallback? onDoubled;
+
   bool get _humanDeciding {
     if (controller.awaitingHumanTurn) return true;
     for (final side in [Player.white, Player.black]) {
@@ -2586,6 +2680,7 @@ class _Hud extends StatelessWidget {
   /// button's own condition.
   void _offerDouble() {
     if (!controller.awaitingHumanTurn || !_doublingLegal) return;
+    onDoubled?.call();
     controller.offerDouble();
   }
 
