@@ -1138,8 +1138,8 @@ class FirestoreTransport implements MatchTransport {
   /// a second of the 15s the lobby screen's own wait settles at.
   static const int _seatCeilingFactor = 8;
 
-  /// The delay before seat-wait read number [cycle]: [pollInterval] for the
-  /// first [_seatFastCycles], then doubling to a ceiling.
+  /// The delay before seat-wait read number [cycle]: [poll] for the first
+  /// [_seatFastCycles], then doubling to a ceiling.
   ///
   /// This is a FREE-TIER budget decision, not a UX one. "Create a match, then go
   /// and tell your friend" is the longest idle window in the product, and every
@@ -1150,14 +1150,24 @@ class FirestoreTransport implements MatchTransport {
   /// latency on the join itself. `_OnlineBodyState._wait` in
   /// `app/lib/screens/online_screen.dart` backs off the screen's equivalent wait
   /// for exactly this reason, and this is the same ladder.
-  Duration _seatWait(int cycle) {
-    if (cycle < _seatFastCycles) return pollInterval;
-    // The shift is capped so a lobby left open for hours cannot overflow it.
+  ///
+  /// Static and public so a test can assert the SCHEDULE exactly rather than
+  /// infer a ceiling from wall-clock gaps between reads.
+  static Duration seatWaitFor(Duration poll, int cycle) {
+    if (cycle < _seatFastCycles) return poll;
+    // The shift is clamped to the doublings that actually reach the ceiling —
+    // `_seatCeilingFactor.bitLength - 1`, i.e. 3 for a factor of 8, derived so
+    // that widening the ceiling cannot leave the clamp behind. Clamping is
+    // load-bearing rather than belt-and-braces: Dart's int is 64-bit and
+    // `1 << n` TRUNCATES TO ZERO past that, so an unclamped shift turns a lobby
+    // left open long enough into a zero-length sleep — a spin against a metered
+    // backend, which is the opposite of what this ladder is for.
     final steps = cycle - _seatFastCycles + 1;
-    final scaled = pollInterval * (1 << (steps > 8 ? 8 : steps));
-    final ceiling = pollInterval * _seatCeilingFactor;
-    return scaled > ceiling ? ceiling : scaled;
+    final maxSteps = _seatCeilingFactor.bitLength - 1;
+    return poll * (1 << (steps < maxSteps ? steps : maxSteps));
   }
+
+  Duration _seatWait(int cycle) => seatWaitFor(pollInterval, cycle);
 
   /// A CANCELLABLE pause — the loop's only timer.
   ///

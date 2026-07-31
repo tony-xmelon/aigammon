@@ -201,10 +201,31 @@ void main() {
       expect(at.length, greaterThan(3), reason: 'it must still be polling');
       expect(at.length, lessThan(40),
           reason: 'a flat cadence would have billed ~100 reads by now');
-      // And it is CAPPED, not still doubling: the last gap is nowhere near the
-      // half-second a runaway doubling would have reached by read ~10.
+      // And it is CAPPED, not still doubling. The ceiling is 8 * poll = 80ms,
+      // so anything at or under ~1.5 ceilings is the capped schedule plus timer
+      // jitter; the old bound of 400ms was FIVE ceilings and would have passed
+      // against a cap that had quietly widened by 4x.
       final last = at.last.difference(at[at.length - 2]);
-      expect(last, lessThan(const Duration(milliseconds: 400)));
+      expect(last, lessThanOrEqualTo(const Duration(milliseconds: 120)));
+    });
+
+    test('the seat-wait schedule reaches its ceiling and stays there', () {
+      // The wall-clock test above can only bound the cadence loosely. The
+      // schedule itself is exact, so assert it exactly — that is what catches a
+      // ceiling that widens, a doubling that never stops, and (the one that
+      // would be a SPIN rather than a cost) a shift that overflows to a
+      // zero-length sleep once a lobby has been left open for hours.
+      const poll = Duration(seconds: 2);
+      Duration at(int cycle) => FirestoreTransport.seatWaitFor(poll, cycle);
+      for (var c = 0; c < 5; c++) {
+        expect(at(c), poll, reason: 'cycle $c is still at the resting cadence');
+      }
+      expect(at(5), poll * 2);
+      expect(at(6), poll * 4);
+      expect(at(7), poll * 8, reason: 'the ceiling');
+      expect(at(8), poll * 8, reason: 'and it does not move past it');
+      expect(at(1000), poll * 8, reason: 'nor after an hour in the lobby');
+      expect(at(1 << 40), poll * 8, reason: 'nor when the shift would overflow');
     });
 
     test('a device with no seat in the match is rejected', () async {
