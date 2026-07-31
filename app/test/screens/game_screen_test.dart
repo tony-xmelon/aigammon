@@ -3763,6 +3763,69 @@ void main() {
       c.disposeController();
     });
 
+    testWidgets('a roll does not yank a scrolled-up reader back down, but a '
+        'new row does', (t) async {
+      // The auto-pin is keyed on RENDERED ROWS, not on events, because the two
+      // do not move together: a roll adds no row (it is printed as a prefix on
+      // the move it produces). Keyed on events, every roll re-pinned the list —
+      // exactly while a reader was scrolled up looking at an earlier turn.
+      await t.binding.setSurfaceSize(phone);
+      addTearDown(() => t.binding.setSurfaceSize(null));
+
+      final human = LocalHumanAgent();
+      final c = whiteFirst(human);
+      await t.pumpWidget(_harness(c));
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+      human.submitMove(c.state.legalMoves.first);
+      await playTurns(t, c, human, 7);
+      await t.pump();
+
+      ScrollPosition sheetPosition() => t
+          .widget<ListView>(find.byKey(const ValueKey('scoreSheetList')))
+          .controller!
+          .position;
+
+      expect(sheetPosition().maxScrollExtent, greaterThan(0),
+          reason: 'the sheet must overflow for scrolling to mean anything');
+
+      // The reader scrolls up to re-read the opening.
+      await pumpUntil(t, () => c.awaitingHumanTurn, maxFrames: 2000);
+      sheetPosition().jumpTo(0);
+      await t.pump();
+      expect(sheetPosition().pixels, 0);
+
+      final rowsBefore = buildScoreSheet(c.game.events).length;
+      final eventsBefore = c.game.events.length;
+
+      // A roll lands: a new EVENT, no new row.
+      c.rollDice();
+      await pumpUntil(t, () => human.pendingMoveRequest.value != null,
+          maxFrames: 2000);
+      await t.pump();
+      await t.pump();
+
+      expect(c.game.events.length, greaterThan(eventsBefore),
+          reason: 'the roll really did append an event');
+      expect(buildScoreSheet(c.game.events).length, rowsBefore,
+          reason: 'and it really did NOT add a row');
+      expect(sheetPosition().pixels, 0,
+          reason: 'the reader was left where they were');
+
+      // The move that follows DOES add a row, and the sheet follows it down.
+      human.submitMove(c.state.legalMoves.first);
+      await pumpUntil(
+          t, () => buildScoreSheet(c.game.events).length > rowsBefore,
+          maxFrames: 2000);
+      await t.pump();
+      await t.pump();
+
+      final position = sheetPosition();
+      expect(position.pixels, closeTo(position.maxScrollExtent, 0.5),
+          reason: 'a new row re-pins the list to the bottom');
+
+      c.disposeController();
+    });
+
     testWidgets('the board rect never moves as the sheet fills (F6)', (t) async {
       await t.binding.setSurfaceSize(phone);
       addTearDown(() => t.binding.setSurfaceSize(null));

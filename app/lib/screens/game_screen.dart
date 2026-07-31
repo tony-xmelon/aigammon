@@ -398,11 +398,17 @@ class _GameScreenState extends State<GameScreen> {
   /// can auto-scroll to the newest row as live events append.
   final ScrollController _sheetScroll = ScrollController();
 
-  /// The event count the score sheet was last auto-scrolled for. A fresh event
-  /// re-pins the list to the bottom; unrelated rebuilds do not, so a user who
-  /// scrolls up to re-read an earlier turn is left where they are until the next
-  /// real event.
-  int _sheetScrolledCount = -1;
+  /// The number of RENDERED ROWS the score sheet was last auto-scrolled for. A
+  /// row appearing re-pins the list to the bottom; anything else leaves a user
+  /// who scrolled up to re-read an earlier turn exactly where they are.
+  ///
+  /// Rows, not events: the two do not move together. A [RollEvent] adds no row
+  /// at all (the roll is printed as a prefix on the move it produces), and a
+  /// Black move joins the open row rather than starting one — so keying this on
+  /// the event count yanked the list back down two or three times per exchange
+  /// for content that had not moved, which is precisely when a reader is
+  /// looking at it.
+  int _sheetScrolledRows = -1;
 
   // --- Rebuild scoping -------------------------------------------------------
   //
@@ -2088,8 +2094,8 @@ class _GameScreenState extends State<GameScreen> {
   /// labels), a hairline, then a scrollable list of [buildScoreSheet] rows —
   /// numbered turn rows with one cell per side, and full-width span rows for the
   /// opening / cube / resignation events. Newest row at the BOTTOM, auto-pinned
-  /// there as events append (see [_sheetScrolledCount] for how a manual
-  /// scroll-up is respected).
+  /// there as rows append (see [_sheetScrolledRows] for how a manual scroll-up
+  /// is respected).
   ///
   /// Scoped to [_sheetRevision] and held as one widget instance, so the rows
   /// are rebuilt when a row actually changes and not when the dice tumble. See
@@ -2102,12 +2108,12 @@ class _GameScreenState extends State<GameScreen> {
   Widget _scoreSheet() {
     final scheme = Theme.of(context).colorScheme;
     final rows = _scoreSheetRows();
-    final count = _c.game.events.length;
-    // Re-pin to the newest row on any new event, but NOT on unrelated rebuilds
-    // (a tutor assessment landing, the thinking dot flickering) — so a user who
-    // scrolled up to re-read turn 3 stays there until the game moves on.
-    if (count != _sheetScrolledCount) {
-      _sheetScrolledCount = count;
+    // Re-pin to the newest row when a ROW appears, but not on any other rebuild
+    // (a roll, a tutor assessment landing, a best-play line revealed) — so a
+    // user who scrolled up to re-read turn 3 stays there until the sheet
+    // actually grows. See [_sheetScrolledRows].
+    if (rows.length != _sheetScrolledRows) {
+      _sheetScrolledRows = rows.length;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_sheetScroll.hasClients) {
           _sheetScroll.jumpTo(_sheetScroll.position.maxScrollExtent);
