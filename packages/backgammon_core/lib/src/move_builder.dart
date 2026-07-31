@@ -1,3 +1,4 @@
+import 'bear_off.dart';
 import 'board_state.dart';
 import 'dice.dart';
 import 'game_state.dart';
@@ -371,29 +372,36 @@ class MoveBuilder {
   /// illegal as a FIRST hop: `7/6 4/off` reordered puts the bear-off before the
   /// straggler comes home, and `4/off 2/off` on a 6-4 reordered overshoots the
   /// 2-point while the 4-point is still occupied. Neither is offered.
+  ///
+  /// The rule itself is [canBearOff], shared with the generator — this method
+  /// only translates the live board into the generator's normalized frame
+  /// (mover positive, travelling toward index 0) and tries each die in hand.
   bool _canBearOff(int from, BoardState position, List<CheckerMove> prefix) {
-    final player = _player;
-    if (position.barFor(player) > 0) return false;
-    final white = player == Player.white;
-    // Every checker inside the mover's home board (White 0-5, Black 18-23).
+    final white = _player == Player.white;
+    if (position.barFor(_player) > 0) return false;
+    // Normalized: the mover's home board is 0-5 and its furthest-back checker
+    // sits on the HIGHEST index, whichever colour is moving.
+    int norm(int i) => white ? i : 23 - i;
+    var allHome = true;
+    var highestPoint = -1;
     for (var i = 0; i < 24; i++) {
       final n = position.points[i];
-      final mine = white ? n > 0 : n < 0;
-      if (!mine) continue;
-      if (white ? i > 5 : i < 18) return false;
+      if (white ? n <= 0 : n >= 0) continue;
+      final k = norm(i);
+      if (k > 5) allHome = false;
+      if (k > highestPoint) highestPoint = k;
     }
-    final distance = white ? from + 1 : 24 - from;
-    // The furthest-back checker: the highest index for White, lowest for Black.
-    var furthest = from;
-    for (var i = 0; i < 24; i++) {
-      final n = position.points[i];
-      final mine = white ? n > 0 : n < 0;
-      if (!mine) continue;
-      if (white ? i > furthest : i < furthest) furthest = i;
-    }
+    if (!allHome) return false;
+    final normFrom = norm(from);
     for (final die in _remainingDice(prefix)) {
-      if (die == distance) return true; // exact: from any point
-      if (die > distance && from == furthest) return true; // overshoot: back only
+      if (canBearOff(
+        allHome: allHome,
+        from: normFrom,
+        die: die,
+        highestPoint: highestPoint,
+      )) {
+        return true;
+      }
     }
     return false;
   }

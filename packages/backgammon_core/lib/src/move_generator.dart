@@ -1,3 +1,4 @@
+import 'bear_off.dart';
 import 'board_state.dart';
 import 'dice.dart';
 import 'move.dart';
@@ -92,10 +93,16 @@ class _Pos {
     if (points[from] <= 0) return null;
     final to = from - die;
     if (to < 0) {
-      if (!allHome) return null;
-      final exact = die == from + 1;
-      final overshoot = die > from + 1 && from == highestPoint;
-      if (!exact && !overshoot) return null;
+      // The rule itself lives in bear_off.dart — MoveBuilder asks the same
+      // question of a live board and must get the same answer.
+      if (!canBearOff(
+        allHome: allHome,
+        from: from,
+        die: die,
+        highestPoint: highestPoint,
+      )) {
+        return null;
+      }
       points[from]--;
       off++;
       return CheckerMove(from, CheckerMove.off);
