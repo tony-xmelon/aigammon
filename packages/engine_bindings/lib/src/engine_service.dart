@@ -34,15 +34,20 @@ class EngineService {
 
   /// The port the worker's uncaught errors and its exit signal arrive on.
   ///
-  /// This is the SAME port `Isolate.spawn(onError:)` was given in [spawn], kept
-  /// for the service's whole life rather than replaced by a fresh one after the
-  /// handshake. That is deliberate: `onError` is registered atomically by the
-  /// spawn itself, so there is no instant at which the isolate is running and
-  /// unwatched. Handing the service a port registered LATER (via
-  /// [Isolate.addErrorListener]) would reopen exactly that hole — and worse,
-  /// a listener added to an already-dead isolate never fires at all, so a death
-  /// inside the gap is not merely delayed but lost, leaving every pending call
-  /// hanging and the service believing it is alive.
+  /// This is the SAME port `Isolate.spawn(onError:)` AND `onExit:` were given in
+  /// [spawn], kept for the service's whole life rather than replaced by a fresh
+  /// one after the handshake. That is deliberate: both are registered atomically
+  /// by the spawn itself, so there is no instant at which the isolate is running
+  /// and unwatched. Registering either one LATER (via [Isolate.addErrorListener]
+  /// or [Isolate.addOnExitListener]) would reopen exactly that hole — and worse,
+  /// a listener added to an already-terminated isolate never fires at all, so a
+  /// death inside the gap is not merely delayed but lost, leaving every pending
+  /// call hanging and the service believing it is alive.
+  ///
+  /// The exit half matters on its own, not just for symmetry: a worker can stop
+  /// existing WITHOUT an error — a bare `Isolate.kill` from elsewhere, or an
+  /// entry point that simply returns — and then the exit signal is the only
+  /// evidence there is.
   final ReceivePort _deathPort;
 
   final Duration _callTimeout;
@@ -79,17 +84,18 @@ class EngineService {
   final void Function(Object error, StackTrace? stack)? _onIsolateError;
 
   /// Wires the service to an already-handshaken worker. Everything here is
-  /// SYNCHRONOUS on purpose — the reply port is created, bound and listening,
-  /// and the exit listener attached, within one turn of the event loop — so no
-  /// message can be delivered while the service is half-built.
+  /// SYNCHRONOUS on purpose — the reply port is created, bound and listening
+  /// within one turn of the event loop — so no message can be delivered while
+  /// the service is half-built.
+  ///
+  /// Note what is NOT here: any listener registration. BOTH halves of
+  /// [_deathPort] — errors and clean exit — are wired by the spawn itself; see
+  /// [_deathPort].
   EngineService._(this._isolate, this._worker, this._deathPort,
       this._onIsolateError, this._callTimeout)
       : _fromWorker = ReceivePort() {
     _fromWorker.listen(_onReply);
     _worker.send(['bind', _fromWorker.sendPort]);
-    // The error half of this port was registered by the spawn (see
-    // [_deathPort]); only the clean-exit signal still needs subscribing.
-    _isolate.addOnExitListener(_deathPort.sendPort);
   }
 
   /// Spawns the worker isolate and opens the engine inside it. Completes only
@@ -113,10 +119,11 @@ class EngineService {
     void Function(List<Object?> args)? workerEntry,
   }) async {
     final handshake = ReceivePort();
-    // `errors` is registered by the spawn below and then NEVER re-registered:
-    // it is handed to the service as its death port. See [_deathPort] for why
-    // swapping in a fresh port after the handshake is not safe.
-    final errors = ReceivePort();
+    // `deaths` is registered by the spawn below — as BOTH onError and onExit —
+    // and then NEVER re-registered: it is handed to the service as its death
+    // port. See [_deathPort] for why subscribing after the handshake is not
+    // safe for either half.
+    final deaths = ReceivePort();
 
     final ready = Completer<SendPort>();
 
@@ -141,13 +148,22 @@ class EngineService {
         }
       }
     });
-    errors.listen((err) {
+    deaths.listen((err) {
       final live = service;
       if (live != null) {
         live._onDeath(err);
         return;
       }
       if (!ready.isCompleted) {
+        // A CLEAN exit before the handshake is not evidence of anything worth
+        // failing on, and racing it against the handshake would be actively
+        // harmful: `_workerMain` reports a bad [netsPath] by sending
+        // 'init_error' and then RETURNING, so the exit signal and the real
+        // message are in flight at once on two different ports, with no
+        // ordering between them. Completing here on the exit would replace the
+        // worker's explanation with a bare "failed to start: null". The
+        // handshake is the authority on startup; only a real error preempts it.
+        if (decodeIsolateError(err) == null) return;
         _reportIsolateError(onIsolateError, err);
         final message = (err is List && err.isNotEmpty) ? err[0] : err;
         ready.completeError(
@@ -166,17 +182,18 @@ class EngineService {
       workerEntry ?? _workerMain,
       [handshake.sendPort, libraryPath, netsPath],
       errorsAreFatal: true,
-      onError: errors.sendPort,
+      onError: deaths.sendPort,
+      onExit: deaths.sendPort,
     );
 
     try {
       final workerPort = await ready.future;
       // Handshake done. Build the service FIRST — synchronously, in this one
       // turn — so the error port always has a live destination from here on,
-      // and only then drop the handshake port. `errors` stays open and stays
+      // and only then drop the handshake port. `deaths` stays open and stays
       // subscribed: it is the service's death port now.
       final built = EngineService._(
-          isolate, workerPort, errors, onIsolateError, callTimeout);
+          isolate, workerPort, deaths, onIsolateError, callTimeout);
       service = built;
       if (deathHeld) built._onDeath(heldDeath);
       await handshakeSub.cancel();
@@ -186,7 +203,7 @@ class EngineService {
       // Clean up on init failure so we leak neither ports nor the isolate.
       await handshakeSub.cancel();
       handshake.close();
-      errors.close();
+      deaths.close();
       isolate.kill(priority: Isolate.immediate);
       rethrow;
     }

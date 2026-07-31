@@ -69,6 +69,16 @@ void diesLaterWorker(List<Object?> args) {
   });
 }
 
+/// Completes the handshake and then EXITS CLEANLY — no error, just a worker
+/// that stops existing. Nothing but the exit signal can reveal this, and the
+/// exit almost certainly happens before `spawn()` resumes.
+void quietlyExitingWorker(List<Object?> args) {
+  final handshake = args[0] as SendPort;
+  final commands = ReceivePort();
+  handshake.send(['ready', commands.sendPort]);
+  commands.close();
+}
+
 /// A well-behaved worker with no engine behind it: answers `evaluate` with a
 /// fixed distribution. Present so the misbehaviour tests are read against a
 /// baseline that proves the same seam carries a NORMAL round trip.
@@ -208,6 +218,42 @@ void main() {
       throwsA(isA<StateError>().having(
           (e) => e.message, 'message', contains('isolate died'))),
     );
+  });
+
+  // The error half of the death port is registered BY the spawn. The clean-exit
+  // half used to be added afterwards, from the constructor — and the Dart SDK
+  // is explicit that an exit listener requested after the isolate has already
+  // terminated never fires. A worker that exits in that gap was therefore
+  // invisible: the service believed it was alive and every call waited out the
+  // full timeout.
+  //
+  // Honesty about what this test is: a GUARD, not a reproduction. It passed
+  // before the fix as well, because the gap is a race and this worker loses it
+  // — the parent almost always finishes the constructor before the VM reports
+  // the exit. Nothing available from outside `spawn()` can widen that window,
+  // so the fix is justified by the SDK contract rather than by a red bar, and
+  // this test's job is to notice if the clean-exit signal ever stops arriving
+  // at all.
+  test('a clean exit right after the handshake still reaches the service',
+      () async {
+    final service = await EngineService.spawn(
+      netsPath: 'unused',
+      workerEntry: quietlyExitingWorker,
+      // Short enough to keep the test quick, long enough that a timeout is
+      // clearly distinguishable from the death signal by elapsed time.
+      callTimeout: const Duration(seconds: 2),
+    );
+    addTearDown(service.dispose);
+
+    final started = DateTime.now();
+    await expectLater(
+      service.evaluate(BoardState.initial(), Player.white),
+      throwsA(isA<StateError>().having(
+          (e) => e.message, 'message', contains('isolate died'))),
+    );
+    expect(DateTime.now().difference(started),
+        lessThan(const Duration(milliseconds: 500)),
+        reason: 'the exit signal must fail the call, not the timeout');
   });
 
   test('a call after a deliberate dispose() reports a disposal, not a death',
