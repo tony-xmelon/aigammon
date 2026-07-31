@@ -63,6 +63,33 @@ void main() {
           isTrue);
     });
 
+    test('accepts a transit chain whose hops arrive in reverse order', () {
+      // 24/20 entered as the transit chain 24/23, 23/20 — but submitted with
+      // the hops the other way round. Hop ORDER is the submitter's business
+      // (a remote peer or a replayed log may order them however it likes),
+      // and normalising must happen BEFORE the board is asked to apply
+      // anything: [BoardState.applyMove] is order-dependent for a checker
+      // transiting a point, so applying the submission as given either throws
+      // or lands on a board that belongs to no legal move at all.
+      final s = fresh();
+      // The NON-representative decomposition of 24/20 (24/21 then 21/20), so
+      // the multiset check above cannot answer it and the transit fallback has
+      // to.
+      final forwards =
+          Move(const [CheckerMove(23, 20), CheckerMove(20, 19)]);
+      final backwards =
+          Move(const [CheckerMove(20, 19), CheckerMove(23, 20)]);
+      final canonical = s.canonicalPlay(backwards);
+      expect(canonical, isNotNull,
+          reason: 'the same hop multiset, merely listed in another order');
+      expect(s.legalMoves.map((m) => m.toString()),
+          contains(canonical!.toString()));
+      expect(s.board.applyMove(Player.white, canonical),
+          s.board.applyMove(Player.white, s.canonicalPlay(forwards)!));
+      // And it plays, rather than throwing out of applyMove.
+      expect(s.play(backwards).board, s.play(forwards).board);
+    });
+
     test('answers null for anything illegal', () {
       final s = fresh();
       expect(s.canonicalPlay(Move(const [CheckerMove(23, 20)])), isNull,

@@ -280,15 +280,20 @@ class GameState {
       if (m.sameAs(move)) return m;
     }
     if (move.checkerMoves.length != legal.first.checkerMoves.length) return null;
-    for (final cm in move.checkerMoves) {
-      final fromOk =
-          cm.from == CheckerMove.bar || (cm.from >= 0 && cm.from < 24);
-      final toOk = cm.to == CheckerMove.off || (cm.to >= 0 && cm.to < 24);
-      if (!fromOk || !toOk) return null;
-    }
-    final resulting = board.applyMove(turn, move);
-    for (final m in legal) {
-      if (board.applyMove(turn, m) == resulting) return m;
+    // Transit-equivalent decomposition. Matched against the GENERATOR's own
+    // decompositions ([MoveGenerator.legalVariants] enumerates every distinct
+    // hop multiset per resulting position), never by applying the submission to
+    // the board: [BoardState.applyMove] is order-dependent — a hop that lands
+    // on a point a later hop departs from sees a count the intervening hop
+    // already changed — so applying the SUBMITTED hop order lands on a board
+    // that belongs to no legal move, and a perfectly legal play arrives from a
+    // remote peer (or a replayed persisted log) with its hops in some other
+    // order and is refused. Hop order is the submitter's business; [sameAs]
+    // is order-insensitive, so this compares multisets and nothing else.
+    for (final v in legalVariants) {
+      for (final d in v.decompositions) {
+        if (d.sameAs(move)) return v.canonical;
+      }
     }
     return null;
   }
