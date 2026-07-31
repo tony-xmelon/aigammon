@@ -6,6 +6,7 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:match_transport/match_transport.dart';
+import 'package:match_transport/testing.dart';
 
 import '../helpers/board_driving.dart';
 

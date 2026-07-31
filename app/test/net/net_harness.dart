@@ -14,6 +14,7 @@ import 'package:aigammon_app/net/net_match_controller.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:match_transport/match_transport.dart';
+import 'package:match_transport/testing.dart';
 
 // ---------------------------------------------------------------------------
 // Persistence recorder

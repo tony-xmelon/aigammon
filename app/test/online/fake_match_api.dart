@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:backgammon_core/backgammon_core.dart';
-import 'package:match_transport/match_transport.dart';
+import 'package:match_transport/testing.dart';
 import 'package:online_client/online_client.dart';
 
 /// An in-memory stand-in for the serverless backend's DOCUMENTS: match

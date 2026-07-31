@@ -44,9 +44,14 @@ library;
 import 'dart:async';
 
 import 'package:backgammon_core/backgammon_core.dart';
+// A lib/ deliverable that IS a test suite, so it imports the runner while
+// `test` stays a dev dependency of this package (see the pubspec). Resolution
+// is the entrypoint's, and all three suites that run this contract are
+// plain-Dart packages with their own `test`.
+// ignore: depend_on_referenced_packages
 import 'package:test/test.dart';
 
-import 'match_transport.dart';
+import 'src/match_transport.dart';
 
 /// A connected host+guest pair on one backend, as the contract suite needs it.
 ///

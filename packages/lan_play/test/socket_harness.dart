@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:lan_play/lan_play.dart';
 import 'package:match_transport/match_transport.dart';
+import 'package:match_transport/testing.dart';
 
 /// The room code every socket test uses unless it is testing the code itself.
 const String testCode = '4271';

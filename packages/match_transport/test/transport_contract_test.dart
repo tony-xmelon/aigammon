@@ -16,6 +16,7 @@ library;
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:match_transport/match_transport.dart';
+import 'package:match_transport/testing.dart';
 import 'package:match_transport/transport_contract.dart';
 import 'package:test/test.dart';
 
