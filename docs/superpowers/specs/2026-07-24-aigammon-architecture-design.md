@@ -68,6 +68,28 @@ aigammon/
 - **Engine:** wildbg behind a small FFI surface, running in a background
   isolate.
 - **Backend:** Firebase — used only for online mode.
+- **Observability (added v0.13, Plan 18 Task 1.5):** real FlutterFire —
+  `firebase_core` + `firebase_analytics` + `firebase_performance` +
+  `firebase_crashlytics`, in `app/lib/analytics/` only.
+
+  This **reverses** the standing "no FlutterFire anywhere" rule and is
+  deliberate and user-approved; do not re-litigate it in review. Plan 5 chose a
+  pure-Dart REST transport specifically to avoid FlutterFire, because its
+  Windows desktop support is partial and all local dev/testing happens on
+  Windows. That reasoning still holds for the TRANSPORT and is unchanged:
+  `packages/match_transport`, `packages/lan_play` and `packages/online_client`
+  remain pure Dart, Windows-testable and FlutterFire-free. But Performance
+  Monitoring and Crashlytics are SDK-only pipelines with no REST ingestion
+  path, so real telemetry means the real SDKs. Offered the REST-only
+  alternative (GA4 Measurement Protocol plus the on-device log), the user chose
+  full FlutterFire and accepted the Windows tradeoff.
+
+  Two guardrails make that safe: initialization is guarded to Android/iOS and
+  returns all-no-op sinks everywhere else (enforced by
+  `app/test/analytics/desktop_guard_test.dart`), and `FirebaseOptions` is built
+  programmatically from dart-defines — no `google-services.json`, no
+  `GoogleService-Info.plist`, same discipline as online play. See
+  `firebase/DEPLOY.md` for the values.
 
 ## 2. Domain model (`backgammon_core`)
 
