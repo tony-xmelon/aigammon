@@ -87,6 +87,10 @@ jobs:
         env:
           FB_PROJECT: ${{ vars.AIGAMMON_FIREBASE_PROJECT }}
           FB_API_KEY: ${{ vars.AIGAMMON_FIREBASE_API_KEY }}
+          FB_SENDER_ID: ${{ vars.AIGAMMON_FIREBASE_SENDER_ID }}
+          # Reused from the App Distribution setup — one iOS app id serves both
+          # distribution and telemetry, so there is no second secret for it.
+          FB_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
         run: |
           DEFINES=""
           if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ]; then
@@ -94,6 +98,15 @@ jobs:
             echo "Online play ENABLED for project $FB_PROJECT"
           else
             echo "Online-play repo variables not set — building with online play not configured"
+          fi
+          # Analytics / Performance / Crashlytics — see android.yml for the
+          # same block and firebase/DEPLOY.md for the values.
+          if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ] \
+             && [ -n "$FB_SENDER_ID" ] && [ -n "$FB_IOS_APP_ID" ]; then
+            DEFINES="$DEFINES --dart-define=AIGAMMON_FIREBASE_SENDER_ID=$FB_SENDER_ID --dart-define=AIGAMMON_FIREBASE_IOS_APP_ID=$FB_IOS_APP_ID"
+            echo "Telemetry ENABLED (Analytics + Performance + Crashlytics)"
+          else
+            echo "Telemetry config incomplete — building with analytics/performance/crashlytics disabled"
           fi
           flutter build ios --release --no-codesign \
             --build-number=${{ github.run_number }} \
@@ -168,6 +181,8 @@ jobs:
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           FB_PROJECT: ${{ vars.AIGAMMON_FIREBASE_PROJECT }}
           FB_API_KEY: ${{ vars.AIGAMMON_FIREBASE_API_KEY }}
+          FB_SENDER_ID: ${{ vars.AIGAMMON_FIREBASE_SENDER_ID }}
+          FB_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
         run: |
           set -euo pipefail
 
@@ -223,10 +238,16 @@ jobs:
           </plist>
           PLIST_EOF
 
-          # --- Online-play dart-defines (same pattern as the unsigned build) ---
+          # --- Online-play + telemetry dart-defines (same pattern as the
+          # unsigned build; this is the binary testers actually install, so it
+          # must carry the same config) ---
           DEFINES=""
           if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ]; then
             DEFINES="--dart-define=AIGAMMON_FIREBASE_PROJECT=$FB_PROJECT --dart-define=AIGAMMON_FIREBASE_API_KEY=$FB_API_KEY"
+          fi
+          if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ] \
+             && [ -n "$FB_SENDER_ID" ] && [ -n "$FB_IOS_APP_ID" ]; then
+            DEFINES="$DEFINES --dart-define=AIGAMMON_FIREBASE_SENDER_ID=$FB_SENDER_ID --dart-define=AIGAMMON_FIREBASE_IOS_APP_ID=$FB_IOS_APP_ID"
           fi
 
           # We deliberately do NOT use `flutter build ipa`: its internal

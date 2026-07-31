@@ -156,6 +156,11 @@ jobs:
         env:
           FB_PROJECT: ${{ vars.AIGAMMON_FIREBASE_PROJECT }}
           FB_API_KEY: ${{ vars.AIGAMMON_FIREBASE_API_KEY }}
+          FB_SENDER_ID: ${{ vars.AIGAMMON_FIREBASE_SENDER_ID }}
+          # Reused from the App Distribution setup below — the SAME Android app
+          # id identifies the app to distribute and to report telemetry for, so
+          # there is deliberately no second secret for it.
+          FB_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
         run: |
           DEFINES=""
           if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ]; then
@@ -163,6 +168,17 @@ jobs:
             echo "Online play ENABLED for project $FB_PROJECT"
           else
             echo "Online-play repo variables not set — building with online play not configured"
+          fi
+          # Analytics / Performance / Crashlytics. Independent of the online
+          # gate above: telemetry needs the project + key AND the numeric sender
+          # id AND the Android app id, and the app builds fine (silently, with
+          # no telemetry) when any of them is missing. See firebase/DEPLOY.md.
+          if [ -n "$FB_PROJECT" ] && [ -n "$FB_API_KEY" ] \
+             && [ -n "$FB_SENDER_ID" ] && [ -n "$FB_ANDROID_APP_ID" ]; then
+            DEFINES="$DEFINES --dart-define=AIGAMMON_FIREBASE_SENDER_ID=$FB_SENDER_ID --dart-define=AIGAMMON_FIREBASE_ANDROID_APP_ID=$FB_ANDROID_APP_ID"
+            echo "Telemetry ENABLED (Analytics + Performance + Crashlytics)"
+          else
+            echo "Telemetry config incomplete — building with analytics/performance/crashlytics disabled"
           fi
           flutter build apk --release --build-number=${{ github.run_number }} \
             --obfuscate --split-debug-info=build/symbols/android \

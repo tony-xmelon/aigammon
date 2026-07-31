@@ -3,12 +3,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'analytics/analytics_events.dart';
+import 'analytics/app_analytics.dart';
+import 'analytics/firebase_observability.dart';
 import 'data/app_settings.dart';
 import 'data/settings_repository.dart';
 import 'diagnostics/crash_log.dart';
 import 'screens/home_screen.dart';
 
-void main() {
+Future<void> main() async {
+  // The cold-start clock starts HERE — before the binding, before Firebase,
+  // before the first widget — because that is the wait a user actually feels.
+  // It is reported as a duration metric once the first frame is up, since the
+  // SDK that would host a live trace does not exist yet at this line.
+  final startup = Stopwatch()..start();
+
   // Binding first: the crash handlers touch PlatformDispatcher, and storage
   // resolution goes through a platform channel.
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,14 +28,54 @@ void main() {
   CrashLog.installGlobalHandlers();
   unawaited(CrashLog.initializeStorage());
 
-  runApp(const ProviderScope(child: AiGammonApp()));
+  // Telemetry. On Windows/Linux/macOS — and in any build without a complete
+  // Firebase config — this returns the all-no-op bundle WITHOUT touching a
+  // single Firebase symbol, so nothing below changes shape by platform: the
+  // providers are always overridden, just sometimes with no-ops.
+  final observability = await initializeObservability();
+
+  runApp(ProviderScope(
+    overrides: [
+      appAnalyticsProvider.overrideWithValue(observability.analytics),
+      appPerformanceProvider.overrideWithValue(observability.performance),
+      appCrashReporterProvider.overrideWithValue(observability.crashReporter),
+    ],
+    child: AiGammonApp(startup: startup),
+  ));
 }
 
-class AiGammonApp extends ConsumerWidget {
-  const AiGammonApp({super.key});
+class AiGammonApp extends ConsumerStatefulWidget {
+  const AiGammonApp({super.key, this.startup});
+
+  /// The clock started at the top of [main], stopped and reported at the first
+  /// frame. Null in tests and harnesses that mount this widget directly — there
+  /// is no meaningful cold start to measure there.
+  final Stopwatch? startup;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AiGammonApp> createState() => _AiGammonAppState();
+}
+
+class _AiGammonAppState extends ConsumerState<AiGammonApp> {
+  @override
+  void initState() {
+    super.initState();
+    final startup = widget.startup;
+    if (startup == null) return;
+    // `addPostFrameCallback` fires after the first frame has been BUILT and
+    // laid out, which is the closest a Dart-side measurement gets to
+    // "something appeared". Reported as a metric rather than a live trace
+    // because the clock predates Firebase (see main()).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      startup.stop();
+      ref
+          .read(appPerformanceProvider)
+          .recordDuration(PerfTraces.coldStart, startup.elapsed);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Follow the persisted theme preference; fall back to system while the
     // (sub-frame) initial load resolves.
     final themeMode =

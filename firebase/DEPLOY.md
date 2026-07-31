@@ -147,6 +147,87 @@ ships with online play "not configured", exactly as a define-less local build
 does. So setting the two Variables is the ONLY action needed to turn on online
 play in distributed builds — no workflow edit.
 
+## Telemetry: Analytics, Performance Monitoring, Crashlytics
+
+Since v0.13 the app also reports **usage analytics, performance traces and
+crashes** to the same Firebase project, through the real FlutterFire SDKs
+(`firebase_core`, `firebase_analytics`, `firebase_performance`,
+`firebase_crashlytics`). Three properties of that wiring matter here:
+
+- **Android and iOS only.** `lib/analytics/firebase_config.dart` refuses to
+  initialize Firebase on Windows/Linux/macOS, so a desktop build never loads a
+  Firebase plugin and never sends anything. This is enforced by
+  `test/analytics/desktop_guard_test.dart`.
+- **No `google-services.json` / `GoogleService-Info.plist`.** As with online
+  play, every value is a build-time `--dart-define` sourced from a repo Variable
+  or an existing secret. A fork, or any local `flutter run`, simply has no
+  telemetry.
+- **All four values are required together.** A partial set is treated as
+  "unconfigured": the app runs normally with the no-op sinks and reports
+  nothing. There is no half-configured failure mode.
+
+### The values
+
+| dart-define | Source | Where to find it |
+|---|---|---|
+| `AIGAMMON_FIREBASE_PROJECT` | repo **Variable**, already set in §4 | ⚙ *Project settings* → **General** → *Project ID* |
+| `AIGAMMON_FIREBASE_API_KEY` | repo **Variable**, already set in §4 | ⚙ *Project settings* → **General** → *Web API Key* |
+| `AIGAMMON_FIREBASE_SENDER_ID` | repo **Variable**, **NEW — set this** | ⚙ *Project settings* → **General** → **Project number** (a ~12-digit number; the Cloud Messaging tab calls the identical value *Sender ID*) |
+| `AIGAMMON_FIREBASE_ANDROID_APP_ID` | repo **Secret** `FIREBASE_ANDROID_APP_ID`, already exists | ⚙ *Project settings* → **General** → *Your apps* → the Android app → *App ID* (`1:<project-number>:android:<hash>`) |
+| `AIGAMMON_FIREBASE_IOS_APP_ID` | repo **Secret** `FIREBASE_IOS_APP_ID`, already exists | same page, the iOS app (`1:<project-number>:ios:<hash>`) |
+
+**Only one new repository Variable is needed:** `AIGAMMON_FIREBASE_SENDER_ID`.
+It is a value to *read* out of the console, not a credential to create. Set it
+under **Settings → Secrets and variables → Actions → Variables → New repository
+variable**. Like the Web API key it is not a secret — it ships in every client
+binary and identifies the project, nothing more.
+
+The two App IDs are **deliberately reused** from the Firebase App Distribution
+secrets configured earlier; the app being distributed and the app reporting
+telemetry are the same Firebase app, so a second copy of the value could only
+ever drift.
+
+### Console steps
+
+1. **Analytics** — ⚙ *Project settings* → **Integrations** → *Google Analytics*,
+   or **Analytics → Dashboard** → follow the enable prompt. A Google Analytics
+   property must be linked to the project or events are accepted and discarded.
+   (§1 says Analytics is "not needed" for online play; that is still true — it
+   is needed for *this*.)
+2. **Crashlytics** — **Release & Monitor → Crashlytics → Enable Crashlytics**,
+   then select the Android and iOS apps. The first report from a real device
+   completes the setup.
+3. **Performance Monitoring** — **Release & Monitor → Performance → Get
+   started**. Custom traces appear under *Custom traces* once builds report.
+4. Confirm both the Android and iOS apps exist under ⚙ *Project settings →
+   General → Your apps* (they already do if App Distribution is working) and
+   copy their App IDs into the two secrets if those are not set yet.
+
+Nothing here leaves the **Spark** plan: Analytics, Performance Monitoring and
+Crashlytics are all free and unmetered.
+
+### CI
+
+`android.yml` and `ios.yml` inject the telemetry defines from the Variable and
+the existing secret, in a block right beside the online-play one, and print
+`Telemetry ENABLED` / `Telemetry config incomplete` so a build log says which
+binary reports and which does not. Setting `AIGAMMON_FIREBASE_SENDER_ID` is the
+only action required; no workflow edit.
+
+### Local
+
+A local `flutter run`/`flutter build` gets no telemetry unless the defines are
+passed explicitly — which is normally the right thing, since a developer's own
+sessions would otherwise pollute production analytics:
+
+```sh
+flutter build apk --release \
+  --dart-define=AIGAMMON_FIREBASE_PROJECT=aigammon \
+  --dart-define=AIGAMMON_FIREBASE_API_KEY=<web-api-key> \
+  --dart-define=AIGAMMON_FIREBASE_SENDER_ID=<project-number> \
+  --dart-define=AIGAMMON_FIREBASE_ANDROID_APP_ID=<1:...:android:...>
+```
+
 ## Free-tier budget
 
 Spark's daily Firestore quota is **50,000 document reads, 20,000 writes and
