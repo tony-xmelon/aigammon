@@ -1,8 +1,9 @@
 // Derived from wildbg's wildbg-c crate (MIT OR Apache-2.0), pinned at 24d26fe.
 // The body below is a verbatim copy of native/wildbg/crates/wildbg-c/src/lib.rs.
-// The ONLY addition is `wildbg_new_with_path` at the end of this file, which
-// loads the production neural nets from a runtime directory path instead of the
-// weak demo nets that `wildbg_new` compiles in.
+// Two changes from upstream: `wildbg_new_with_path` is ADDED at the end of this
+// file, loading the production neural nets from a runtime directory path; and
+// upstream's `wildbg_new`, which compiles in the weak DEMO nets, is no longer
+// exported — see its own comment below.
 
 use core::ffi::*;
 use engine::composite::CompositeEvaluator;
@@ -37,11 +38,24 @@ pub struct BgConfig {
     pub o_away: c_uint,
 }
 
-#[unsafe(no_mangle)]
-/// Loads the neural nets into memory and returns a pointer to the API.
-/// Returns `NULL` if the neural nets cannot be found.
+/// Loads the COMPILED-IN DEMO neural nets and returns a pointer to the API.
+/// Returns `NULL` if they cannot be found.
 ///
 /// To free the memory after usage, call `wildbg_free`.
+///
+/// NOT part of the shim's C ABI — `#[cfg(test)]`, so it is neither exported nor
+/// compiled into the shipped library. AIGammon ships the production nets and
+/// binds `wildbg_new_with_path` alone; an exported constructor that quietly
+/// hands back a demo-strength engine is a trap on a public C ABI, and the only
+/// caller left was upstream's own unit test below.
+///
+/// That test is kept verbatim rather than ported: its assertions name the exact
+/// move each match score picks, and the production nets play the position
+/// differently (they agree across the two scores where the demo nets do not),
+/// so re-pointing it would have meant rewriting what it asserts — which is the
+/// signal to leave it alone. The production nets have their own coverage in
+/// `tests/smoke.rs` and in the engine_bindings Dart suite.
+#[cfg(test)]
 pub extern "C" fn wildbg_new() -> *mut Wildbg {
     match WildbgApi::try_default() {
         Ok(api) => Box::into_raw(Box::new(Wildbg { api })),
@@ -173,7 +187,7 @@ type Error = &'static str;
 /// Checkers of the player on turn are encoded with positive integers, the opponent's checkers with negative integers.
 ///
 /// # Safety
-/// The argument `wildbg` needs to be initialized with `wildbg_new()` and `wildbg_free()` must not be called yet.
+/// The argument `wildbg` needs to be initialized with `wildbg_new_with_path()` and `wildbg_free()` must not be called yet.
 /// Otherwise we have random memory access here.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn best_move(
@@ -239,14 +253,23 @@ pub extern "C" fn cube_info(wildbg: &Wildbg, pips: &[c_int; 26]) -> CCubeInfo {
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-/// Like wildbg_new(), but loads neural nets at RUNTIME from the given
-/// directory (UTF-8 path to a directory CONTAINING contact.onnx and
-/// race.onnx — note: the files directly, not a neural-nets/ subdir; the
-/// Dart side passes .../wildbg-nets/neural-nets). Returns NULL on failure.
-/// This is the only constructor that loads production nets; wildbg_new()
-/// compiles in the demo nets.
-#[no_mangle]
-pub extern "C" fn wildbg_new_with_path(path: *const c_char) -> *mut Wildbg {
+/// Loads neural nets at RUNTIME from the given directory (UTF-8 path to a
+/// directory CONTAINING contact.onnx and race.onnx — note: the files directly,
+/// not a neural-nets/ subdir; the Dart side passes
+/// .../wildbg-nets/neural-nets). Returns NULL on failure.
+///
+/// The shim's only exported constructor, which is the point: every `Wildbg` a
+/// caller can obtain is backed by the production nets.
+///
+/// To free the memory after usage, call `wildbg_free`.
+///
+/// # Safety
+///
+/// `path` must be either NULL or a pointer to a NUL-terminated C string that
+/// stays valid for the duration of this call. A non-NULL pointer is read as a
+/// C string, so a dangling or unterminated one is random memory access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wildbg_new_with_path(path: *const c_char) -> *mut Wildbg {
     if path.is_null() {
         return std::ptr::null_mut();
     }
