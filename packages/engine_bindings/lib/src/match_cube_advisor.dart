@@ -8,7 +8,18 @@ import 'scored_move.dart';
 ///
 ///  * `aRemaining <= 0` -> the mover has reached 0 away, i.e. won the match -> 1.0.
 ///  * `bRemaining <= 0` -> the opponent has won the match -> 0.0.
-///  * otherwise both are >= 1 and we read the [MatchEquityTable].
+///  * otherwise both are >= 1 and we read the [MatchEquityTable], with each
+///    away score CLAMPED to [MatchEquityTable.maxAway] (see below).
+///
+/// **Why clamp rather than throw.** The table is 25 rows long; an away score
+/// past that is reachable from OUTSIDE this process — a LAN or online peer
+/// names the match length, and nothing between the wire and here re-checks it
+/// against the table's length. Throwing would turn a peer's odd number into a
+/// crash mid-match. Clamping is also a fair reading rather than a fallback: the
+/// equity surface is essentially flat out there (the 25-away/25-away corner is
+/// 0.5, and moving either side further barely shifts it), so the longest row
+/// the table has is the right answer to within far less than the model's own
+/// error.
 ///
 /// See [MatchCubeAdvisor] for the pre-/post-Crawford reasoning ([crawfordPlayed]
 /// selects the post-Crawford column when the leader sits permanently 1-away).
@@ -16,22 +27,29 @@ double matchEquityAfter(int aRemaining, int bRemaining,
     {required bool crawfordPlayed}) {
   if (aRemaining <= 0) return 1.0; // mover reached the match
   if (bRemaining <= 0) return 0.0; // opponent reached the match
+  // Both are >= 1 from here; only the upper end needs bounding.
+  final a = aRemaining > MatchEquityTable.maxAway
+      ? MatchEquityTable.maxAway
+      : aRemaining;
+  final b = bRemaining > MatchEquityTable.maxAway
+      ? MatchEquityTable.maxAway
+      : bRemaining;
   if (crawfordPlayed) {
     // Post-Crawford: the leader is permanently 1-away, so a continuing state
     // has exactly one side at 1-away. Use the post-Crawford column.
-    if (bRemaining == 1) {
+    if (b == 1) {
       // Opponent is the 1-away leader; mover trails aRemaining away.
-      return MatchEquityTable.postCrawford(aRemaining);
+      return MatchEquityTable.postCrawford(a);
     }
-    if (aRemaining == 1) {
+    if (a == 1) {
       // Mover is the 1-away leader; opponent trails bRemaining away.
-      return 1.0 - MatchEquityTable.postCrawford(bRemaining);
+      return 1.0 - MatchEquityTable.postCrawford(b);
     }
     // Neither side 1-away: not a genuine post-Crawford state. Fall through
     // to the pre-Crawford table (defensive; should not occur for valid
     // input, where crawfordPlayed implies one current away == 1).
   }
-  return MatchEquityTable.preCrawford(aRemaining, bRemaining);
+  return MatchEquityTable.preCrawford(a, b);
 }
 
 /// Mover's match-winning probability of playing a game on to completion at the

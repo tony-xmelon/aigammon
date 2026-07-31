@@ -45,6 +45,64 @@ void main() {
       // Double match point (1-away/1-away) is exactly 0.5 (post(1) == 0.5).
       expect(matchEquityAfter(1, 1, crawfordPlayed: true), closeTo(0.5, 1e-12));
     });
+
+    // An away score above the table's length is REACHABLE from outside: a LAN
+    // or online peer names the match length, and nothing between the wire and
+    // here re-checks it against the table. Throwing there would take the whole
+    // game down, so the helper clamps to the longest row it has — the equity
+    // curve is flat out there (25-away/25-away is 0.5 and moving either side
+    // further barely shifts it), which makes the clamp a fair reading rather
+    // than a lie.
+    const beyond = MatchEquityTable.maxAway + 1;
+
+    test('an away score past the table clamps instead of throwing', () {
+      expect(matchEquityAfter(beyond, 5, crawfordPlayed: false),
+          closeTo(MatchEquityTable.preCrawford(MatchEquityTable.maxAway, 5),
+              1e-12));
+      expect(matchEquityAfter(5, 1000, crawfordPlayed: false),
+          closeTo(MatchEquityTable.preCrawford(5, MatchEquityTable.maxAway),
+              1e-12));
+      // Both sides past the end: still the table's far corner, still 0.5.
+      expect(matchEquityAfter(beyond, beyond, crawfordPlayed: false),
+          closeTo(0.5, 1e-12));
+    });
+
+    test('the post-Crawford column clamps too', () {
+      expect(matchEquityAfter(beyond, 1, crawfordPlayed: true),
+          closeTo(MatchEquityTable.postCrawford(MatchEquityTable.maxAway),
+              1e-12));
+      expect(matchEquityAfter(1, beyond, crawfordPlayed: true),
+          closeTo(
+              1.0 - MatchEquityTable.postCrawford(MatchEquityTable.maxAway),
+              1e-12));
+    });
+
+    test('a clamped equity still reads as a probability', () {
+      final e = matchEquityAfter(500, 500, crawfordPlayed: false);
+      expect(e, inInclusiveRange(0.0, 1.0));
+      expect(e.isNaN, isFalse);
+    });
+  });
+
+  group('MatchCubeAdvisor with an out-of-range match length', () {
+    test('advises without throwing at an away score past the table', () {
+      const advisor = MatchCubeAdvisor();
+      final advice = advisor.advise(
+        probs: Probabilities(
+          win: 0.7,
+          winGammon: 0,
+          winBackgammon: 0,
+          loseGammon: 0,
+          loseBackgammon: 0,
+        ),
+        moverAway: 99,
+        opponentAway: 99,
+        cubeValue: 1,
+      );
+      expect(advice.equityNoDouble, inInclusiveRange(0.0, 1.0));
+      expect(advice.equityDoubleTake, inInclusiveRange(0.0, 1.0));
+      expect(advice.equityDoubleDrop, inInclusiveRange(0.0, 1.0));
+    });
   });
 
   group('matchEquityOfDistribution', () {
