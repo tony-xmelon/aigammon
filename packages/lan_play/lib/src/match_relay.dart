@@ -115,6 +115,36 @@ class MatchRelay {
   /// peer creates, which the honest controller refuses entropy for.
   static const int maxRollIndex = 4096;
 
+  /// Hard ceiling on how many events one relay's log will ever hold — and so,
+  /// with [maxRollIndex], on the size of a [welcome].
+  ///
+  /// [maxRollIndex] bounded the roll store but NOT the log, which is the bigger
+  /// half of a welcome. Contiguity is not a bound: [appendEvent] only refuses a
+  /// hole, so a guest that walks the log upward one seq at a time grows it
+  /// without limit — and once a welcome exceeds [maxMessageLength] the host can
+  /// no longer answer a reconnect, which breaks the match permanently rather
+  /// than transiently. (An honest host freezes on the first illegal event, so
+  /// in practice a peer had to stay legal to do it; "in practice" is not a
+  /// bound.)
+  ///
+  /// Sized off [maxRollIndex], because the protocol ties the two together. An
+  /// event is one log entry per DECISION, not per checker: a turn is a roll
+  /// event plus a move event, and the events that come without a roll (double,
+  /// take, drop, resign) are a handful a game. So a match runs to very close to
+  /// two events per roll, and this is `2 * maxRollIndex` — the same
+  /// several-times headroom over a real match that [maxRollIndex] already
+  /// carries, arrived at the same way.
+  ///
+  /// What this bounds is GROWTH — the relay's memory, and a hostile peer's
+  /// ability to inflate every future [welcome]. It is deliberately NOT a
+  /// promise that a maximal relay state still encodes under [maxMessageLength]:
+  /// at ~130 bytes an event and ~230 a roll it does not, and never did for
+  /// [maxRollIndex] alone either. The frame cap is enforced independently, at
+  /// [Envelope.encode], which since v0.12 refuses and reports rather than
+  /// letting the peer silently drop the frame. A match the LAN screen can
+  /// actually start (7 points at most) encodes to the low hundreds of KB.
+  static const int maxEventCount = 2 * maxRollIndex;
+
   /// The match parameters the host fixed; the guest adopts them.
   final MatchConfig config;
 
@@ -191,8 +221,9 @@ class MatchRelay {
 
   /// Append one event, authored by [author].
   ///
-  /// Throws [TransportContested] when [seq] is taken (the writer is behind) and
-  /// [TransportRejected] when it would leave a hole.
+  /// Throws [TransportContested] when [seq] is taken (the writer is behind),
+  /// and [TransportRejected] when it would leave a hole or run past
+  /// [maxEventCount].
   EventFrame appendEvent({
     required String author,
     required int seq,
@@ -207,6 +238,14 @@ class MatchRelay {
     if (seq > nextSeq) {
       throw TransportRejected(
           'seq-gap', 'events/$seq would leave a hole after $lastSeq',
+          peerLastSeq: lastSeq);
+    }
+    // Contiguity above makes seq == _events.length + 1 here, so this is the
+    // CAPACITY check as much as an index one — and it is stated as capacity for
+    // the same reason [createRoll]'s is: the store is what must stay bounded.
+    if (_events.length >= maxEventCount) {
+      throw TransportRejected(
+          'log-full', 'this match already holds $maxEventCount events',
           peerLastSeq: lastSeq);
     }
     final frame =

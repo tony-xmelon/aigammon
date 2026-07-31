@@ -427,9 +427,15 @@ class HostServer {
       // out its handshake timeout with no idea it was ever answered. Say so and
       // close instead: pre-welcome the guest reports the reason as a terminal
       // handshake failure, post-welcome its transport surfaces it. Nothing
-      // legitimate reaches here — the roll store is bounded
-      // ([MatchRelay.maxRollIndex]) — so this is the diagnostic for a bug or a
-      // peer that provoked one, not a path a real match takes.
+      // legitimate reaches here — a `welcome` carries the relay's whole state,
+      // and a match the LAN screen can actually start (7 points at most)
+      // encodes to the low hundreds of KB against a 512 KB cap. Both halves of
+      // that state are also BOUNDED against a peer that inflates it on purpose
+      // ([MatchRelay.maxEventCount] events, [MatchRelay.maxRollIndex] roll
+      // documents; the log was not bounded at all when this comment was first
+      // written). Those bounds carry several times a real match, so they are a
+      // growth bound rather than a guarantee of fitting: this path stays the
+      // diagnostic that keeps such a frame from vanishing silently.
       unawaited(_rejectOversized(c, e));
       return;
     }

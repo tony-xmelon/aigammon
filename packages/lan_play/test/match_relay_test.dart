@@ -103,6 +103,37 @@ void main() {
       );
       expect(relay.events, isEmpty);
     });
+
+    test('the log is BOUNDED, so it cannot grow without limit either', () {
+      // The roll store has been bounded since v0.12; the LOG was not, and it is
+      // the bigger half of a welcome(). Contiguity alone is no bound: a guest
+      // that appends one seq at a time walks the log upward for as long as the
+      // host is willing to hold it, and every subsequent welcome carries the
+      // whole thing — past maxMessageLength the host can no longer answer a
+      // reconnect at all, which permanently breaks the match it is hosting.
+      final relay = newRelay();
+      for (var seq = 1; seq <= MatchRelay.maxEventCount; seq++) {
+        relay.appendEvent(
+            author: MatchRelay.guestAuthor,
+            seq: seq,
+            gameNo: 1,
+            event: const TakeEvent(Player.black));
+      }
+      expect(relay.lastSeq, MatchRelay.maxEventCount,
+          reason: 'the last seq in range is accepted, so this is a ceiling '
+              'and not an off-by-one');
+      expect(
+        () => relay.appendEvent(
+            author: MatchRelay.guestAuthor,
+            seq: MatchRelay.maxEventCount + 1,
+            gameNo: 1,
+            event: const TakeEvent(Player.black)),
+        throwsA(isA<TransportRejected>()
+            .having((e) => e.code, 'code', 'log-full')),
+      );
+      expect(relay.events, hasLength(MatchRelay.maxEventCount),
+          reason: 'a refused append leaves nothing behind');
+    });
   });
 
   group('roll documents', () {

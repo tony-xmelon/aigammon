@@ -209,8 +209,10 @@ sealed class Envelope {
   /// the cap is checked HERE too and an oversized frame is refused loudly
   /// rather than emitted to be dropped. Callers on the send path turn this into
   /// a `reject` for the peer (see `HostServer._send`); nothing legitimate
-  /// reaches it, because the log and the roll store are both bounded
-  /// ([MatchRelay.maxRollIndex]).
+  /// reaches it, because the longest match the LAN screen can start encodes to
+  /// the low hundreds of KB, and both halves of what a `welcome` carries are
+  /// bounded against a peer inflating them on purpose
+  /// ([MatchRelay.maxEventCount] and [MatchRelay.maxRollIndex]).
   String encode() {
     final raw = jsonEncode(toJson());
     if (raw.length > maxMessageLength) {
