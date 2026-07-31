@@ -1,22 +1,36 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../branding/app_version.dart';
 import '../diagnostics/crash_log.dart';
+import '../feedback/feedback_link.dart';
 
 /// Shows the rolling on-device error log and lets the user get it OUT.
 ///
-/// There is no remote crash reporting (see [CrashLog]'s doc comment for why
-/// that is deferred), so this screen is the whole delivery mechanism: a tester
-/// who hits a bug taps Settings → Diagnostics → Copy and pastes the result
-/// into a message. "Copy to clipboard" rather than a share sheet deliberately —
-/// `share_plus` is not a dependency of this app and a plugin is not worth
-/// adding for one button.
+/// Two routes out, and they are for different people. **Copy to clipboard** is
+/// the universal one — it works with no network, no GitHub account and no
+/// Firebase config, and a tester can paste the result into any message.
+/// ("Copy" rather than a share sheet deliberately: `share_plus` is not a
+/// dependency and a plugin is not worth adding for one button.) **Report an
+/// issue** opens a GitHub issue with the log already pasted in, for the user
+/// who is willing to file one.
+///
+/// Crashlytics reports the same errors automatically on mobile, but this screen
+/// does not depend on it: on desktop, and in any build without Firebase config,
+/// this is still the whole delivery mechanism.
 class DiagnosticsScreen extends StatefulWidget {
-  const DiagnosticsScreen({super.key, this.log});
+  const DiagnosticsScreen({super.key, this.log, this.openUrl});
 
   /// Injectable for tests; defaults to the process-wide log the global
   /// handlers write to.
   final CrashLog? log;
+
+  /// How a URL is opened. Injectable for the same reason [log] is: this screen
+  /// is mounted in tests WITHOUT a [ProviderScope], so it takes its
+  /// collaborators as parameters rather than reading providers.
+  final UrlOpener? openUrl;
 
   @override
   State<DiagnosticsScreen> createState() => _DiagnosticsScreenState();
@@ -34,6 +48,23 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     );
   }
 
+  /// Opens a pre-filled GitHub issue carrying the log.
+  ///
+  /// The excerpt is the same human-readable report Copy produces, clamped by
+  /// [buildFeedbackIssueUri] to something a URL can actually carry — the
+  /// clipboard route stays the way to send a long log in full.
+  void _reportIssue() {
+    final uri = buildFeedbackIssueUri(
+      appVersion: appVersion,
+      platform: currentPlatformName(),
+      diagnosticsExcerpt: _log.isEmpty ? null : _log.asText(),
+    );
+    final open = widget.openUrl ?? openExternally;
+    // Silent on failure: there is no browser to fall back to, and an error
+    // under a "report an issue" button is a poor joke.
+    unawaited(open(uri).catchError((Object _) => false));
+  }
+
   Future<void> _clear() async {
     await _log.clear();
     if (mounted) setState(() {});
@@ -48,6 +79,14 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       appBar: AppBar(
         title: const Text('Diagnostics'),
         actions: [
+          // Always enabled, unlike Copy and Clear: "there is nothing in the log
+          // and the app is still misbehaving" is a report worth sending, and
+          // the version and platform go with it either way.
+          IconButton(
+            onPressed: _reportIssue,
+            icon: const Icon(Icons.outgoing_mail),
+            tooltip: 'Report an issue on GitHub',
+          ),
           IconButton(
             onPressed: entries.isEmpty ? null : _copy,
             icon: const Icon(Icons.copy_all),

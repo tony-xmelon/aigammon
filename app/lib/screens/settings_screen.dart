@@ -1,11 +1,16 @@
+import 'dart:async';
+
 import 'package:engine_bindings/engine_bindings.dart' show Difficulty;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../analytics/analytics_events.dart';
 import '../analytics/analytics_screen_view.dart';
+import '../analytics/app_analytics.dart';
+import '../branding/app_version.dart';
 import '../data/app_settings.dart';
 import '../data/settings_repository.dart';
+import '../feedback/feedback_link.dart';
 import 'diagnostics_screen.dart';
 
 /// The preferences screen. Every control autosaves on change (there is no save
@@ -245,23 +250,44 @@ class SettingsScreen extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(height: 24),
-                    // The ONLY route to the on-device error log. There is no
-                    // remote crash reporting, so if a tester cannot reach
-                    // this, a bug report has nothing in it.
+                    // The ONLY route to the on-device error log — the sink that
+                    // works with no network and no Firebase config, and the
+                    // only one a tester can read. Crashlytics reports the same
+                    // errors remotely on mobile, but nothing here depends on
+                    // it having been configured.
                     _Section(
                       label: 'Diagnostics',
-                      child: ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.bug_report_outlined),
-                        title: const Text('Error log'),
-                        subtitle: const Text(
-                            'Recent errors, ready to copy into a bug report'),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const DiagnosticsScreen(),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.bug_report_outlined),
+                            title: const Text('Error log'),
+                            subtitle: const Text(
+                                'Recent errors, ready to copy into a bug report'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const DiagnosticsScreen(),
+                              ),
+                            ),
                           ),
-                        ),
+                          // Deliberately WITHOUT the error log attached: this
+                          // is the "I have an idea" / "this feels wrong" route,
+                          // and most of the time there is no crash to send. The
+                          // Diagnostics screen has its own feedback action that
+                          // does attach the log.
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.feedback_outlined),
+                            title: const Text('Send feedback'),
+                            subtitle: const Text(
+                                'Opens a pre-filled issue on GitHub'),
+                            trailing: const Icon(Icons.open_in_new, size: 18),
+                            onTap: () => _sendFeedback(ref),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -273,6 +299,20 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Opens the pre-filled GitHub issue form.
+///
+/// Fire-and-forget, and failure is silent by design: if no browser can be
+/// reached there is nothing the user can do about it from here, and a red
+/// error under a "Send feedback" button is a poor joke.
+void _sendFeedback(WidgetRef ref) {
+  ref.read(appAnalyticsProvider).logFeedbackOpened();
+  final uri = buildFeedbackIssueUri(
+    appVersion: appVersion,
+    platform: currentPlatformName(),
+  );
+  unawaited(ref.read(urlOpenerProvider)(uri).catchError((Object _) => false));
 }
 
 /// The tri-state tutor default as a segmented choice: auto (null), on, off.
