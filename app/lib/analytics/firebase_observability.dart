@@ -212,6 +212,32 @@ class _FirebaseTrace implements AppTrace {
 }
 
 /// [AppCrashReporter] over Crashlytics.
+///
+/// **What this actually captures, precisely.** Everything that reaches
+/// [recordError] is a Dart-level error the process survived. Native crashes —
+/// a SIGSEGV inside the Rust engine `.so`, which no Dart handler can ever
+/// see — are a different mechanism entirely, and they are captured on ONE of
+/// the two platforms:
+///
+///  * **iOS: yes.** The `FirebaseCrashlytics` pod installs its signal and
+///    NSException handlers when `Firebase.initializeApp` runs, so a native
+///    crash after that point is reported. It arrives UNSYMBOLICATED, though:
+///    that needs an `upload-symbols` run-script build phase in
+///    `Runner.xcodeproj`, which this project does not have — see the Telemetry
+///    section of `firebase/DEPLOY.md`.
+///  * **Android: no.** NDK capture requires the `firebase-crashlytics-ndk`
+///    artifact and the Crashlytics Gradle plugin, and the Gradle plugin reads
+///    the app id out of the resource that `com.google.gms.google-services`
+///    generates from `google-services.json`. This project deliberately ships
+///    no `google-services.json` (every Firebase value is a `--dart-define`;
+///    see `firebase_config.dart`), so applying the plugin would break the
+///    Android build rather than fix anything. A native crash in the engine
+///    `.so` on Android is therefore NOT reported to Crashlytics today. The
+///    trade-off — adopt the config file, or accept Dart-only reporting — is
+///    written up in `firebase/DEPLOY.md`.
+///
+/// So on Android this sink is not a second-best copy of native capture; it is
+/// the ONLY remote crash reporting there is.
 class FirebaseAppCrashReporter implements AppCrashReporter {
   FirebaseAppCrashReporter(this._crashlytics);
 
@@ -221,9 +247,10 @@ class FirebaseAppCrashReporter implements AppCrashReporter {
   void recordError(Object error, StackTrace? stack, {String? reason}) {
     try {
       // `fatal: false` throughout: these are Dart-level errors the process
-      // survived. Real fatals — a native crash in the Rust engine `.so`, which
-      // no Dart handler can ever see — are captured by the Crashlytics NDK/iOS
-      // layer itself, which is the reason this sink exists at all.
+      // survived, and marking a survived error fatal would corrupt the
+      // crash-free-users metric. Genuine process-killing crashes are the
+      // native layer's business — see the class doc for exactly which platform
+      // reports those and which does not.
       unawaited(_crashlytics
           .recordError(error, stack, reason: reason, fatal: false)
           .catchError((Object _) {}));
