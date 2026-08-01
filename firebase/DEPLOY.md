@@ -343,15 +343,24 @@ work regardless). See
 for the file, and *Native symbols* under it for exactly what stands between
 capture and a readable Rust stack.
 
-**4. iOS symbol upload specifically.** The `FirebaseCrashlytics` pod
+**4. iOS symbol upload specifically.** The `FirebaseCrashlytics` library
 installs its handlers at init, so native iOS crashes *are* captured — but
-`Runner.xcodeproj` has no run-script build phase invoking
-`${PODS_ROOT}/FirebaseCrashlytics/upload-symbols`, so no dSYM ever reaches
-Firebase and stacks show raw addresses. **Manual follow-up, needs Xcode:** open
+`Runner.xcodeproj` has no run-script build phase invoking Crashlytics'
+`upload-symbols`, so no dSYM ever reaches Firebase and stacks show raw
+addresses.
+
+Note that the iOS project integrates its plugins through **Swift Package
+Manager, not CocoaPods** — there is deliberately no `app/ios/Podfile` (see
+*iOS uses Swift Package Manager* below) — so the `${PODS_ROOT}/...` paths in
+Firebase's CocoaPods instructions do not exist here; the SPM checkout path
+below is the one to use.
+
+**Manual follow-up, needs Xcode:** open
 `app/ios/Runner.xcworkspace`, select the *Runner* target → *Build Phases* → **+
 → New Run Script Phase**, name it `Upload Crashlytics dSYMs`, place it last,
 untick *Based on dependency analysis*, and set the script to
-`"${PODS_ROOT}/FirebaseCrashlytics/run"` with Input Files
+`"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"`
+(Firebase's documented Swift Package Manager path) with Input Files
 `${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}`
 and `$(SRCROOT)/$(BUILT_PRODUCTS_DIR)/$(INFOPLIST_PATH)`. This was left to the
 GUI deliberately: hand-editing `project.pbxproj` to add a build phase risks
@@ -543,6 +552,46 @@ and pushes it to the Firebase `testers` group automatically (same group and
 The workflow's signed path stays **skipped** until all four secrets exist:
 `IOS_CERT_P12_BASE64`, `IOS_CERT_PASSWORD`,
 `IOS_PROVISIONING_PROFILE_BASE64`, `FIREBASE_IOS_APP_ID`.
+
+### iOS uses Swift Package Manager — there is deliberately no Podfile
+
+`app/ios/` has **no `Podfile`, no `Podfile.lock` and no `Pods/`**, and that is
+correct, not an omission. Every plugin this app pulls in that has native iOS
+code — `firebase_core`, `firebase_analytics`, `firebase_performance`,
+`firebase_crashlytics`, `sqlite3_flutter_libs`, `mobile_scanner` — ships a
+`Package.swift` next to its `.podspec`, so Flutter's tooling routes all of them
+through **Xcode's Swift Package Manager**. `Runner.xcodeproj` carries the
+`XCLocalSwiftPackageReference` to
+`Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage` that makes that
+work, and `Runner.xcworkspace` references only `Runner.xcodeproj`.
+
+A Podfile *was* briefly added (commit `750b4e5`) on the assumption that
+FlutterFire's iOS integration goes through CocoaPods. It does not, for this
+plugin set and this Flutter version, and its presence broke the build:
+`flutter build ios` reported *"All plugins found for ios are Swift Packages, but
+your project still has CocoaPods integration … your project uses a non-standard
+Podfile"*, ran a `pod install` that resolved to no plugin pods, and then Xcode
+failed with *"The sandbox is not in sync with the Podfile.lock"*. The fix was to
+delete the Podfile, restoring the pure-SPM integration the project already had.
+
+The sandbox error had a specific cause worth recording, because it would recur:
+`app/ios/Flutter/{Debug,Release}.xcconfig` are **customised** (they carry the
+`-force_load` for the Rust staticlib), so CocoaPods refuses to overwrite the
+target's base configuration — which is where `PODS_ROOT` and
+`PODS_PODFILE_DIR_PATH` are defined. It still injects the `[CP] Check Pods
+Manifest.lock` build phase, which then diffs two paths built from unset
+variables and always fails. Any future CocoaPods use here must `#include` the
+generated `Pods/Target Support Files/Pods-Runner/Pods-Runner.<config>.xcconfig`
+from those two files.
+
+**If you ever need to re-add CocoaPods** (a future plugin that ships only a
+podspec), add the Podfile back with the stock Flutter template *unmodified* and
+let `flutter build ios` drive `pod install` — do not hand-edit it.
+
+The `IPHONEOS_DEPLOYMENT_TARGET = 15.0` in all three `Runner.xcodeproj`
+configurations is a separate, still-required setting: the Firebase plugins'
+`Package.swift` files declare `platforms: [.iOS("15.0")]`, and SPM enforces that
+floor against the app target regardless of CocoaPods.
 
 ### 1. Enroll in the Apple Developer Program
 

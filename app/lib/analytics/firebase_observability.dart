@@ -242,7 +242,9 @@ class _FirebaseTrace implements AppTrace {
 /// see — are a different mechanism entirely, and on both platforms they are
 /// captured by machinery that has nothing to do with this class:
 ///
-///  * **iOS.** The `FirebaseCrashlytics` pod installs its signal and
+///  * **iOS.** The `FirebaseCrashlytics` library — pulled in by Xcode's Swift
+///    Package Manager, not CocoaPods; this project has no Podfile because every
+///    plugin it uses ships a `Package.swift` — installs its signal and
 ///    NSException handlers when `Firebase.initializeApp` runs, so a native
 ///    crash after that point is reported.
 ///  * **Android.** The `firebase-crashlytics-ndk` artifact plus the
