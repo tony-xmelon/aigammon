@@ -744,6 +744,58 @@ void main() {
     c2.disposeController();
   });
 
+  testWidgets('tapping the disabled Double explains why (Crawford)',
+      (t) async {
+    final human = LocalHumanAgent();
+    final c = GameController(
+      white: human,
+      black: FakeAgent(),
+      matchLength: 1,
+      diceRoller: ScriptedDiceRoller(Dice(1, 6), [Dice(3, 1), Dice(6, 5)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => c.awaitingHumanTurn);
+    expect(c.state.isCrawfordGame, isTrue);
+    final dbl = find.widgetWithText(OutlinedButton, 'Double');
+    expect(isButtonEnabled(t, dbl), isFalse);
+
+    await t.tap(dbl);
+    await t.pump();
+
+    expect(
+      find.text('No doubling in the Crawford game — this single game '
+          'decides the match.'),
+      findsOneWidget,
+    );
+    c.disposeController();
+  });
+
+  testWidgets('tapping the disabled Double explains why (already rolled)',
+      (t) async {
+    // The opening roll lands the mover straight in the `moving` phase — the
+    // pre-roll gate this turn never opens at all, which is the most common
+    // way a player finds Double disabled (they tap it after seeing dice, not
+    // before).
+    final human = LocalHumanAgent();
+    final c = GameController(
+      white: human,
+      black: FakeAgent(),
+      matchLength: 5,
+      diceRoller: ScriptedDiceRoller(Dice(6, 1), [Dice(6, 5), Dice(4, 3)]),
+    );
+    await t.pumpWidget(_harness(c));
+    await pumpUntil(t, () => human.pendingMoveRequest.value != null);
+    final dbl = find.widgetWithText(OutlinedButton, 'Double');
+    expect(isButtonEnabled(t, dbl), isFalse);
+
+    await t.tap(dbl);
+    await t.pump();
+
+    expect(find.text('You can only double before rolling, on your turn.'),
+        findsOneWidget);
+    c.disposeController();
+  });
+
   testWidgets('header is a single compact row (score and Double aligned)',
       (t) async {
     await t.binding.setSurfaceSize(_surface);
@@ -2110,6 +2162,33 @@ void main() {
         await pumpUntil(t, () => white.pendingCubeRequest.value != null);
         expect(c.game.events.whereType<DoubleEvent>().last.player, Player.black);
 
+        c.disposeController();
+      });
+
+      testWidgets(
+          'tapping the far edge\'s disabled Double explains why', (t) async {
+        await t.binding.setSurfaceSize(_surface);
+        addTearDown(() => t.binding.setSurfaceSize(null));
+
+        final white = LocalHumanAgent();
+        final black = LocalHumanAgent();
+        final c = hotSeat(white, black);
+
+        await t.pumpWidget(_harnessTabletop(c));
+        await pumpUntil(t, () => white.pendingMoveRequest.value != null);
+        await commitVia(t, bottomBar());
+        await pumpUntil(
+            t, () => c.awaitingHumanTurn && c.state.turn == Player.black);
+
+        // White's own bar, at the far edge, while it is Black's turn.
+        final bottomDouble = barButton(bottomBar(), OutlinedButton, 'Double');
+        expect(isButtonEnabled(t, bottomDouble), isFalse);
+
+        await t.tap(bottomDouble);
+        await t.pump();
+
+        expect(find.text("It's the other player's turn to act."),
+            findsOneWidget);
         c.disposeController();
       });
 

@@ -17,6 +17,7 @@ import 'game/game_dialogs.dart';
 import 'game/game_hud.dart';
 import 'game/hint_panel.dart';
 import 'game/score_sheet_panel.dart';
+import 'game/tap_when_disabled.dart';
 import 'game/tutor_sync.dart';
 import 'history_screen.dart';
 
@@ -1445,11 +1446,15 @@ class _GameScreenState extends State<GameScreen> {
           // each reaches only their own bar. Far left, away from Roll: it is
           // the irreversible one of the two verbs on offer at this gate.
           if (_tabletopBars && !_c.cubeless)
-            OutlinedButton.icon(
-              onPressed: live && _doublingLegal(_c.state) ? _offerDouble : null,
-              icon: const Icon(Icons.control_point_duplicate, size: 16),
-              label: const Text('Double'),
-              style: _compactButton,
+            TapWhenDisabled(
+              onDisabledTap: () => _explainTabletopDoubleBlocked(live),
+              child: OutlinedButton.icon(
+                onPressed:
+                    live && _doublingLegal(_c.state) ? _offerDouble : null,
+                icon: const Icon(Icons.control_point_duplicate, size: 16),
+                label: const Text('Double'),
+                style: _compactButton,
+              ),
             ),
           const Spacer(),
           FilledButton(
@@ -1520,6 +1525,40 @@ class _GameScreenState extends State<GameScreen> {
     if (!_c.awaitingHumanTurn || !_doublingLegal(_c.state)) return;
     _logCubeOffered();
     _c.offerDouble();
+  }
+
+  /// One sentence explaining why a tap on a tabletop edge's (disabled)
+  /// Double button just did nothing. [live] mirrors the same variable the
+  /// button's own `onPressed` was built from — the row it lives in only
+  /// renders once the roll gate is already open (see [_canRoll] above), so
+  /// the only two ways to be blocked here are "it's the other edge's turn"
+  /// and whatever [_doublingLegal] itself refuses.
+  void _explainTabletopDoubleBlocked(bool live) {
+    final reason = !live
+        ? "It's the other player's turn to act."
+        : _doubleBlockedReasonFor(_c.state);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.only(bottom: 104, left: 12, right: 12),
+        content: Text(reason),
+      ),
+    );
+  }
+
+  /// The [_doublingLegal] half of [_explainTabletopDoubleBlocked] — kept
+  /// separate so it reads as "why does the RULE refuse it", independent of
+  /// whose edge is asking.
+  String _doubleBlockedReasonFor(GameState s) {
+    if (s.isCrawfordGame) {
+      return 'No doubling in the Crawford game — this single game decides '
+          'the match.';
+    }
+    if (s.cube.owner != null && s.cube.owner != s.turn) {
+      return 'Only the cube owner can double, and the other side owns it '
+          'right now.';
+    }
+    return 'Doubling is not available right now.';
   }
 
   /// The shared compact style for the action bar's buttons — see [_actionBar] for

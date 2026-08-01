@@ -2,6 +2,7 @@ import 'package:backgammon_core/backgammon_core.dart';
 import 'package:flutter/material.dart';
 
 import '../../game/match_controller.dart';
+import 'tap_when_disabled.dart';
 
 /// The compact header score, named from the local player's point of view where
 /// there IS one: "You 2–3 AI · to 5" against the computer (or "… Opp …" online,
@@ -186,6 +187,34 @@ class GameHud extends StatelessWidget {
     controller.offerDouble();
   }
 
+  /// One sentence explaining why a tap on the (disabled) Double button just
+  /// did nothing — the one thing the button itself cannot say. Mirrors
+  /// exactly the two halves of [_offerDouble]'s own guard, so it is only ever
+  /// reached when at least one of them is false.
+  String _doubleBlockedReason(bool atGate) {
+    if (!atGate) return 'You can only double before rolling, on your turn.';
+    final s = controller.state;
+    if (s.isCrawfordGame) {
+      return 'No doubling in the Crawford game — this single game decides '
+          'the match.';
+    }
+    if (s.cube.owner != null && s.cube.owner != s.turn) {
+      return 'Only the cube owner can double, and the other side owns it '
+          'right now.';
+    }
+    return 'Doubling is not available right now.';
+  }
+
+  void _explainDoubleBlocked(BuildContext context, bool atGate) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.only(bottom: 104, left: 12, right: 12),
+        content: Text(_doubleBlockedReason(atGate)),
+      ),
+    );
+  }
+
   /// Row 1's text: the match context — "You 1–0 AI · to 3 · Game 2", or just
   /// "Game 2" when the score is switched off.
   ///
@@ -316,15 +345,21 @@ class GameHud extends StatelessWidget {
                     // for whoever is on turn. It moves to the per-edge action
                     // bars instead (see [_GameScreenState._actionBar]).
                     if (!controller.cubeless && showDouble)
-                      OutlinedButton.icon(
-                        onPressed:
-                            atGate && _doublingLegal ? _offerDouble : null,
-                        icon:
-                            const Icon(Icons.control_point_duplicate, size: 16),
-                        label: const Text('Double'),
-                        style: OutlinedButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                      TapWhenDisabled(
+                        onDisabledTap: () =>
+                            _explainDoubleBlocked(context, atGate),
+                        child: OutlinedButton.icon(
+                          onPressed: atGate && _doublingLegal
+                              ? _offerDouble
+                              : null,
+                          icon: const Icon(Icons.control_point_duplicate,
+                              size: 16),
+                          label: const Text('Double'),
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 12),
+                          ),
                         ),
                       ),
                     // ALWAYS enabled wherever a local human exists. Gating the
