@@ -26,12 +26,13 @@ enum RoiId {
   /// region spans the board's full height and occupancy separates them.
   bar(-1),
 
-  /// White's bear-off tray. Both home boards are on the right, so both trays
-  /// are the same right-hand well split at the midline: White's half is the
-  /// near one.
+  /// White's bear-off tray. Both trays are the same well split at the
+  /// midline — the RIGHT-hand well under `whiteHomeNear`, rotated to the
+  /// left-hand one under `whiteHomeFar` like every other region — and
+  /// White's half is whichever the atlas's orientation puts it at.
   offWhite(-1),
 
-  /// Black's bear-off tray — the far half of the same well.
+  /// Black's bear-off tray — the other half of the same well as [offWhite].
   offBlack(-1),
 
   /// The strip of felt the point triangles do not reach, across both halves
@@ -93,9 +94,10 @@ enum RoiId {
 /// point — so the half a point sits in is precisely its region and no point
 /// can ever bleed into the column facing it.
 ///
-/// The **bar** is its full column, both colours. Each **tray** is half of the
-/// right-hand well. The **dice zone** is the band between the two rows of
-/// triangle tips, spanning both halves and the bar.
+/// The **bar** is its full column, both colours. Each **tray** is half of
+/// the bear-off well (the right-hand one under `whiteHomeNear`; rotated with
+/// everything else under `whiteHomeFar`). The **dice zone** is the band
+/// between the two rows of triangle tips, spanning both halves and the bar.
 ///
 /// ## Overlaps, by design
 ///
@@ -111,7 +113,19 @@ enum RoiId {
 /// * occupancy for a point must be measured over the whole region, headroom
 ///   included, or tall stacks read short.
 ///
-/// The left-hand tray is addressed by no region: nothing is ever played there.
+/// The well opposite the bear-off one (left-hand under `whiteHomeNear`) is
+/// addressed by no region: nothing is ever played there.
+///
+/// ## The board must not be mirrored
+///
+/// [BoardOrientation] expresses a half-turn only — there is no
+/// `(BoardQuad, orientation)` pair that describes a MIRRORED board, one set
+/// up with the home boards to the players' left. The atlas assumes the
+/// standard right-handed setup, and the calibration UI (the plan's Task 12)
+/// must say so out loud: "set up with your home board to your right", with
+/// the start-position confirmation as the backstop that catches a mirrored
+/// board before play begins (every point would read as its diagonal twin,
+/// which the confirmation renders visibly wrong).
 ///
 /// ## One set of proportions, provisionally
 ///

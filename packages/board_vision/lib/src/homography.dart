@@ -25,10 +25,13 @@ import 'geometry_types.dart';
 /// itself.
 ///
 /// **Points on the horizon.** A homography sends one line of the image plane
-/// to infinity. [mapToBoard] and [mapToImage] return non-finite coordinates
-/// for points on (or across) it rather than throwing — callers sampling near
-/// the frame's edges should reject non-finite results, which is cheaper than
-/// an exception on a hot sampling loop.
+/// to infinity. [mapToBoard] and [mapToImage] NEVER throw for such points:
+/// exactly on the line the division by zero produces non-finite coordinates,
+/// and within floating-point rounding of it the result is finite but
+/// astronomically outside the unit square. Callers on a hot sampling loop
+/// therefore reject by RANGE (board space is `[0,1]` — anything far outside
+/// is garbage whichever way the arithmetic rounded), which subsumes the
+/// non-finite check and is cheaper than an exception.
 class Homography {
   /// Row-major 3x3, image pixels to board space.
   final Float64List _toBoard;

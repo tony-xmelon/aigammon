@@ -182,7 +182,51 @@ void main() {
         expect(back.y, closeTo(board.y, 1e-9), reason: '$board y');
       }
     });
+
+    test('a pixel on the horizon never throws — it maps far outside the '
+        'unit square', () {
+      // The class doc makes this a binding contract: mapToBoard never throws,
+      // and callers on a hot loop reject by RANGE (exactly on the horizon the
+      // division by zero is non-finite; within rounding of it the result is
+      // finite but astronomically outside [0,1] — range rejection covers
+      // both). Pin it, so a future guard that throws fails here rather than
+      // surprising Tasks 3-9.
+      //
+      // The quad's left and right edges are images of the board's parallel
+      // x=0 / x=1 lines, so their image-plane intersection is a VANISHING
+      // POINT — a point on the horizon — computable here with plain line
+      // math, no access to the matrix.
+      final perspective = BoardQuad(
+        topLeft: Pt(300, 100),
+        topRight: Pt(900, 140),
+        bottomRight: Pt(1100, 800),
+        bottomLeft: Pt(100, 760),
+      );
+      final h = Homography.fromQuad(perspective);
+      final vanish = _intersect(
+        const Pt(300, 100), const Pt(100, 760), // left edge, extended
+        const Pt(900, 140), const Pt(1100, 800), // right edge, extended
+      );
+      final mapped = h.mapToBoard(vanish);
+      const wayOutside = 1e3;
+      final rejectable = !mapped.x.isFinite ||
+          !mapped.y.isFinite ||
+          mapped.x.abs() > wayOutside ||
+          mapped.y.abs() > wayOutside;
+      expect(rejectable, isTrue,
+          reason: 'a horizon pixel must map non-finite or far outside the '
+              'unit square, got $mapped');
+    });
   });
+}
+
+/// Image-plane intersection of lines (a1,a2) and (b1,b2).
+Pt _intersect(Pt a1, Pt a2, Pt b1, Pt b2) {
+  final d1x = a2.x - a1.x, d1y = a2.y - a1.y;
+  final d2x = b2.x - b1.x, d2y = b2.y - b1.y;
+  final denom = d1x * d2y - d1y * d2x;
+  final t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / denom;
+  return Pt(a1.x + t * d1x, a1.y + t * d1y);
 }
 
 /// A pixel guaranteed to lie inside [quad], by bilinear blend of its corners.

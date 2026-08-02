@@ -4,9 +4,12 @@
 ///
 /// * **image space** — pixels of a [Frame], x right / y down, origin at the
 ///   top-left pixel's centre-ish corner;
-/// * **board space** — the playing field as the unit rectangle `(0,0)`–`(1,1)`
-///   (see the ROI atlas), x toward White's right, y from the far edge to the
-///   near edge.
+/// * **board space** — the physical board as the unit rectangle
+///   `(0,0)`–`(1,1)` (see the ROI atlas), **anchored to the camera frame**:
+///   x runs left to right and y far edge to near edge AS THE CAMERA SEES IT,
+///   under either [BoardOrientation]. Orientation never mirrors these axes —
+///   the atlas half-turns its *regions* instead, so a `Pt` in board space
+///   means the same physical spot regardless of which seat calibrated.
 ///
 /// The homography between them is what calibration produces.
 class Pt {
