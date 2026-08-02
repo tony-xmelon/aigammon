@@ -18,3 +18,4 @@ library;
 export 'src/frame.dart';
 export 'src/geometry_types.dart';
 export 'src/homography.dart';
+export 'src/roi_atlas.dart';
