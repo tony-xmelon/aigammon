@@ -20,15 +20,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The three pure-Dart packages. One job definition, three legs: they were three
+  # The pure-Dart packages. One job definition, one leg each: they were
   # near-identical copies of the same six steps, and every change to the shape
-  # (a cache, an analyzer flag) had to be made three times or silently drift.
+  # (a cache, an analyzer flag) had to be made in every copy or silently drift.
   #
-  # `fail-fast: false` is load-bearing: the default would cancel the other two
-  # legs the moment one fails, so a push that breaks two packages would report
-  # only one of them and the second failure would surface a round trip later.
+  # `fail-fast: false` is load-bearing: the default would cancel the other legs
+  # the moment one fails, so a push that breaks two packages would report only
+  # one of them and the second failure would surface a round trip later.
   # Each leg still gets its own named entry in the checks list, so a red X points
   # at a package exactly as it did before.
+  #
+  # Not every pure-Dart package is here: engine_bindings runs in `engine` because
+  # its suite needs the Rust shim built first, and online_client runs in `online`
+  # behind the Firestore emulator. This matrix is the packages whose suites need
+  # nothing but a Dart SDK.
   packages:
     name: ${{ matrix.package }} tests
     runs-on: ubuntu-latest
@@ -42,8 +47,13 @@ jobs:
       matrix:
         include:
           - package: backgammon_core
+          # Buddy Mode's perception core (Plan 19). Pure Dart with no camera and
+          # no Flutter precisely so it can run here: its suite renders synthetic
+          # boards and, from Task 5 on, scores the committed corpus, so a
+          # perception regression turns this job red exactly like a rules one.
+          - package: board_vision
           # `-P ci` is the retry preset in packages/lan_play/dart_test.yaml, and
-          # it is deliberately NOT given to the other two legs: their suites are
+          # it is deliberately NOT given to the other legs: their suites are
           # pure computation, so a retry there could only ever hide a real
           # order-dependent or nondeterminism bug. See that file for why the
           # retry is a preset rather than a top-level setting.
