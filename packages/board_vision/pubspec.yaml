@@ -1,0 +1,30 @@
+name: board_vision
+description: >-
+  Pure-Dart perception core for AIGammon's Buddy Mode: RGB frames in,
+  state-primed answers about a physical backgammon board out.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  backgammon_core:
+    path: ../backgammon_core
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0
+  # DEV-ONLY ON PURPOSE. `package:image` is the codec/drawing library the
+  # synthetic board renderer (test/synthetic/) and the corpus tooling (tool/)
+  # are built on. Nothing under lib/ may import it: lib/ runs inside the app on
+  # a phone, where frames arrive as raw planes from the camera plugin and every
+  # byte of decode work is battery. Keeping it in dev_dependencies makes that a
+  # resolution error rather than a code-review convention.
+  #
+  # Major 4 is the current one on pub (resolved 4.9.1 at scaffold time). The
+  # drawing API moved substantially between 3.x and 4.x — `Image(width:,
+  # height:)`, `ColorRgb8`, `fillRect`/`fillCircle`/`fillPolygon` as free
+  # functions — so a 5.x bump will want the renderer re-checked, not just the
+  # constraint widened.
+  image: ^4.9.1
