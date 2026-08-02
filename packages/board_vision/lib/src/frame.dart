@@ -74,9 +74,13 @@ class Frame {
   ///
   /// ## Plane layout
   ///
-  /// [y] is assumed tightly packed at a row stride of [width] (padding *past*
-  /// `width * height` is fine and ignored; a padded luma row stride is not
-  /// supported — repack before calling). Chroma is addressed as
+  /// [y] is addressed at a row stride of [yRowStride], which defaults to
+  /// [width] (tightly packed). Android's `YUV_420_888` luma planes routinely
+  /// carry per-row padding (`plane.bytesPerRow > width`) — pass that
+  /// `bytesPerRow` here rather than repacking; a padded plane is LONGER than
+  /// `width * height`, so a plain length guard cannot catch the mismatch and
+  /// the result would silently shear diagonally. Padding *past* the last
+  /// row's pixels is fine and ignored. Chroma is addressed as
   /// `(y >> 1) * uvRowStride + (x >> 1) * uvPixelStride`, which covers both
   /// layouts in the wild: planar I420 ([uvPixelStride] 1) and semi-planar
   /// NV12/NV21 ([uvPixelStride] 2, where [u] and [v] are overlapping views of
@@ -87,6 +91,7 @@ class Frame {
     required Uint8List v,
     required int width,
     required int height,
+    int? yRowStride,
     required int uvRowStride,
     required int uvPixelStride,
   }) {
@@ -94,13 +99,20 @@ class Frame {
       throw ArgumentError('frame dimensions must be positive, '
           'got ${width}x$height');
     }
+    final yStride = yRowStride ?? width;
+    if (yStride < width) {
+      throw ArgumentError(
+          'yRowStride $yStride cannot be narrower than width $width');
+    }
     if (uvRowStride <= 0 || uvPixelStride <= 0) {
       throw ArgumentError('uv strides must be positive, got '
           'row $uvRowStride / pixel $uvPixelStride');
     }
-    if (y.length < width * height) {
+    // The last row needs only its width pixels, not its full stride.
+    final lastLuma = (height - 1) * yStride + width;
+    if (y.length < lastLuma) {
       throw ArgumentError('luma plane holds ${y.length} bytes, needs at least '
-          '${width * height} for a ${width}x$height frame');
+          '$lastLuma for a ${width}x$height frame at row stride $yStride');
     }
     final lastUv =
         ((height - 1) >> 1) * uvRowStride + ((width - 1) >> 1) * uvPixelStride;
@@ -112,7 +124,7 @@ class Frame {
     final rgb = Uint8List(width * height * 3);
     var out = 0;
     for (var py = 0; py < height; py++) {
-      final yRow = py * width;
+      final yRow = py * yStride;
       final uvRow = (py >> 1) * uvRowStride;
       for (var px = 0; px < width; px++) {
         final luma = y[yRow + px];

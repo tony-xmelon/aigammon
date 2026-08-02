@@ -207,6 +207,58 @@ void main() {
       );
       expect(frame.rgb, [10, 10, 10, 20, 20, 20, 30, 30, 30, 40, 40, 40]);
     });
+
+    test('honours a padded luma ROW stride (Android row padding)', () {
+      // Android YUV_420_888 luma planes routinely carry per-ROW padding
+      // (plane.bytesPerRow > width). Without yRowStride the plane is LONGER
+      // than width * height, passes the length guard, and every row after the
+      // first shears — the exact silent failure this parameter exists to
+      // prevent. Here each 2-pixel row sits in a 4-byte stride with 99s as
+      // padding: correct output ignores every 99.
+      final frame = Frame.fromYuv420(
+        y: Uint8List.fromList([10, 20, 99, 99, 30, 40, 99, 99]),
+        u: Uint8List.fromList([128]),
+        v: Uint8List.fromList([128]),
+        width: 2,
+        height: 2,
+        yRowStride: 4,
+        uvRowStride: 1,
+        uvPixelStride: 1,
+      );
+      expect(frame.rgb, [10, 10, 10, 20, 20, 20, 30, 30, 30, 40, 40, 40]);
+    });
+
+    test('throws when a padded luma plane cannot cover its last row', () {
+      expect(
+        () => Frame.fromYuv420(
+          y: Uint8List.fromList([10, 20, 99, 99, 30]), // last row cut short
+          u: Uint8List.fromList([128]),
+          v: Uint8List.fromList([128]),
+          width: 2,
+          height: 2,
+          yRowStride: 4,
+          uvRowStride: 1,
+          uvPixelStride: 1,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('rejects a yRowStride narrower than the frame', () {
+      expect(
+        () => Frame.fromYuv420(
+          y: Uint8List.fromList([10, 20, 30, 40]),
+          u: Uint8List.fromList([128]),
+          v: Uint8List.fromList([128]),
+          width: 2,
+          height: 2,
+          yRowStride: 1,
+          uvRowStride: 1,
+          uvPixelStride: 1,
+        ),
+        throwsArgumentError,
+      );
+    });
   });
 
   group('Pt', () {
