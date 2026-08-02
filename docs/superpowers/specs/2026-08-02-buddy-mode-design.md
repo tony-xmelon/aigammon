@@ -125,9 +125,19 @@ side of the table the user sits on (needed to map board orientation).
 4. **Confirmation.** Buddy renders its belief of the starting position over
    the preview; the user confirms. Mis-detected calibration restarts cheaply.
 
-A gyro-detected bump, a large homography residual, or an exposure shift
-flags calibration as stale: the readability light drops and the user is
-asked to re-confirm (fast path: corners usually just need a nudge).
+**Calibration is a session-long contract, continuously re-validated — not a
+one-time gate.** Every stable frame throughout the session runs cheap
+validity checks (corner-patch verification against the calibration's
+remembered appearance, exposure statistics, gyro history) regardless of
+whether a query is pending, so degraded conditions are caught the moment
+they happen — a nudged board, a lamp switched off, a phone slide — not the
+next time Buddy needs an answer. When a check fails: the readability light
+drops immediately with the named cause, perception answers are suppressed,
+and if the cause invalidates calibration (geometry moved, colors no longer
+match), the session routes to the recalibration flow — the same guided
+corner/confirm loop as setup, with the fast path of nudging the existing
+corners. Play resumes exactly where it paused; the authoritative game state
+is never touched by a readability outage.
 
 ### The user's turn
 
@@ -242,10 +252,14 @@ is to confirm or renegotiate them with measurements before Phase 2 commits.
 
 A three-state light (green/amber/red) over the preview, computed from:
 board-in-frame + homography freshness, gyro stability, frame sharpness, and
-lighting adequacy (dynamic range within board ROIs). Amber/red always name
-the failing cause on screen — "I can't see the left edge", "too dark",
-"the phone moved — re-check the corners" — and the transition to red is
-spoken once (not nagged). Perception answers are suppressed while red.
+lighting adequacy (dynamic range within board ROIs). It is evaluated
+**continuously on every stable frame for the whole session**, not merely
+when a query is pending (see the calibration section's session-long
+contract). Amber/red always name the failing cause on screen — "I can't see
+the left edge", "too dark", "the phone moved — re-check the corners" — and
+the transition to red is spoken once (not nagged). Perception answers are
+suppressed while red, and a red caused by invalidated calibration offers
+the recalibration flow directly.
 
 ## Audio
 
