@@ -48,14 +48,35 @@
     "lighting": "lamp",
     "angle": "leaning against something at the end of the table, lower — the far edge of the board should look clearly shorter than the near one"
   },
-  "synthetic": null,
+  "synthetic": {
+    "palette": "blue-red",
+    "lightingGain": 0.85,
+    "noise": 2.0,
+    "blurSigma": 0.5,
+    "seed": 152498665,
+    "jpegQuality": 95,
+    "dice": [
+      {
+        "face": 4,
+        "x": 0.7000851445113566,
+        "y": 0.5,
+        "angle": 0.1286713450747256
+      },
+      {
+        "face": 5,
+        "x": 0.8120851445113567,
+        "y": 0.5,
+        "angle": -0.18817421458266168
+      }
+    ]
+  },
   "expectRefusal": null,
   "refusalReason": null,
   "title": "Dice 4-5 on the starting position",
   "instructions": [
     "Leave the board exactly as it is.",
     "Put two dice showing 4 and 5 in the empty band across the middle of the board.",
-    "Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.",
+    "Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.",
     "Take the photo."
   ]
 }

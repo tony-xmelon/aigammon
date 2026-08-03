@@ -64,14 +64,15 @@ const BoardQuad kCorpusSteepQuad = BoardQuad(
   bottomLeft: Pt(65, 855),
 );
 
-/// Lower still, and rolled: the phone leaning on something, not held.
+/// Lower still, and rolled: the phone leaning on something, not held. Its far
+/// edge is 0.58 of its near one, against [kCameraQuad]'s 0.82.
 ///
-/// Its foreshortening (0.58) is the corner of the envelope rather than the
-/// middle of it. Measured: the dice reader holds to about 0.55 and stops
-/// finding dice at all somewhere between 0.5 and 0.45, which is a phone very
-/// nearly flat on the table. `test/degradation_test.dart` pins that limit; the
-/// corpus stays inside it, so that what the harness scores is accuracy and not
-/// a viewpoint nobody promised to support.
+/// Steepness turned out **not** to be what limits the pipeline. Walking the
+/// viewpoint down at a blurrier setting produced scattered failures that read
+/// exactly like a foreshortening limit; at the corpus's own sharpness the same
+/// boards read from very nearly table level. `test/degradation_test.dart`
+/// records the correction, which matters for what a user gets told: "hold the
+/// phone higher" would fix nothing.
 const BoardQuad kCorpusLowQuad = BoardQuad(
   topLeft: Pt(298, 200),
   topRight: Pt(982, 140),
@@ -100,31 +101,45 @@ const List<BoardQuad> kCorpusQuads = <BoardQuad>[
 /// What the corpus does to every synthetic shot. See [ShotDegradation] for why
 /// a corpus of clean renders scores nothing, and `test/degradation_test.dart`
 /// for the assertion that these particular numbers are enough to matter.
-/// Measured, not chosen. Every number here sits inside a cliff that
-/// `test/degradation_test.dart` pins:
+/// Measured, not chosen, and the measurements are the most valuable thing in
+/// this file. `test/degradation_test.dart` pins each of them.
 ///
-/// * Additive grain of **4 levels** stops the classic palette calibrating. Its
-///   black checkers are painted at 20/18/15, and the colour model's feature is
-///   a per-channel log ratio, so ±4 levels on a value of 18 is a quarter of a
-///   log unit — nearly two of the model's own minimum spreads, from grain a
-///   photograph of a dark checker in ordinary light would carry.
-/// * Blur of **1.1 sigma** stops the dice reader finding dice at all, on two
-///   of the three boards. That is the tightest limit anywhere in the pipeline
-///   and by some distance the most important finding this file carries: the
-///   spec already names dice as the sub-problem most likely to need the ML
-///   escape hatch, and a shot from a hand-held phone will not always be
-///   sharper than one sigma.
-/// * Blur past about **1.8 sigma** goes on to break calibration itself, by
-///   smearing the foot of each stack into the board under it.
+/// **Blur is what the pipeline cannot take, and it is the dice that go first.**
+/// Reading a settled pair across a grid of three viewpoints, three palettes,
+/// both seatings and four sub-pixel offsets of the corners — 24 to 72 cells,
+/// each a full calibrate-then-read:
 ///
-/// These are findings for the Task 6 gate rather than things to tune away
-/// here, and the corpus is set inside them so that what it scores is accuracy
-/// rather than a known cliff. The committed corpus then adds one more
+/// | blur sigma | pairs read |
+/// |---|---|
+/// | 0.3 – 0.6 | 72 / 72 |
+/// | 0.8 | 20 / 24 |
+/// | 1.0 | 12 / 24 |
+/// | 1.1 | 10 / 24 |
+///
+/// Note the shape as much as the numbers: at 0.8 the failures are **ragged**,
+/// deciding on nothing more than where the board's corners fall between two
+/// pixels — the same board, the same light, the same dice, read or not read
+/// depending on half a pixel. Calibration itself survives to about 1.8 sigma,
+/// so this is the dice reader alone, and it is by a distance the tightest
+/// limit anywhere in the pipeline. The spec already names dice as the
+/// sub-problem most likely to need the ML escape hatch; this is that
+/// prediction with a number against it, taken before a single photograph
+/// exists. A hand-held phone over a table will not always be sharper than one
+/// sigma.
+///
+/// **Grain** matters much less: 24/24 at 3 levels, 16/24 at 4, where the
+/// classic palette's near-black checkers stop calibrating — its Black is
+/// painted at 20/18/15 and the colour model's feature is a per-channel log
+/// ratio, so ±4 levels on a value of 18 is a quarter of a log unit.
+///
+/// The corpus therefore runs at **0.5 sigma and 2 levels**, inside the region
+/// measured stable rather than on the edge of it, so that what the harness
+/// scores is accuracy and not a coin toss. The committed corpus adds one more
 /// degradation on top — JPEG at quality 95 — for which see the corpus
 /// generator.
 const ShotDegradation kCorpusDegradation = ShotDegradation(
   noise: 2,
-  blurSigma: 0.8,
+  blurSigma: 0.5,
   quadJitter: 0.8,
   seed: 4242,
 );

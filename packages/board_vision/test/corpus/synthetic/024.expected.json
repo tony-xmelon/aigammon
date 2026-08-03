@@ -48,14 +48,35 @@
     "lighting": "lamp",
     "angle": "leaning against something at the end of the table, lower — the far edge of the board should look clearly shorter than the near one"
   },
-  "synthetic": null,
+  "synthetic": {
+    "palette": "blue-red",
+    "lightingGain": 0.8,
+    "noise": 2.0,
+    "blurSigma": 0.5,
+    "seed": 152498728,
+    "jpegQuality": 95,
+    "dice": [
+      {
+        "face": 3,
+        "x": 0.24008514451135624,
+        "y": 0.5,
+        "angle": 0.20635949760486538
+      },
+      {
+        "face": 1,
+        "x": 0.3520851445113563,
+        "y": 0.5,
+        "angle": 0.32807262988583286
+      }
+    ]
+  },
   "expectRefusal": null,
   "refusalReason": null,
   "title": "Dice 3-1 on the starting position",
   "instructions": [
     "Leave the board exactly as it is.",
     "Put two dice showing 3 and 1 in the empty band across the middle of the board.",
-    "Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.",
+    "Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.",
     "Take the photo."
   ]
 }

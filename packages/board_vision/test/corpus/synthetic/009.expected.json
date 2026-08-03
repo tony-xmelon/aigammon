@@ -1,0 +1,409 @@
+{
+  "schema": 1,
+  "id": "009",
+  "session": "A-lamp",
+  "kind": "dice",
+  "calibrateFrom": "006",
+  "corners": null,
+  "orientation": "whiteHomeFar",
+  "board": {
+    "points": [
+      -2,
+      3,
+      2,
+      0,
+      -2,
+      2,
+      0,
+      1,
+      1,
+      0,
+      0,
+      -2,
+      3,
+      0,
+      1,
+      -1,
+      1,
+      -2,
+      -4,
+      1,
+      0,
+      0,
+      0,
+      -2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": [
+    {
+      "type": "openingRoll",
+      "whiteDie": 2,
+      "blackDie": 6
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          16,
+          22,
+          false
+        ],
+        [
+          0,
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 4,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          23,
+          19,
+          false
+        ],
+        [
+          12,
+          8,
+          false
+        ],
+        [
+          5,
+          1,
+          false
+        ],
+        [
+          5,
+          1,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 3,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          2,
+          4,
+          false
+        ],
+        [
+          16,
+          19,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 2,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          22,
+          true
+        ],
+        [
+          5,
+          0,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 1,
+      "die2": 1
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          24,
+          0,
+          true
+        ],
+        [
+          24,
+          0,
+          false
+        ],
+        [
+          16,
+          17,
+          false
+        ],
+        [
+          19,
+          20,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 6,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          21,
+          false
+        ],
+        [
+          8,
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 1,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          17,
+          19,
+          false
+        ],
+        [
+          20,
+          21,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 6,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          22,
+          false
+        ],
+        [
+          7,
+          1,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 5,
+      "die2": 6
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          11,
+          17,
+          false
+        ],
+        [
+          18,
+          23,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 2,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          19,
+          true
+        ],
+        [
+          22,
+          20,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 2,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          24,
+          4,
+          false
+        ],
+        [
+          21,
+          23,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 6,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          12,
+          8,
+          false
+        ],
+        [
+          22,
+          16,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 4,
+      "die2": 6
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          11,
+          17,
+          false
+        ],
+        [
+          11,
+          15,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 5,
+      "die2": 6
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          20,
+          14,
+          false
+        ],
+        [
+          7,
+          2,
+          false
+        ]
+      ]
+    }
+  ],
+  "dice": {
+    "die1": 5,
+    "die2": 1
+  },
+  "capture": {
+    "board": "board A",
+    "lighting": "lamp",
+    "angle": "leaning against something at the end of the table, lower — the far edge of the board should look clearly shorter than the near one"
+  },
+  "synthetic": {
+    "palette": "blue-red",
+    "lightingGain": 0.85,
+    "noise": 2.0,
+    "blurSigma": 0.5,
+    "seed": 152498667,
+    "jpegQuality": 95,
+    "dice": [
+      {
+        "face": 5,
+        "x": 0.13608514451135614,
+        "y": 0.5,
+        "angle": -0.06546948085176298
+      },
+      {
+        "face": 1,
+        "x": 0.24808514451135624,
+        "y": 0.5,
+        "angle": 0.1316746906767563
+      }
+    ]
+  },
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Dice 5-1 on that position",
+  "instructions": [
+    "Leave the checkers where they are.",
+    "Put two dice showing 5 and 1 in the middle band, again clear of every stack.",
+    "Take the photo."
+  ]
+}

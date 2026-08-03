@@ -411,6 +411,54 @@ void main() {
       expect(hi - lo, lessThan(0.01), reason: 'pitches: $pitches');
     });
   });
+
+  group('what the corpus found', () {
+    test('a die lying in a point\'s headroom is counted as a checker there',
+        () {
+      // Found by the corpus harness, which reads occupancy on shots that have
+      // dice on the board and so asks a question no test here had asked. It is
+      // the largest single source of miscounts in the synthetic corpus.
+      //
+      // The mechanism, and why the two halves of the reading disagree: the
+      // dice band overlaps every point's headroom (see [RoiAtlas]), so a die
+      // sitting there is inside the point's region. Its pale body is not the
+      // board's own surface, so it classifies as a checker and lifts the
+      // region's MASS over the presence threshold. But the reach walk starts
+      // at the board's edge and stops at the first wide gap, so it finds
+      // nothing and returns zero — and `_resolve` floors the count at one.
+      // The reading that comes back is "one checker, reach zero", which is a
+      // combination a real stack cannot produce.
+      //
+      // Left as a finding rather than fixed here: the plan puts diff-matching
+      // in Task 7, and it is diff-matching that has the context to dismiss a
+      // phantom checker (the expected position says that point is empty, and
+      // no legal play puts a lone checker there). Recorded so that the fix,
+      // when it comes, is aimed at something measured — the signature is
+      // `count >= 1` with `reach == 0`, and it is cheap to detect.
+      final calibration = _calibrate(
+        renderShot(board: BoardState.initial()),
+      );
+      final withDice = renderShot(
+        board: BoardState.initial(),
+        // Point 3 (index 2) is empty at the start; the band crosses its
+        // headroom, so this die lies inside that point's region.
+        dicePlacements: <DicePlacement>[
+          const DicePlacement(face: 4, center: Pt(0.76, 0.5)),
+          const DicePlacement(face: 2, center: Pt(0.30, 0.5)),
+        ],
+      );
+      final reading = BoardVision(calibration)
+          .occupancyIn(withDice.frame)
+          .read(RoiId.point(2));
+
+      expect(reading.color, isNot(CheckerColor.none),
+          reason: 'the die reads as something the board does not account for');
+      expect(reading.count, 1);
+      expect(reading.reach, 0.0,
+          reason: 'nothing was found at the foot of the point, which is the '
+              'signature that separates this from a real checker');
+    });
+  });
 }
 
 // --- the boards this file counts --------------------------------------------

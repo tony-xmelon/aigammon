@@ -224,6 +224,48 @@ void main() {
     });
   });
 
+  group('what the corpus found', () {
+    test('a die overlapping the bar can pick up a pip that is not there', () {
+      // The bar is wood where the rest of the band is felt, and a die lying
+      // across that seam has a hard dark edge under one side of it. The blur
+      // any real optics apply spreads that edge INTO the die, far enough to
+      // survive [DiceReader.pipErosion], and it is then counted as a pip: a
+      // three reads as a four. Nothing about the reading looks doubtful — the
+      // blob is square, its contrast is good, its size agrees with its
+      // partner's — so the wrong roll is offered with full confidence.
+      //
+      // On the synthetic bed it costs one of the three palettes a reading at
+      // the corpus's own sharpness and more of them as blur rises. Two things
+      // follow, and both are done: the corpus generator keeps dice off the
+      // bar, and the capture checklist tells a person to throw onto the felt.
+      // A real player does that anyway, which is why this is a note for Task 9
+      // rather than a hole in the MVP — but it is the kind of failure the
+      // readability light cannot see, so it is written down.
+      final calibration = calibrationFor(BoardPalette.blueRed);
+      final vision = BoardVision(calibration);
+
+      List<int>? facesAt(double x) {
+        final shot = renderShot(
+          board: BoardState.initial(),
+          palette: BoardPalette.blueRed,
+          dicePlacements: <DicePlacement>[
+            DicePlacement(face: 3, center: Pt(x, 0.5)),
+            const DicePlacement(face: 4, center: Pt(0.70, 0.5)),
+          ],
+          degradation: kCorpusDegradation,
+        );
+        final reading = vision.readDice(shot.frame);
+        return reading == null ? null : _facesOf(reading);
+      }
+
+      // Clear of the bar: right.
+      expect(facesAt(0.30), <int>[3, 4]);
+      // Lying across the bar's right-hand edge: a phantom pip.
+      expect(facesAt(0.54), <int>[4, 4],
+          reason: 'the seam under the die is being read as one of its pips');
+    });
+  });
+
   group('what calibration must not have been shown', () {
     test('a board calibrated with dice on it can never see dice again', () {
       // Found while building the corpus, and it decides the shape of the whole

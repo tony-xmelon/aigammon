@@ -43,7 +43,7 @@ Point numbers run round the board as they always do. `5W` means five White check
 
 - Leave the board exactly as it is.
 - Put two dice showing 3 and 4 in the empty band across the middle of the board.
-- Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.
+- Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.
 - Take the photo.
 
 ### 003 — Mid-game position after 6 half-turns
@@ -111,7 +111,7 @@ Point numbers run round the board as they always do. `5W` means five White check
 
 - Leave the board exactly as it is.
 - Put two dice showing 4 and 5 in the empty band across the middle of the board.
-- Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.
+- Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.
 - Take the photo.
 
 ### 008 — Mid-game position after 14 half-turns
@@ -190,7 +190,7 @@ Point numbers run round the board as they always do. `5W` means five White check
 
 - Leave the board exactly as it is.
 - Put two dice showing 3 and 1 in the empty band across the middle of the board.
-- Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.
+- Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.
 - Take the photo.
 
 ### 014 — Mid-game position after 22 half-turns
@@ -258,7 +258,7 @@ Point numbers run round the board as they always do. `5W` means five White check
 
 - Leave the board exactly as it is.
 - Put two dice showing 5 and 1 in the empty band across the middle of the board.
-- Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.
+- Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.
 - Take the photo.
 
 ### 019 — Mid-game position after 30 half-turns
@@ -338,7 +338,7 @@ Point numbers run round the board as they always do. `5W` means five White check
 
 - Leave the board exactly as it is.
 - Put two dice showing 3 and 1 in the empty band across the middle of the board.
-- Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.
+- Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.
 - Take the photo.
 
 ### 025 — Mid-game position after 38 half-turns
@@ -406,7 +406,7 @@ Point numbers run round the board as they always do. `5W` means five White check
 
 - Leave the board exactly as it is.
 - Put two dice showing 2 and 4 in the empty band across the middle of the board.
-- Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.
+- Both dice must be CLEAR OF EVERY STACK and OFF THE BAR, flat on the felt — a die touching checkers is a different question, one Buddy answers by asking for another roll, and a die lying across the bar reads a pip too many.
 - Take the photo.
 
 ### 030 — Mid-game position after 46 half-turns

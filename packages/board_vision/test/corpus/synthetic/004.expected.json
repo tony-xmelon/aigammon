@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "id": "004",
+  "session": "A-daylight",
+  "kind": "dice",
+  "calibrateFrom": "001",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      -1,
+      1,
+      -1,
+      0,
+      2,
+      6,
+      0,
+      0,
+      0,
+      0,
+      0,
+      -2,
+      4,
+      0,
+      0,
+      0,
+      -5,
+      0,
+      -5,
+      0,
+      -1,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": [
+    {
+      "type": "openingRoll",
+      "whiteDie": 2,
+      "blackDie": 5
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          11,
+          16,
+          false
+        ],
+        [
+          0,
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 3,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          5,
+          false
+        ],
+        [
+          7,
+          4,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 3,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          11,
+          13,
+          false
+        ],
+        [
+          13,
+          16,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 5,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          5,
+          1,
+          false
+        ],
+        [
+          12,
+          7,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 5,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          11,
+          15,
+          false
+        ],
+        [
+          15,
+          20,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 2,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          4,
+          false
+        ],
+        [
+          7,
+          5,
+          false
+        ]
+      ]
+    }
+  ],
+  "dice": {
+    "die1": 6,
+    "die2": 4
+  },
+  "capture": {
+    "board": "board A",
+    "lighting": "daylight",
+    "angle": "propped at the end of the table, roughly a hand span above it"
+  },
+  "synthetic": {
+    "palette": "classic",
+    "lightingGain": 1.05,
+    "noise": 2.0,
+    "blurSigma": 0.5,
+    "seed": 152498662,
+    "jpegQuality": 95,
+    "dice": [
+      {
+        "face": 6,
+        "x": 0.14808514451135615,
+        "y": 0.5,
+        "angle": -0.056177258311329054
+      },
+      {
+        "face": 4,
+        "x": 0.27608514451135624,
+        "y": 0.5,
+        "angle": 0.3248370384328489
+      }
+    ]
+  },
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Dice 6-4 on that position",
+  "instructions": [
+    "Leave the checkers where they are.",
+    "Put two dice showing 6 and 4 in the middle band, again clear of every stack.",
+    "Take the photo."
+  ]
+}

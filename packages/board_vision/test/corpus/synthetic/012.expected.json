@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "id": "012",
+  "session": "A-dim",
+  "kind": "calibration",
+  "calibrateFrom": null,
+  "corners": {
+    "topLeft": [
+      150.07687577347747,
+      214.84808088829692
+    ],
+    "topRight": [
+      1054.6589249229548,
+      119.34395795183211
+    ],
+    "bottomRight": [
+      1179.627834891861,
+      904.2950740060727
+    ],
+    "bottomLeft": [
+      104.86077673693079,
+      699.3395398768605
+    ]
+  },
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      3,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -3,
+      0,
+      -5,
+      0,
+      0,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": null,
+  "capture": {
+    "board": "board A",
+    "lighting": "dim",
+    "angle": "off to one side of the table rather than at the end of it"
+  },
+  "synthetic": {
+    "palette": "low-contrast wood",
+    "lightingGain": 0.65,
+    "noise": 2.0,
+    "blurSigma": 0.5,
+    "seed": 152498693,
+    "jpegQuality": 95,
+    "dice": []
+  },
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Calibration — the starting position",
+  "instructions": [
+    "Set board A up for the start of a game, home boards to the RIGHT for both players.",
+    "Sit where the checklist says (the side where WHITE bears off into the tray on your right) and prop the phone so the whole playing field, both bear-off trays included, is inside the picture: off to one side of the table rather than at the end of it.",
+    "Nothing on the felt but the checkers — no dice, no cube, no hands.",
+    "Take the photo. DO NOT MOVE THE PHONE OR THE BOARD until this session's shots are all taken."
+  ]
+}

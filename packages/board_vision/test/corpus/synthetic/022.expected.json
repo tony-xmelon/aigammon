@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "id": "022",
+  "session": "B-daylight",
+  "kind": "degraded",
+  "calibrateFrom": null,
+  "corners": {
+    "topLeft": [
+      298.0507944797192,
+      200.72829252986287
+    ],
+    "topRight": [
+      981.8779832170981,
+      139.5613811862378
+    ],
+    "bottomRight": [
+      1229.9252641017745,
+      819.6513062224532
+    ],
+    "bottomLeft": [
+      49.809314110171904,
+      880.4368621951783
+    ]
+  },
+  "orientation": "whiteHomeFar",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      3,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -3,
+      0,
+      -5,
+      0,
+      0,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": null,
+  "capture": {
+    "board": "board B",
+    "lighting": "daylight",
+    "angle": "propped at the end of the table, roughly a hand span above it"
+  },
+  "synthetic": {
+    "palette": "classic",
+    "lightingGain": 0.12,
+    "noise": 2.0,
+    "blurSigma": 0.5,
+    "seed": 152498726,
+    "jpegQuality": 95,
+    "dice": []
+  },
+  "expectRefusal": "calibration",
+  "refusalReason": "the board and the men on it have squeezed into the same few sensor values, so no colour model can separate them",
+  "title": "Deliberately unreadable — too dark to read",
+  "instructions": [
+    "This one is meant to fail, and it is the most valuable shot in the session: it is how the corpus checks that Buddy says \"I cannot read this\" instead of guessing.",
+    "Set the board back to the STARTING position.",
+    "Turn the lights off, or close the curtains, until the board is barely visible to you — a room where you would not sit down to play.",
+    "Do not use the phone's flash or night mode.",
+    "Take the photo. This is the LAST shot of the session — the phone may be moved freely afterwards."
+  ]
+}

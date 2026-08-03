@@ -258,32 +258,37 @@ void main() {
       expect(calibrateWith(BoardPalette.classic).ok, isTrue);
     });
 
-    test('one sigma of blur and the dice cannot be found at all', () {
+    test('a sigma of blur and half the dice cannot be found at all', () {
       // The tightest limit anywhere in the pipeline, and the most consequential
-      // thing this file records. Calibration survives 1.8 sigma; the dice
-      // reader stops finding dice between 1.0 and 1.1, on two of three boards
-      // at once. Its first gate looks for what the board does not account for
-      // and its second asks whether that thing is square, and a blur that
-      // leaves a checker perfectly countable has already rounded a die's
-      // corners past the squareness threshold.
+      // measurement in this file. Calibration survives 1.8 sigma of blur; the
+      // dice reader is already ragged at 0.8 and has lost half its readings by
+      // 1.0. Its first gate looks for what the board does not account for and
+      // its second asks whether that thing is square, and a blur that leaves a
+      // checker perfectly countable has already softened a die's corners past
+      // the squareness threshold.
+      //
+      // Measured over a grid of viewpoints, palettes, seatings and sub-pixel
+      // corner offsets (the table on [kCorpusDegradation]); three cells here,
+      // enough to hold the shape without paying for the grid on every run.
       //
       // A hand-held phone at arm's length over a table will not always be
       // sharper than one sigma. This is the measurement behind the spec's bet
       // that dice are where the ML escape hatch gets spent, taken before a
-      // single photograph exists — and it is why the corpus runs at 0.8.
-      for (final sigma in <double>[1.0, 1.1]) {
-        final results = <String, bool>{};
+      // single photograph exists — and it is why the corpus runs at 0.5.
+      int readsAt(double sigma) {
+        var read = 0;
         for (final palette in BoardPalette.all) {
+          final degradation = ShotDegradation(
+            noise: kCorpusDegradation.noise,
+            blurSigma: sigma,
+            quadJitter: kCorpusDegradation.quadJitter,
+            seed: kCorpusDegradation.seed,
+          );
           final bare = renderShot(
             board: BoardState.initial(),
             palette: palette,
             quad: kCorpusSteepQuad,
-            degradation: ShotDegradation(
-              noise: kCorpusDegradation.noise,
-              blurSigma: sigma,
-              quadJitter: kCorpusDegradation.quadJitter,
-              seed: kCorpusDegradation.seed,
-            ),
+            degradation: degradation,
           );
           final calibrated = BoardVision.calibrate(
             frame: bare.frame,
@@ -291,39 +296,41 @@ void main() {
             orientation: BoardOrientation.whiteHomeNear,
           );
           expect(calibrated.ok, isTrue,
-              reason: 'calibration is not what fails here');
+              reason: 'calibration is not what fails here (${palette.name} at '
+                  '$sigma sigma)');
           final withDice = renderShot(
             board: BoardState.initial(),
             palette: palette,
             dice: Dice(5, 2),
             quad: kCorpusSteepQuad,
-            degradation: ShotDegradation(
-              noise: kCorpusDegradation.noise,
-              blurSigma: sigma,
-              quadJitter: kCorpusDegradation.quadJitter,
-              seed: kCorpusDegradation.seed,
-            ),
+            degradation: degradation,
           );
-          results[palette.name] =
-              BoardVision(calibrated.calibration!).readDice(withDice.frame) !=
-                  null;
+          if (BoardVision(calibrated.calibration!).readDice(withDice.frame) !=
+              null) {
+            read++;
+          }
         }
-        if (sigma == 1.0) {
-          expect(results.values, everyElement(isTrue),
-              reason: 'one sigma is still inside the envelope: $results');
-        } else {
-          expect(results.values.where((read) => read).length, lessThan(3),
-              reason: 'at 1.1 sigma the reader loses boards: $results');
-        }
+        return read;
       }
+
+      expect(readsAt(kCorpusDegradation.blurSigma), 3,
+          reason: 'the corpus runs where every board reads');
+      expect(readsAt(1.1), lessThan(3),
+          reason: 'past a sigma the reader loses boards outright');
     });
 
-    test('and the viewpoint cannot go much past half foreshortening', () {
-      // The other envelope wall, and the one that decides where the corpus's
-      // camera may stand. Measured across the three boards: dice read at a far
-      // edge 0.55 of the near one, and stop between 0.5 and 0.45 — a phone
-      // very nearly flat on the table. The corpus's steepest viewpoint is
-      // 0.58, so it sits inside this rather than on it.
+    test('but the viewpoint is not the thing that limits it', () {
+      // Worth recording because it was got wrong first. Walking the viewpoint
+      // down at 0.8 sigma of blur produced scattered failures that looked
+      // exactly like a foreshortening limit — dice read at 0.55 of a far edge
+      // and not at 0.45 — and the obvious reading was "the camera cannot go
+      // much lower". It was blur wearing a viewpoint's clothes: at the
+      // corpus's own sharpness the same boards read fine from a phone very
+      // nearly flat on the table.
+      //
+      // The correction matters for what gets told to a user. "Hold the phone
+      // higher" would have been advice that fixes nothing; "hold it still, and
+      // wait for the frame to settle" is the one that does.
       final flat = _quadAtForeshortening(0.45);
       var read = 0;
       for (final palette in BoardPalette.all) {
@@ -338,7 +345,7 @@ void main() {
           corners: bare.groundTruthQuad,
           orientation: BoardOrientation.whiteHomeNear,
         );
-        if (!calibrated.ok) continue;
+        expect(calibrated.ok, isTrue, reason: calibrated.message);
         final withDice = renderShot(
           board: BoardState.initial(),
           palette: palette,
@@ -351,8 +358,8 @@ void main() {
           read++;
         }
       }
-      expect(read, lessThan(3),
-          reason: 'at 0.45 foreshortening at least one board loses its dice');
+      expect(read, 3,
+          reason: 'a sharp frame reads its dice from very nearly table level');
     });
   });
 }
