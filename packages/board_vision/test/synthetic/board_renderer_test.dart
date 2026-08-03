@@ -397,6 +397,34 @@ void main() {
       expect(shot.board.dice, isEmpty);
     });
 
+    test('placements put any number of dice anywhere, at any angle', () {
+      // The dice reader has to FIND dice, not be handed them in the one spot
+      // the default path always uses — and it has to answer "not two dice" for
+      // one and for three. Board space in, top-down pixels out.
+      final shot = renderShot(
+        board: BoardState.initial(),
+        dicePlacements: <DicePlacement>[
+          DicePlacement(face: 4, center: const Pt(0.30, 0.47)),
+          DicePlacement(
+            face: 2,
+            center: const Pt(0.62, 0.53),
+            angle: math.pi / 4,
+          ),
+          DicePlacement(face: 6, center: const Pt(0.80, 0.50)),
+        ],
+      );
+
+      expect(shot.board.dice, hasLength(3));
+      expect(shot.board.dice.map((d) => d.value), <int>[4, 2, 6]);
+      final w = shot.board.image.width, h = shot.board.image.height;
+      expect(shot.board.dice[0].center.x, closeTo(0.30 * w, 1));
+      expect(shot.board.dice[0].center.y, closeTo(0.47 * h, 1));
+      expect(shot.board.dice[1].angle, closeTo(math.pi / 4, 1e-9));
+      for (final die in shot.board.dice) {
+        expect(_countPipBlobs(shot, die), die.value, reason: '$die');
+      }
+    });
+
     test('the dice land in the right half, clear of the start position', () {
       final shot = renderShot(board: BoardState.initial(), dice: Dice(5, 2));
       final w = shot.board.image.width;

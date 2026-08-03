@@ -267,6 +267,36 @@ class CheckerSpot {
       '$pointIndex #$indexInStack at $center)';
 }
 
+/// One die to draw, said in board space so a test can put it anywhere.
+///
+/// The default path — pass a [Dice] and let the renderer place them — draws
+/// the same two dice in the same spot every time, which is the wrong bed for a
+/// reader that has to find dice rather than be handed them. This says exactly
+/// where each die goes, at what angle, and how many of them there are: one
+/// (a die rolled off the board), three (a die from the next table), or the two
+/// a game actually uses, sitting somewhere other than the middle of the right
+/// half.
+class DicePlacement {
+  /// The face showing, 1 to 6.
+  final int face;
+
+  /// The die's centre in **board space** — the unit rectangle the ROI atlas
+  /// addresses, `(0,0)` at the far left corner and `(1,1)` at the near right.
+  final Pt center;
+
+  /// Rotation about [center], radians, clockwise in image coordinates.
+  final double angle;
+
+  const DicePlacement({
+    required this.face,
+    required this.center,
+    this.angle = 0.0,
+  });
+
+  @override
+  String toString() => 'DicePlacement($face at $center, ${angle}rad)';
+}
+
 /// One drawn die, in top-down image pixels.
 class DieSpot {
   final int value;
@@ -443,6 +473,7 @@ RenderedBoard renderTopDown({
   double lightingGain = 1.0,
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
+  List<DicePlacement>? dicePlacements,
   int width = kTopDownWidth,
   int height = kTopDownHeight,
 }) {
@@ -457,9 +488,11 @@ RenderedBoard renderTopDown({
   _drawFrameAndFelt(image, palette);
   _drawPoints(image, palette);
   final checkers = _drawCheckers(image, board, palette);
-  final drawnDice = dice == null
-      ? const <DieSpot>[]
-      : _drawDice(image, dice, palette, diceAngle);
+  final drawnDice = _drawDice(
+    image,
+    dicePlacements ?? _defaultPlacements(dice, diceAngle),
+    palette,
+  );
   _applyLightingGain(image, lightingGain);
 
   if (orientation == BoardOrientation.whiteHomeFar) {
@@ -589,6 +622,7 @@ SyntheticShot renderShot({
   double lightingGain = 1.0,
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
+  List<DicePlacement>? dicePlacements,
   int topDownWidth = kTopDownWidth,
   int topDownHeight = kTopDownHeight,
   BoardQuad quad = kCameraQuad,
@@ -603,6 +637,7 @@ SyntheticShot renderShot({
     lightingGain: lightingGain,
     orientation: orientation,
     diceAngle: diceAngle,
+    dicePlacements: dicePlacements,
     width: topDownWidth,
     height: topDownHeight,
   );
@@ -824,25 +859,34 @@ List<CheckerSpot> _drawCheckerStack({
   return spots;
 }
 
-/// Both dice, drawn last so they sit on top of whatever they landed near.
+/// Where a [Dice] lands when nothing says otherwise: both on the vertical
+/// midline, inside the right half, at whatever angle was asked for.
+List<DicePlacement> _defaultPlacements(Dice? dice, double angle) {
+  if (dice == null) return const <DicePlacement>[];
+  return <DicePlacement>[
+    for (final (value, cx) in <(int, double)>[
+      (dice.die1, BoardLayout.firstDieCentreX),
+      (dice.die2, BoardLayout.secondDieCentreX),
+    ])
+      DicePlacement(face: value, center: Pt(cx, 0.5), angle: angle),
+  ];
+}
+
+/// The dice, drawn last so they sit on top of whatever they landed near.
 List<DieSpot> _drawDice(
   img.Image image,
-  Dice dice,
+  List<DicePlacement> placements,
   BoardPalette palette,
-  double angle,
 ) {
   final w = image.width, h = image.height;
   final side = BoardLayout.dieSide * w;
   final spots = <DieSpot>[];
-  for (final (value, cx) in <(int, double)>[
-    (dice.die1, BoardLayout.firstDieCentreX),
-    (dice.die2, BoardLayout.secondDieCentreX),
-  ]) {
+  for (final placement in placements) {
     final spot = DieSpot(
-      value: value,
-      center: Pt(cx * w, h / 2),
+      value: placement.face,
+      center: Pt(placement.center.x * w, placement.center.y * h),
       side: side,
-      angle: angle,
+      angle: placement.angle,
     );
     _drawDie(image, spot, palette);
     spots.add(spot);
