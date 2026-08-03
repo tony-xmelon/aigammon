@@ -94,22 +94,33 @@ void main() {
   // would stop at its first bad region and the splits would never be printed,
   // and the splits are the point of a prototype.
   group('what occupancy promises', () {
+    // Every promise test re-pins the EXACT matrix size, not just non-empty:
+    // review found that `greaterThan(0)` in one test still let the other two
+    // pass alone on an empty scoreboard, and let a future `continue` quietly
+    // narrow the matrix while every surviving cell stayed at 100%. If the
+    // matrix legitimately changes shape, this number changes with it — in the
+    // same commit, on purpose.
+    const matrixReadings = 336;
+
     test('the colour is right wherever checkers are', () {
-      expect(scoreboard.readings, greaterThan(0),
-          reason: 'the matrix above has to have run first — if it did not, '
-              'these three tests pass by reading an empty scoreboard');
+      expect(scoreboard.readings, matrixReadings,
+          reason: 'the full matrix above has to have run first — fewer '
+              'readings means cells were skipped and the promises below '
+              'cover less than they claim');
       expect(scoreboard.colorWrong, isEmpty,
           reason: 'a wrong colour hands a checker to the wrong player, which '
               'the game state can never recover from');
     });
 
     test('the count is exact at nothing, one and two', () {
+      expect(scoreboard.readings, matrixReadings);
       expect(scoreboard.smallCountWrong, isEmpty,
           reason: 'counts of two and under are the ones the design trusts '
               'without a prior');
     });
 
     test('the count is within one at three to five', () {
+      expect(scoreboard.readings, matrixReadings);
       expect(scoreboard.tallCountWrong, isEmpty);
     });
   });

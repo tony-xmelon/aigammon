@@ -573,8 +573,9 @@ class Calibrator {
     // of a die. The dice reader, looking for what the band's surfaces do not
     // account for, would find no dice at all.
     //
-    // Keeping clear of every occupied column costs the band two thirds of its
-    // samples and gains it a true reading of both the surfaces it does have,
+    // Keeping clear of every occupied column costs the band about a fifth of
+    // its samples (400 -> 320, still twenty times minBackgroundSamples's
+    // floor) and gains it a true reading of both the surfaces it does have,
     // the felt and the bar's wood — which the contaminated model also got
     // wrong, since one spurious cluster leaves only one for two real ones.
     final occupiedColumns = <(double, double)>[
