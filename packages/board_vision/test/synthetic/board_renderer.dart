@@ -48,6 +48,87 @@ const BoardQuad kCameraQuad = BoardQuad(
   bottomLeft: Pt(80, 830),
 );
 
+/// A steeper viewpoint than [kCameraQuad]: the far edge is a little under
+/// three fifths of the near one, against [kCameraQuad]'s four fifths.
+///
+/// [kCameraQuad] turns out to be a gentle view — Task 4's reviewer measured its
+/// foreshortening at 21%, which is a phone standing tall beside the table
+/// rather than one propped against a mug, and it makes the far half of the
+/// board easier to read than a session normally will. The corpus uses these
+/// three instead, and reports its per-half scores separately so that the
+/// difference is visible rather than averaged away.
+const BoardQuad kCorpusSteepQuad = BoardQuad(
+  topLeft: Pt(300, 180),
+  topRight: Pt(980, 165),
+  bottomRight: Pt(1215, 835),
+  bottomLeft: Pt(65, 855),
+);
+
+/// Lower still, and rolled: the phone leaning on something, not held.
+///
+/// Its foreshortening (0.58) is the corner of the envelope rather than the
+/// middle of it. Measured: the dice reader holds to about 0.55 and stops
+/// finding dice at all somewhere between 0.5 and 0.45, which is a phone very
+/// nearly flat on the table. `test/degradation_test.dart` pins that limit; the
+/// corpus stays inside it, so that what the harness scores is accuracy and not
+/// a viewpoint nobody promised to support.
+const BoardQuad kCorpusLowQuad = BoardQuad(
+  topLeft: Pt(298, 200),
+  topRight: Pt(982, 140),
+  bottomRight: Pt(1230, 820),
+  bottomLeft: Pt(50, 880),
+);
+
+/// The camera off to one side of the table rather than at the end of it, so
+/// one vertical edge of the board is far shorter than the other — a different
+/// distortion from foreshortening, and the one that stretches the ROI atlas's
+/// fixed proportions hardest.
+const BoardQuad kCorpusOffAxisQuad = BoardQuad(
+  topLeft: Pt(150, 215),
+  topRight: Pt(1055, 120),
+  bottomRight: Pt(1180, 905),
+  bottomLeft: Pt(105, 700),
+);
+
+/// The viewpoints the corpus shoots from.
+const List<BoardQuad> kCorpusQuads = <BoardQuad>[
+  kCorpusSteepQuad,
+  kCorpusLowQuad,
+  kCorpusOffAxisQuad,
+];
+
+/// What the corpus does to every synthetic shot. See [ShotDegradation] for why
+/// a corpus of clean renders scores nothing, and `test/degradation_test.dart`
+/// for the assertion that these particular numbers are enough to matter.
+/// Measured, not chosen. Every number here sits inside a cliff that
+/// `test/degradation_test.dart` pins:
+///
+/// * Additive grain of **4 levels** stops the classic palette calibrating. Its
+///   black checkers are painted at 20/18/15, and the colour model's feature is
+///   a per-channel log ratio, so ±4 levels on a value of 18 is a quarter of a
+///   log unit — nearly two of the model's own minimum spreads, from grain a
+///   photograph of a dark checker in ordinary light would carry.
+/// * Blur of **1.1 sigma** stops the dice reader finding dice at all, on two
+///   of the three boards. That is the tightest limit anywhere in the pipeline
+///   and by some distance the most important finding this file carries: the
+///   spec already names dice as the sub-problem most likely to need the ML
+///   escape hatch, and a shot from a hand-held phone will not always be
+///   sharper than one sigma.
+/// * Blur past about **1.8 sigma** goes on to break calibration itself, by
+///   smearing the foot of each stack into the board under it.
+///
+/// These are findings for the Task 6 gate rather than things to tune away
+/// here, and the corpus is set inside them so that what it scores is accuracy
+/// rather than a known cliff. The committed corpus then adds one more
+/// degradation on top — JPEG at quality 95 — for which see the corpus
+/// generator.
+const ShotDegradation kCorpusDegradation = ShotDegradation(
+  noise: 2,
+  blurSigma: 0.8,
+  quadJitter: 0.8,
+  seed: 4242,
+);
+
 /// What surrounds the board in a warped frame — "the room", not the board.
 /// Unlike the board itself this is NOT scaled by `lightingGain`; the gain
 /// models the light falling on the playing field, which is what the
@@ -234,6 +315,81 @@ class BoardPalette {
 
   @override
   String toString() => 'BoardPalette($name)';
+}
+
+/// Everything a camera adds to a scene that a flat render does not.
+///
+/// ## Why a perfect render is a bad test bed
+///
+/// The drawing above is exact: flat colour, no grain, an exact projective warp.
+/// One consequence is not obvious and is what this class exists for. A
+/// checker's pitch along a stack comes out an exact multiple of the sampler's
+/// row depth, so the length occupancy measures divides into a whole number of
+/// checkers with no remainder — and `floor()` in place of `round()` passes
+/// every cell of the matrix. Task 4's reviewer demonstrated it. A hundred
+/// percent scored on a bed like that is arithmetic, not accuracy.
+///
+/// So the corpus renders the same positions and then spoils them, in the order
+/// a camera does:
+///
+/// * **[blurSigma]** — the lens, which smears the rim of every checker and pip
+///   over a few pixels, so where a run of checker-coloured rows stops is a
+///   judgement rather than a fact;
+/// * **[noise]** — the sensor, which moves the classification of the samples
+///   nearest a threshold from frame to frame;
+/// * **[quadJitter]** — the board is never *quite* where the corners say, and
+///   half a pixel is enough to move every board-space sample to a different
+///   spot between pixels.
+///
+/// ## What this is not
+///
+/// Not a camera model. The noise is uniform rather than Poisson, the blur is a
+/// single isotropic gaussian rather than a lens's varying point spread, and
+/// nothing here does glare, motion, rolling shutter, or the way a real checker
+/// is a disc with a rim that catches the light. Those are what the plan's Task
+/// 6 photographs are for. The job of these three is narrower and worth being
+/// exact about: **to stop the answers being exact**, so that the harness's
+/// scores measure something an error could change.
+class ShotDegradation {
+  /// Peak per-channel additive noise, in sensor levels. Uniform in
+  /// `[-noise, +noise]`, which is the wrong distribution for a sensor and the
+  /// right one for this: it puts the most samples near the extremes, where
+  /// classification decisions actually flip.
+  final double noise;
+
+  /// Gaussian blur, in output pixels of standard deviation. Applied to the
+  /// warped frame, so it blurs the picture rather than the board — which is
+  /// what a lens does, and it means the far half of a steep shot is blurred
+  /// harder in board-space terms than the near half, again like a lens.
+  final double blurSigma;
+
+  /// How far each corner of the warp quad may wander, in output pixels, in x
+  /// and y independently. The wandered quad is what the frame is warped onto
+  /// AND what is reported as ground truth — a corpus whose sidecar disagreed
+  /// with its own picture would be scoring the wrong thing.
+  final double quadJitter;
+
+  /// Everything above is deterministic in this. Two shots that want different
+  /// grain must differ here; two runs of the same shot must not.
+  final int seed;
+
+  const ShotDegradation({
+    this.noise = 0,
+    this.blurSigma = 0,
+    this.quadJitter = 0,
+    this.seed = 0,
+  });
+
+  /// The flat render, as Tasks 1–4 used it.
+  static const ShotDegradation none = ShotDegradation();
+
+  bool get isNothing => noise <= 0 && blurSigma <= 0 && quadJitter <= 0;
+
+  @override
+  String toString() => isNothing
+      ? 'ShotDegradation(none)'
+      : 'ShotDegradation(noise $noise, blur $blurSigma, jitter $quadJitter, '
+          'seed $seed)';
 }
 
 /// Where a checker lives, for the ground-truth records below.
@@ -629,6 +785,7 @@ SyntheticShot renderShot({
   int outWidth = kFrameWidth,
   int outHeight = kFrameHeight,
   int backgroundColor = kBackdropColor,
+  ShotDegradation degradation = ShotDegradation.none,
 }) {
   final rendered = renderTopDown(
     board: board,
@@ -641,15 +798,31 @@ SyntheticShot renderShot({
     width: topDownWidth,
     height: topDownHeight,
   );
+  // The jittered quad, not the asked-for one, is the board's real outline from
+  // here on: the frame is warped onto it, the ground truth reports it, and the
+  // homography a test uses to find a checker is built from it.
+  final actualQuad = degradation.quadJitter > 0
+      ? _jitterQuad(quad, degradation.quadJitter, degradation.seed)
+      : quad;
   final warped = warpToQuad(
     rendered.image,
-    quad,
+    actualQuad,
     outWidth: outWidth,
     outHeight: outHeight,
     backgroundColor: backgroundColor,
   );
+  var frame = warped.frame;
+  // Optics before sensor: a real blur cannot smooth away grain that the sensor
+  // has not added yet, and doing it the other way round would produce a frame
+  // whose noise is spatially correlated for no reason.
+  if (degradation.blurSigma > 0) {
+    frame = _blurred(frame, degradation.blurSigma);
+  }
+  if (degradation.noise > 0) {
+    frame = _noised(frame, degradation.noise, degradation.seed);
+  }
   return SyntheticShot(
-    frame: warped.frame,
+    frame: frame,
     groundTruthQuad: warped.groundTruthQuad,
     board: rendered,
     topDownToFrame: PlaneHomography.fromQuads(
@@ -657,9 +830,94 @@ SyntheticShot renderShot({
         rendered.image.width.toDouble(),
         rendered.image.height.toDouble(),
       ),
-      quad,
+      actualQuad,
     ),
   );
+}
+
+/// Each corner of [quad] moved by up to [amplitude] pixels in x and y.
+///
+/// Its own generator, seeded apart from the noise's, so that changing how
+/// grainy a shot is does not silently move the board underneath it.
+BoardQuad _jitterQuad(BoardQuad quad, double amplitude, int seed) {
+  final rng = math.Random(seed);
+  double wobble() => (rng.nextDouble() * 2 - 1) * amplitude;
+  return BoardQuad.fromCorners(<Pt>[
+    for (final c in quad.corners) Pt(c.x + wobble(), c.y + wobble()),
+  ]);
+}
+
+/// Uniform additive grain, one draw per channel per pixel.
+Frame _noised(Frame frame, double amplitude, int seed) {
+  // Seeded apart from the jitter's generator: two knobs that shared a stream
+  // would move together whenever either was turned.
+  final rng = math.Random(seed * 31 + 17);
+  final bytes = Uint8List.fromList(frame.rgb);
+  for (var i = 0; i < bytes.length; i++) {
+    bytes[i] = (bytes[i] + (rng.nextDouble() * 2 - 1) * amplitude)
+        .round()
+        .clamp(0, 255);
+  }
+  return Frame(bytes, frame.width, frame.height);
+}
+
+/// A separable gaussian blur, edges handled by clamping to the border.
+///
+/// Separable because the alternative is a two-dimensional kernel over a
+/// million-pixel frame for every shot in the corpus, and the corpus is
+/// generated from a tool a person waits on.
+Frame _blurred(Frame frame, double sigma) {
+  final radius = math.max(1, (3 * sigma).ceil());
+  final kernel = Float64List(2 * radius + 1);
+  var total = 0.0;
+  for (var i = -radius; i <= radius; i++) {
+    final w = math.exp(-(i * i) / (2 * sigma * sigma));
+    kernel[i + radius] = w;
+    total += w;
+  }
+  for (var i = 0; i < kernel.length; i++) {
+    kernel[i] /= total;
+  }
+
+  final w = frame.width, h = frame.height;
+  final horizontal = Uint8List(frame.rgb.length);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var r = 0.0, g = 0.0, b = 0.0;
+      for (var k = -radius; k <= radius; k++) {
+        final sx = (x + k).clamp(0, w - 1);
+        final i = (y * w + sx) * 3;
+        final weight = kernel[k + radius];
+        r += frame.rgb[i] * weight;
+        g += frame.rgb[i + 1] * weight;
+        b += frame.rgb[i + 2] * weight;
+      }
+      final o = (y * w + x) * 3;
+      horizontal[o] = r.round().clamp(0, 255);
+      horizontal[o + 1] = g.round().clamp(0, 255);
+      horizontal[o + 2] = b.round().clamp(0, 255);
+    }
+  }
+
+  final out = Uint8List(frame.rgb.length);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var r = 0.0, g = 0.0, b = 0.0;
+      for (var k = -radius; k <= radius; k++) {
+        final sy = (y + k).clamp(0, h - 1);
+        final i = (sy * w + x) * 3;
+        final weight = kernel[k + radius];
+        r += horizontal[i] * weight;
+        g += horizontal[i + 1] * weight;
+        b += horizontal[i + 2] * weight;
+      }
+      final o = (y * w + x) * 3;
+      out[o] = r.round().clamp(0, 255);
+      out[o + 1] = g.round().clamp(0, 255);
+      out[o + 2] = b.round().clamp(0, 255);
+    }
+  }
+  return Frame(out, w, h);
 }
 
 /// Reads one pixel of a top-down render, so tests need no `package:image`.

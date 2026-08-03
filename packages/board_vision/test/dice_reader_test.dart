@@ -224,6 +224,41 @@ void main() {
     });
   });
 
+  group('what calibration must not have been shown', () {
+    test('a board calibrated with dice on it can never see dice again', () {
+      // Found while building the corpus, and it decides the shape of the whole
+      // capture plan, so it is pinned here rather than remembered.
+      //
+      // The reader finds dice by finding what the board does not account for,
+      // and calibration is what teaches it what the board accounts for. Learn
+      // the dice band from a frame with dice sitting in it and the dice ARE
+      // one of the band's surfaces from then on — perfectly familiar, never
+      // foreign, and therefore invisible. Calibration does not notice: it
+      // succeeds, because every other thing it checks is still true.
+      //
+      // Two consequences. The corpus is organised into sessions whose first
+      // shot is a bare starting position and whose later shots are read
+      // through that calibration, exactly as a real session is. And the
+      // calibration screen (the plan's Task 12) has to say so: clear the dice
+      // off the board before calibrating.
+      final bare = renderShot(board: BoardState.initial());
+      final dicey = renderShot(board: BoardState.initial(), dice: Dice(5, 2));
+
+      final fromBare = _calibrate(bare);
+      final fromDicey = BoardVision.calibrate(
+        frame: dicey.frame,
+        corners: dicey.groundTruthQuad,
+        orientation: BoardOrientation.whiteHomeNear,
+      );
+      expect(fromDicey.ok, isTrue,
+          reason: 'nothing in calibration is untrue, which is the trap');
+
+      expect(BoardVision(fromBare).readDice(dicey.frame), isNotNull);
+      expect(BoardVision(fromDicey.calibration!).readDice(dicey.frame), isNull,
+          reason: 'the dice were learned as part of the board');
+    });
+  });
+
   group('what a reading is worth', () {
     test('a dim room reads the same dice with less confidence', () {
       // Confidence here is not "how likely is this right" — it is how much
