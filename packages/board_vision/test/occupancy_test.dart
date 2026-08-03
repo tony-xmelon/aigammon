@@ -89,8 +89,15 @@ void main() {
     tearDownAll(scoreboard.report);
   });
 
+  // These read the scoreboard the matrix above filled in, which is what keeps
+  // a failure from truncating the numbers: a cell that asserted as it went
+  // would stop at its first bad region and the splits would never be printed,
+  // and the splits are the point of a prototype.
   group('what occupancy promises', () {
     test('the colour is right wherever checkers are', () {
+      expect(scoreboard.readings, greaterThan(0),
+          reason: 'the matrix above has to have run first — if it did not, '
+              'these three tests pass by reading an empty scoreboard');
       expect(scoreboard.colorWrong, isEmpty,
           reason: 'a wrong colour hands a checker to the wrong player, which '
               'the game state can never recover from');
@@ -417,6 +424,7 @@ BoardCalibration _calibrate(
 /// and noisier, and by palette, because a board whose colours barely differ is
 /// a different problem from one whose colours shout.
 class _Scoreboard {
+  int readings = 0;
   final List<String> colorWrong = <String>[];
   final List<String> smallCountWrong = <String>[];
   final List<String> tallCountWrong = <String>[];
@@ -434,6 +442,7 @@ class _Scoreboard {
     required RegionOccupancy observed,
     required String where,
   }) {
+    readings++;
     final colourRight = observed.color == expectedColor;
     final exact = observed.count == expectedCount;
     final within1 = (observed.count - expectedCount).abs() <= 1;
