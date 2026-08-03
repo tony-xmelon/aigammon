@@ -47,6 +47,15 @@ class CalibrationFingerprint {
   static const double maxPatchDrift = 0.12;
 
   /// How far overall brightness may move, as a ratio either way.
+  ///
+  /// Sitting close to a cliff, and knowingly. Re-normalizing the colour model
+  /// holds all the way down to a board at three tenths of its calibration
+  /// light, because dimming only scales; upward it fails much sooner, because
+  /// brightening also clips, and a board 40% over reads half its checkers
+  /// wrong however well it is re-normalized. One symmetric ratio for both
+  /// directions is therefore generous below and tight above — deliberately, to
+  /// keep the number simple until the corpus says what real auto-exposure
+  /// actually does between two frames.
   static const double maxExposureRatio = 1.3;
 
   /// How far the frame's colour cast may move.
@@ -122,11 +131,10 @@ class CalibrationFingerprint {
 
     var sumR = 0.0, sumG = 0.0, sumB = 0.0, sumL = 0.0, sumL2 = 0.0, n = 0.0;
     var clipped = 0.0;
-    const inset = 0.05, lattice = 24;
-    for (var iy = 0; iy < lattice; iy++) {
-      final y = inset + (iy + 0.5) / lattice * (1 - 2 * inset);
-      for (var ix = 0; ix < lattice; ix++) {
-        final x = inset + (ix + 0.5) / lattice * (1 - 2 * inset);
+    for (var iy = 0; iy < _lattice; iy++) {
+      final y = _interiorAt(iy);
+      for (var ix = 0; ix < _lattice; ix++) {
+        final x = _interiorAt(ix);
         final sample = sampler.at(x, y);
         if (sample == null) continue;
         final luma = _luma(sample);
@@ -156,6 +164,36 @@ class CalibrationFingerprint {
     );
   }
 
+  /// Mean BT.601 luma over the board's interior in [frame], measured over the
+  /// same lattice [meanLuma] is — the one number
+  /// `ColorModel.renormalized` wants, without paying for the corner patches a
+  /// full fingerprint also takes.
+  ///
+  /// Zero when none of the board falls inside the picture, which callers turn
+  /// into "do not re-normalize" rather than a division by nothing.
+  static double boardLuma(Frame frame, Homography homography) {
+    final sampler = _FrameSampler(frame, homography);
+    var sum = 0.0, n = 0.0;
+    for (var iy = 0; iy < _lattice; iy++) {
+      final y = _interiorAt(iy);
+      for (var ix = 0; ix < _lattice; ix++) {
+        final sample = sampler.at(_interiorAt(ix), y);
+        if (sample == null) continue;
+        sum += _luma(sample);
+        n++;
+      }
+    }
+    return n == 0 ? 0.0 : sum / n;
+  }
+
+  /// The interior lattice both of the above walk: inset from the board's own
+  /// edges so the room around it is never in the average.
+  static const int _lattice = 24;
+  static const double _inset = 0.05;
+
+  static double _interiorAt(int index) =>
+      _inset + (index + 0.5) / _lattice * (1 - 2 * _inset);
+
   /// Whether the board is still where calibration left it.
   ///
   /// Both patch sets are divided by their own frame's mean luma first, so a
@@ -183,6 +221,13 @@ class CalibrationFingerprint {
   }
 
   /// Both of the above: the scene is the one that was calibrated.
+  ///
+  /// Every part of this is a comparison *against the calibration's own
+  /// fingerprint*, so it detects drift and nothing else. It cannot tell you
+  /// that a scene is badly lit — only that it is lit differently than it was.
+  /// A session calibrated under a blazing lamp matches itself perfectly while
+  /// being unreadable; that is what [clippedFraction] is for, and Task 9 needs
+  /// both.
   bool matches(CalibrationFingerprint other) =>
       geometryMatches(other) && exposureMatches(other);
 
@@ -215,6 +260,32 @@ class BoardCalibration {
 
   /// Where everything is, for this seating.
   RoiAtlas get atlas => RoiAtlas.forOrientation(orientation);
+
+  /// How much brighter [frame]'s board is than the frame the colours were
+  /// learned from.
+  ///
+  /// Every query that classifies a pixel needs this, because a background is
+  /// measured once and a checker sitting on it can never be re-measured: let
+  /// the light drift and the sample-over-background ratio stops cancelling.
+  /// The drift does not have to be large to matter — a phone's auto-exposure
+  /// moves this much between two frames of the same scene, well inside the
+  /// fingerprint's own tolerance, which is why nothing flags it and why it has
+  /// to be applied rather than watched for.
+  ///
+  /// One when the board is not in the picture at all, which leaves the model
+  /// as learned rather than scaling it by nothing.
+  double exposureIn(Frame frame) {
+    final luma = CalibrationFingerprint.boardLuma(frame, h);
+    if (luma <= 0 || fingerprint.meanLuma <= 0) return 1.0;
+    return luma / fingerprint.meanLuma;
+  }
+
+  /// [colors], re-normalized for the light in [frame].
+  ///
+  /// The one-call form for a query that reads a single frame. A caller reading
+  /// several answers from one frame should take [exposureIn] once and pass its
+  /// result to `ColorModel.renormalized`, rather than re-measuring per query.
+  ColorModel colorsIn(Frame frame) => colors.renormalized(exposureIn(frame));
 }
 
 /// Why a calibration attempt could not be made into a [BoardCalibration].
@@ -232,10 +303,17 @@ enum CalibrationProblem {
   /// or lost in shadow or glare.
   regionUnreadable,
 
+  /// So much light that the board's colours are running into each other at the
+  /// top of the sensor's range. Distinct from
+  /// [checkerColoursNotSeparable]: those colours are separable, the frame
+  /// simply has no room left to hold them apart.
+  boardOverExposed,
+
   /// The board is readable but the men are not where a game starts.
   checkersNotInStartingPosition,
 
-  /// The two sets of checkers cannot be told apart in this light.
+  /// The board's colours cannot be told apart in this light — the two sets of
+  /// checkers from each other, or a set of checkers from the board under it.
   checkerColoursNotSeparable,
 }
 
@@ -283,12 +361,18 @@ class CalibrationResult {
       ok ? 'CalibrationResult(ok)' : 'CalibrationResult($message)';
 }
 
-/// One point that does not hold what the starting position says it should.
+/// One region that does not hold what the starting position says it should.
+///
+/// Usually a point, hence the name, but the bar and the two bear-off trays get
+/// checked as well — they start empty, and a checker sitting in one would
+/// otherwise be folded into the authoritative game state as though the board
+/// were correct. [pointNumber] is null for those three.
 class PointDiscrepancy {
   final RoiId region;
 
   /// The point as White numbers it — `BoardState.points[i]` is White's point
-  /// `i + 1`, and that is the number the app speaks and prints.
+  /// `i + 1`, and that is the number the app speaks and prints. Null when
+  /// [region] is not a point.
   final int? pointNumber;
 
   final CheckerColor expected;
@@ -303,7 +387,7 @@ class PointDiscrepancy {
 
   /// A clause for the user, ready to be joined into a sentence.
   String get message {
-    final where = pointNumber == null ? region.name : 'the $pointNumber-point';
+    final where = _describe(region);
     if (observed == CheckerColor.none) {
       return '$where looks empty, but the game starts with '
           '${_side(expected)} there';
@@ -324,10 +408,20 @@ class PointDiscrepancy {
 }
 
 /// Whether the board in front of the camera is the starting position.
+///
+/// **What [agrees] does and does not claim.** Every one of the twenty-four
+/// points holds the colour the starting position puts there, and the bar and
+/// both trays are empty. It does NOT claim the counts are right: a point
+/// showing two White where the game starts with five agrees here, because
+/// counting checkers is occupancy's job and stack verification's after it.
+/// For the calibration flow that is the right division — a mis-set count is
+/// something the user sees on their own board, while a mirrored or half-turned
+/// board is not, and that is what this catches.
 class ConfirmResult {
   final bool agrees;
 
-  /// The points that disagree, in White's numbering order.
+  /// The regions that disagree: points first in White's numbering order, then
+  /// the bar and the trays.
   final List<PointDiscrepancy> discrepancies;
 
   /// A sentence for the user, naming the offenders.
@@ -370,6 +464,15 @@ class ConfirmResult {
 ///   is, which board space cannot supply.
 /// * A **region interior** is an inset lattice over the whole ROI, which is
 ///   what the bare surface is measured from.
+///
+/// ## Numbers, provisionally
+///
+/// Every threshold on this class was measured against the synthetic renderer,
+/// and each says what it was measured against. Photographs are a different
+/// thing entirely — grain, gloss, shadow, checkers that are not flat discs —
+/// so the corpus gate (the plan's Task 6) is where all of them get asked
+/// again, and where the ones that turn out to be wrong get changed here, in
+/// the one place they live.
 class Calibrator {
   const Calibrator._();
 
@@ -394,21 +497,63 @@ class Calibrator {
   static const double checkerPatchFar = 0.045;
 
   /// How much of a lattice has to land inside the picture before the region
-  /// counts as visible at all.
+  /// counts as visible at all. Effectively "all of it": the lattice is already
+  /// inset from the region's own boundary, so a sample outside the frame means
+  /// the board itself is over the edge.
   static const double minVisibleFraction = 0.98;
 
   /// How many checker-free samples a region needs before its own background is
-  /// trusted over the board-wide one.
+  /// trusted over the board-wide one. The tightest case in the starting
+  /// position is a five-stack, which leaves 76 to 107 of its 400 lattice
+  /// samples showing across the three palettes — so this floor is a long way
+  /// below what a board in good order produces, and it is reached only when
+  /// something is wrong.
   static const int minBackgroundSamples = 16;
 
-  /// How near a sample has to be to a checker's measured colour, in the model's
-  /// feature space, before it is thrown out of a covered region's background.
-  /// Generous on purpose: leaving a checker in the background is far worse than
-  /// leaving out a little felt.
+  /// How near a sample has to be to the checkers standing on its own region,
+  /// in the model's feature space, before it is thrown out of that region's
+  /// background. Generous on purpose: leaving a checker in the background is
+  /// far worse than leaving out a little felt, since the region would go on to
+  /// take the checker for part of itself.
+  ///
+  /// Measured: the closest any of the three palettes puts a point's own paint
+  /// to its checkers is 0.28 (pale points against white checkers on the
+  /// blue-red board), and felt to checkers is 0.70 at the tightest. So this
+  /// keeps the felt of every palette and, on the hardest one, takes the paint
+  /// with the checkers — which is harmless, the felt being the majority of
+  /// what is left.
   static const double checkerExclusionRadius = 0.30;
 
   /// What fraction of a patch has to agree before a point is called read.
+  /// Short of it the answer is "no checker", which sends a doubtful point to
+  /// the user as something to look at rather than into the game state as a
+  /// fact.
   static const double patchMajority = 0.6;
+
+  /// How much of the bar or a bear-off tray has to come out one colour before
+  /// a checker is called there. A single checker on the bar covers about a
+  /// twentieth of it and one in a tray about a tenth, so this sits well under
+  /// the smallest thing worth seeing while staying clear of a region that
+  /// reads a stray sample or two.
+  static const double minRegionCoverage = 0.02;
+
+  /// How many regions may read back wrong from the very frame they were
+  /// learned on before the calibration is refused.
+  ///
+  /// Zero, and the zero is the argument: a model that cannot read its own
+  /// calibration frame will tell the user their board is set up wrongly one
+  /// screen later, and they will stand there looking at a board that is
+  /// exactly right. Better to fail now, while the message can still name the
+  /// light. Whether real photographs can hold to zero is a Task 6 question —
+  /// if they cannot, this is the knob, and raising it trades that misleading
+  /// message back in one region at a time.
+  static const int maxLearningMisreads = 0;
+
+  /// How much of the board may be pinned at the top of the sensor's range
+  /// before over-exposure is named as the reason a calibration would not read
+  /// back. A diagnostic threshold, not a gate: the gate is whether the board
+  /// reads back at all.
+  static const double maxClippedFraction = 0.05;
 
   /// Learns [frame]'s board, which must be in the starting position.
   static CalibrationResult learnStartingPosition({
@@ -452,12 +597,6 @@ class Calibrator {
       interiors[id] = scan.samples;
     }
 
-    // --- the two checker colours, as bytes, before anything relative
-    final rawWhite =
-        _medianOfRegionMedians(occupied, patches, CheckerColor.white);
-    final rawBlack =
-        _medianOfRegionMedians(occupied, patches, CheckerColor.black);
-
     // --- every region's bare surface
     //
     // Only regions the starting position covers get their samples filtered by
@@ -465,17 +604,34 @@ class Calibrator {
     // Filtering everywhere would be worse than useless: on a board whose pale
     // points are nearly the colour of its white checkers it would throw away
     // exactly the surface an empty point most needs to have measured.
-    final filtered = <RoiId>{
-      for (final index in occupied.keys) RoiId.point(index),
-      RoiId.diceZone,
+    //
+    // What each region is filtered AGAINST is the colour of the checkers
+    // standing on that same region, sampled a moment ago — not a board-wide
+    // average of them. Light is never even across a real board, and a pooled
+    // colour compared absolutely fails at whichever end of the table is
+    // darker: its checkers no longer look like the average, so none of them
+    // are removed, the region takes them for part of its own surface, and it
+    // will afterwards read its own checkers as bare board. A five-stack in the
+    // dim corner would go further and take the checker colour for its
+    // reference outright. Measured on a board lit from one side, this is the
+    // difference between reading it and refusing it.
+    final filtered = <RoiId, List<Rgb>>{
+      for (final index in occupied.keys)
+        RoiId.point(index): <Rgb>[_medianRgb(patches[index]!)],
+      // The band has no checkers of its own; what reaches into it are the tops
+      // of the four tallest stacks, each of which is one of these.
+      RoiId.diceZone: <Rgb>[
+        for (final index in occupied.keys) _medianRgb(patches[index]!),
+      ],
     };
     final free = <RoiId, List<Rgb>>{};
     for (final id in RoiId.values) {
-      free[id] = filtered.contains(id)
+      final against = filtered[id];
+      free[id] = against == null
           ? interiors[id]!
-              .where((s) => !_looksLikeChecker(s, rawWhite, rawBlack))
-              .toList()
-          : interiors[id]!;
+          : interiors[id]!
+              .where((s) => !_looksLikeChecker(s, against))
+              .toList();
     }
     final pooled = <Rgb>[
       for (final id in RoiId.values)
@@ -495,13 +651,16 @@ class Calibrator {
     for (final id in RoiId.values) {
       final samples = free[id]!;
       if (samples.isEmpty) {
-        // Every one of the region's samples looked like a checker. In the
-        // starting position no stack is tall enough to bury a whole region, so
-        // something is on the board that should not be.
+        // Nothing in the region could be told apart from the checkers standing
+        // on it. Either something is lying on the board that should not be, or
+        // that corner is dark enough that the board and the men on it have
+        // squeezed into the same few values — the two are not distinguishable
+        // from here, so the message names both.
         return CalibrationResult.failure(
           CalibrationProblem.regionUnreadable,
-          'I cannot see any of ${_describe(id)} — something is resting on it. '
-          'Clear the board and try again.',
+          'I cannot make out ${_describe(id)} — something may be resting on '
+          'it, or that corner of the board may be too dark to read. Clear it, '
+          'or add some light, and try again.',
           <RoiId>[id],
         );
       }
@@ -520,7 +679,7 @@ class Calibrator {
         modes: surfaces.modes,
         spread: surfaces.spread,
         sampleCount: samples.length,
-        fullyMeasured: !filtered.contains(id) && enough,
+        fullyMeasured: !filtered.containsKey(id) && enough,
       );
     }
 
@@ -582,22 +741,60 @@ class Calibrator {
       }
     }
 
-    return CalibrationResult.success(BoardCalibration(
+    // Last, calibration reads the board back out of the frame it just learned
+    // from. Everything above says the model is self-consistent; this says it
+    // works. The two come apart in exactly one measured way — a board lit hard
+    // enough that its pale points and its white checkers both clip to the same
+    // 255 learns two perfectly separable checker colours and then reads
+    // phantom White on half its empty points — and handing that calibration
+    // over would push the failure one screen along, where it arrives as "your
+    // board is set up wrong" and sends the user to move checkers that are
+    // already right.
+    final fingerprint = CalibrationFingerprint.fromFrame(frame, homography);
+    final calibration = BoardCalibration(
       h: homography,
       orientation: orientation,
       colors: colors,
-      fingerprint: CalibrationFingerprint.fromFrame(frame, homography),
-    ));
+      fingerprint: fingerprint,
+    );
+    final readBack = confirm(frame, calibration);
+    if (readBack.discrepancies.length > maxLearningMisreads) {
+      if (fingerprint.clippedFraction >= maxClippedFraction) {
+        return CalibrationResult.failure(
+          CalibrationProblem.boardOverExposed,
+          'There is so much light on the board that its colours are washing '
+          'into each other. Dim the light, or move the phone so the lamp is '
+          'not shining straight back at it.',
+          readBack.discrepancies.map((d) => d.region).toList(),
+        );
+      }
+      return CalibrationResult.failure(
+        CalibrationProblem.checkersNotInStartingPosition,
+        'I can read this board, but not as a game about to start: '
+        '${readBack.discrepancies.first.message}. Set the men up for the '
+        'start of a game, then calibrate again.',
+        readBack.discrepancies.map((d) => d.region).toList(),
+      );
+    }
+
+    return CalibrationResult.success(calibration);
   }
 
   /// Checks [frame] against the position every game starts from.
   ///
-  /// Colour presence, point by point: is White's, Black's or nothing at the
-  /// foot of each stack. How MANY checkers are there is a different question
-  /// with a different instrument — occupancy and the stack verifier — and this
-  /// one deliberately does not pretend to answer it.
+  /// Colour presence, region by region: White's, Black's or nothing at the
+  /// foot of each point's stack, and nothing at all on the bar or in either
+  /// tray. How MANY checkers are on a point is a different question with a
+  /// different instrument — occupancy and the stack verifier — and this one
+  /// deliberately does not pretend to answer it.
+  ///
+  /// Classification runs through a model re-normalized for this frame's own
+  /// light: the calibration shot and the confirmation frame are seconds apart
+  /// on a live preview, and a phone's auto-exposure moves between them by more
+  /// than enough to turn every empty point into a phantom checker.
   static ConfirmResult confirm(Frame frame, BoardCalibration calibration) {
     final sampler = _RoiSampler(frame, calibration.h, calibration.atlas);
+    final colors = calibration.colorsIn(frame);
     final start = BoardState.initial();
     final discrepancies = <PointDiscrepancy>[];
     var expectedButEmpty = 0, expectedOccupied = 0;
@@ -619,7 +816,7 @@ class Calibrator {
       final observed = _majorityColor(
         <CheckerColor>[
           for (final sample in scan.samples)
-            calibration.colors.classifyIn(RoiId.point(i), sample),
+            colors.classifyIn(RoiId.point(i), sample),
         ],
       );
       if (observed == expected) continue;
@@ -630,6 +827,33 @@ class Calibrator {
         region: RoiId.point(i),
         pointNumber: i + 1,
         expected: expected,
+        observed: observed,
+      ));
+    }
+
+    // The bar and the trays start empty, and a checker in one of them is worse
+    // than a checker on the wrong point: nothing downstream ever asks about
+    // them again until it matters, so it would be folded into the
+    // authoritative game state and every position after it would be wrong.
+    // These are areas rather than stacks with a known foot — the bar grows
+    // outward from the middle, a tray inward from the edge — so they are
+    // judged by how much of the region is checker-coloured at all.
+    for (final id in const <RoiId>[RoiId.bar, RoiId.offWhite, RoiId.offBlack]) {
+      final scan = sampler.interior(id);
+      if (scan.visibleFraction < minVisibleFraction) {
+        outOfPicture ??= id;
+        continue;
+      }
+      final observed = _dominantColor(
+        <CheckerColor>[
+          for (final sample in scan.samples) colors.classifyIn(id, sample),
+        ],
+      );
+      if (observed == CheckerColor.none) continue;
+      discrepancies.add(PointDiscrepancy(
+        region: id,
+        pointNumber: null,
+        expected: CheckerColor.none,
         observed: observed,
       ));
     }
@@ -650,7 +874,9 @@ class Calibrator {
       return ConfirmResult(
         agrees: true,
         discrepancies: const <PointDiscrepancy>[],
-        message: 'That is the starting position.',
+        // "Looks like", because that is the whole of what was checked: the
+        // right colour in the right places, not the right number of them.
+        message: 'That looks like the starting position.',
       );
     }
     // Every starting point bare and no checker anywhere it should not be: the
@@ -683,20 +909,8 @@ class Calibrator {
         <RoiId>[id],
       );
 
-  /// A region in words, for a sentence the user reads.
-  static String _describe(RoiId id) {
-    if (id.pointIndex >= 0) return 'the ${id.pointIndex + 1}-point';
-    return switch (id) {
-      RoiId.bar => 'the bar',
-      RoiId.offWhite => 'the tray White bears off into',
-      RoiId.offBlack => 'the tray Black bears off into',
-      RoiId.diceZone => 'the middle of the board, where the dice land',
-      _ => id.name,
-    };
-  }
-
-  static bool _looksLikeChecker(Rgb sample, Rgb white, Rgb black) {
-    for (final checker in <Rgb>[white, black]) {
+  static bool _looksLikeChecker(Rgb sample, List<Rgb> checkers) {
+    for (final checker in checkers) {
       final f = ColorModel.feature(sample, checker);
       if (math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]) <
           checkerExclusionRadius) {
@@ -705,16 +919,6 @@ class Calibrator {
     }
     return false;
   }
-
-  static Rgb _medianOfRegionMedians(
-    Map<int, CheckerColor> occupied,
-    Map<int, List<Rgb>> patches,
-    CheckerColor colour,
-  ) =>
-      _medianRgb(<Rgb>[
-        for (final entry in occupied.entries)
-          if (entry.value == colour) _medianRgb(patches[entry.key]!),
-      ]);
 
   static ColorDistribution _distributionOf(
     Map<int, CheckerColor> occupied,
@@ -797,6 +1001,23 @@ class Calibrator {
     );
   }
 
+  /// The colour covering enough of a region for a checker to be in it, for
+  /// regions with no stack foot to sample.
+  static CheckerColor _dominantColor(List<CheckerColor> labels) {
+    if (labels.isEmpty) return CheckerColor.none;
+    var white = 0, black = 0;
+    for (final label in labels) {
+      if (label == CheckerColor.white) white++;
+      if (label == CheckerColor.black) black++;
+    }
+    final whiteShare = white / labels.length;
+    final blackShare = black / labels.length;
+    if (whiteShare < minRegionCoverage && blackShare < minRegionCoverage) {
+      return CheckerColor.none;
+    }
+    return whiteShare >= blackShare ? CheckerColor.white : CheckerColor.black;
+  }
+
   static CheckerColor _majorityColor(List<CheckerColor> labels) {
     if (labels.isEmpty) return CheckerColor.none;
     final counts = <CheckerColor, int>{};
@@ -817,6 +1038,20 @@ class Calibrator {
         ? best
         : CheckerColor.none;
   }
+}
+
+/// A region in words, for a sentence the user reads. Shared by the failure
+/// messages and by [PointDiscrepancy.message], so nothing user-facing ever
+/// says `offWhite`.
+String _describe(RoiId id) {
+  if (id.pointIndex >= 0) return 'the ${id.pointIndex + 1}-point';
+  return switch (id) {
+    RoiId.bar => 'the bar',
+    RoiId.offWhite => "White's bear-off tray",
+    RoiId.offBlack => "Black's bear-off tray",
+    RoiId.diceZone => 'the middle of the board, where the dice land',
+    _ => id.name,
+  };
 }
 
 // --- sampling ---------------------------------------------------------------

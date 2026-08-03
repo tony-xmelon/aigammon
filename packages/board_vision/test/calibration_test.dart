@@ -23,6 +23,13 @@ void main() {
   group('calibration learns the board it is shown', () {
     for (final palette in BoardPalette.all) {
       for (final gain in <double>[0.6, 1.0, 1.4]) {
+        // One cell of this matrix cannot work and must not pretend to: lit 40%
+        // over its own colours, the blue-red board's pale points and its white
+        // checkers both clip to 255, so in the frame they are the same colour
+        // and no model can separate what the sensor discarded. Calibration
+        // refuses it by name — asserted in 'an over-lit board is refused'.
+        if (palette == BoardPalette.blueRed && gain == 1.4) continue;
+
         test('${palette.name} at gain $gain: two separable checker colours, '
             'and every checker reads back', () {
           final shot = renderShot(
@@ -99,8 +106,7 @@ void main() {
       final calibration = _calibrate(bright);
 
       final dim = renderShot(board: BoardState.initial(), lightingGain: 0.6);
-      final now = CalibrationFingerprint.fromFrame(dim.frame, calibration.h);
-      final exposure = now.meanLuma / calibration.fingerprint.meanLuma;
+      final exposure = calibration.exposureIn(dim.frame);
       expect(exposure, closeTo(0.6, 0.02));
 
       _expectEveryCheckerReadsBack(
@@ -108,6 +114,64 @@ void main() {
         calibration.colors.renormalized(exposure),
       );
     });
+
+    test('confirmation survives the camera exposing for itself', () {
+      // The calibration shot and the confirmation frame are seconds apart on a
+      // live preview, and a phone's auto-exposure moves this much between two
+      // frames of the same scene without anything else changing. Both gains
+      // here sit well inside the fingerprint's drift tolerance, so nothing
+      // would flag them — confirmation has to hold on its own, or the user is
+      // sent to fix a board that is already correct.
+      final calibration = _calibrate(renderShot(board: BoardState.initial()));
+      final vision = BoardVision(calibration);
+
+      for (final gain in <double>[0.8, 0.9, 1.15, 1.25]) {
+        final shot = renderShot(
+          board: BoardState.initial(),
+          lightingGain: gain,
+        );
+        final result = vision.confirmStartingPosition(shot.frame);
+        expect(result.agrees, isTrue, reason: 'at gain $gain: ${result.message}');
+        expect(result.discrepancies, isEmpty, reason: 'at gain $gain');
+      }
+    });
+
+    // The reason the reference is per region and not one number for the whole
+    // board: a lamp off to one side leaves one end of the board at a fraction
+    // of the light on the other, and no single exposure describes both. Run
+    // both ways round because they are not the same test — one of them puts
+    // the tall five-stacks in the dark end, where a region has least of itself
+    // showing to measure a background from. Measured to hold to a ratio of
+    // more than three to one; asserted at the gentler ratio a lamp actually
+    // makes across half a metre of table.
+    for (final (name, near, far) in <(String, double, double)>[
+      ('the far side', 1.0, 0.6),
+      ('the near side', 0.6, 1.0),
+    ]) {
+      test('a board with the light falling away toward $name', () {
+        final shot = renderShot(board: BoardState.initial());
+        final lit = _sideLit(shot.frame, near: near, far: far);
+        final result = BoardVision.calibrate(
+          frame: lit,
+          corners: shot.groundTruthQuad,
+          orientation: BoardOrientation.whiteHomeNear,
+        );
+        expect(result.ok, isTrue, reason: result.message);
+
+        final vision = BoardVision(result.calibration!);
+        final confirmed = vision.confirmStartingPosition(lit);
+        expect(confirmed.agrees, isTrue, reason: confirmed.message);
+        _expectEveryCheckerReadsBack(
+          SyntheticShot(
+            frame: lit,
+            groundTruthQuad: shot.groundTruthQuad,
+            board: shot.board,
+            topDownToFrame: shot.topDownToFrame,
+          ),
+          result.calibration!.colors,
+        );
+      });
+    }
 
     test('the bare board is not a checker', () {
       // Every point the start position leaves empty must read as no checker
@@ -193,6 +257,29 @@ void main() {
           anyOf(contains(RoiId.point(7)), contains(RoiId.point(16))));
     });
 
+    test('an over-lit board is refused rather than half-learned', () {
+      // Measured, not supposed: on this board at this gain the pale points and
+      // the white checkers clip to the same 255, and a model learned from it
+      // reads phantom White on half the empty points of the very frame it was
+      // learned from. Returning a calibration anyway would push the failure
+      // one screen along, where it shows up as "your board is set up wrong" —
+      // the user fixing the wrong thing. So calibration reads its own frame
+      // back before it hands anything over.
+      final shot = renderShot(
+        board: BoardState.initial(),
+        palette: BoardPalette.blueRed,
+        lightingGain: 1.4,
+      );
+      final result = BoardVision.calibrate(
+        frame: shot.frame,
+        corners: shot.groundTruthQuad,
+        orientation: BoardOrientation.whiteHomeNear,
+      );
+      expect(result.ok, isFalse);
+      expect(result.problem, CalibrationProblem.boardOverExposed);
+      expect(result.message.toLowerCase(), contains('light'));
+    });
+
     test('two sets of checkers that look alike', () {
       final shot = renderShot(
         board: BoardState.initial(),
@@ -262,6 +349,52 @@ void main() {
       expect(extra.expected, CheckerColor.none);
       expect(extra.observed, CheckerColor.white);
       expect(extra.message, contains('4-point'));
+    });
+
+    test('a checker left on the bar is named', () {
+      // The bar is not a point, and a checker sitting there at the start would
+      // be folded into the authoritative game state as if the board were
+      // correct — from move one, every position after it is wrong. The bar
+      // starts empty and confirmation has to say so.
+      final start = renderShot(board: BoardState.initial());
+      final vision = BoardVision(_calibrate(start));
+
+      final points = List<int>.of(BoardState.initial().points);
+      points[5] -= 1; // one White off the 6-point and onto the bar, so the
+      final stray = renderShot( // 6-point still reads White and only the bar
+        board: BoardState(points: points, whiteBar: 1), // is wrong.
+      );
+      final result = vision.confirmStartingPosition(stray.frame);
+
+      expect(result.agrees, isFalse);
+      expect(result.discrepancies.map((d) => d.region), contains(RoiId.bar));
+      final onBar =
+          result.discrepancies.firstWhere((d) => d.region == RoiId.bar);
+      expect(onBar.expected, CheckerColor.none);
+      expect(onBar.observed, CheckerColor.white);
+      expect(onBar.pointNumber, isNull);
+      expect(onBar.message, contains('the bar'));
+      expect(result.message, contains('the bar'));
+    });
+
+    test('checkers left in a bear-off tray are named in words', () {
+      final start = renderShot(board: BoardState.initial());
+      final vision = BoardVision(_calibrate(start));
+
+      final points = List<int>.of(BoardState.initial().points);
+      points[11] += 3; // three of Black's five off the 12-point...
+      final stray = renderShot(
+        board: BoardState(points: points, blackOff: 3), // ...into its tray.
+      );
+      final result = vision.confirmStartingPosition(stray.frame);
+
+      expect(result.agrees, isFalse);
+      final inTray =
+          result.discrepancies.firstWhere((d) => d.region == RoiId.offBlack);
+      expect(inTray.observed, CheckerColor.black);
+      // Named the way a person would say it, not the way the enum spells it.
+      expect(inTray.message, contains('tray'));
+      expect(inTray.message, isNot(contains('offBlack')));
     });
 
     test('a frame the calibration cannot reach across is not called a bad '
@@ -472,6 +605,23 @@ void _expectEveryCheckerReadsBack(
 
 Set<int> _pointNumbersIn(ConfirmResult result) =>
     result.discrepancies.map((d) => d.pointNumber).whereType<int>().toSet();
+
+/// A lamp off to one side: the light falls away smoothly across the frame,
+/// which is the spatial non-uniformity a single global exposure cannot model
+/// and a per-region reference can.
+Frame _sideLit(Frame frame, {double near = 1.0, double far = 0.6}) {
+  final bytes = Uint8List.fromList(frame.rgb);
+  for (var y = 0; y < frame.height; y++) {
+    for (var x = 0; x < frame.width; x++) {
+      final gain = near + (far - near) * x / (frame.width - 1);
+      final i = frame.offsetOf(x, y);
+      for (var c = 0; c < 3; c++) {
+        bytes[i + c] = (bytes[i + c] * gain).round().clamp(0, 255);
+      }
+    }
+  }
+  return Frame(bytes, frame.width, frame.height);
+}
 
 /// Sensor noise, so "the same scene" is not the same bytes.
 Frame _withNoise(Frame frame, {int amplitude = 4, int seed = 7}) {

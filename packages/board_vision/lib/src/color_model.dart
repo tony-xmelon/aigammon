@@ -92,12 +92,13 @@ class RoiBackground {
 
   /// Whether the region showed its whole surface during calibration.
   ///
-  /// False for the eight points the starting position covers with checkers:
-  /// their triangles were partly or wholly hidden, so their [modes] describe
-  /// only what was visible around the stack. [ColorModel.classify] lends such
-  /// a region the board-wide vocabulary; anything reading "no checker" there
-  /// still deserves less trust than elsewhere, which is why the flag is
-  /// public rather than an implementation detail.
+  /// False for nine regions: the eight points the starting position covers
+  /// with checkers, whose triangles were partly or wholly hidden, and the dice
+  /// band, which the four tallest stacks reach into. Their [modes] describe
+  /// only what was visible around the checkers, so [ColorModel.classify] lends
+  /// them the board-wide vocabulary. Anything reading "no checker" there still
+  /// deserves less trust than elsewhere, which is why the flag is public
+  /// rather than an implementation detail.
   final bool fullyMeasured;
 
   RoiBackground({
@@ -180,22 +181,41 @@ class RoiBackground {
 /// Everything above is learned at calibration from the known starting
 /// position. There is not a single colour constant in this package's `lib/`,
 /// and `test/calibration_test.dart` fails the build if one appears.
+/// ## Numbers, provisionally
+///
+/// Every threshold below was measured against the synthetic renderer, which
+/// paints in flat colour. Real boards have grain, weave, gloss and shadow, and
+/// the corpus gate (the plan's Task 6) is where each of these gets asked
+/// again with photographs. Nothing outside this file should hard-code any of
+/// them.
 class ColorModel {
   /// The floor under every spread in the model, in log units — about 15% of
-  /// intensity. It keeps a distribution learned from flat colour from being
-  /// so tight that ordinary photographic variation falls outside it.
+  /// intensity. It keeps a distribution learned from flat colour from being so
+  /// tight that ordinary photographic variation falls outside it.
+  ///
+  /// Worth being plain about how much this one is currently doing: against the
+  /// synthetic renderer every measured spread comes out *below* the floor, so
+  /// [boardSpread] is exactly `[0.15, 0.15, 0.15]` on all three palettes and
+  /// the floor is the whole of the scale in the borrowed-background path. The
+  /// measured half of this number has never yet been exercised; the first real
+  /// photograph will exercise it.
   static const double minSpread = 0.15;
 
   /// How far apart [separation] must find the two checker clouds before a
-  /// calibration is worth keeping.
+  /// calibration is worth keeping. The three synthetic palettes come out at
+  /// 15.1, 9.5 and 5.1 — so this refuses only a board considerably worse than
+  /// the one deliberately built to be hard.
   static const double minSeparation = 2.0;
 
   /// Farther than this from all three learned answers and a sample is nothing
-  /// the model knows: [CheckerColor.none], not a guess.
+  /// the model knows: [CheckerColor.none], not a guess. Genuine checker
+  /// samples sit under 1 in every synthetic condition tested, and about 3.3
+  /// in the worst (a board clipping at 40% over its calibration light), so
+  /// this leaves room without admitting a hand or a coffee cup.
   static const double maxClassDistance = 6.0;
 
   /// How much closer the region's own surface has to be than a checker cloud
-  /// before it wins. See the class doc.
+  /// before it wins. See the class doc for why the tie goes to the checker.
   static const double boardPreferenceMargin = 0.5;
 
   final ColorDistribution white;

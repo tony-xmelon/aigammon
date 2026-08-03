@@ -43,12 +43,23 @@ class BoardVision {
       );
 
   /// Checks the board in [frame] against the position every game starts from,
-  /// naming the points that disagree.
+  /// naming the regions that disagree.
   ///
   /// The last step of the calibration flow, and the cheapest possible test
   /// that the corners, the seat and the colours all came out right: a mirrored
   /// board or a half-turned one reads as its own diagonal twin and every point
   /// disagrees at once.
+  ///
+  /// **It checks colours, not counts.** Every point holds the right colour and
+  /// the bar and trays are empty — a point holding two White where the game
+  /// starts with five still agrees. Counting is occupancy's job (and stack
+  /// verification's after it); see [ConfirmResult] for why that division is
+  /// the right one here.
+  ///
+  /// [frame] may be lit differently from the frame that was calibrated — the
+  /// colours are re-normalized for it, which matters more than it sounds,
+  /// since a live preview's auto-exposure drifts between two frames of the
+  /// same scene by enough to turn every empty point into a phantom checker.
   ConfirmResult confirmStartingPosition(Frame frame) =>
       Calibrator.confirm(frame, calibration);
 }
