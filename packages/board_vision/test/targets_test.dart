@@ -1,0 +1,68 @@
+import 'dart:io';
+
+import 'package:board_vision/board_vision.dart';
+import 'package:test/test.dart';
+
+/// [PerceptionTargets] is a transcription of a table in the design spec, and a
+/// transcription is a thing that drifts. So the test reads the table.
+///
+/// This is the same trick as the no-colour-literals guard in
+/// `calibration_test.dart`: crude, textual, and binding. If someone lowers a
+/// target here to make the corpus harness go green, this fails and names the
+/// spec — which is exactly the conversation that number is supposed to force.
+/// If the spec's table is renegotiated at the Task 6 gate, both move together.
+void main() {
+  group('the targets are the ones the spec sets', () {
+    final spec = File(
+      '../../docs/superpowers/specs/2026-08-02-buddy-mode-design.md',
+    );
+
+    test('the spec is where this test thinks it is', () {
+      expect(spec.existsSync(), isTrue,
+          reason: 'accuracy targets are the spec\'s to set; ${spec.path} is '
+              'where they are written down');
+    });
+
+    /// The `≥NN%` in the row whose first column contains [row].
+    double targetIn(String row) {
+      final line = spec.readAsLinesSync().firstWhere(
+            (l) => l.startsWith('|') && l.contains(row),
+            orElse: () => '',
+          );
+      expect(line, isNotEmpty, reason: 'no accuracy-table row mentions "$row"');
+      final match = RegExp(r'≥(\d+)%').firstMatch(line);
+      expect(match, isNotNull, reason: 'row "$row" states no ≥NN% target');
+      return int.parse(match!.group(1)!) / 100.0;
+    }
+
+    test('calibration', () {
+      expect(PerceptionTargets.calibrationSuccess,
+          targetIn('Calibration completes'));
+    });
+
+    test('dice', () {
+      expect(PerceptionTargets.dicePairRead, targetIn('Dice pair read'));
+    });
+
+    test('legal-play identification', () {
+      expect(PerceptionTargets.legalPlayIdentification,
+          targetIn('Legal-play identification'));
+    });
+
+    test('placement verification', () {
+      expect(PerceptionTargets.placementVerification,
+          targetIn('Placement verification'));
+    });
+
+    test('full-board resync', () {
+      expect(PerceptionTargets.fullBoardResync, targetIn('Full-board resync'));
+    });
+
+    test('refusing an unreadable shot is not negotiable', () {
+      // The one target with no row to read: it is not a promise about
+      // answering, it is the counterweight that stops the other five being
+      // gamed by answering everything. See [PerceptionTargets.expectedRefusal].
+      expect(PerceptionTargets.expectedRefusal, 1.0);
+    });
+  });
+}

@@ -25,3 +25,4 @@ export 'src/homography.dart';
 export 'src/occupancy.dart';
 export 'src/roi_atlas.dart';
 export 'src/roi_sampler.dart';
+export 'src/targets.dart';
