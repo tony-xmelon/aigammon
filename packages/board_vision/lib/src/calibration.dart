@@ -7,6 +7,7 @@ import 'frame.dart';
 import 'geometry_types.dart';
 import 'homography.dart';
 import 'roi_atlas.dart';
+import 'roi_sampler.dart';
 
 /// What the board looked like when calibration accepted it.
 ///
@@ -112,7 +113,7 @@ class CalibrationFingerprint {
   /// comparable, and a corner patch that reaches past the edge of the frame is
   /// itself stable information about where the board sits.
   factory CalibrationFingerprint.fromFrame(Frame frame, Homography homography) {
-    final sampler = _FrameSampler(frame, homography);
+    final sampler = FrameSampler(frame, homography);
     final patches = <int>[];
     for (final corner in const <Pt>[Pt(0, 0), Pt(1, 0), Pt(1, 1), Pt(0, 1)]) {
       final sx = corner.x == 0 ? 1.0 : -1.0;
@@ -137,7 +138,7 @@ class CalibrationFingerprint {
         final x = _interiorAt(ix);
         final sample = sampler.at(x, y);
         if (sample == null) continue;
-        final luma = _luma(sample);
+        final luma = lumaOf(sample);
         sumR += sample.$1;
         sumG += sample.$2;
         sumB += sample.$3;
@@ -172,14 +173,14 @@ class CalibrationFingerprint {
   /// Zero when none of the board falls inside the picture, which callers turn
   /// into "do not re-normalize" rather than a division by nothing.
   static double boardLuma(Frame frame, Homography homography) {
-    final sampler = _FrameSampler(frame, homography);
+    final sampler = FrameSampler(frame, homography);
     var sum = 0.0, n = 0.0;
     for (var iy = 0; iy < _lattice; iy++) {
       final y = _interiorAt(iy);
       for (var ix = 0; ix < _lattice; ix++) {
         final sample = sampler.at(_interiorAt(ix), y);
         if (sample == null) continue;
-        sum += _luma(sample);
+        sum += lumaOf(sample);
         n++;
       }
     }
@@ -451,19 +452,11 @@ class ConfirmResult {
 ///
 /// ## What is sampled where
 ///
-/// Two shapes, both in board space and both kept well clear of edges. The
-/// perspective warp lays the room over the outermost pixel of the board, and
-/// on a dark-framed board that sliver of room classifies as a black checker,
-/// so every lattice here is inset.
-///
-/// * A **checker patch** is a small block a fraction of the way in from the
-///   board's outer edge, across the middle of a point's column. Whatever else
-///   a stack does, its first checker sits against that edge and is about as
-///   wide as the column, so the patch is on the checker for any board
-///   proportions worth photographing — no assumption about how deep a checker
-///   is, which board space cannot supply.
-/// * A **region interior** is an inset lattice over the whole ROI, which is
-///   what the bare surface is measured from.
+/// Two shapes, both taken by the shared [RoiSampler] — a **checker patch**
+/// across the foot of a point's stack, and a **region interior** over the
+/// whole of an ROI. Their geometry and the reasoning behind it live with the
+/// sampler, which occupancy and the dice reader use too, so that every query
+/// in the package measures a region the same way.
 ///
 /// ## Numbers, provisionally
 ///
@@ -475,32 +468,6 @@ class ConfirmResult {
 /// the one place they live.
 class Calibrator {
   const Calibrator._();
-
-  /// Lattice per side for a region's interior.
-  static const int interiorLattice = 20;
-
-  /// How far in from a region's own boundary its interior lattice starts, as a
-  /// fraction of the region's size.
-  static const double interiorInset = 0.06;
-
-  static const int checkerPatchAcross = 6;
-  static const int checkerPatchDeep = 4;
-
-  /// Half the patch's width, as a fraction of the column's width — narrow
-  /// enough that a round checker still covers it at the patch's far end.
-  static const double checkerPatchHalfWidth = 0.25;
-
-  /// The patch's near and far depth from the board's outer edge, in board-space
-  /// units. Clear of the warp's sliver of room at the near end and inside the
-  /// first checker at the far end.
-  static const double checkerPatchNear = 0.02;
-  static const double checkerPatchFar = 0.045;
-
-  /// How much of a lattice has to land inside the picture before the region
-  /// counts as visible at all. Effectively "all of it": the lattice is already
-  /// inset from the region's own boundary, so a sample outside the frame means
-  /// the board itself is over the edge.
-  static const double minVisibleFraction = 0.98;
 
   /// How many checker-free samples a region needs before its own background is
   /// trusted over the board-wide one. The tightest case in the starting
@@ -573,7 +540,7 @@ class Calibrator {
     }
 
     final atlas = RoiAtlas.forOrientation(orientation);
-    final sampler = _RoiSampler(frame, homography, atlas);
+    final sampler = RoiSampler(frame, homography, atlas);
     final start = BoardState.initial();
     final occupied = <int, CheckerColor>{
       for (var i = 0; i < 24; i++)
@@ -585,7 +552,7 @@ class Calibrator {
     final patches = <int, List<Rgb>>{};
     for (final index in occupied.keys) {
       final scan = sampler.checkerPatch(index);
-      if (scan.visibleFraction < minVisibleFraction) {
+      if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
         return _notVisible(RoiId.point(index));
       }
       patches[index] = scan.samples;
@@ -593,7 +560,7 @@ class Calibrator {
     final interiors = <RoiId, List<Rgb>>{};
     for (final id in RoiId.values) {
       final scan = sampler.interior(id);
-      if (scan.visibleFraction < minVisibleFraction) return _notVisible(id);
+      if (scan.visibleFraction < RoiSampler.minVisibleFraction) return _notVisible(id);
       interiors[id] = scan.samples;
     }
 
@@ -793,7 +760,7 @@ class Calibrator {
   /// on a live preview, and a phone's auto-exposure moves between them by more
   /// than enough to turn every empty point into a phantom checker.
   static ConfirmResult confirm(Frame frame, BoardCalibration calibration) {
-    final sampler = _RoiSampler(frame, calibration.h, calibration.atlas);
+    final sampler = RoiSampler(frame, calibration.h, calibration.atlas);
     final colors = calibration.colorsIn(frame);
     final start = BoardState.initial();
     final discrepancies = <PointDiscrepancy>[];
@@ -809,7 +776,7 @@ class Calibrator {
       if (expected != CheckerColor.none) expectedOccupied++;
 
       final scan = sampler.checkerPatch(i);
-      if (scan.visibleFraction < minVisibleFraction) {
+      if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
         outOfPicture ??= RoiId.point(i);
         continue;
       }
@@ -840,7 +807,7 @@ class Calibrator {
     // judged by how much of the region is checker-coloured at all.
     for (final id in const <RoiId>[RoiId.bar, RoiId.offWhite, RoiId.offBlack]) {
       final scan = sampler.interior(id);
-      if (scan.visibleFraction < minVisibleFraction) {
+      if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
         outOfPicture ??= id;
         continue;
       }
@@ -1054,143 +1021,7 @@ String _describe(RoiId id) {
   };
 }
 
-// --- sampling ---------------------------------------------------------------
-
-/// A lattice of samples taken from one region, and how much of it landed
-/// inside the picture.
-class _Scan {
-  final List<Rgb> samples;
-  final int attempted;
-
-  const _Scan(this.samples, this.attempted);
-
-  double get visibleFraction =>
-      attempted == 0 ? 0.0 : samples.length / attempted;
-}
-
-/// Reads a frame in board space.
-class _FrameSampler {
-  final Frame frame;
-  final Homography homography;
-
-  const _FrameSampler(this.frame, this.homography);
-
-  /// The pixel at board-space `(x, y)`, or null when that is outside the
-  /// picture — including the non-finite coordinates a point on the horizon
-  /// produces, which the range test subsumes.
-  Rgb? at(double x, double y) {
-    final p = homography.mapToImage(Pt(x, y));
-    if (!p.x.isFinite || !p.y.isFinite) return null;
-    final px = p.x.round(), py = p.y.round();
-    if (px < 0 || py < 0 || px >= frame.width || py >= frame.height) {
-      return null;
-    }
-    return frame.pixelAt(px, py);
-  }
-
-  /// The mean of a small block of board space, with samples clamped into the
-  /// picture rather than dropped. For the fingerprint, whose entries have to
-  /// line up between two frames to be comparable.
-  Rgb blockMean(double x, double y, double halfWidth, double halfHeight) {
-    const lattice = 3;
-    var r = 0, g = 0, b = 0, n = 0;
-    for (var iy = 0; iy < lattice; iy++) {
-      final sy = y + (2 * (iy + 0.5) / lattice - 1) * halfHeight;
-      for (var ix = 0; ix < lattice; ix++) {
-        final sx = x + (2 * (ix + 0.5) / lattice - 1) * halfWidth;
-        final p = homography.mapToImage(Pt(sx, sy));
-        if (!p.x.isFinite || !p.y.isFinite) continue;
-        final px = p.x.round().clamp(0, frame.width - 1);
-        final py = p.y.round().clamp(0, frame.height - 1);
-        final sample = frame.pixelAt(px, py);
-        r += sample.$1;
-        g += sample.$2;
-        b += sample.$3;
-        n++;
-      }
-    }
-    if (n == 0) return const (0, 0, 0);
-    return (r ~/ n, g ~/ n, b ~/ n);
-  }
-}
-
-/// Reads a frame region by region.
-class _RoiSampler extends _FrameSampler {
-  final RoiAtlas atlas;
-
-  const _RoiSampler(super.frame, super.homography, this.atlas);
-
-  /// An inset lattice over the whole of [id].
-  _Scan interior(RoiId id) {
-    final b = _boundsOf(atlas.roi(id));
-    final insetX = (b.maxX - b.minX) * Calibrator.interiorInset;
-    final insetY = (b.maxY - b.minY) * Calibrator.interiorInset;
-    final x0 = b.minX + insetX, x1 = b.maxX - insetX;
-    final y0 = b.minY + insetY, y1 = b.maxY - insetY;
-
-    final samples = <Rgb>[];
-    var attempted = 0;
-    for (var iy = 0; iy < Calibrator.interiorLattice; iy++) {
-      final y = y0 + (iy + 0.5) / Calibrator.interiorLattice * (y1 - y0);
-      for (var ix = 0; ix < Calibrator.interiorLattice; ix++) {
-        final x = x0 + (ix + 0.5) / Calibrator.interiorLattice * (x1 - x0);
-        attempted++;
-        final sample = at(x, y);
-        if (sample != null) samples.add(sample);
-      }
-    }
-    return _Scan(samples, attempted);
-  }
-
-  /// The block the checker nearest the board's edge covers on point [index].
-  _Scan checkerPatch(int index) {
-    final b = _boundsOf(atlas.roi(RoiId.point(index)));
-    // Which board edge this point stacks from: its region runs from that edge
-    // to the midline, so whichever end is not the midline is the edge.
-    final fromTop = b.maxY <= RoiAtlas.midline + 1e-9;
-    final centreX = (b.minX + b.maxX) / 2;
-    final halfWidth = (b.maxX - b.minX) * Calibrator.checkerPatchHalfWidth;
-
-    final samples = <Rgb>[];
-    var attempted = 0;
-    for (var iy = 0; iy < Calibrator.checkerPatchDeep; iy++) {
-      final depth = Calibrator.checkerPatchNear +
-          (iy + 0.5) /
-              Calibrator.checkerPatchDeep *
-              (Calibrator.checkerPatchFar - Calibrator.checkerPatchNear);
-      final y = fromTop ? depth : 1 - depth;
-      for (var ix = 0; ix < Calibrator.checkerPatchAcross; ix++) {
-        final x = centreX +
-            ((ix + 0.5) / Calibrator.checkerPatchAcross - 0.5) *
-                2 *
-                halfWidth;
-        attempted++;
-        final sample = at(x, y);
-        if (sample != null) samples.add(sample);
-      }
-    }
-    return _Scan(samples, attempted);
-  }
-}
-
-typedef _Bounds = ({double minX, double minY, double maxX, double maxY});
-
-_Bounds _boundsOf(BoardQuad quad) {
-  var minX = double.infinity, minY = double.infinity;
-  var maxX = double.negativeInfinity, maxY = double.negativeInfinity;
-  for (final c in quad.corners) {
-    minX = math.min(minX, c.x);
-    minY = math.min(minY, c.y);
-    maxX = math.max(maxX, c.x);
-    maxY = math.max(maxY, c.y);
-  }
-  return (minX: minX, minY: minY, maxX: maxX, maxY: maxY);
-}
-
 // --- small robust statistics ------------------------------------------------
-
-double _luma(Rgb sample) =>
-    0.299 * sample.$1 + 0.587 * sample.$2 + 0.114 * sample.$3;
 
 double _euclid(List<double> a, List<double> b) {
   var sum = 0.0;
