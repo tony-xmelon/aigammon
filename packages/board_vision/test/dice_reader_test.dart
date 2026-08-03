@@ -180,6 +180,34 @@ void main() {
       expect(vision.readDice(shot.frame), isNull);
     });
 
+    test('a die resting against a tall stack is not read', () {
+      // MEASURED, and the other side of the same coin: a die that rolls to a
+      // stop touching a point's top checker merges with it, and a die fused to
+      // a checker is neither square nor pipped enough to survive. One
+      // candidate is not a pair, so the answer is nothing.
+      //
+      // Which is the RIGHT answer, if a frustrating one — the session waits
+      // for the next stable frame and then offers the dice pad, rather than
+      // reading a face off a shape that is half checker. Whether real dice
+      // come to rest against stacks often enough to be worth separating
+      // touching blobs is a question for photographs, and a watershed on the
+      // foreign mask is the obvious tool if they do.
+      final vision = BoardVision(calibrationFor(BoardPalette.classic));
+      final points = List<int>.filled(24, 0);
+      points[8] = 5;
+      points[20] = 10;
+      points[15] = -15;
+      final (left, right) = BoardLayout.pointSpan(8);
+      final shot = renderShot(
+        board: BoardState(points: points),
+        dicePlacements: <DicePlacement>[
+          DicePlacement(face: 4, center: Pt((left + right) / 2, 0.50)),
+          const DicePlacement(face: 3, center: Pt(0.70, 0.50)),
+        ],
+      );
+      expect(vision.readDice(shot.frame), isNull);
+    });
+
     test('the same, on all three boards', () {
       for (final palette in BoardPalette.all) {
         final vision = BoardVision(calibrationFor(palette));

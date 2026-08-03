@@ -229,6 +229,54 @@ void main() {
       expect(short.confidence, greaterThan(tall.confidence));
     });
 
+    test('a die parked on a stack is counted as another checker', () {
+      // MEASURED, and a real thing that happens on a real board: a die rolls
+      // to a stop against a tall point and comes to rest in that point's
+      // headroom, which the atlas hands to the point and to the dice band at
+      // once. Occupancy has no idea what a die is — nothing does, there is no
+      // learned distribution for one — so on two of the three palettes a die
+      // whose body reads as checker-coloured adds a checker to the stack under
+      // it. On the third it does not, because that board's dice look nothing
+      // like its checkers.
+      //
+      // Two reasons this is reported rather than fixed. It stays inside the
+      // band the design asks for (within one at three to five), and the
+      // confidence halves — the measured length lands between two whole
+      // checkers, which is exactly what that factor is for. And the session
+      // reads the dice from a settled frame BEFORE it asks about checkers, so
+      // by the time occupancy is asked, where the dice are is known. Task 7's
+      // matcher could subtract them; that is a decision for the gate, with
+      // photographs.
+      final palette = BoardPalette.lowContrastWood;
+      final calibration = _calibrate(
+        renderShot(board: BoardState.initial(), palette: palette),
+      );
+      final vision = BoardVision(calibration);
+      const stack = 8; // near half, five White
+      final board = _boardOf(const <int, int>{stack: 5, 20: 10, 15: -15});
+      final (left, right) = BoardLayout.pointSpan(stack);
+
+      final clean = vision
+          .occupancyIn(renderShot(board: board, palette: palette).frame)
+          .read(RoiId.point(stack));
+      final crowded = vision
+          .occupancyIn(renderShot(
+            board: board,
+            palette: palette,
+            dicePlacements: <DicePlacement>[
+              DicePlacement(face: 4, center: Pt((left + right) / 2, 0.50)),
+              const DicePlacement(face: 3, center: Pt(0.70, 0.50)),
+            ],
+          ).frame)
+          .read(RoiId.point(stack));
+
+      expect(clean.count, 5);
+      expect(crowded.color, CheckerColor.white);
+      expect(crowded.count, 6);
+      expect(crowded.confidence, lessThan(clean.confidence / 1.5),
+          reason: 'a count that lands between two checkers has to say so');
+    });
+
     test('a board lit past what its colours survive loses White on its pale '
         'points, and says nothing rather than the wrong thing', () {
       // MEASURED, and left in the open rather than tuned away. Lit 40% over
