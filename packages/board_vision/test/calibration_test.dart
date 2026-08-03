@@ -74,6 +74,49 @@ void main() {
       _expectEveryCheckerReadsBack(shot, colors);
     });
 
+    test('the dice band learns the two surfaces it has, and no third', () {
+      // The band runs across both halves AND the bar, so it has a felt and a
+      // wood, and both have to be in its vocabulary — a dice reader asks what
+      // the band's surfaces do not account for, and a surface missing from
+      // that list turns the whole bar into a foreign object.
+      //
+      // The third thing it must NOT learn is the rim of the four five-stacks
+      // standing in it. Filtering by colour removes a checker and leaves the
+      // pixels where its edge blends into the felt, and that blend is a
+      // colour the board does not have anywhere. Measured: on two of these
+      // three palettes it is within two spreads of a die's body, so a band
+      // that has learned it finds no dice at all. The band keeps clear of
+      // every occupied column instead.
+      final shot = renderShot(board: BoardState.initial());
+      final colors = _calibrate(shot).colors;
+      final band = colors.backgroundOf(RoiId.diceZone);
+      final h = Homography.fromQuad(shot.groundTruthQuad);
+
+      double distanceAt(Pt boardPoint) {
+        final p = h.mapToImage(boardPoint);
+        final sample = shot.frame.pixelAt(p.x.round(), p.y.round());
+        return band.distanceTo(ColorModel.feature(sample, band.color));
+      }
+
+      // Felt on the left, the bar's wood, felt on the right.
+      for (final x in <double>[0.25, 0.5, 0.75]) {
+        expect(distanceAt(Pt(x, RoiAtlas.midline)), lessThan(2.0),
+            reason: 'the band does not recognise its own surface at x=$x');
+      }
+
+      // And a checker standing in the band is not one of its surfaces.
+      final cap = shot.board.checkers.lastWhere(
+        (c) => c.pointIndex == 5 && c.area == SpotArea.point,
+      );
+      final p = shot.toFrame(cap.center);
+      final sample = shot.frame.pixelAt(p.x.round(), p.y.round());
+      expect(
+        band.distanceTo(ColorModel.feature(sample, band.color)),
+        greaterThan(4.0),
+        reason: 'the band learned a checker as though it were board',
+      );
+    });
+
     test('every region gets a background, and the covered ones say so', () {
       final shot = renderShot(board: BoardState.initial());
       final colors = _calibrate(shot).colors;

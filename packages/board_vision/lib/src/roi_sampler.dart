@@ -119,7 +119,12 @@ class RoiSampler extends FrameSampler {
   static const double minVisibleFraction = 0.98;
 
   /// An inset lattice over the whole of [id].
-  RoiScan interior(RoiId id) {
+  ///
+  /// [skip] leaves parts of the region out by board-space position. Skipped
+  /// spots are not counted as attempted either, so [RoiScan.visibleFraction]
+  /// still means "how much of what was asked for is in the picture" rather
+  /// than being dragged down by a deliberate omission.
+  RoiScan interior(RoiId id, {bool Function(double x, double y)? skip}) {
     final b = boundsOf(atlas.roi(id));
     final insetX = (b.maxX - b.minX) * interiorInset;
     final insetY = (b.maxY - b.minY) * interiorInset;
@@ -132,6 +137,7 @@ class RoiSampler extends FrameSampler {
       final y = y0 + (iy + 0.5) / interiorLattice * (y1 - y0);
       for (var ix = 0; ix < interiorLattice; ix++) {
         final x = x0 + (ix + 0.5) / interiorLattice * (x1 - x0);
+        if (skip != null && skip(x, y)) continue;
         attempted++;
         final sample = at(x, y);
         if (sample != null) samples.add(sample);

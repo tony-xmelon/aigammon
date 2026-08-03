@@ -563,18 +563,52 @@ class Calibrator {
       }
       patches[index] = scan.samples;
     }
+    // The dice band is the one region that keeps out of the way of the
+    // checkers standing in it, rather than filtering them out afterwards. The
+    // difference matters and was measured: a filter works on colour, so it
+    // removes a checker but leaves the RIM of one — the pixels where a
+    // checker's edge blends into the felt — and the band's surface model then
+    // learns that blend as though it were a surface the board has. It is not,
+    // and on two of the three synthetic palettes it is very nearly the colour
+    // of a die. The dice reader, looking for what the band's surfaces do not
+    // account for, would find no dice at all.
+    //
+    // Keeping clear of every occupied column costs the band two thirds of its
+    // samples and gains it a true reading of both the surfaces it does have,
+    // the felt and the bar's wood — which the contaminated model also got
+    // wrong, since one spurious cluster leaves only one for two real ones.
+    final occupiedColumns = <(double, double)>[
+      for (final index in occupied.keys)
+        () {
+          final b = boundsOf(atlas.roi(RoiId.point(index)));
+          return (b.minX, b.maxX);
+        }(),
+    ];
+    bool underAStack(double x, double y) {
+      for (final (left, right) in occupiedColumns) {
+        if (x >= left && x <= right) return true;
+      }
+      return false;
+    }
+
     final interiors = <RoiId, List<Rgb>>{};
     for (final id in RoiId.values) {
-      final scan = sampler.interior(id);
-      if (scan.visibleFraction < RoiSampler.minVisibleFraction) return _notVisible(id);
+      final scan = sampler.interior(
+        id,
+        skip: id == RoiId.diceZone ? underAStack : null,
+      );
+      if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
+        return _notVisible(id);
+      }
       interiors[id] = scan.samples;
     }
 
     // --- every region's bare surface
     //
     // Only regions the starting position covers get their samples filtered by
-    // colour, and the dice band with them since four stacks reach into it.
-    // Filtering everywhere would be worse than useless: on a board whose pale
+    // colour, and the dice band with them as a backstop behind the columns it
+    // already keeps clear of. Filtering everywhere would be worse than useless:
+    // on a board whose pale
     // points are nearly the colour of its white checkers it would throw away
     // exactly the surface an empty point most needs to have measured.
     //
