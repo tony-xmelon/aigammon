@@ -1,4 +1,5 @@
 import 'calibration.dart';
+import 'dice_reader.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
 import 'occupancy.dart';
@@ -73,4 +74,13 @@ class BoardVision {
   /// position, never read as an answer on their own.
   OccupancyReader occupancyIn(Frame frame) =>
       OccupancyReader(calibration, frame);
+
+  /// The two settled dice in [frame], or null when there are not exactly two.
+  ///
+  /// Null is an answer, and the common one when a die is under a hand, off the
+  /// board, or still rolling. The session's response is to wait for another
+  /// stable frame and then to offer the manual dice pad — never to guess, since
+  /// a wrong roll goes into the authoritative game state and stays there.
+  DiceReading? readDice(Frame frame) =>
+      DiceReader(calibration, frame).read();
 }
