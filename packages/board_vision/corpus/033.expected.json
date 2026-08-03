@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "id": "033",
+  "session": "B-dim",
+  "kind": "degraded",
+  "calibrateFrom": "028",
+  "corners": null,
+  "orientation": "whiteHomeFar",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      3,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -3,
+      0,
+      -5,
+      0,
+      0,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": null,
+  "capture": {
+    "board": "board B",
+    "lighting": "dim",
+    "angle": "off to one side of the table rather than at the end of it"
+  },
+  "synthetic": null,
+  "expectRefusal": "geometry",
+  "refusalReason": "the board is no longer where the session calibrated it, so every region is being measured in the wrong place",
+  "title": "Deliberately unreadable — the phone was knocked",
+  "instructions": [
+    "This one is meant to fail, and it is the most valuable shot in the session: it is how the corpus checks that Buddy says \"I cannot read this\" instead of guessing.",
+    "Set the board back to the STARTING position.",
+    "Knock the phone — a real nudge, a centimetre or two, the kind that happens when someone leans on the table. Do not re-aim it.",
+    "Take the photo. This is the LAST shot of the session — the phone may be moved freely afterwards."
+  ]
+}

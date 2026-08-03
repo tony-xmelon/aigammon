@@ -1,0 +1,595 @@
+{
+  "schema": 1,
+  "id": "016",
+  "session": "A-dim",
+  "kind": "position",
+  "calibrateFrom": "012",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      2,
+      -1,
+      2,
+      0,
+      0,
+      4,
+      0,
+      1,
+      0,
+      0,
+      0,
+      -2,
+      2,
+      -1,
+      0,
+      0,
+      0,
+      -2,
+      0,
+      -3,
+      -3,
+      -3,
+      2,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": [
+    {
+      "type": "openingRoll",
+      "whiteDie": 4,
+      "blackDie": 3
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          4,
+          false
+        ],
+        [
+          7,
+          3,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 2,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          11,
+          13,
+          false
+        ],
+        [
+          11,
+          13,
+          false
+        ],
+        [
+          13,
+          15,
+          false
+        ],
+        [
+          18,
+          20,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 4,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          2,
+          false
+        ],
+        [
+          12,
+          8,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          18,
+          21,
+          false
+        ],
+        [
+          15,
+          21,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 1,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          23,
+          19,
+          false
+        ],
+        [
+          5,
+          4,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 4,
+      "die2": 1
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          0,
+          1,
+          false
+        ],
+        [
+          16,
+          20,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 6,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          5,
+          0,
+          true
+        ],
+        [
+          8,
+          2,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 3,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          24,
+          3,
+          true
+        ],
+        [
+          18,
+          21,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 1,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          23,
+          false
+        ],
+        [
+          4,
+          1,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 5,
+      "die2": 6
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          24,
+          4,
+          true
+        ],
+        [
+          13,
+          19,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 4,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": []
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 3,
+      "die2": 6
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          11,
+          17,
+          false
+        ],
+        [
+          3,
+          6,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 4,
+      "die2": 6
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": []
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 1,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          6,
+          11,
+          false
+        ],
+        [
+          18,
+          19,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 6,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          22,
+          false
+        ],
+        [
+          24,
+          18,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 3,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": []
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 1,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          18,
+          14,
+          false
+        ],
+        [
+          14,
+          13,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          24,
+          3,
+          false
+        ],
+        [
+          3,
+          9,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 1,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          12,
+          7,
+          false
+        ],
+        [
+          1,
+          0,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          16,
+          19,
+          false
+        ],
+        [
+          4,
+          10,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 3,
+      "die2": 1
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          23,
+          22,
+          false
+        ],
+        [
+          12,
+          9,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 3,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          24,
+          1,
+          false
+        ],
+        [
+          10,
+          13,
+          true
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 5,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": []
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 5,
+      "die2": 1
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          16,
+          17,
+          false
+        ],
+        [
+          11,
+          16,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 4,
+      "die2": 1
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          23,
+          false
+        ],
+        [
+          9,
+          5,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 1,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          16,
+          19,
+          false
+        ],
+        [
+          19,
+          20,
+          false
+        ]
+      ]
+    }
+  ],
+  "dice": null,
+  "capture": {
+    "board": "board A",
+    "lighting": "dim",
+    "angle": "off to one side of the table rather than at the end of it"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Mid-game position after 26 half-turns",
+  "instructions": [
+    "Set the board to the position in the diagram below. Take your time and count twice; this is the ground truth.",
+    "Clear the dice off the board.",
+    "Take the photo."
+  ]
+}

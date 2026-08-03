@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "id": "001",
+  "session": "A-daylight",
+  "kind": "calibration",
+  "calibrateFrom": null,
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      3,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -3,
+      0,
+      -5,
+      0,
+      0,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": null,
+  "capture": {
+    "board": "board A",
+    "lighting": "daylight",
+    "angle": "propped at the end of the table, roughly a hand span above it"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Calibration — the starting position",
+  "instructions": [
+    "Set board A up for the start of a game, home boards to the RIGHT for both players.",
+    "Sit where the checklist says (the side where WHITE bears off into the tray on your right) and prop the phone so the whole playing field, both bear-off trays included, is inside the picture: propped at the end of the table, roughly a hand span above it.",
+    "Nothing on the felt but the checkers — no dice, no cube, no hands.",
+    "Take the photo. DO NOT MOVE THE PHONE OR THE BOARD until this session's shots are all taken."
+  ]
+}

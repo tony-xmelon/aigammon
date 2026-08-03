@@ -802,7 +802,7 @@ SyntheticShot renderShot({
   // here on: the frame is warped onto it, the ground truth reports it, and the
   // homography a test uses to find a checker is built from it.
   final actualQuad = degradation.quadJitter > 0
-      ? _jitterQuad(quad, degradation.quadJitter, degradation.seed)
+      ? jitterQuad(quad, degradation.quadJitter, degradation.seed)
       : quad;
   final warped = warpToQuad(
     rendered.image,
@@ -839,7 +839,13 @@ SyntheticShot renderShot({
 ///
 /// Its own generator, seeded apart from the noise's, so that changing how
 /// grainy a shot is does not silently move the board underneath it.
-BoardQuad _jitterQuad(BoardQuad quad, double amplitude, int seed) {
+///
+/// Public because a whole capture *session* wants one jitter, not one per
+/// shot: the board does not move between two photographs taken a few seconds
+/// apart, and giving each shot its own wobble would model something that does
+/// not happen. The corpus generator jitters a session's quad once and renders
+/// every shot in that session onto it.
+BoardQuad jitterQuad(BoardQuad quad, double amplitude, int seed) {
   final rng = math.Random(seed);
   double wobble() => (rng.nextDouble() * 2 - 1) * amplitude;
   return BoardQuad.fromCorners(<Pt>[

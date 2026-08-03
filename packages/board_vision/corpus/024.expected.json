@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "id": "024",
+  "session": "B-lamp",
+  "kind": "dice",
+  "calibrateFrom": "023",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      3,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -3,
+      0,
+      -5,
+      0,
+      0,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": {
+    "die1": 3,
+    "die2": 1
+  },
+  "capture": {
+    "board": "board B",
+    "lighting": "lamp",
+    "angle": "leaning against something at the end of the table, lower — the far edge of the board should look clearly shorter than the near one"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Dice 3-1 on the starting position",
+  "instructions": [
+    "Leave the board exactly as it is.",
+    "Put two dice showing 3 and 1 in the empty band across the middle of the board.",
+    "Both dice must be CLEAR OF EVERY STACK — a die touching checkers is a different question, and one Buddy answers by asking for another roll.",
+    "Take the photo."
+  ]
+}
