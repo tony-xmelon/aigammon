@@ -165,6 +165,338 @@ class RoiSampler extends FrameSampler {
     }
     return RoiScan(samples, attempted);
   }
+
+  /// Rows along a stack axis. Enough that one checker spans about twenty of
+  /// them, so the end of a run is placed to a fiftieth of a checker.
+  static const int stackRows = 120;
+
+  /// Samples across the column on each row. A dozen resolves the width of a
+  /// round checker well enough to say whether the row is under one, without
+  /// paying for a fourth of the samples the whole board would otherwise cost.
+  static const int stackColumns = 12;
+
+  /// How far in from the column's own sides the profile samples, as a fraction
+  /// of the column's width. Just enough to keep the neighbouring column's
+  /// paint out; a checker is very nearly as wide as its column, so insetting
+  /// far would measure the checker rather than the row.
+  static const double stackInsetX = 0.04;
+
+  /// What share of a row has to read as one colour before that row counts as
+  /// standing under a checker of it.
+  ///
+  /// A round checker covers its whole row at the widest and tapers to nothing
+  /// at its ends, so this threshold decides where a checker is judged to start
+  /// and stop. The number itself hardly matters to the count — whatever it
+  /// shaves off each end, it shaves off equally at calibration, and the fit's
+  /// origin absorbs it. What it must do is sit well above the stray sample or
+  /// two a shadow produces.
+  static const double minRowCoverage = 0.35;
+
+  /// The widest gap, in rows, a stack may have inside it and still be one run.
+  ///
+  /// Tangent discs pinch to nothing where they touch, so a synthetic stack is
+  /// a chain of runs rather than one; a photograph of real checkers shows a
+  /// rim there instead, which is darker again. Six rows is under a third of a
+  /// checker — enough to bridge either, and far too little to swallow a die
+  /// sitting in a point's headroom.
+  static const int maxProfileGap = 6;
+
+  /// Walks [axis] from its origin and reports what stands on it.
+  ///
+  /// One pass, both colours, because the bar carries both and because the
+  /// wrong colour showing up on a point is exactly what a confidence needs to
+  /// know. Classification goes through [colors], which the caller is
+  /// responsible for having re-normalized for this frame's light — see
+  /// `BoardCalibration.colorsIn`.
+  StackMeasurement measureStack(StackAxis axis, ColorModel colors) {
+    final background = colors.backgroundOf(axis.region);
+    final insetX = (axis.maxX - axis.minX) * stackInsetX;
+    final x0 = axis.minX + insetX, x1 = axis.maxX - insetX;
+
+    final whiteRows = List<double>.filled(stackRows, 0);
+    final blackRows = List<double>.filled(stackRows, 0);
+    var whiteTotal = 0, blackTotal = 0, seen = 0;
+
+    for (var r = 0; r < stackRows; r++) {
+      final y = axis.yAt((r + 0.5) / stackRows * axis.reach);
+      var white = 0, black = 0, taken = 0;
+      for (var c = 0; c < stackColumns; c++) {
+        final sample = at(x0 + (c + 0.5) / stackColumns * (x1 - x0), y);
+        if (sample == null) continue;
+        taken++;
+        switch (colors.classify(sample, background)) {
+          case CheckerColor.white:
+            white++;
+          case CheckerColor.black:
+            black++;
+          case CheckerColor.none:
+            break;
+        }
+      }
+      seen += taken;
+      whiteTotal += white;
+      blackTotal += black;
+      if (taken == 0) continue;
+      whiteRows[r] = white / taken;
+      blackRows[r] = black / taken;
+    }
+
+    final attempted = stackRows * stackColumns;
+    final rowDepth = axis.reach / stackRows;
+    return StackMeasurement(
+      whiteMass: seen == 0 ? 0.0 : whiteTotal / seen,
+      blackMass: seen == 0 ? 0.0 : blackTotal / seen,
+      whiteReach: _runReach(whiteRows, rowDepth),
+      blackReach: _runReach(blackRows, rowDepth),
+      visibleFraction: attempted == 0 ? 0.0 : seen / attempted,
+    );
+  }
+
+  /// How far the run of covered rows starting at the origin reaches.
+  static double _runReach(List<double> coverage, double rowDepth) {
+    var last = -1;
+    for (var r = 0; r < coverage.length; r++) {
+      if (coverage[r] < minRowCoverage) continue;
+      if (r - last > maxProfileGap + 1) break;
+      last = r;
+    }
+    return last < 0 ? 0.0 : (last + 0.5) * rowDepth;
+  }
+}
+
+/// The line a region's checkers stack along, in board space.
+///
+/// Every region on a backgammon board is a queue with a known end. A point's
+/// stack grows from that point's own edge of the board toward the middle; a
+/// bear-off tray's grows from the outer edge inward; the bar's grows from the
+/// middle *outward*, each colour toward its own player's edge, which is the
+/// one case where the axis depends on whose checkers are being asked about.
+/// Depth is measured from wherever the first checker sits, so a stack of one
+/// looks the same on all four kinds of region.
+class StackAxis {
+  /// Which region this axis belongs to — carried so a measurement can look up
+  /// that region's learned background.
+  final RoiId region;
+
+  /// Board-space y the first checker of a stack sits against.
+  final double startY;
+
+  /// `+1` when depth grows with y, `-1` when it shrinks.
+  final double directionY;
+
+  /// How far the region reaches along the axis, in board-space units.
+  final double reach;
+
+  /// The column the stack occupies, in board space.
+  final double minX;
+  final double maxX;
+
+  const StackAxis({
+    required this.region,
+    required this.startY,
+    required this.directionY,
+    required this.reach,
+    required this.minX,
+    required this.maxX,
+  });
+
+  /// The axis [region]'s stacks grow along, for [color]'s checkers.
+  ///
+  /// [color] matters only on the bar, where the two colours stack away from
+  /// each other; everywhere else a region holds one queue and the colour is
+  /// what the queue turns out to be.
+  factory StackAxis.forRegion(
+    RoiAtlas atlas,
+    RoiId region, {
+    CheckerColor color = CheckerColor.white,
+  }) {
+    final b = boundsOf(atlas.roi(region));
+    if (region == RoiId.bar) {
+      // Which edge is "White's own" is what the seating says, and the atlas
+      // carries the seating.
+      final whiteNear = atlas.orientation == BoardOrientation.whiteHomeNear;
+      final towardNear = (color == CheckerColor.white) == whiteNear;
+      return StackAxis(
+        region: region,
+        startY: RoiAtlas.midline,
+        directionY: towardNear ? 1.0 : -1.0,
+        reach: RoiAtlas.midline,
+        minX: b.minX,
+        maxX: b.maxX,
+      );
+    }
+    // A point or a tray runs from one board edge to the midline; whichever end
+    // is not the midline is the edge its stack sits against.
+    final fromFarEdge = b.maxY <= RoiAtlas.midline + 1e-9;
+    return StackAxis(
+      region: region,
+      startY: fromFarEdge ? b.minY : b.maxY,
+      directionY: fromFarEdge ? 1.0 : -1.0,
+      reach: b.maxY - b.minY,
+      minX: b.minX,
+      maxX: b.maxX,
+    );
+  }
+
+  /// The board-space y at [depth] along the axis.
+  double yAt(double depth) => startY + directionY * depth;
+
+  @override
+  String toString() => 'StackAxis(${region.name}, from '
+      '${startY.toStringAsFixed(2)} by ${directionY.toStringAsFixed(0)})';
+}
+
+/// What one stack axis showed, for both colours at once.
+///
+/// Both colours are measured in the same pass because the bar holds both and
+/// because a point that reads a little of the wrong colour is exactly the case
+/// a confidence has to know about.
+class StackMeasurement {
+  /// Share of the profile's samples that read as each colour.
+  final double whiteMass;
+  final double blackMass;
+
+  /// How far each colour's run reaches from the stack's origin, in board-space
+  /// units. Zero when that colour was not found at the origin end at all.
+  ///
+  /// A *run*, not a scattering: the walk starts at the origin and stops at the
+  /// first gap wider than [maxProfileGap]. A blob floating in the middle of a
+  /// region — a die in a point's headroom, a hand's shadow — is therefore not
+  /// counted as part of the stack unless it is touching it.
+  final double whiteReach;
+  final double blackReach;
+
+  /// How much of the profile landed inside the picture.
+  final double visibleFraction;
+
+  const StackMeasurement({
+    required this.whiteMass,
+    required this.blackMass,
+    required this.whiteReach,
+    required this.blackReach,
+    required this.visibleFraction,
+  });
+
+  double massOf(CheckerColor color) => switch (color) {
+        CheckerColor.white => whiteMass,
+        CheckerColor.black => blackMass,
+        CheckerColor.none => 0.0,
+      };
+
+  double reachOf(CheckerColor color) => switch (color) {
+        CheckerColor.white => whiteReach,
+        CheckerColor.black => blackReach,
+        CheckerColor.none => 0.0,
+      };
+
+  /// Whichever colour covers more of the profile, or [CheckerColor.none] when
+  /// neither covers enough to be a checker.
+  CheckerColor dominant(double minMass) {
+    if (whiteMass < minMass && blackMass < minMass) return CheckerColor.none;
+    return whiteMass >= blackMass ? CheckerColor.white : CheckerColor.black;
+  }
+
+  @override
+  String toString() => 'StackMeasurement(white ${whiteMass.toStringAsFixed(3)}'
+      '/${whiteReach.toStringAsFixed(3)}, black '
+      '${blackMass.toStringAsFixed(3)}/${blackReach.toStringAsFixed(3)})';
+}
+
+/// How a stack of *this* board's checkers grows, in board-space units.
+///
+/// The one number that turns a measured length into a count, and it is
+/// **learned, never written down**. Board space is a unit square whichever
+/// shape the physical board is, so how far one checker reaches along a stack
+/// axis depends on the board's proportions — a number the atlas cannot supply
+/// and a constant here would get wrong for every board but one.
+///
+/// Calibration measures it from the only frame that comes with labels: the
+/// starting position stands stacks of two, three and five on both halves, so
+/// fitting reach against known height is a three-point regression with the
+/// board's own checkers.
+///
+/// **What this does not model.** A real checker is a disc with height, and a
+/// tall stack's top leans toward the camera, so its footprint in board space
+/// grows a little faster than linearly. The synthetic bed paints flat discs
+/// and cannot show that; the corpus gate (the plan's Task 6) is where it turns
+/// up, and a quadratic term is the obvious answer if it does.
+class StackMetrics {
+  /// Board-space depth one more checker adds.
+  final double pitch;
+
+  /// The depth a stack of no checkers would reach — the gap between the board
+  /// edge and where the first checker's own edge starts, plus whatever the
+  /// coverage threshold shaves off each end. Absorbed here so that
+  /// `count = (reach - origin) / pitch`.
+  final double origin;
+
+  /// Whether the fit had enough distinct stack heights behind it to be worth
+  /// trusting. False means [pitch] is a single ratio rather than a regression,
+  /// and occupancy says so in its confidence.
+  final bool wellConditioned;
+
+  const StackMetrics({
+    required this.pitch,
+    required this.origin,
+    required this.wellConditioned,
+  });
+
+  /// Narrower than this and a "pitch" is noise; wider and it is not a stack of
+  /// checkers. A point's region is half the board deep and five checkers very
+  /// nearly fill it, which puts the true value near a tenth either side.
+  static const double minPitch = 0.02;
+  static const double maxPitch = 0.15;
+
+  /// Least squares through `(height, reach)` pairs.
+  ///
+  /// Falls back to the median of `reach / height` when the heights on offer do
+  /// not span enough to fit a line — one ratio is a worse instrument than a
+  /// regression, but it is a great deal better than refusing to count.
+  factory StackMetrics.fit(List<(int height, double reach)> samples) {
+    final usable = samples.where((s) => s.$1 > 0 && s.$2 > 0).toList();
+    if (usable.isEmpty) {
+      return const StackMetrics(pitch: 0, origin: 0, wellConditioned: false);
+    }
+    final heights = usable.map((s) => s.$1).toSet();
+    if (heights.length >= 2) {
+      var meanK = 0.0, meanR = 0.0;
+      for (final s in usable) {
+        meanK += s.$1;
+        meanR += s.$2;
+      }
+      meanK /= usable.length;
+      meanR /= usable.length;
+      var num = 0.0, den = 0.0;
+      for (final s in usable) {
+        final dk = s.$1 - meanK;
+        num += dk * (s.$2 - meanR);
+        den += dk * dk;
+      }
+      final pitch = den == 0 ? 0.0 : num / den;
+      if (pitch >= minPitch && pitch <= maxPitch) {
+        return StackMetrics(
+          pitch: pitch,
+          origin: meanR - pitch * meanK,
+          wellConditioned: heights.length >= 3 && usable.length >= 4,
+        );
+      }
+    }
+    final ratios = usable.map((s) => s.$2 / s.$1).toList()..sort();
+    return StackMetrics(
+      pitch: ratios[ratios.length ~/ 2],
+      origin: 0,
+      wellConditioned: false,
+    );
+  }
+
+  /// How many checkers a run of [reach] is, before any rounding.
+  double heightOf(double reach) =>
+      pitch <= 0 ? 0.0 : (reach - origin) / pitch;
+
+  @override
+  String toString() => 'StackMetrics(pitch ${pitch.toStringAsFixed(4)}, '
+      'origin ${origin.toStringAsFixed(4)}'
+      '${wellConditioned ? '' : ', poorly conditioned'})';
 }
 
 /// A region's extent in board space, as an axis-aligned box.

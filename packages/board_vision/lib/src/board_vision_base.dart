@@ -1,6 +1,7 @@
 import 'calibration.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
+import 'occupancy.dart';
 
 /// The perception core, as the app sees it.
 ///
@@ -62,4 +63,14 @@ class BoardVision {
   /// same scene by enough to turn every empty point into a phantom checker.
   ConfirmResult confirmStartingPosition(Frame frame) =>
       Calibrator.confirm(frame, calibration);
+
+  /// How many checkers of what colour each region holds, in [frame].
+  ///
+  /// The reader carries the frame and the colour model re-normalized for its
+  /// light, so several regions can be asked about without re-measuring either.
+  /// Read [OccupancyReader]'s own documentation before trusting a count above
+  /// two: mid-game these are meant to be differenced against an expected
+  /// position, never read as an answer on their own.
+  OccupancyReader occupancyIn(Frame frame) =>
+      OccupancyReader(calibration, frame);
 }

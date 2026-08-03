@@ -252,11 +252,17 @@ class BoardCalibration {
   /// What the scene looked like, for the session-long re-validation.
   final CalibrationFingerprint fingerprint;
 
+  /// How far one of this board's checkers reaches along a stack, learned from
+  /// the eight stacks the starting position labels. What turns a measured
+  /// length into a count; see [StackMetrics] for why it cannot be a constant.
+  final StackMetrics stacks;
+
   const BoardCalibration({
     required this.h,
     required this.orientation,
     required this.colors,
     required this.fingerprint,
+    required this.stacks,
   });
 
   /// Where everything is, for this seating.
@@ -717,12 +723,31 @@ class Calibrator {
     // over would push the failure one screen along, where it arrives as "your
     // board is set up wrong" and sends the user to move checkers that are
     // already right.
+    // The other thing the starting position labels for free: eight stacks of
+    // known height, on both halves, at three different heights. That is a
+    // regression, and it is where the checker pitch occupancy counts with
+    // comes from — measured on this board rather than assumed from any board's
+    // proportions.
+    final stacks = StackMetrics.fit(<(int, double)>[
+      for (final entry in occupied.entries)
+        (
+          start.points[entry.key].abs(),
+          sampler
+              .measureStack(
+                StackAxis.forRegion(atlas, RoiId.point(entry.key)),
+                colors,
+              )
+              .reachOf(entry.value),
+        ),
+    ]);
+
     final fingerprint = CalibrationFingerprint.fromFrame(frame, homography);
     final calibration = BoardCalibration(
       h: homography,
       orientation: orientation,
       colors: colors,
       fingerprint: fingerprint,
+      stacks: stacks,
     );
     final readBack = confirm(frame, calibration);
     if (readBack.discrepancies.length > maxLearningMisreads) {
