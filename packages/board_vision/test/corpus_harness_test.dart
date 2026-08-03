@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:backgammon_core/backgammon_core.dart';
@@ -50,14 +51,32 @@ void main() {
           reason: 'one calibration per session, as a real session does');
     });
 
-    test('every shot the plan describes is present', () {
-      final planned = flatten(buildCapturePlan()).map((s) => s.id).toSet();
-      final present = loadSidecars(Directory('test/corpus/synthetic'))
-          .map((s) => s.id)
-          .toSet();
-      expect(present, planned,
-          reason: 'the corpus and the capture plan have drifted apart — '
-              'regenerate with tool/generate_synthetic_corpus.dart');
+    test('every committed sidecar is still the one the plan produces', () {
+      // Not just the same shot numbers: the same ground truth, the same
+      // instructions, the same everything the plan owns. The corpus is
+      // generated and committed, so it goes stale the moment the plan moves —
+      // and a stale sidecar is a corpus scoring this week's pipeline against
+      // last week's truth. Caught here once already, on nothing worse than a
+      // reworded instruction.
+      final planned = <String, CorpusShot>{
+        for (final shot in flatten(buildCapturePlan())) shot.id: shot,
+      };
+      final committed = loadSidecars(Directory('test/corpus/synthetic'));
+      expect(committed.map((s) => s.id).toSet(), planned.keys.toSet());
+
+      for (final shot in committed) {
+        expect(
+          jsonEncode(shot.toJson()),
+          // Everything except the two fields the generator owns: where the
+          // corners came out after the session's jitter, and the recipe that
+          // drew the picture.
+          jsonEncode(planned[shot.id]!
+              .copyWith(corners: shot.corners, synthetic: shot.synthetic)
+              .toJson()),
+          reason: 'shot ${shot.id} has drifted from the capture plan — '
+              'regenerate with tool/generate_synthetic_corpus.dart',
+        );
+      }
     });
 
     test('it stays inside the corpus size budget', () {
