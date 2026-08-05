@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:board_vision/board_vision.dart';
@@ -75,6 +76,61 @@ void main() {
               .toJson()),
           reason: 'shot ${shot.id} has drifted from the capture plan — '
               'regenerate with tool/generate_synthetic_corpus.dart',
+        );
+      }
+    });
+
+    test('the committed pictures are still the ones this code draws', () {
+      // The sidecar guard above deliberately excludes `corners` and
+      // `synthetic` — the two fields that describe the PICTURE — so on its own
+      // it would let a renderer change, a new `kCorpusDegradation`, or a
+      // different palette in the generator's session map leave thirty-three
+      // stale JPEGs behind with nothing red. Determinism is what makes the
+      // corpus reproducible; this is the test that notices if it is lost.
+      //
+      // Two shots rather than thirty-three, for runtime: one calibration frame
+      // and one with dice on it, which between them exercise the warp, the
+      // palette, all three degradation knobs, the dice placements and the JPEG
+      // encoder. The three deliberately-spoiled shots are not re-rendered —
+      // their quads are the generator's own arithmetic and are deliberately
+      // not recorded anywhere a harness could reach, since a shot whose
+      // sidecar said where the board really was would not be much of a drift
+      // test.
+      final committed = loadSidecars(Directory('test/corpus/synthetic'));
+      final calibration = committed.firstWhere((s) => s.id == '001');
+      final withDice = committed.firstWhere((s) => s.id == '002');
+      expect(calibration.corners, isNotNull);
+      expect(withDice.dice, isNotNull);
+      expect(withDice.calibrateFrom, calibration.id,
+          reason: 'the dice shot is warped onto its session\'s quad, which is '
+              'only recorded on the shot the session calibrates from');
+
+      for (final shot in <CorpusShot>[calibration, withDice]) {
+        expect(
+          _reRender(shot, calibration.corners!),
+          File('test/corpus/synthetic/${shot.id}.jpg').readAsBytesSync(),
+          reason: 'shot ${shot.id} on disk is not what the renderer draws '
+              'today — regenerate with tool/generate_synthetic_corpus.dart, '
+              'and look at why it moved before you do',
+        );
+      }
+    });
+
+    test('and they were drawn at the settings this code still uses', () {
+      // The other half of the same guard, covering the thirty-one shots not
+      // re-rendered above: a knob turned in `kCorpusDegradation` or in the
+      // corpus JPEG settings has to be followed by a regeneration.
+      for (final shot in loadSidecars(Directory('test/corpus/synthetic'))) {
+        final recipe = shot.synthetic;
+        expect(recipe, isNotNull, reason: '${shot.id} has no recipe');
+        expect(recipe!.noise, kCorpusDegradation.noise, reason: shot.id);
+        expect(recipe.blurSigma, kCorpusDegradation.blurSigma,
+            reason: shot.id);
+        expect(recipe.jpegQuality, kCorpusJpegQuality, reason: shot.id);
+        expect(
+          BoardPalette.all.map((p) => p.name),
+          contains(recipe.palette),
+          reason: '${shot.id} was drawn with a palette that no longer exists',
         );
       }
     });
@@ -240,6 +296,30 @@ void main() {
       expect(board.totalFor(CorpusMetric.dicePair).attempts, 0);
     });
   });
+}
+
+/// Redraws [shot] from nothing but its own sidecar, and encodes it the way the
+/// corpus is committed.
+///
+/// Driven entirely by the recipe in the sidecar rather than by anything inside
+/// the generator, so this checks that a committed picture and the code that
+/// claims to have drawn it still agree — which is what makes the corpus
+/// reproducible and, when it stops being true, worth knowing about.
+Uint8List _reRender(CorpusShot shot, BoardQuad sessionQuad) {
+  final recipe = shot.synthetic!;
+  final rendered = renderShot(
+    board: shot.board,
+    palette: recipe.boardPalette,
+    lightingGain: recipe.lightingGain,
+    orientation: shot.orientation,
+    dicePlacements: recipe.dice.isEmpty ? null : recipe.placements,
+    quad: shot.corners ?? sessionQuad,
+    degradation: recipe.degradation,
+  );
+  return encodeCorpusJpeg(
+    imageOfFrame(rendered.frame),
+    quality: recipe.jpegQuality,
+  );
 }
 
 /// What a fixture corpus has wrong with it, if anything.

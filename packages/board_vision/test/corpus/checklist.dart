@@ -130,8 +130,13 @@ void _writeShot(StringBuffer out, CorpusShot shot) {
 }
 
 void _writeAfterwards(StringBuffer out, List<CaptureSession> sessions) {
-  final calibrationShots =
-      sessions.map((s) => s.calibrationShot.id).join(', ');
+  // Counted from the plan, never written down: the checklist and the prep tool
+  // said different numbers once, and a person following the checklist would
+  // have found shots in the template that the instructions did not account for.
+  final needing = flatten(sessions).where((s) => s.needsCorners).toList();
+  final calibrationShots = sessions.map((s) => s.calibrationShot.id).toList();
+  final awkward =
+      needing.where((s) => !calibrationShots.contains(s.id)).toList();
   out
     ..writeln('---')
     ..writeln()
@@ -154,9 +159,19 @@ void _writeAfterwards(StringBuffer out, List<CaptureSession> sessions) {
         'the four corners of the playing field — in the app the user drags '
         'them onto a preview, and the corpus has to supply the same thing. '
         'The prep tool writes a `corners.json` template listing the shots that '
-        'need corners; there are only ${sessions.length} of them, the '
-        'calibration shot of each session ($calibrationShots), plus any shot '
-        'marked unreadable that carries its own corners.')
+        'need them: **${needing.length} shots**, out of '
+        '${flatten(sessions).length}.')
+    ..writeln()
+    ..writeln('   Those ${needing.length} are '
+        '${_andList(needing.map((s) => '`${s.id}`').toList())} — the '
+        'calibration shot of each session '
+        '(${calibrationShots.map((id) => '`$id`').join(', ')}), plus '
+        '${_andList(awkward.map((s) => '`${s.id}`').toList())}, which '
+        '${awkward.length == 1 ? 'is its own' : 'are their own'} calibration '
+        'attempt${awkward.length == 1 ? '' : 's'} and so '
+        '${awkward.length == 1 ? 'needs' : 'need'} '
+        '${awkward.length == 1 ? 'its' : 'their'} own corners. Every other '
+        'shot is read through its session\'s calibration and needs nothing.')
     ..writeln()
     ..writeln('   Open each of those prepared JPEGs in any image viewer that '
         'shows pixel coordinates, read off the four corners of the playing '
@@ -164,7 +179,22 @@ void _writeAfterwards(StringBuffer out, List<CaptureSession> sessions) {
         'wooden surround — and fill them in **clockwise from the top left as '
         'the photograph shows them**. Then run the prep tool again; it folds '
         'them into the sidecars.')
-    ..writeln()
+    ..writeln();
+
+  for (final shot in awkward) {
+    final session = sessions.firstWhere((s) => s.name == shot.session);
+    out
+      ..writeln('   **`${shot.id}` needs a word of its own** — it is the '
+          '"${_labelOf(shot)}" shot, and tapping its corners is not the '
+          'ordinary job:')
+      ..writeln();
+    for (final line in _cornerRulingFor(shot, session.calibrationShot.id)) {
+      out.writeln('   - $line');
+    }
+    out.writeln();
+  }
+
+  out
     ..writeln('4. Run the harness:')
     ..writeln()
     ..writeln('   ```')
@@ -175,6 +205,32 @@ void _writeAfterwards(StringBuffer out, List<CaptureSession> sessions) {
         'lighting, board half, seating — and fails if a spec target is '
         'missed. That scoreboard is the Task 6 gate.')
     ..writeln()
+    ..writeln('## One thing to expect, so it is not mistaken for a bug')
+    ..writeln()
+    ..writeln('Some shots may fail to calibrate for a reason that is nothing '
+        'to do with your board or your photography, and it is worth knowing '
+        'before it happens.')
+    ..writeln()
+    ..writeln('Phone cameras save JPEGs with the **colour** stored at a '
+        'quarter of the detail of the brightness (4:2:0 chroma subsampling). '
+        'The pipeline classifies colour pixel by pixel, so that loss lands '
+        'squarely on the thing it is doing. Measured on the synthetic boards: '
+        'at 4:2:0 a brown board with cream points and near-black checkers '
+        'stops calibrating at the same quality where it is fine without the '
+        'subsampling. **Dark checkers on a warm-coloured board are the case at '
+        'risk**, and the prep tool cannot undo it — the phone discarded the '
+        'colour before the file was written.')
+    ..writeln()
+    ..writeln('So: **shoot anyway, and do not adjust anything to work around '
+        'it.** If a session refuses to calibrate, note which board and which '
+        'light and carry on. Knowing that a real capture chain costs this much '
+        'is one of the things the corpus is for, and the gate accounts for it '
+        'rather than reading it as an algorithm that does not work.')
+    ..writeln()
+    ..writeln('If your camera app offers a RAW / HEIF-maximum-quality / '
+        '"ProRAW" mode, using it will avoid the problem — but only if you can '
+        'export to JPEG or PNG afterwards, and it is not worth a fight.')
+    ..writeln()
     ..writeln('## If something goes wrong mid-session')
     ..writeln()
     ..writeln('Re-shoot the **whole session** rather than the one photograph. '
@@ -182,6 +238,53 @@ void _writeAfterwards(StringBuffer out, List<CaptureSession> sessions) {
         'different one is a shot whose sidecar is quietly wrong — which is '
         'worse for the corpus than a missing session.')
     ..writeln();
+}
+
+/// How to tap the corners of a shot that was spoiled on purpose.
+///
+/// Both cases are ones a person would otherwise stop at, and the second is one
+/// they would get subtly wrong without being told: the board in a too-dark shot
+/// has not moved, so its corners are the session's, and re-reading them off a
+/// nearly black photograph would introduce error into a shot whose whole job is
+/// to be refused for the right reason.
+List<String> _cornerRulingFor(CorpusShot shot, String calibrationId) =>
+    shot.isPartlyOutOfFrame
+        ? <String>[
+            'Two of the four corners are **outside the picture** — that is '
+                'what makes this shot unreadable, and it is the point of it.',
+            'Extend the board\'s visible edges in straight lines past the edge '
+                'of the photograph and estimate where they would meet. It does '
+                'not have to be accurate; it has to be honest about where the '
+                'board is.',
+            'Coordinates outside the image, including **negative** ones, are '
+                'expected here and are accepted by the tool. Do not clamp them '
+                'to the edge of the picture.',
+            'Do not re-frame or re-shoot to get all four corners in. A shot '
+                'that shows the whole board is not the shot this is.',
+          ]
+        : <String>[
+            'The phone did not move for this one — only the light changed — so '
+                'the board is exactly where it was in `$calibrationId`.',
+            '**Copy `$calibrationId`\'s four corners across unchanged.** That '
+                'is the true answer, and it is more accurate than anything you '
+                'could read off a photograph this dark.',
+            'If you would rather read them off this shot, brighten it in a '
+                'viewer first — the corners are there, just dark. Do not edit '
+                'and re-save the photograph itself.',
+          ];
+
+/// The short name a degraded shot goes by, taken from its own title so the two
+/// cannot drift apart.
+String _labelOf(CorpusShot shot) {
+  final dash = shot.title.indexOf('—');
+  return dash < 0 ? shot.title : shot.title.substring(dash + 1).trim();
+}
+
+/// "a", "a and b", "a, b and c".
+String _andList(List<String> items) {
+  if (items.isEmpty) return 'none';
+  if (items.length == 1) return items.single;
+  return '${items.sublist(0, items.length - 1).join(', ')} and ${items.last}';
 }
 
 /// A position drawn the way it sits on the table, for a person to copy.

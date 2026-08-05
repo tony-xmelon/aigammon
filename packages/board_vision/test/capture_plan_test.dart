@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:board_vision/board_vision.dart';
@@ -231,6 +232,124 @@ void main() {
     test('a sidecar from another schema is refused, not misread', () {
       final json = shots.first.toJson()..['schema'] = kSidecarSchema + 1;
       expect(() => CorpusShot.fromJson(json), throwsFormatException);
+    });
+  });
+
+  group('the committed capture kit is the plan\'s', () {
+    // The kit in `corpus/` is what a person actually shoots from, and it is
+    // generated and committed like the synthetic corpus — so it goes stale the
+    // same way, and the consequence is worse. `prepare_corpus` writes sidecars
+    // from the LIVE plan: if the committed checklist has drifted, someone sets
+    // up the position the stale document asked for and the tool labels the
+    // photograph with the position the plan means now. Every shot in the real
+    // corpus would carry wrong ground truth, silently, and the harness would
+    // score a pipeline that is working as though it were broken.
+    final kit = Directory('corpus');
+
+    test('the kit is committed at all', () {
+      expect(kit.existsSync(), isTrue,
+          reason: 'run `dart run tool/generate_capture_checklist.dart`');
+    });
+
+    test('CHECKLIST.md is what the plan renders today', () {
+      expect(
+        File('${kit.path}/CHECKLIST.md').readAsStringSync().replaceAll(
+              '\r\n',
+              '\n',
+            ),
+        renderChecklist(plan),
+        reason: 'the committed checklist has drifted from the plan — '
+            'regenerate with tool/generate_capture_checklist.dart',
+      );
+    });
+
+    test('every kit sidecar is what the plan produces today', () {
+      final committed = <String, CorpusShot>{
+        for (final file in kit
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.expected.json')))
+          (jsonDecode(file.readAsStringSync())
+              as Map<String, dynamic>)['id'] as String: CorpusShot.fromJson(
+            jsonDecode(file.readAsStringSync()) as Map<String, dynamic>,
+          ),
+      };
+      expect(committed.keys.toSet(), shots.map((s) => s.id).toSet());
+      for (final shot in shots) {
+        expect(
+          jsonEncode(committed[shot.id]!.toJson()),
+          jsonEncode(shot.toJson()),
+          reason: 'kit sidecar ${shot.id} has drifted from the plan',
+        );
+      }
+    });
+  });
+
+  group('the corners, which are the only thing a person has to work out', () {
+    test('the plan needs exactly eight sets of them, and these eight', () {
+      // The count the checklist prints and the count the prep tool means have
+      // to be the same number, and once were not: the checklist said six where
+      // the tool meant eight, so a person following it would have found two
+      // shots in `corners.json` that the instructions did not mention — and
+      // one of those two is the shot with a third of the board deliberately
+      // out of frame. Both now read [CorpusShot.needsCorners]; this pins what
+      // it answers.
+      final needing = shots.where((s) => s.needsCorners).map((s) => s.id);
+      expect(needing, <String>[
+        '001', '006', '011', '012', '017', '022', '023', '028', //
+      ]);
+    });
+
+    test('they are the six calibration shots plus the two own-attempt '
+        'refusals', () {
+      final needing = shots.where((s) => s.needsCorners).toList();
+      expect(
+        needing.where((s) => s.kind == ShotKind.calibration).length,
+        6,
+        reason: 'one per session',
+      );
+      final awkward =
+          needing.where((s) => s.kind != ShotKind.calibration).toList();
+      expect(awkward.length, 2);
+      for (final shot in awkward) {
+        expect(shot.expectRefusal, ExpectedRefusal.calibration,
+            reason: '${shot.id} carries corners only because it is its own '
+                'calibration attempt');
+      }
+      // The knocked-phone shot is read through its session and must NOT be in
+      // the list: its whole point is that the session's corners no longer
+      // describe where the board is.
+      final bumped = shots.firstWhere(
+        (s) => s.expectRefusal == ExpectedRefusal.geometry,
+      );
+      expect(bumped.needsCorners, isFalse);
+    });
+
+    test('the two awkward ones are one of each kind, and the checklist rules '
+        'on both', () {
+      final awkward = shots
+          .where((s) => s.needsCorners && s.kind != ShotKind.calibration)
+          .toList();
+      expect(awkward.where((s) => s.isPartlyOutOfFrame).length, 1);
+      expect(awkward.where((s) => !s.isPartlyOutOfFrame).length, 1);
+
+      final text = renderChecklist(plan);
+      final outOfFrame = awkward.firstWhere((s) => s.isPartlyOutOfFrame);
+      final dark = awkward.firstWhere((s) => !s.isPartlyOutOfFrame);
+
+      // Two corners of the out-of-frame shot are not in the picture, and a
+      // person told nothing would either stop or clamp them to the edge.
+      expect(text, contains('`${outOfFrame.id}` needs a word of its own'));
+      expect(text, contains('outside the picture'));
+      expect(text, contains('**negative**'));
+
+      // The dark shot's phone never moved, so its corners are its session's.
+      expect(text, contains('`${dark.id}` needs a word of its own'));
+      expect(text, contains('four corners across unchanged'));
+    });
+
+    test('the checklist counts them rather than asserting a number', () {
+      expect(renderChecklist(plan), contains('**8 shots**'));
     });
   });
 

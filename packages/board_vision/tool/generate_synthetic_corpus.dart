@@ -163,9 +163,11 @@ Future<void> main(List<String> args) async {
     // A refusal earned by lying about the corners would prove nothing.
     carriesCorners = true;
     board = BoardState.initial();
-    if (shot.refusalReason!.contains('outside the frame')) {
+    if (shot.isPartlyOutOfFrame) {
       quad = _translated(sessionQuad, _outOfFrameShift * kFrameWidth, 0);
     } else {
+      // Nothing moved for this one; the room went dark. Which is why the
+      // checklist can tell a person to reuse the session's corners.
       gain = _tooDarkGain;
     }
   } else if (shot.expectRefusal == ExpectedRefusal.geometry) {

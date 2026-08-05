@@ -167,12 +167,14 @@ class SyntheticRecipe {
           DicePlacement(face: d.face, center: Pt(d.x, d.y), angle: d.angle),
       ];
 
+  // `quadJitter` is deliberately left at its default of zero, and the zero is
+  // the point: a session's quad is jittered ONCE, by the generator, and every
+  // shot in that session is warped onto the result. A board does not move
+  // between two photographs taken seconds apart, so a per-shot wobble would
+  // model something that does not happen.
   ShotDegradation get degradation => ShotDegradation(
         noise: noise,
         blurSigma: blurSigma,
-        // Zero, and it matters: a session's quad is jittered once and every
-        // shot in it is warped onto that same quad, because a board does not
-        // move between two photographs taken seconds apart.
         seed: seed,
       );
 
@@ -302,6 +304,35 @@ class CorpusShot {
   }) : instructions = List<String>.unmodifiable(instructions);
 
   bool get expectsRefusal => expectRefusal != null;
+
+  /// Whether somebody has to tap this shot's four corners.
+  ///
+  /// True for the shot a session calibrates from, and for a shot that is its
+  /// own calibration attempt because the corpus expects that attempt to be
+  /// refused — those carry honest corners saying where the board really is,
+  /// since a refusal earned by lying about the corners would prove nothing.
+  ///
+  /// **One definition, used by everything.** The prep tool decides what to put
+  /// in `corners.json` with this, the checklist counts and names the shots with
+  /// this, and a test pins the answer. They disagreed once — the checklist said
+  /// six where the tool meant eight, and a person following it would have found
+  /// two shots in the template that the instructions did not account for.
+  bool get needsCorners =>
+      kind == ShotKind.calibration ||
+      expectRefusal == ExpectedRefusal.calibration;
+
+  /// Whether this shot's board is partly outside the picture, as opposed to
+  /// being merely unlit.
+  ///
+  /// The two deliberately-unreadable calibration attempts are handled
+  /// differently everywhere — where the generator puts the quad, and what a
+  /// person is told about tapping corners on them — so something has to tell
+  /// them apart. It is a text test rather than a field because the sidecar
+  /// schema is committed alongside photographs: adding a field means bumping
+  /// the version and invalidating every corpus already shot, which is a steep
+  /// price for a distinction one string already carries.
+  bool get isPartlyOutOfFrame =>
+      refusalReason?.contains(_outOfFrameMark) ?? false;
 
   /// The sidecar's file name.
   String get sidecarName => '$id.expected.json';
@@ -667,6 +698,10 @@ const List<_SessionPlan> _sessions = <_SessionPlan>[
     orientation: BoardOrientation.whiteHomeFar,
   ),
 ];
+
+/// The phrase in a degraded shot's reason that means "part of the playing
+/// field is not in the picture". See [CorpusShot.isPartlyOutOfFrame].
+const String _outOfFrameMark = 'outside the frame';
 
 typedef _Degradation = ({
   String label,

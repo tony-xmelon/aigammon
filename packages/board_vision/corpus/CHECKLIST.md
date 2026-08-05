@@ -478,9 +478,24 @@ Point numbers run round the board as they always do. `5W` means five White check
 
    It shrinks each photo to at most 1280 px on its long side, writes it to `test/corpus/real/`, copies the sidecar beside it, and prints the total size against the 25 MB budget.
 
-3. **The one manual step: the corners.** Perception is given the four corners of the playing field — in the app the user drags them onto a preview, and the corpus has to supply the same thing. The prep tool writes a `corners.json` template listing the shots that need corners; there are only 6 of them, the calibration shot of each session (001, 006, 012, 017, 023, 028), plus any shot marked unreadable that carries its own corners.
+3. **The one manual step: the corners.** Perception is given the four corners of the playing field — in the app the user drags them onto a preview, and the corpus has to supply the same thing. The prep tool writes a `corners.json` template listing the shots that need them: **8 shots**, out of 33.
+
+   Those 8 are `001`, `006`, `011`, `012`, `017`, `022`, `023` and `028` — the calibration shot of each session (`001`, `006`, `012`, `017`, `023`, `028`), plus `011` and `022`, which are their own calibration attempts and so need their own corners. Every other shot is read through its session's calibration and needs nothing.
 
    Open each of those prepared JPEGs in any image viewer that shows pixel coordinates, read off the four corners of the playing field — **outer** corners, where the felt-and-tray field meets the wooden surround — and fill them in **clockwise from the top left as the photograph shows them**. Then run the prep tool again; it folds them into the sidecars.
+
+   **`011` needs a word of its own** — it is the "half the board out of the picture" shot, and tapping its corners is not the ordinary job:
+
+   - Two of the four corners are **outside the picture** — that is what makes this shot unreadable, and it is the point of it.
+   - Extend the board's visible edges in straight lines past the edge of the photograph and estimate where they would meet. It does not have to be accurate; it has to be honest about where the board is.
+   - Coordinates outside the image, including **negative** ones, are expected here and are accepted by the tool. Do not clamp them to the edge of the picture.
+   - Do not re-frame or re-shoot to get all four corners in. A shot that shows the whole board is not the shot this is.
+
+   **`022` needs a word of its own** — it is the "too dark to read" shot, and tapping its corners is not the ordinary job:
+
+   - The phone did not move for this one — only the light changed — so the board is exactly where it was in `017`.
+   - **Copy `017`'s four corners across unchanged.** That is the true answer, and it is more accurate than anything you could read off a photograph this dark.
+   - If you would rather read them off this shot, brighten it in a viewer first — the corners are there, just dark. Do not edit and re-save the photograph itself.
 
 4. Run the harness:
 
@@ -489,6 +504,16 @@ Point numbers run round the board as they always do. `5W` means five White check
    ```
 
    It prints a scoreboard per metric and per slice — palette, lighting, board half, seating — and fails if a spec target is missed. That scoreboard is the Task 6 gate.
+
+## One thing to expect, so it is not mistaken for a bug
+
+Some shots may fail to calibrate for a reason that is nothing to do with your board or your photography, and it is worth knowing before it happens.
+
+Phone cameras save JPEGs with the **colour** stored at a quarter of the detail of the brightness (4:2:0 chroma subsampling). The pipeline classifies colour pixel by pixel, so that loss lands squarely on the thing it is doing. Measured on the synthetic boards: at 4:2:0 a brown board with cream points and near-black checkers stops calibrating at the same quality where it is fine without the subsampling. **Dark checkers on a warm-coloured board are the case at risk**, and the prep tool cannot undo it — the phone discarded the colour before the file was written.
+
+So: **shoot anyway, and do not adjust anything to work around it.** If a session refuses to calibrate, note which board and which light and carry on. Knowing that a real capture chain costs this much is one of the things the corpus is for, and the gate accounts for it rather than reading it as an algorithm that does not work.
+
+If your camera app offers a RAW / HEIF-maximum-quality / "ProRAW" mode, using it will avoid the problem — but only if you can export to JPEG or PNG afterwards, and it is not worth a fight.
 
 ## If something goes wrong mid-session
 

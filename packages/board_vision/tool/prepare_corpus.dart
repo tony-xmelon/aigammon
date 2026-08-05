@@ -73,7 +73,9 @@ Future<void> main(List<String> args) async {
     corners: readCorners(File(cornersPath)),
   );
 
-  stdout.writeln(report.summary);
+  stdout
+    ..writeln(report.summary)
+    ..writeln(kChromaCaveat);
   if (report.needCorners.isNotEmpty) {
     final template = File('${source.path}/corners.template.json');
     template.writeAsStringSync(cornersTemplate(report.needCorners));
@@ -86,6 +88,24 @@ Future<void> main(List<String> args) async {
       ..writeln('  Until then the harness skips those sessions and says so.');
   }
 }
+
+/// The one caveat this tool cannot fix, printed every run.
+///
+/// It lives in the output rather than only in a doc comment on purpose. The
+/// person who needs it is looking at a corpus that will not calibrate, at the
+/// Task 6 gate, deciding whether a classical-CV backbone is viable — and the
+/// failure it predicts looks exactly like the algorithm not working. A comment
+/// three files away does not reach that conversation.
+const String kChromaCaveat = '''
+  NOTE — colour, and what a phone threw away before you ran this.
+  Phone cameras write JPEG at 4:2:0: colour is stored at a quarter of the
+  detail of brightness. Classification here is per pixel and per colour, so
+  that loss lands on exactly what perception is doing. Measured on the
+  synthetic boards: a brown board with cream points and near-black checkers
+  stops calibrating at 4:2:0 quality 95, and is fine at the same quality
+  without the subsampling. Dark checkers on a warm board are the case at risk.
+  This tool re-encodes at 4:4:4 and cannot put back what was already gone.
+  A session that will not calibrate may be this rather than the pipeline.''';
 
 /// What a run of the tool did.
 class PrepareReport {
@@ -169,9 +189,7 @@ PrepareReport prepareCorpus({
     // different size would invalidate them. Saying so here is cheaper than
     // debugging a corpus whose homographies are all slightly wrong.
     final tapped = corners[shot.id];
-    final wantsCorners = shot.kind == ShotKind.calibration ||
-        shot.expectRefusal == ExpectedRefusal.calibration;
-    if (wantsCorners && tapped == null) needCorners.add(shot.id);
+    if (shot.needsCorners && tapped == null) needCorners.add(shot.id);
 
     writeSidecar(destination, shot.copyWith(corners: tapped));
     written.add(shot.id);
