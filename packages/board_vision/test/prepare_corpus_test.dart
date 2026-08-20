@@ -378,6 +378,79 @@ void main() {
     });
   });
 
+  group('the other plan: a session that was filmed rather than shot', () {
+    // The real corpus came off one continuous video (`corpus/FILMING.md`), so
+    // its shots are not the checklist's. The tool has to be able to prepare a
+    // named plan rather than only the one it was written against — otherwise
+    // the frames go through some private script, and a corpus whose sidecars
+    // were written by something that is not this tool is a corpus nobody can
+    // re-prepare.
+    late Directory source;
+    late Directory destination;
+
+    setUp(() {
+      source = Directory.systemTemp.createTempSync('prep_in');
+      destination = Directory.systemTemp.createTempSync('prep_out');
+      final shot = renderShot(board: BoardState.initial());
+      for (final id in const <String>['001', '066']) {
+        File('${source.path}/$id.jpg')
+            .writeAsBytesSync(encodeCorpusJpeg(imageOfFrame(shot.frame)));
+      }
+    });
+
+    tearDown(() {
+      source.deleteSync(recursive: true);
+      destination.deleteSync(recursive: true);
+    });
+
+    test('the filmed session\'s own shots are what get prepared', () {
+      final report = prepareCorpus(
+        source: source,
+        destination: destination,
+        shots: buildRealSession().shots,
+      );
+      expect(report.written, <String>['001', '066']);
+      expect(report.missing, isNot(contains('002')),
+          reason: 'the checklist\'s 002 is not a shot of this session at all');
+
+      final sidecar = CorpusShot.fromJson(
+        jsonDecode(File('${destination.path}/066.expected.json')
+            .readAsStringSync()) as Map<String, dynamic>,
+      );
+      expect(sidecar.session, kRealSessionName);
+      expect(sidecar.calibrateFrom, '001');
+      expect(sidecar.board.blackBar, 1,
+          reason: 'the bar keyframe, straight from the plan');
+    });
+
+    test('the measured die size survives the trip through the tool', () {
+      // It rides in the plan rather than in `corners.json` because it is a
+      // fraction of the board's width and not a pixel — but every run rewrites
+      // every sidecar, so "rides in the plan" has to mean it comes out the
+      // other side.
+      prepareCorpus(
+        source: source,
+        destination: destination,
+        shots: buildRealSession().shots,
+        foldingCorners: <String, FoldingCorners>{
+          '001': foldingCornersOf(
+            kFoldingTent,
+            barWidth: kFoldingBarWidth,
+            aspect: kTopDownHeight / kTopDownWidth,
+            principal: const Pt(kFrameWidth / 2, kFrameHeight / 2),
+          ),
+        },
+      );
+      final sidecar = CorpusShot.fromJson(
+        jsonDecode(File('${destination.path}/001.expected.json')
+            .readAsStringSync()) as Map<String, dynamic>,
+      );
+      expect(sidecar.dieSide, kRealDieSide);
+      expect(sidecar.foldingCorners, isNotNull);
+      expect(sidecar.proportions, isNull);
+    });
+  });
+
   group('a prepared corpus is one the harness can read', () {
     test('a prepared synthetic shot decodes and calibrates', () {
       // The end-to-end shape of Task 6: a photograph goes through the prep

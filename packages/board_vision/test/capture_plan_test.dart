@@ -498,4 +498,179 @@ void main() {
       expect(withBar, contains('3 Black borne off'));
     });
   });
+
+  group('the filmed session, which is the real corpus', () {
+    // The other plan in this file, and the opposite kind of thing: the
+    // checklist above says what to go and shoot, this one says what was
+    // already shot. It exists in code for the same reason the checklist does —
+    // a sidecar is generated from a plan, never typed — and it earns its keep
+    // twice over, because a real game's positions can be replayed and a
+    // hand-written pile of checkers cannot.
+    final session = buildRealSession();
+    final filmed = session.shots;
+
+    test('is one board, one light, one camera position', () {
+      expect(session.name, kRealSessionName);
+      expect(session.conditions.board, 'folding-case walnut');
+      expect(session.conditions.lighting, 'daylight-backlit');
+      expect(session.orientation, BoardOrientation.whiteHomeNear);
+      expect(filmed.length, 10);
+      for (final shot in filmed) {
+        expect(shot.session, kRealSessionName, reason: shot.id);
+        expect(shot.orientation, session.orientation, reason: shot.id);
+        expect(shot.synthetic, isNull,
+            reason: '${shot.id} is a photograph — nothing drew it');
+      }
+    });
+
+    test('one calibration, and every other shot is read through it', () {
+      expect(filmed.first.kind, ShotKind.calibration);
+      expect(filmed.first.calibrateFrom, isNull);
+      expect(filmed.first.board, BoardState.initial());
+      for (final shot in filmed.skip(1)) {
+        expect(shot.kind, ShotKind.position, reason: shot.id);
+        expect(shot.calibrateFrom, filmed.first.id, reason: shot.id);
+        expect(shot.expectsRefusal, isFalse, reason: shot.id);
+        expect(shot.needsCorners, isFalse, reason: shot.id);
+      }
+    });
+
+    test('the ledger is replayed through the rules engine, never typed in',
+        () {
+      // The whole reason the ledger is here rather than in ten sidecars. The
+      // transcript recovered a move list from the footage; a move list can be
+      // wrong in ways a position cannot be checked for by eye, and
+      // `Game.replay` is the only judge that has no opinion about what was
+      // filmed. Building the session at all runs it — an illegal turn throws
+      // out of `buildRealSession` — and this pins that the boards written into
+      // the sidecars are that replay's own output.
+      final withLogs = filmed.where((s) => s.events != null).toList();
+      expect(withLogs.length, 7,
+          reason: 'seven positions came off the turn ledger');
+      for (final shot in withLogs) {
+        expect(shot.replayedBoard, shot.board, reason: shot.id);
+        expect(shot.events!.first, isA<OpeningRollEvent>(), reason: shot.id);
+      }
+    });
+
+    test('and each log is the one before it plus one turn', () {
+      // Cumulative by construction, which is what makes the corpus a session
+      // rather than seven unrelated positions — and what Task 7's play
+      // matching will read: shot N's board differs from shot N-1's by exactly
+      // the play the ledger names.
+      final withLogs = filmed.where((s) => s.events != null).toList();
+      for (var i = 1; i < withLogs.length; i++) {
+        final earlier = withLogs[i - 1].events!;
+        final later = withLogs[i].events!;
+        expect(later.length, greaterThan(earlier.length),
+            reason: withLogs[i].id);
+        expect(later.take(earlier.length).map((e) => e.toJson()).toList(),
+            earlier.map((e) => e.toJson()).toList(),
+            reason: '${withLogs[i].id} is not ${withLogs[i - 1].id} continued');
+      }
+    });
+
+    test('every position has thirty checkers on it, wherever they are', () {
+      // The one arithmetic a replay cannot get wrong and a hand-read keyframe
+      // can. The two keyframes were counted off zoomed frames by a person, so
+      // this is the check that the counting closed.
+      for (final shot in filmed) {
+        expect(shot.board.checkerCount(Player.white), 15, reason: shot.id);
+        expect(shot.board.checkerCount(Player.black), 15, reason: shot.id);
+      }
+    });
+
+    test('the two keyframes carry a board and no log at all', () {
+      // The footage ran on past the ledger, and the last stretch was not
+      // transcribable move by move — hands in shot, a hit nobody could pin to
+      // a turn. What survived is two positions read off zoomed frames. The
+      // schema takes that as it stands: `events` is nullable, a null one emits
+      // as null and reads back as null, and the harness scores occupancy off
+      // `board` without ever asking how the board got there.
+      final keyframes =
+          filmed.where((s) => s.events == null && s.kind != ShotKind.calibration)
+              .toList();
+      expect(keyframes.map((s) => s.id), <String>['066', '070']);
+      for (final shot in keyframes) {
+        expect(shot.replayedBoard, isNull, reason: shot.id);
+        expect(shot.toJson()['events'], isNull, reason: shot.id);
+        final decoded = CorpusShot.fromJson(
+          jsonDecode(jsonEncode(shot.toJson())) as Map<String, dynamic>,
+        );
+        expect(decoded.events, isNull, reason: shot.id);
+        expect(decoded.board, shot.board, reason: shot.id);
+        expect(jsonEncode(decoded.toJson()), jsonEncode(shot.toJson()),
+            reason: shot.id);
+      }
+    });
+
+    test('066 is the bar shot — a Black checker sitting on the worn hinge',
+        () {
+      // The flagship of the whole corpus, and the reason it was kept. Every
+      // other question about that hinge strip has been asked of an EMPTY one;
+      // this is the object-versus-surface case in the wild, on the one board
+      // whose bar is a rubbed ridge that already reads like checkers.
+      final bar = filmed.firstWhere((s) => s.id == '066');
+      expect(bar.board.blackBar, 1);
+      expect(bar.board.whiteBar, 0);
+    });
+
+    test('the four rolls a person could read are the only dice claimed', () {
+      // Dice values are ground truth and stay in the sidecars whatever the
+      // reader currently manages. Four of the ten frames have a settled pair
+      // a person read off a zoom; the rest have no dice, dice mid-throw, or a
+      // pair nobody could attribute, and claiming those would be inventing
+      // ground truth.
+      final withDice = <String, String>{
+        for (final shot in filmed.where((s) => s.dice != null))
+          shot.id: '${shot.dice!.die1}-${shot.dice!.die2}',
+      };
+      expect(withDice, <String, String>{
+        '003': '4-2',
+        '005': '6-4',
+        '010': '6-5',
+        '013': '6-3',
+      });
+    });
+
+    test('only the calibration shot carries the board\'s measurements', () {
+      final calibration = filmed.first;
+      expect(calibration.dieSide, closeTo(0.021, 1e-9),
+          reason: 'measured off a settled roll — this board\'s dice are a '
+              'third of the synthetic bed\'s across');
+      expect(calibration.proportions, isNull,
+          reason: 'a folding case derives its widths from its eight points, '
+              'so writing them as well would be two answers to one question');
+      for (final shot in filmed.skip(1)) {
+        expect(shot.dieSide, isNull, reason: shot.id);
+        expect(shot.proportions, isNull, reason: shot.id);
+        expect(shot.foldingCorners, isNull, reason: shot.id);
+      }
+    });
+
+    test('the ids are the video windows the frames were cut from', () {
+      // Provenance, and it is worth the oddity of a corpus whose ids have gaps
+      // in them: 066 is frame 066 of the stable-window sweep, and anyone
+      // holding the footage can go back to it.
+      expect(filmed.map((s) => s.id).toList(),
+          <String>['001', '003', '005', '008', '010', '013', '018', '020',
+              '066', '070']);
+      expect(filmed.map((s) => s.id).toSet().length, filmed.length);
+      for (final shot in filmed) {
+        expect(shot.id, matches(RegExp(r'^\d{3}$')), reason: shot.id);
+        expect(shot.instructions.join(' '), contains('VID20260820105037'),
+            reason: '${shot.id} does not say which footage it came from');
+      }
+    });
+
+    test('every filmed sidecar survives JSON exactly', () {
+      for (final shot in filmed) {
+        final decoded = CorpusShot.fromJson(
+          jsonDecode(jsonEncode(shot.toJson())) as Map<String, dynamic>,
+        );
+        expect(jsonEncode(decoded.toJson()), jsonEncode(shot.toJson()),
+            reason: shot.id);
+      }
+    });
+  });
 }

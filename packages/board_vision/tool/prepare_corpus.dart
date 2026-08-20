@@ -3,6 +3,7 @@
 /// ```
 /// dart run tool/prepare_corpus.dart --in <folder of photos>
 ///                                   [--out test/corpus/real]
+///                                   [--plan checklist|filmed]
 ///                                   [--kit corpus]
 ///                                   [--corners <file>]
 ///                                   [--proportions <file>]
@@ -11,6 +12,16 @@
 /// For each shot in the capture plan it finds `NNN.<ext>` in `--in`, shrinks it
 /// so its long side is at most 1280 px, writes it as `NNN.jpg`, and copies the
 /// sidecar beside it. Then it prints the total against the spec's 25 MB budget.
+///
+/// ## Two plans, one tool
+///
+/// `--plan checklist` (the default) is `CHECKLIST.md`'s thirty-three staged
+/// photographs. `--plan filmed` is the other route the corpus can arrive by:
+/// one continuous video of a game, windows cut from it afterwards and their
+/// positions recovered by replaying the transcribed move ledger — see
+/// `corpus/FILMING.md` and `buildRealSession`. Everything below this line is
+/// the same for both, which is the point: a corpus prepared by some private
+/// script beside this one is a corpus nobody can re-prepare.
 ///
 /// ## Why it shrinks, and why to that number
 ///
@@ -99,9 +110,17 @@ Future<void> main(List<String> args) async {
       _option(args, '--proportions') ?? '${source.path}/proportions.json';
   final measured = readProportions(File(shapePath));
   final folding = readFoldingCorners(File(cornersPath));
+  final planName = _option(args, '--plan') ?? 'checklist';
+  final shots = switch (planName) {
+    'checklist' => flatten(buildCapturePlan()),
+    'filmed' => buildRealSession().shots,
+    _ => throw ArgumentError.value(
+        planName, '--plan', 'expected "checklist" or "filmed"'),
+  };
   final report = prepareCorpus(
     source: source,
     destination: out,
+    shots: shots,
     corners: readCorners(File(cornersPath)),
     foldingCorners: folding,
     proportions: measured,
@@ -190,14 +209,19 @@ class PrepareReport {
   }
 }
 
-/// Downsamples every photograph in [source] that the capture plan names, and
-/// writes it with its sidecar into [destination].
+/// Downsamples every photograph in [source] that [shots] names, and writes it
+/// with its sidecar into [destination].
+///
+/// [shots] defaults to the checklist's plan; the filmed session passes its own.
+/// Either way they are the LIVE plan's shots rather than anything on disk,
+/// which is what keeps a sidecar from being edited by hand and then believed.
 ///
 /// Split out of `main` so the tests can drive it: everything above is argument
 /// parsing and everything below is the work.
 PrepareReport prepareCorpus({
   required Directory source,
   required Directory destination,
+  List<CorpusShot>? shots,
   Map<String, BoardQuad> corners = const <String, BoardQuad>{},
   Map<String, FoldingCorners> foldingCorners =
       const <String, FoldingCorners>{},
@@ -212,7 +236,7 @@ PrepareReport prepareCorpus({
   final missing = <String>[];
   final needCorners = <String>[];
 
-  for (final shot in flatten(buildCapturePlan())) {
+  for (final shot in shots ?? flatten(buildCapturePlan())) {
     final photo = _photographOf(source, shot.id);
     if (photo == null) {
       missing.add(shot.id);

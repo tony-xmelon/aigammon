@@ -725,6 +725,416 @@ List<CorpusShot> flatten(List<CaptureSession> sessions) => <CorpusShot>[
       for (final session in sessions) ...session.shots,
     ];
 
+// --- the session that was actually filmed -----------------------------------
+
+/// The name of the one real session in the corpus.
+const String kRealSessionName = 'living-room-daylight';
+
+/// The footage every real shot was cut from.
+const String kRealFootage = 'VID20260820105037';
+
+/// How wide this board's dice are, as a fraction of the playing field.
+///
+/// Measured off a settled roll in the footage — about a third of the synthetic
+/// bed's 0.075, which is why `BoardCalibration.dieSide` had to become an input
+/// at all. Resolution-independent, which is why it lives here rather than in
+/// `corners.json`: the eight corner points are pixels in a particular prepared
+/// image and would be wrong the moment the corpus were prepared at another
+/// size, and this number would not.
+const double kRealDieSide = 0.021;
+
+/// The real corpus: ten frames out of one filmed game.
+///
+/// The mirror image of [buildCapturePlan], and the pair of them is the point.
+/// That one says what to go and shoot; this one says what was shot — the
+/// `FILMING.md` route, one continuous video of a game played out, with stable
+/// windows cut from it afterwards. The corpus's contract does not change: a
+/// sidecar is still generated from a plan rather than typed, and the ground
+/// truth is still something other than a person's opinion of a photograph.
+///
+/// ## Where the ground truth comes from, per shot
+///
+/// * the **calibration** frame is the starting position, which needs no
+///   evidence at all;
+/// * seven **positions** come from [_filmedTurns], the move ledger transcribed
+///   off the footage, replayed here through `backgammon_core`. The board in
+///   the sidecar is the replay's output and nothing else, so a transcription
+///   error that produces an illegal play throws out of this function rather
+///   than becoming a corpus that scores perception against a board no game can
+///   reach;
+/// * two **keyframes** from the end of the video carry a board and no log. The
+///   last stretch was not transcribable move by move — hands in shot, a hit
+///   nobody could pin to a turn — so those two were read off zoomed frames by
+///   a person instead. They are the weakest ground truth in the corpus and the
+///   most interesting positions in it, which is the trade that was made
+///   knowingly; the `checkerCount` check in `capture_plan_test.dart` is the
+///   only arithmetic that can be held over them.
+///
+/// The middle of the game (turns 9 to 15) is **not** in the corpus. Its
+/// windows have hands at rest in them and a hit sequence nobody could
+/// attribute, and a sidecar that guessed would be worse than a shorter corpus.
+///
+/// ## What this does not carry
+///
+/// The eight corner points. They are pixels in the prepared image, so they
+/// come through `corners.json` and `prepare_corpus` like every other board's —
+/// see `CorpusShot.corners`. Everything here is true of the session whatever
+/// size it is prepared at.
+CaptureSession buildRealSession() {
+  const conditions = CaptureConditions(
+    board: 'folding-case walnut',
+    lighting: 'daylight-backlit',
+    // Measured off the frame rather than described from memory: the board's
+    // far edge spans 825 px in the raw 1920-wide frame against the near
+    // edge's 1526.
+    angle: 'propped at the end of the table and low — the far edge of the '
+        'board measures barely half the near one',
+  );
+
+  // Replayed, not typed. `Game.append` validates every event against the
+  // rules engine, so an illegal turn in the ledger fails here, loudly, naming
+  // itself — long before a photograph is scored against it.
+  var game = Game.start(const OpeningRollEvent(whiteDie: 4, blackDie: 2));
+  final afterTurn = <int, ({BoardState board, List<GameEvent> log})>{};
+  for (final (index, turn) in _filmedTurns.indexed) {
+    final number = index + 1;
+    try {
+      // Turn 1 is played on the opening roll itself, which is already on the
+      // felt — every turn after it needs its own roll first.
+      if (number > 1) {
+        game = game.append(RollEvent(turn.player, turn.die1, turn.die2));
+      }
+      game = game.append(MoveEvent(turn.player, _moveOf(turn.hops)));
+    } on StateError catch (e) {
+      throw StateError(
+        'the filmed ledger stops being a legal game at turn $number '
+        '(${turn.notation}): ${e.message}',
+      );
+    }
+    afterTurn[number] = (board: game.state.board, log: game.events);
+  }
+
+  final shots = <CorpusShot>[];
+
+  CorpusShot filmed({
+    required String id,
+    required String seconds,
+    required ShotKind kind,
+    required BoardState board,
+    required List<GameEvent>? events,
+    required Dice? dice,
+    required String title,
+    required List<String> notes,
+    FoldingCorners? foldingCorners,
+    double? dieSide,
+  }) =>
+      CorpusShot(
+        id: id,
+        session: kRealSessionName,
+        kind: kind,
+        calibrateFrom: kind == ShotKind.calibration ? null : shots.first.id,
+        // Read off the prepared image, so they arrive through the prep tool.
+        corners: null,
+        orientation: BoardOrientation.whiteHomeNear,
+        board: board,
+        events: events,
+        dice: dice,
+        capture: conditions,
+        synthetic: null,
+        expectRefusal: null,
+        refusalReason: null,
+        title: title,
+        // A filmed shot's "instructions" are how to get this exact frame
+        // back: the footage, the timestamp, and what was true of the board
+        // then. Followed literally, in order, they reproduce it.
+        instructions: <String>[
+          'Cut $kRealFootage at t=${seconds}s and take the whole frame.',
+          ...notes,
+        ],
+        foldingCorners: foldingCorners,
+        dieSide: dieSide,
+      );
+
+  shots.add(filmed(
+    id: '001',
+    seconds: '10.5',
+    kind: ShotKind.calibration,
+    board: BoardState.initial(),
+    events: null,
+    dice: null,
+    title: 'Calibration — the starting position',
+    notes: <String>[
+      'Act 1 of FILMING.md: the board set for the start of a game, home '
+          'boards to the right, held still.',
+      'Nothing on the felt but the checkers. No dice anywhere in view — a '
+          'die present at calibration is learned as part of the board and is '
+          'then invisible for the rest of the session.',
+    ],
+    dieSide: kRealDieSide,
+  ));
+
+  for (final cut in _filmedPositions) {
+    final position = afterTurn[cut.afterTurn]!;
+    shots.add(filmed(
+      id: cut.id,
+      seconds: cut.seconds,
+      kind: ShotKind.position,
+      board: position.board,
+      events: position.log,
+      dice: cut.dice,
+      title: 'Turn ${cut.afterTurn} played — '
+          '${_filmedTurns[cut.afterTurn - 1].notation}',
+      notes: <String>[
+        'The board as the ledger leaves it after turn ${cut.afterTurn}.',
+        cut.diceNote,
+      ],
+    ));
+  }
+
+  for (final cut in _filmedKeyframes) {
+    shots.add(filmed(
+      id: cut.id,
+      seconds: cut.seconds,
+      kind: ShotKind.position,
+      board: cut.board,
+      // No log: see the class doc. A board with no story is still a board.
+      events: null,
+      dice: null,
+      title: cut.title,
+      notes: <String>[cut.evidence, cut.diceNote],
+    ));
+  }
+
+  return CaptureSession(
+    name: kRealSessionName,
+    conditions: conditions,
+    orientation: BoardOrientation.whiteHomeNear,
+    shots: shots,
+  );
+}
+
+/// The transcript's stand-in for a checker on the bar, one past White's
+/// 24-point in its own 1-based numbering.
+const int _filmedBar = 25;
+
+/// One half-turn of the filmed game, as the transcript recorded it.
+///
+/// [hops] are `(from, to)` in the numbering the whole transcript uses — White's
+/// points 1 to 24 ascending, whoever is moving, with [_filmedBar] for a checker
+/// coming in off the bar. Deliberately the transcript's notation rather than
+/// the engine's: the ledger is evidence, and evidence converted on its way into
+/// the file can no longer be checked against what it came from. [notation] is
+/// the transcript's own line, carried so the title of a shot is quoted rather
+/// than retyped.
+typedef _FilmedTurn = ({
+  Player player,
+  int die1,
+  int die2,
+  List<(int from, int to)> hops,
+  String notation,
+});
+
+/// The move ledger, turn by turn, exactly as the transcript settled it.
+///
+/// Every entry was pinned twice over in the footage — a machine delta between
+/// two stable windows, filtered by what the rules allowed, then adjudicated on
+/// a zoom of the leaf it happened on. What makes it safe to commit is that it
+/// is replayed rather than believed: see [buildRealSession].
+const List<_FilmedTurn> _filmedTurns = <_FilmedTurn>[
+  (
+    player: Player.white,
+    die1: 4,
+    die2: 2,
+    hops: <(int, int)>[(8, 4), (6, 4)],
+    notation: 'W 4-2: 8/4 6/4',
+  ),
+  (
+    player: Player.black,
+    die1: 6,
+    die2: 4,
+    hops: <(int, int)>[(17, 23), (19, 23)],
+    notation: "B 6-4: 17/23 19/23 (Black's own 8/2 6/2)",
+  ),
+  (
+    player: Player.white,
+    die1: 5,
+    die2: 2,
+    hops: <(int, int)>[(13, 8), (8, 6)],
+    notation: 'W 5-2: 13/8 8/6',
+  ),
+  (
+    player: Player.black,
+    die1: 6,
+    die2: 5,
+    hops: <(int, int)>[(1, 7), (7, 12)],
+    notation: "B 6-5: 1/7 7/12 (the lover's leap)",
+  ),
+  (
+    player: Player.white,
+    die1: 5,
+    die2: 1,
+    hops: <(int, int)>[(13, 8), (8, 7)],
+    notation: 'W 5-1: 13/8 8/7',
+  ),
+  (
+    player: Player.black,
+    die1: 6,
+    die2: 3,
+    hops: <(int, int)>[(1, 7), (7, 10)],
+    notation: "B 6-3: 1/7* 7/10 (hits White's blot on the 7)",
+  ),
+  (
+    player: Player.white,
+    die1: 5,
+    die2: 4,
+    hops: <(int, int)>[(_filmedBar, 20), (8, 4)],
+    notation: 'W 5-4: bar/20 8/4',
+  ),
+  (
+    player: Player.black,
+    die1: 5,
+    die2: 2,
+    hops: <(int, int)>[(12, 17), (10, 12)],
+    notation: 'B 5-2: 12/17 10/12',
+  ),
+];
+
+/// A window cut from the footage, and which turn's board it shows.
+typedef _FilmedCut = ({
+  String id,
+  String seconds,
+  int afterTurn,
+  Dice? dice,
+  String diceNote,
+});
+
+/// The seven windows the turn ledger covers.
+///
+/// Not one per turn: a window is only usable when the hands are out of it and
+/// the checkers have settled, and turn 6's did not come. The log is cumulative
+/// either way, so the gap costs a shot rather than a position.
+final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
+  (
+    id: '003',
+    seconds: '33.5',
+    afterTurn: 1,
+    dice: Dice(4, 2),
+    diceNote: 'The opening roll is still lying where it fell — a settled pair '
+        'a person read off a zoom.',
+  ),
+  (
+    id: '005',
+    seconds: '49.5',
+    afterTurn: 2,
+    dice: Dice(6, 4),
+    diceNote: "Black's roll still on the left leaf, read off a zoom.",
+  ),
+  (
+    id: '008',
+    seconds: '76.5',
+    afterTurn: 3,
+    dice: null,
+    diceNote: 'No dice on the felt: the next roll is mid-throw.',
+  ),
+  (
+    id: '010',
+    seconds: '94.5',
+    afterTurn: 4,
+    dice: Dice(6, 5),
+    diceNote: 'The 6 clear and the 5 tilted, both read off a zoom.',
+  ),
+  (
+    id: '013',
+    seconds: '117.5',
+    afterTurn: 5,
+    dice: Dice(6, 3),
+    diceNote: "The pair on the felt is the NEXT turn's roll, thrown and not "
+        'yet played — which is what a Buddy session sees at exactly this '
+        'moment.',
+  ),
+  (
+    id: '018',
+    seconds: '162.5',
+    afterTurn: 7,
+    dice: null,
+    diceNote: 'Dice in view but not settled enough for a person to call, so '
+        'the sidecar claims none.',
+  ),
+  (
+    id: '020',
+    seconds: '185.0',
+    afterTurn: 8,
+    dice: null,
+    diceNote: 'No dice on the felt.',
+  ),
+];
+
+/// A window from the end of the video, with a position and no story.
+typedef _FilmedKeyframe = ({
+  String id,
+  String seconds,
+  BoardState board,
+  String title,
+  String evidence,
+  String diceNote,
+});
+
+/// The two end-game keyframes.
+///
+/// Read cell by cell off zoomed frames, cross-checked against fifteen checkers
+/// a side and against the machine's own deltas either side of them. They are
+/// here because they hold the two things the ledger's opening never does — a
+/// checker on the bar, and a board with men borne off it — and because a
+/// corpus of nothing but opening positions would teach the pipeline that
+/// stacks are always where a game starts.
+final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
+  (
+    id: '066',
+    seconds: '680.0',
+    board: BoardState(
+      points: const <int>[
+        0, -1, 0, 3, 2, 2, //  1-6   White's home, Black's entered runner on 2
+        1, 3, 1, 0, 0, 0, //   7-12
+        0, 0, 0, 0, -2, -1, // 13-18
+        -3, -2, -2, -1, -2, 1, // 19-24, White's doomed blot on the 24
+      ],
+      blackBar: 1,
+      whiteOff: 2,
+    ),
+    title: 'End game — a Black checker on the bar',
+    evidence: 'Read cell by cell off five zooms (bar, both far quarters, both '
+        'near quarters); the Black checker sits ON the worn hinge ridge, '
+        'which is the object-versus-surface case this corpus exists to ask '
+        'about.',
+    diceNote: 'A 3 is visible on the hinge and its partner is not, so the '
+        'sidecar claims no roll rather than half of one.',
+  ),
+  (
+    id: '070',
+    seconds: '729.0',
+    board: BoardState(
+      points: const <int>[
+        0, -2, 0, 3, 2, 2, //  1-6
+        2, 2, 1, 0, 0, 0, //   7-12
+        0, 0, 0, 0, -1, -2, // 13-18
+        -2, -2, -2, 1, -2, -2, // 19-24, White's straggler trapped on the 22
+      ],
+      whiteOff: 2,
+    ),
+    title: 'End game — the last frame, a White straggler trapped',
+    evidence: 'Read cell by cell off five zooms and cross-checked against the '
+        "machine's deltas either side; the video ends here with the game "
+        'unfinished.',
+    diceNote: 'Two dice are lying on the felt mid-sequence and neither can be '
+        'attributed to a turn, so the sidecar claims no roll.',
+  ),
+];
+
+Move _moveOf(List<(int from, int to)> hops) => Move(<CheckerMove>[
+      for (final (from, to) in hops)
+        CheckerMove(from == _filmedBar ? CheckerMove.bar : from - 1, to - 1),
+    ]);
+
 // --- the plan's fixed skeleton ----------------------------------------------
 
 /// One session's setup. Six of them: two boards times the spec's three
