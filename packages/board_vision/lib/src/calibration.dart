@@ -503,6 +503,16 @@ class Calibrator {
   /// something is wrong.
   static const int minBackgroundSamples = 16;
 
+  /// What share of a covered region's visible surface has to be ONE surface
+  /// before that region's own reference colour is trusted over the board's.
+  ///
+  /// Measured on the bed, over the eight points the starting position covers:
+  /// with the stacks flush against their edges the dominant surface takes 71%
+  /// to 84% of what is left showing, and with them sitting a sixteenth of the
+  /// board back it falls to 43% to 68% as the triangles' bases come out from
+  /// under the stacks. This sits in that gap.
+  static const double minSurfaceShare = 0.7;
+
   /// How near a sample has to be to the checkers standing on its own region,
   /// in the model's feature space, before it is thrown out of that region's
   /// background. Generous on purpose: leaving a checker in the background is
@@ -640,13 +650,21 @@ class Calibrator {
     };
 
     // --- what is even in the picture
+    //
+    // Where each stack actually sits is found rather than assumed: a person's
+    // starting position leaves its outermost checkers a little way off their
+    // own edges, by different amounts on different points. See
+    // [RoiSampler.findChecker], which exists because a real board's frame said
+    // so.
     final patches = <int, List<Rgb>>{};
+    final feet = <int, double>{};
     for (final index in occupied.keys) {
-      final scan = sampler.checkerPatch(index);
-      if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
+      final found = sampler.findChecker(index);
+      if (found.scan.visibleFraction < RoiSampler.minVisibleFraction) {
         return _notVisible(RoiId.point(index));
       }
-      patches[index] = scan.samples;
+      patches[index] = found.scan.samples;
+      feet[index] = found.depth;
     }
     // The dice band is the one region that keeps out of the way of the
     // checkers standing in it, rather than filtering them out afterwards. The
@@ -713,11 +731,11 @@ class Calibrator {
     // difference between reading it and refusing it.
     final filtered = <RoiId, List<Rgb>>{
       for (final index in occupied.keys)
-        RoiId.point(index): <Rgb>[_medianRgb(patches[index]!)],
+        RoiId.point(index): <Rgb>[medianRgb(patches[index]!)],
       // The band has no checkers of its own; what reaches into it are the tops
       // of the four tallest stacks, each of which is one of these.
       RoiId.diceZone: <Rgb>[
-        for (final index in occupied.keys) _medianRgb(patches[index]!),
+        for (final index in occupied.keys) medianRgb(patches[index]!),
       ],
     };
     final free = <RoiId, List<Rgb>>{};
@@ -741,7 +759,7 @@ class Calibrator {
         'again.',
       );
     }
-    final pooledColor = _medianRgb(pooled);
+    final pooledColor = medianRgb(pooled);
 
     final backgrounds = <RoiId, RoiBackground>{};
     for (final id in atlas.regions) {
@@ -763,8 +781,26 @@ class Calibrator {
       // With some of itself showing but not much, the region has too little to
       // anchor its own exposure and borrows the board's instead;
       // [RoiBackground.fullyMeasured] records which happened.
-      final enough = samples.length >= minBackgroundSamples;
-      final color = enough ? _medianRgb(samples) : pooledColor;
+      //
+      // "Not much" is two conditions, and the second one arrived with stacks
+      // that are not flush against their edges. A point with a stack on it
+      // shows whatever the stack does not cover, and where the stack sits back
+      // from its edge what it uncovers is the WIDE base of the triangle — so
+      // the region's visible surface splits nearly evenly between felt and
+      // paint. A per-channel median of an even mixture is not either of them
+      // and is often a colour the board does not have anywhere: measured on
+      // the bed at an inset of a sixteenth of the board, a point whose
+      // surfaces are (110,74,42) and (142,43,28) produced a reference of
+      // (110,43,28). The region then goes on to measure its own checkers
+      // against a colour that does not exist, their feature lands outside the
+      // cloud the other three points of that colour agree on, and calibration
+      // reports a stack of five as an empty point.
+      //
+      // So a region that cannot say what its own surface IS borrows the
+      // board's, exactly as one that has barely any surface showing does.
+      final enough = samples.length >= minBackgroundSamples &&
+          (!filtered.containsKey(id) || _mostlyOneSurface(samples));
+      final color = enough ? medianRgb(samples) : pooledColor;
       final surfaces = _surfaces(
         <List<double>>[
           for (final s in samples) ColorModel.feature(s, color),
@@ -783,7 +819,7 @@ class Calibrator {
     final features = <int, List<double>>{
       for (final index in occupied.keys)
         index: ColorModel.feature(
-          _medianRgb(patches[index]!),
+          medianRgb(patches[index]!),
           backgrounds[RoiId.point(index)]!.color,
         ),
     };
@@ -927,7 +963,10 @@ class Calibrator {
               : CheckerColor.none;
       if (expected != CheckerColor.none) expectedOccupied++;
 
-      final scan = sampler.checkerPatch(i);
+      // With the colours already learned, the walk can stop at a checker
+      // standing alone — which is exactly what a point that should be empty
+      // has on it when something is wrong.
+      final scan = sampler.findChecker(i, colors: colors).scan;
       if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
         outOfPicture ??= RoiId.point(i);
         continue;
@@ -1035,6 +1074,47 @@ class Calibrator {
         'field.',
         <RoiId>[id],
       );
+
+  /// Whether [samples] are mostly one surface rather than a mixture of two.
+  ///
+  /// Two-means in plain sensor levels — this runs before there is a reference
+  /// to measure a feature against, which is the whole reason it is here. The
+  /// share is what matters, not which surface won: a region showing four
+  /// fifths felt and a fifth of paint has a reference; one showing half of
+  /// each does not.
+  static bool _mostlyOneSurface(List<Rgb> samples) {
+    if (samples.length < 2) return true;
+    var a = samples.first;
+    var b = samples.first;
+    var furthest = -1.0;
+    for (final s in samples) {
+      final d = _rgbGap(s, a);
+      if (d > furthest) {
+        furthest = d;
+        b = s;
+      }
+    }
+    var inA = samples.length, inB = 0;
+    for (var round = 0; round < 6; round++) {
+      final groupA = <Rgb>[], groupB = <Rgb>[];
+      for (final s in samples) {
+        (_rgbGap(s, a) <= _rgbGap(s, b) ? groupA : groupB).add(s);
+      }
+      if (groupA.isEmpty || groupB.isEmpty) return true;
+      inA = groupA.length;
+      inB = groupB.length;
+      a = medianRgb(groupA);
+      b = medianRgb(groupB);
+    }
+    return math.max(inA, inB) >= minSurfaceShare * samples.length;
+  }
+
+  static double _rgbGap(Rgb a, Rgb b) {
+    final dr = (a.$1 - b.$1).toDouble();
+    final dg = (a.$2 - b.$2).toDouble();
+    final db = (a.$3 - b.$3).toDouble();
+    return dr * dr + dg * dg + db * db;
+  }
 
   static bool _looksLikeChecker(Rgb sample, List<Rgb> checkers) {
     for (final checker in checkers) {
@@ -1190,19 +1270,6 @@ double _euclid(List<double> a, List<double> b) {
     sum += d * d;
   }
   return math.sqrt(sum);
-}
-
-Rgb _medianRgb(List<Rgb> samples) {
-  final r = <int>[], g = <int>[], b = <int>[];
-  for (final s in samples) {
-    r.add(s.$1);
-    g.add(s.$2);
-    b.add(s.$3);
-  }
-  r.sort();
-  g.sort();
-  b.sort();
-  return (r[r.length ~/ 2], g[g.length ~/ 2], b[b.length ~/ 2]);
 }
 
 List<double> _medianFeature(List<List<double>> features) {

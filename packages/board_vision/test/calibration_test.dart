@@ -137,6 +137,165 @@ void main() {
     });
   });
 
+  group('stacks a person placed, not a renderer', () {
+    // The failure that made the checker patch into a checker finder, and it
+    // came off a photograph rather than out of a design review. Every render
+    // before this group seated the outermost checker of every stack flush
+    // against its own board edge, and the patch that learns this board's
+    // checker colours was a fixed window two to four and a half hundredths
+    // deep, measured from that edge.
+    //
+    // On the first real calibration frame, six of the eight starting stacks
+    // were far enough inside their edge that the window fell in front of them
+    // and sampled bare board; the two that were not were on the far half,
+    // where a shallow camera angle projects a stack the other way. Half the
+    // patches read board, both learned checker distributions converged on
+    // board, and the separation gate refused the frame — correctly, on a
+    // frame that a person can read at a glance.
+    //
+    // Insets are a hand's work, so they differ from stack to stack: no single
+    // offset fixes them, which is why this is a search and not a bigger
+    // number. The three renders below are that failure, in the bed.
+
+    /// The eight stacks the starting position puts out, at insets a hand
+    /// might leave: a hundredth of the board's height apart at the tightest
+    /// and an eighth at the loosest. The deep ones are deliberately on the
+    /// short stacks — a five-stack inset that far would have to compress to
+    /// stay off the midline, which is a different measurement (the pitch)
+    /// getting harder rather than this one.
+    const varied = <int, StackPlacement>{
+      0: StackPlacement(edgeInset: 0.12),
+      5: StackPlacement(edgeInset: 0.04),
+      7: StackPlacement(edgeInset: 0.09),
+      11: StackPlacement(edgeInset: 0.02),
+      12: StackPlacement(edgeInset: 0.06),
+      16: StackPlacement(edgeInset: 0.11),
+      18: StackPlacement(edgeInset: 0.03),
+      23: StackPlacement(edgeInset: 0.08),
+    };
+
+    test('every stack sitting the same little way off its edge', () {
+      final shot = renderShot(
+        board: BoardState.initial(),
+        stackPlacement: const StackPlacement(edgeInset: 0.06),
+      );
+      final calibration = _calibrate(shot);
+
+      expect(calibration.colors.separation,
+          greaterThanOrEqualTo(ColorModel.minSeparation),
+          reason: 'the two checker colours did not come out apart');
+      _expectEveryCheckerReadsBack(shot, calibration.colors);
+      final confirmed =
+          BoardVision(calibration).confirmStartingPosition(shot.frame);
+      expect(confirmed.agrees, isTrue, reason: confirmed.message);
+    });
+
+    test('insets that differ from stack to stack, as a hand leaves them', () {
+      final shot = renderShot(
+        board: BoardState.initial(),
+        pointPlacements: varied,
+      );
+      final calibration = _calibrate(shot);
+
+      expect(calibration.colors.separation,
+          greaterThanOrEqualTo(ColorModel.minSeparation));
+      _expectEveryCheckerReadsBack(shot, calibration.colors);
+      final confirmed =
+          BoardVision(calibration).confirmStartingPosition(shot.frame);
+      expect(confirmed.agrees, isTrue, reason: confirmed.message);
+    });
+
+    test('and stacks pushed off the middle of their columns', () {
+      // The other half of what a hand does. A patch taken at the column's
+      // centre still catches a stack nudged sideways in the middle of a
+      // checker, but not at the leading edge of one, where the disc is at its
+      // narrowest — so the finder tries a little either side of centre and
+      // keeps the best-scoring position.
+      //
+      // Read through a model learned from a tidy board, deliberately. A
+      // checker is very nearly as wide as its column, so a stack shifted this
+      // far overhangs the NEXT column by about a tenth of one, and what that
+      // does to the neighbour's learned surface is a different question from
+      // the one this test asks — see the plan's Task 9 note. Here the colours
+      // are known to be right, and what is under test is whether the walk
+      // finds a stack that is not where a renderer would have put it.
+      final flush = renderShot(board: BoardState.initial());
+      final calibration = _calibrate(flush);
+
+      final shot = renderShot(
+        board: BoardState.initial(),
+        pointPlacements: <int, StackPlacement>{
+          ...varied,
+          12: const StackPlacement(edgeInset: 0.06, centerOffset: 0.15),
+          0: const StackPlacement(edgeInset: 0.12, centerOffset: -0.15),
+        },
+      );
+      final colors = calibration.colorsIn(shot.frame);
+      final sampler = RoiSampler(
+        shot.frame,
+        PlanarBoardGeometry.fromQuad(shot.groundTruthQuad),
+        calibration.atlas,
+      );
+      final start = BoardState.initial();
+
+      for (final index in varied.keys) {
+        final found = sampler.findChecker(index);
+        final read = <CheckerColor, int>{};
+        for (final sample in found.scan.samples) {
+          final c = colors.classifyIn(RoiId.point(index), sample);
+          read[c] = (read[c] ?? 0) + 1;
+        }
+        final expected = start.points[index] > 0
+            ? CheckerColor.white
+            : CheckerColor.black;
+        expect(
+          (read[expected] ?? 0) / found.scan.samples.length,
+          greaterThan(Calibrator.patchMajority),
+          reason: 'point ${index + 1} holds ${start.points[index]}, and the '
+              'walk came back with $read from depth ${found.depth} at offset '
+              '${found.offset}',
+        );
+      }
+
+      // And the board still reads as the starting position through it.
+      final confirmed =
+          BoardVision(calibration).confirmStartingPosition(shot.frame);
+      expect(confirmed.agrees, isTrue, reason: confirmed.message);
+    });
+
+    test('the finder says how far in it found each stack', () {
+      // What it found, not just what colour: the depth is the one number that
+      // says how a stack was placed, and the pitch regression is the obvious
+      // consumer for it. Asserted here because a finder that returned the
+      // right colour from the wrong place would pass everything above.
+      final shot = renderShot(
+        board: BoardState.initial(),
+        pointPlacements: varied,
+      );
+      final atlas = RoiAtlas.forOrientation(BoardOrientation.whiteHomeNear);
+      final sampler = RoiSampler(
+        shot.frame,
+        PlanarBoardGeometry.fromQuad(shot.groundTruthQuad),
+        atlas,
+      );
+
+      for (final entry in varied.entries) {
+        final found = sampler.findChecker(entry.key);
+        expect(found.settled, isTrue,
+            reason: 'the walk down point ${entry.key + 1} never settled');
+        // Within a checker's own thickness of where the renderer put it: the
+        // patch starts at the first depth the disc reads as one colour, which
+        // is a little past its leading edge.
+        expect(
+          found.depth,
+          closeTo(entry.value.edgeInset, 0.05),
+          reason: 'point ${entry.key + 1} was drawn at an inset of '
+              '${entry.value.edgeInset} and found at ${found.depth}',
+        );
+      }
+    });
+  });
+
   group('classification is relative, so the light can change', () {
     test('a model learned in bright light reads a dimmed board', () {
       // A sample is judged against its own region's background, so a room-wide

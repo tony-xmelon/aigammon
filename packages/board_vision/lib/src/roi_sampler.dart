@@ -110,11 +110,71 @@ class RoiSampler extends FrameSampler {
   /// end.
   static const double checkerPatchHalfWidth = 0.25;
 
-  /// The checker patch's near and far depth from the board's outer edge, in
-  /// board-space units. Clear of the warp's sliver of room at the near end and
-  /// inside the first checker at the far end.
-  static const double checkerPatchNear = 0.02;
-  static const double checkerPatchFar = 0.045;
+  /// How deep one candidate patch is, in board-space units. Well inside a
+  /// single checker on any board — a checker reaches about a tenth of the
+  /// board along a stack — so a patch that lands on one is all checker.
+  static const double checkerPatchDepth = 0.025;
+
+  /// Where the walk down a column starts, ends and how far it moves each time,
+  /// in board-space units.
+  ///
+  /// [checkerSearchNear] leaves the warp's sliver of room at the board's own
+  /// edge. [checkerSearchFar] is how far a stack may sit back from that edge
+  /// and still be read as sitting on the point at all — an eighth of the
+  /// board's height past it and a person would say the checkers had been left
+  /// halfway up the column, which is not the starting position.
+  static const double checkerSearchNear = 0.02;
+  static const double checkerSearchFar = 0.15;
+  static const double checkerSearchStep = 0.01;
+
+  /// How far either side of the column's centre the walk also looks, as a
+  /// fraction of the column's width.
+  ///
+  /// Small on purpose: the patch is [checkerPatchHalfWidth] wide either way,
+  /// so this much shift still leaves it inside the column and off the
+  /// neighbouring stack. It buys the leading edge of a checker nudged
+  /// sideways, which is where a round disc is at its narrowest and a
+  /// centre-only patch half-misses.
+  static const double checkerSearchOffset = 0.15;
+
+  /// How far a block of colour has to hold, in board-space units, before the
+  /// walk believes it has found a checker rather than a gap in front of one.
+  ///
+  /// This is the number that separates the two things a column can show near
+  /// its edge. **Board holds briefly**: the wooden rim inside a tapped corner,
+  /// or the felt a hand left in front of a stack, runs out where the checkers
+  /// start. **A checker holds for the whole stack**: the starting position
+  /// never stands fewer than two, and two checkers reach about a fifth of the
+  /// board.
+  ///
+  /// So it wants to sit above the deepest gap a hand plausibly leaves and
+  /// below two checkers' reach. Measured: the first real board's tapped near
+  /// edge put about 0.04 of wooden rim inside the field; the synthetic bed's
+  /// checkers reach 0.087 each on a standard board and 0.107 on a folding one.
+  /// A gap deeper than this reads as bare board — and a stack left that far up
+  /// its column is not a starting position anyway.
+  static const double checkerHoldDepth = 0.12;
+
+  /// How different two medians may be and still count as the same surface, in
+  /// the log-ratio units [ColorModel.feature] measures everything in — so a
+  /// dimmer end of the board does not turn one surface into two.
+  ///
+  /// Measured both ways: down one surface, medians move by under 0.1 over a
+  /// hold's depth (0.065 on the real board's felt, less on the bed's flat
+  /// paint); across the tightest surface pair any of this package's boards
+  /// has — the pale points and white checkers of the low-contrast wood
+  /// palette — they move 0.31. This sits between them.
+  static const double checkerHoldTolerance = 0.2;
+
+  /// How much a patch's own samples may scatter and still count as one
+  /// surface: the mean per-channel distance from its median, in sensor levels.
+  ///
+  /// A checker's face is uniform and so is felt; what is not is a patch lying
+  /// across the boundary between them, which is exactly the sample that must
+  /// never be learned as a checker colour. Measured on the real frame: faces
+  /// and felt come out at 2 to 9, a patch straddling a checker's leading edge
+  /// at 28 to 50.
+  static const double checkerPatchMaxSpread = 18.0;
 
   /// How much of a lattice has to land inside the picture before the region
   /// counts as visible at all. Effectively "all of it": the lattice is already
@@ -150,21 +210,197 @@ class RoiSampler extends FrameSampler {
     return RoiScan(samples, attempted);
   }
 
-  /// The block the checker nearest the board's edge covers on point [index].
-  RoiScan checkerPatch(int index) {
+  /// Walks point [index]'s column from the board's edge inward and reports the
+  /// first checker standing on it.
+  ///
+  /// ## Why this is a search rather than a spot
+  ///
+  /// This used to be a fixed window a few hundredths deep, taken from the
+  /// board's edge, on the assumption that the outermost checker of a stack
+  /// sits flush against that edge. Renderers place checkers that way. People
+  /// do not, and the first real calibration frame said so plainly: not one of
+  /// its eight starting stacks was flush, the gaps differed from stack to
+  /// stack — so no single deeper window would have fixed it — and a shallow
+  /// camera angle projects a near-edge stack further from its edge again,
+  /// because the checker's own height carries its camera-facing side past the
+  /// edge in the picture. Six of the eight windows landed on bare wood, both
+  /// learned checker colours converged on wood, and calibration refused the
+  /// frame for two sets of checkers that look alike. They did not; the
+  /// instrument was looking in the wrong place.
+  ///
+  /// ## What the walk looks for
+  ///
+  /// Two things, and neither of them is a colour — this runs before anything
+  /// about this board's colours is known, and it is what makes knowing them
+  /// possible:
+  ///
+  /// * **coherence**, [checkerPatchMaxSpread] — a checker's face is one
+  ///   colour, and so is felt; a patch lying across the edge between them is
+  ///   not, and is exactly the sample that must not be learned as a checker;
+  /// * **hold**, [checkerHoldDepth] — the board's surface near the edge runs
+  ///   out where the checkers begin, while a checker is the front of a stack
+  ///   of at least two and holds its colour for a fifth of the board. So the
+  ///   walk takes the first coherent block that keeps its colour deeper than
+  ///   any gap could, and steps over the rim and the felt in front of a stack
+  ///   without ever being told what wood looks like.
+  ///
+  /// An empty point settles on its own felt, which is the honest answer and
+  /// the one `Calibrator.confirm` needs: this finds what is standing at the
+  /// foot of a column, and on an empty column that is the column.
+  ///
+  /// ## Once the colours are known
+  ///
+  /// The hold test above is what a walk can do knowing nothing, and it costs
+  /// one thing: a single checker standing alone does not hold for two
+  /// checkers' depth, so a blind walk steps over it and settles on the board
+  /// behind it. That is the right trade at calibration, where the starting
+  /// position guarantees a stack of at least two on every point that has any —
+  /// and it is the wrong one afterwards, where a lone checker on a point that
+  /// should be empty is precisely what has to be seen.
+  ///
+  /// So a caller that already has a [ColorModel] passes it, and the walk stops
+  /// at the first coherent block that reads as a checker of either colour,
+  /// however shallow the stack behind it. Nothing reads as a checker on an
+  /// empty column, and the walk falls through to the blind answer.
+  CheckerFind findChecker(int index, {ColorModel? colors}) {
     final b = boundsOf(atlas.roi(RoiId.point(index)));
     // Which board edge this point stacks from: its region runs from that edge
     // to the midline, so whichever end is not the midline is the edge.
     final fromTop = b.maxY <= RoiAtlas.midline + 1e-9;
     final centreX = (b.minX + b.maxX) / 2;
-    final halfWidth = (b.maxX - b.minX) * checkerPatchHalfWidth;
+    final width = b.maxX - b.minX;
 
+    const offsets = <double>[0.0, -checkerSearchOffset, checkerSearchOffset];
+    final steps =
+        ((checkerSearchFar - checkerSearchNear) / checkerSearchStep).round();
+    final holdSteps = (checkerHoldDepth / checkerSearchStep).ceil();
+
+    // Every patch the walk could want, taken once. The hold test reads blocks
+    // deeper than the walk itself will start from, so the profile runs on past
+    // [checkerSearchFar] — still nowhere near the midline.
+    final profile = <List<_Block>>[
+      for (final offset in offsets)
+        <_Block>[
+          for (var s = 0; s <= steps + holdSteps; s++)
+            _blockAt(
+              centreX + offset * width,
+              width,
+              fromTop,
+              checkerSearchNear + s * checkerSearchStep,
+            ),
+        ],
+    ];
+
+    // With the colours in hand, a checker of either colour is what the walk
+    // is looking for, and it may be standing alone.
+    if (colors != null) {
+      final seen = _firstBlock(
+        profile,
+        offsets,
+        steps,
+        holdSteps,
+        (o, s) =>
+            colors.classifyIn(RoiId.point(index), profile[o][s].median) !=
+            CheckerColor.none,
+      );
+      if (seen != null) return seen;
+    }
+
+    final held = _firstBlock(
+      profile,
+      offsets,
+      steps,
+      holdSteps,
+      (o, s) => _holdOf(profile[o], s, holdSteps) >= holdSteps,
+    );
+    return held ?? _bestEffort(profile, offsets, steps, holdSteps);
+  }
+
+  /// The shallowest coherent block any offset offers that [accepts] it, and
+  /// the more uniform of the two where both do at the same depth.
+  static CheckerFind? _firstBlock(
+    List<List<_Block>> profile,
+    List<double> offsets,
+    int steps,
+    int holdSteps,
+    bool Function(int offset, int step) accepts,
+  ) {
+    for (var s = 0; s <= steps; s++) {
+      var chosen = -1;
+      for (var o = 0; o < offsets.length; o++) {
+        final block = profile[o][s];
+        if (block.scan.samples.isEmpty) continue;
+        if (block.spread > checkerPatchMaxSpread) continue;
+        if (!accepts(o, s)) continue;
+        if (chosen < 0 || block.spread < profile[chosen][s].spread) chosen = o;
+      }
+      if (chosen < 0) continue;
+      // Where the block starts is where the checker is; what it looks like is
+      // taken from INSIDE it. A patch at the very front of a round checker
+      // overhangs it — the disc is at its narrowest there, so the corners of
+      // the patch fall on the board behind — and a colour learned off that rim
+      // is a blend of the two. Measured on the bed: a patch on a checker's
+      // leading edge reads seven of its twenty-four samples as something other
+      // than that checker, which is close enough to the majority a read-back
+      // needs that a hair of noise loses it.
+      return CheckerFind(
+        scan: _cleanestIn(profile[chosen], s, holdSteps).scan,
+        depth: profile[chosen][s].depth,
+        offset: offsets[chosen],
+        settled: true,
+      );
+    }
+    return null;
+  }
+
+  /// What to answer when nothing in the column held: whatever lasted longest,
+  /// which is a better guess than the first thing the walk tripped over, and
+  /// marked as the guess it is.
+  static CheckerFind _bestEffort(
+    List<List<_Block>> profile,
+    List<double> offsets,
+    int steps,
+    int holdSteps,
+  ) {
+    _Block? loose;
+    var looseOffset = 0.0;
+    var longest = -1;
+    for (var s = 0; s <= steps; s++) {
+      for (var o = 0; o < offsets.length; o++) {
+        final block = profile[o][s];
+        if (block.scan.samples.isEmpty) continue;
+        if (block.spread > checkerPatchMaxSpread) continue;
+        final hold = _holdOf(profile[o], s, holdSteps);
+        if (hold > longest) {
+          longest = hold;
+          loose = block;
+          looseOffset = offsets[o];
+        }
+      }
+    }
+    final fallback = loose ?? profile[0][0];
+    return CheckerFind(
+      scan: fallback.scan,
+      depth: fallback.depth,
+      offset: loose == null ? 0.0 : looseOffset,
+      settled: false,
+    );
+  }
+
+  /// One candidate patch: a lattice [checkerPatchDepth] deep whose near end is
+  /// at [depth], centred on [centreX].
+  _Block _blockAt(
+    double centreX,
+    double columnWidth,
+    bool fromTop,
+    double depth,
+  ) {
+    final halfWidth = columnWidth * checkerPatchHalfWidth;
     final samples = <Rgb>[];
     var attempted = 0;
     for (var iy = 0; iy < checkerPatchDeep; iy++) {
-      final depth = checkerPatchNear +
-          (iy + 0.5) / checkerPatchDeep * (checkerPatchFar - checkerPatchNear);
-      final y = fromTop ? depth : 1 - depth;
+      final d = depth + (iy + 0.5) / checkerPatchDeep * checkerPatchDepth;
+      final y = fromTop ? d : 1 - d;
       for (var ix = 0; ix < checkerPatchAcross; ix++) {
         final x = centreX +
             ((ix + 0.5) / checkerPatchAcross - 0.5) * 2 * halfWidth;
@@ -173,7 +409,45 @@ class RoiSampler extends FrameSampler {
         if (sample != null) samples.add(sample);
       }
     }
-    return RoiScan(samples, attempted);
+    return _Block(RoiScan(samples, attempted), depth);
+  }
+
+  /// The most uniform view of the block that starts at [at] — the patch whose
+  /// own samples agree best, among those still showing the block's colour.
+  static _Block _cleanestIn(List<_Block> profile, int at, int limit) {
+    var best = profile[at];
+    final reference = best.median;
+    for (var k = 1; k <= limit && at + k < profile.length; k++) {
+      final block = profile[at + k];
+      if (block.scan.samples.isEmpty) break;
+      if (_logDistance(block.median, reference) > checkerHoldTolerance) break;
+      if (block.spread < best.spread) best = block;
+    }
+    return best;
+  }
+
+  /// How many steps deeper than [at] the column goes on showing [at]'s colour,
+  /// up to [limit].
+  static int _holdOf(List<_Block> profile, int at, int limit) {
+    final reference = profile[at].median;
+    for (var k = 1; k <= limit; k++) {
+      final next = at + k;
+      if (next >= profile.length) return k - 1;
+      final block = profile[next];
+      if (block.scan.samples.isEmpty) return k - 1;
+      if (_logDistance(block.median, reference) > checkerHoldTolerance) {
+        return k - 1;
+      }
+    }
+    return limit;
+  }
+
+  /// How far apart two colours are, in the log-ratio units the colour model
+  /// judges every other sample in. Relative, so the answer is the same on the
+  /// dim end of a board as on the bright one.
+  static double _logDistance(Rgb a, Rgb b) {
+    final f = ColorModel.feature(a, b);
+    return math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
   }
 
   /// Rows along a stack axis. Enough that one checker spans about twenty of
@@ -272,6 +546,75 @@ class RoiSampler extends FrameSampler {
     }
     return last < 0 ? 0.0 : (last + 0.5) * rowDepth;
   }
+}
+
+/// One candidate patch in a column walk, with the two numbers the walk judges
+/// it by.
+class _Block {
+  final RoiScan scan;
+
+  /// Board-space depth of the patch's near end.
+  final double depth;
+
+  final Rgb median;
+
+  /// Mean per-channel distance from [median], in sensor levels.
+  final double spread;
+
+  _Block(RoiScan scan, double depth)
+      : this._(scan, depth, scan.samples.isEmpty ? (0, 0, 0) : medianRgb(scan.samples));
+
+  _Block._(this.scan, this.depth, this.median)
+      : spread = _spreadOf(scan.samples, median);
+
+  static double _spreadOf(List<Rgb> samples, Rgb median) {
+    if (samples.isEmpty) return double.infinity;
+    var total = 0.0;
+    for (final s in samples) {
+      total += ((s.$1 - median.$1).abs() +
+              (s.$2 - median.$2).abs() +
+              (s.$3 - median.$3).abs()) /
+          3;
+    }
+    return total / samples.length;
+  }
+}
+
+/// What the walk down a point's column settled on.
+class CheckerFind {
+  /// The samples the chosen patch took — what the colour of whatever stands
+  /// at the foot of this column is learned from, or judged against.
+  final RoiScan scan;
+
+  /// Board-space depth of the patch's near end, measured from the board edge
+  /// this point stacks from. How far back from its edge the stack was sitting,
+  /// to within the patch's own step.
+  final double depth;
+
+  /// How far the patch was shifted across the column, in fractions of the
+  /// column's width.
+  final double offset;
+
+  /// Whether the walk settled on a block that held its colour, or ran out of
+  /// column and handed back the best it saw.
+  ///
+  /// Not "there is a checker here": an empty point settles on its own felt,
+  /// and settling is what makes that reading trustworthy. False means the
+  /// column showed nothing that held — a hand across it, a stack left halfway
+  /// up it, a region mostly out of the picture — and whatever came back
+  /// deserves less trust.
+  final bool settled;
+
+  const CheckerFind({
+    required this.scan,
+    required this.depth,
+    required this.offset,
+    required this.settled,
+  });
+
+  @override
+  String toString() => 'CheckerFind(depth ${depth.toStringAsFixed(3)}, '
+      'offset ${offset.toStringAsFixed(2)}${settled ? '' : ', unsettled'})';
 }
 
 /// The line a region's checkers stack along, in board space.
@@ -523,6 +866,22 @@ BoardBounds boundsOf(BoardQuad quad) {
     maxY = math.max(maxY, c.y);
   }
   return (minX: minX, minY: minY, maxX: maxX, maxY: maxY);
+}
+
+/// The per-channel median of a set of samples — the package's one way of
+/// asking "what colour is this patch", so that a single bright pixel on a
+/// checker's rim cannot drag an answer the way a mean would.
+Rgb medianRgb(List<Rgb> samples) {
+  final r = <int>[], g = <int>[], b = <int>[];
+  for (final s in samples) {
+    r.add(s.$1);
+    g.add(s.$2);
+    b.add(s.$3);
+  }
+  r.sort();
+  g.sort();
+  b.sort();
+  return (r[r.length ~/ 2], g[g.length ~/ 2], b[b.length ~/ 2]);
 }
 
 /// BT.601 luma of a sample — the one brightness number the package uses, so

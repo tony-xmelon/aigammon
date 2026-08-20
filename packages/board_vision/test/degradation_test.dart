@@ -206,6 +206,15 @@ void main() {
   /// in hand. When either limit moves — a feature space that holds up in the
   /// shadows, a stack measure that survives a smeared foot — these tests fail,
   /// which is the point of writing them down.
+  ///
+  /// **Both limits have moved once, and the same change moved them.** They
+  /// were 4 levels of grain and 1.8 sigma of blur while the checker patch was
+  /// a fixed window taken at the foot of the stack. Making it a walk that
+  /// looks for a coherent block (`RoiSampler.findChecker`) moved them to 6 and
+  /// 7, because the walk refuses a patch lying across the edge between a
+  /// checker and the board under it and takes a clean face further in — and
+  /// that edge is exactly what grain and blur destroy first. The old numbers
+  /// were measuring the boundary, not the checker.
   group('where the bed stops being usable', () {
     /// The corpus baseline with exactly one knob turned up.
     CalibrationResult calibrateWith(
@@ -231,10 +240,10 @@ void main() {
       );
     }
 
-    test('grain of four levels loses the classic board\'s black checkers', () {
+    test('grain of six levels loses the classic board\'s black checkers', () {
       // The classic palette paints Black at 20/18/15. The colour model's
-      // feature is a per-channel log ratio, so ±4 levels on a value of 18 is
-      // about a quarter of a log unit — nearly two of the model's own minimum
+      // feature is a per-channel log ratio, so ±6 levels on a value of 18 is
+      // about a third of a log unit — more than two of the model's own minimum
       // spreads, from grain a photograph of a dark checker in ordinary light
       // would carry. The stack reads bare and calibration tells the user their
       // board is set up wrongly, which is the wrong sentence to show someone
@@ -242,20 +251,39 @@ void main() {
       //
       // Worth naming precisely because it predicts a real failure: dark
       // checkers in shadow are the corpus's hardest cell before a single
-      // photograph has been taken.
-      final result = calibrateWith(BoardPalette.classic, noise: 4);
+      // photograph has been taken. The other two palettes, whose dark checkers
+      // are nowhere near the floor, go to 8 and 14 — so this limit belongs to
+      // near-black paint rather than to the pipeline.
+      final result = calibrateWith(BoardPalette.classic, noise: 6);
       expect(result.ok, isFalse);
       expect(result.problem, CalibrationProblem.checkersNotInStartingPosition);
 
-      // And the same board is fine at the level the corpus actually uses.
+      // And the same board is fine one step below, which is well past the
+      // level the corpus actually uses.
+      expect(calibrateWith(BoardPalette.classic, noise: 4).ok, isTrue);
       expect(calibrateWith(BoardPalette.classic).ok, isTrue);
     });
 
-    test('blur past about 1.8 sigma smears the foot of every stack', () {
-      expect(calibrateWith(BoardPalette.classic, blurSigma: 1.8).ok, isFalse,
-          reason: 'a 1.8-sigma blur at this frame size spreads the boundary '
-              'between a checker and the board under it over about ten pixels');
-      expect(calibrateWith(BoardPalette.classic).ok, isTrue);
+    test('blur past about seven sigma finally takes the classic board', () {
+      // Seven sigma at this frame size spreads a checker's edge over most of
+      // the checker, and a walk looking for a block of one colour finds none.
+      // Not a limit anyone will meet with a camera — the useful part of this
+      // measurement is the one below it, where the blur that used to stop
+      // calibration no longer does.
+      expect(calibrateWith(BoardPalette.classic, blurSigma: 7).ok, isFalse);
+      expect(calibrateWith(BoardPalette.classic, blurSigma: 1.8).ok, isTrue,
+          reason: 'a 1.8-sigma blur spreads the boundary between a checker and '
+              'the board under it over about ten pixels, which is what the '
+              'fixed-window patch used to be sampling');
+      expect(calibrateWith(BoardPalette.classic, blurSigma: 6).ok, isTrue);
+
+      // The blue-red board is the tight one here and was not covered before:
+      // its pale points and white checkers are close enough that a blur which
+      // mixes them loses the difference. Measured over 1.8, 3, 5, 6 and 7
+      // sigma, it is the one palette whose failures are not monotonic in the
+      // blur — 5 reads and 3 does not — which is what a limit looks like when
+      // it is really about two colours meeting rather than about sharpness.
+      expect(calibrateWith(BoardPalette.blueRed, blurSigma: 3).ok, isFalse);
     });
 
     test('a sigma of blur and half the dice cannot be found at all', () {
