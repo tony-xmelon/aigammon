@@ -791,29 +791,7 @@ CaptureSession buildRealSession() {
         'board measures barely half the near one',
   );
 
-  // Replayed, not typed. `Game.append` validates every event against the
-  // rules engine, so an illegal turn in the ledger fails here, loudly, naming
-  // itself — long before a photograph is scored against it.
-  var game = Game.start(const OpeningRollEvent(whiteDie: 4, blackDie: 2));
-  final afterTurn = <int, ({BoardState board, List<GameEvent> log})>{};
-  for (final (index, turn) in _filmedTurns.indexed) {
-    final number = index + 1;
-    try {
-      // Turn 1 is played on the opening roll itself, which is already on the
-      // felt — every turn after it needs its own roll first.
-      if (number > 1) {
-        game = game.append(RollEvent(turn.player, turn.die1, turn.die2));
-      }
-      game = game.append(MoveEvent(turn.player, _moveOf(turn.hops)));
-    } on StateError catch (e) {
-      throw StateError(
-        'the filmed ledger stops being a legal game at turn $number '
-        '(${turn.notation}): ${e.message}',
-      );
-    }
-    afterTurn[number] = (board: game.state.board, log: game.events);
-  }
-
+  final afterTurn = replayFilmedLedger(_filmedTurns);
   final shots = <CorpusShot>[];
 
   CorpusShot filmed({
@@ -874,7 +852,7 @@ CaptureSession buildRealSession() {
   ));
 
   for (final cut in _filmedPositions) {
-    final position = afterTurn[cut.afterTurn]!;
+    final position = afterTurn[cut.afterTurn - 1];
     shots.add(filmed(
       id: cut.id,
       seconds: cut.seconds,
@@ -915,18 +893,22 @@ CaptureSession buildRealSession() {
 
 /// The transcript's stand-in for a checker on the bar, one past White's
 /// 24-point in its own 1-based numbering.
-const int _filmedBar = 25;
+const int kFilmedBar = 25;
 
 /// One half-turn of the filmed game, as the transcript recorded it.
 ///
 /// [hops] are `(from, to)` in the numbering the whole transcript uses — White's
-/// points 1 to 24 ascending, whoever is moving, with [_filmedBar] for a checker
+/// points 1 to 24 ascending, whoever is moving, with [kFilmedBar] for a checker
 /// coming in off the bar. Deliberately the transcript's notation rather than
 /// the engine's: the ledger is evidence, and evidence converted on its way into
 /// the file can no longer be checked against what it came from. [notation] is
 /// the transcript's own line, carried so the title of a shot is quoted rather
 /// than retyped.
-typedef _FilmedTurn = ({
+///
+/// Note what is **not** here: whether a hop hits. That is not something the
+/// transcript recorded, it is something the position determines — see
+/// [replayFilmedLedger].
+typedef FilmedTurn = ({
   Player player,
   int die1,
   int die2,
@@ -934,13 +916,84 @@ typedef _FilmedTurn = ({
   String notation,
 });
 
+/// One position out of the ledger: the board after a turn, and the cumulative
+/// log that reaches it.
+typedef FilmedPosition = ({BoardState board, List<GameEvent> log});
+
+/// Replays [turns] from the filmed game's opening roll, returning the position
+/// after each — index 0 is after turn 1.
+///
+/// **The net under the whole ledger.** `Game.append` validates every event
+/// against the rules engine, so a mis-transcribed turn stops the build here,
+/// loudly and naming itself, rather than becoming a sidecar that scores
+/// photographs against a board no game can reach. Public so that the net can
+/// be tested with a ledger that is deliberately wrong; the real ledger stays
+/// private, because there is only one of it.
+List<FilmedPosition> replayFilmedLedger(List<FilmedTurn> turns) {
+  var game = Game.start(const OpeningRollEvent(whiteDie: 4, blackDie: 2));
+  final out = <FilmedPosition>[];
+  for (final (index, turn) in turns.indexed) {
+    final number = index + 1;
+    try {
+      // Turn 1 is played on the opening roll itself, which is already on the
+      // felt — every turn after it needs its own roll first.
+      if (number > 1) {
+        game = game.append(RollEvent(turn.player, turn.die1, turn.die2));
+      }
+      game = game.append(
+        MoveEvent(turn.player, _moveOf(game.state.board, turn)),
+      );
+    } on StateError catch (e) {
+      throw StateError(
+        'the filmed ledger stops being a legal game at turn $number '
+        '(${turn.notation}): ${e.message}',
+      );
+    }
+    out.add((board: game.state.board, log: game.events));
+  }
+  return out;
+}
+
+/// [turn]'s hops as a [Move], each one's hit flag **derived** from the board it
+/// lands on.
+///
+/// A hit is not something a transcript records; it is something the position
+/// determines. It matters that the flag is right even though `BoardState`
+/// recomputes hits when it applies a move: `CheckerMove.==` compares the flag,
+/// and Task 7 matches an observed play against an enumerated set of legal ones.
+/// A log that reaches the right board with every flag false would be a trap
+/// laid for exactly the corpus that has a real hit in it.
+///
+/// Hand-annotating them would be a second opinion about something already
+/// determined, so the hops are walked in order over a running board and the
+/// flag is read off the point each one lands on before it lands.
+Move _moveOf(BoardState before, FilmedTurn turn) {
+  var board = before;
+  final hops = <CheckerMove>[];
+  for (final (from, to) in turn.hops) {
+    final destination = to - 1;
+    final occupant =
+        destination >= 0 && destination < 24 ? board.points[destination] : 0;
+    final hop = CheckerMove(
+      from == kFilmedBar ? CheckerMove.bar : from - 1,
+      destination,
+      // Exactly one man of the other colour standing there — two is a made
+      // point and no move lands on it at all.
+      isHit: turn.player == Player.white ? occupant == -1 : occupant == 1,
+    );
+    hops.add(hop);
+    board = board.applyMove(turn.player, Move(<CheckerMove>[hop]));
+  }
+  return Move(hops);
+}
+
 /// The move ledger, turn by turn, exactly as the transcript settled it.
 ///
 /// Every entry was pinned twice over in the footage — a machine delta between
 /// two stable windows, filtered by what the rules allowed, then adjudicated on
 /// a zoom of the leaf it happened on. What makes it safe to commit is that it
 /// is replayed rather than believed: see [buildRealSession].
-const List<_FilmedTurn> _filmedTurns = <_FilmedTurn>[
+const List<FilmedTurn> _filmedTurns = <FilmedTurn>[
   (
     player: Player.white,
     die1: 4,
@@ -987,7 +1040,7 @@ const List<_FilmedTurn> _filmedTurns = <_FilmedTurn>[
     player: Player.white,
     die1: 5,
     die2: 4,
-    hops: <(int, int)>[(_filmedBar, 20), (8, 4)],
+    hops: <(int, int)>[(kFilmedBar, 20), (8, 4)],
     notation: 'W 5-4: bar/20 8/4',
   ),
   (
@@ -1129,11 +1182,6 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
         'attributed to a turn, so the sidecar claims no roll.',
   ),
 ];
-
-Move _moveOf(List<(int from, int to)> hops) => Move(<CheckerMove>[
-      for (final (from, to) in hops)
-        CheckerMove(from == _filmedBar ? CheckerMove.bar : from - 1, to - 1),
-    ]);
 
 // --- the plan's fixed skeleton ----------------------------------------------
 

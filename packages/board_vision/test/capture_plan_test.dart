@@ -149,6 +149,15 @@ void main() {
         expect(shot.events!.length, greaterThan(4));
       }
     });
+
+    test('and the hit flags on those logs have not moved', () {
+      // The counterweight to the filmed session's own hit test below. These
+      // logs get their flags from the move generator, and this pins that
+      // nothing done for the real corpus reached them: the synthetic corpus is
+      // committed, so a flag that moved here is thirty-three sidecars on disk
+      // that no longer match the plan that claims to produce them.
+      expect(_hopFlags(shots), (181, 1050));
+    });
   });
 
   group('sessions', () {
@@ -604,6 +613,66 @@ void main() {
       }
     });
 
+    test('the hit in turn 6 is carried as a hit, derived from the board', () {
+      // Turn 6 is Black's 1/7*, and the replay already proves it happened —
+      // White ends up on the bar. But a `CheckerMove` carries a hit FLAG as
+      // well, `CheckerMove.==` compares it, and Task 7's play matching will
+      // compare moves against an enumerated set of legal ones. A log that
+      // reaches the right board with every flag false is therefore a trap laid
+      // for the one corpus in the repository that has a real hit in it.
+      //
+      // Derived during the replay from the board as it stands before each hop.
+      // Not hand-annotated: a flag typed in beside the ledger is a second
+      // opinion about something the position already determines.
+      int hitsIn(String id) =>
+          _hopFlags(<CorpusShot>[filmed.firstWhere((s) => s.id == id)]).$1;
+
+      expect(hitsIn('013'), 0, reason: 'nothing is hit through turn 5');
+      expect(hitsIn('018'), 1, reason: "turn 6 hits White's blot on the 7");
+      expect(hitsIn('020'), 1, reason: 'and the log stays cumulative');
+      expect(_hopFlags(filmed).$2, 60, reason: 'sixty hops in the ledger');
+
+      // The right hop, not merely the right count.
+      final sixth = <MoveEvent>[
+        for (final event in filmed.firstWhere((s) => s.id == '018').events!)
+          if (event is MoveEvent) event,
+      ][5];
+      expect(sixth.player, Player.black);
+      expect(sixth.move.checkerMoves.first.isHit, isTrue);
+      expect(sixth.move.checkerMoves.first.to, 6,
+          reason: "White's blot stood on the 7-point, which is index 6");
+      expect(sixth.move.checkerMoves.last.isHit, isFalse,
+          reason: 'the second hop of that turn lands on an empty point');
+    });
+
+    test('a ledger that stops being legal throws, naming the turn', () {
+      // The net under the whole ledger, tested — otherwise it is a comment.
+      // Turn 2 here asks Black to move a checker that is not on the board.
+      expect(
+        () => replayFilmedLedger(const <FilmedTurn>[
+          (
+            player: Player.white,
+            die1: 4,
+            die2: 2,
+            hops: <(int, int)>[(8, 4), (6, 4)],
+            notation: 'W 4-2: 8/4 6/4',
+          ),
+          (
+            player: Player.black,
+            die1: 6,
+            die2: 4,
+            hops: <(int, int)>[(3, 9), (9, 13)],
+            notation: 'B 6-4: 3/9 9/13',
+          ),
+        ]),
+        throwsA(isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('turn 2'), contains('B 6-4: 3/9 9/13')),
+        )),
+      );
+    });
+
     test('066 is the bar shot — a Black checker sitting on the worn hinge',
         () {
       // The flagship of the whole corpus, and the reason it was kept. Every
@@ -673,4 +742,23 @@ void main() {
       }
     });
   });
+}
+
+/// How many of [shots]' hops carry a hit flag, and how many hops there are.
+///
+/// One helper for both corpora on purpose: the number that matters is the
+/// comparison between them, and a hit flag is the sort of thing that goes
+/// quietly missing on the corpus that was not generated.
+(int hits, int hops) _hopFlags(Iterable<CorpusShot> shots) {
+  var hops = 0, hits = 0;
+  for (final shot in shots) {
+    for (final event in shot.events ?? const <GameEvent>[]) {
+      if (event is! MoveEvent) continue;
+      for (final hop in event.move.checkerMoves) {
+        hops++;
+        if (hop.isHit) hits++;
+      }
+    }
+  }
+  return (hits, hops);
 }
