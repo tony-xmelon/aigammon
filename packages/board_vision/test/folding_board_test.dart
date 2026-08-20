@@ -164,11 +164,30 @@ void main() {
       // The dice band crosses the hinge, so the two dice are read through two
       // different planes in one pass. Nothing in the dice reader knows that —
       // it walks a lattice in board space, and each cell routes itself.
-      final start = renderFoldingShot(board: BoardState.initial());
+      //
+      // From a HIGHER camera than [kFoldingTent]'s, deliberately. A face is
+      // read as a shape now, and framing the shape needs a die's height in
+      // board units — an estimate that carries the camera's own
+      // foreshortening (see the reader's `_dieDownUnits`). At this file's
+      // usual near-table viewpoint the estimate runs 1.85 times the truth,
+      // every framed pattern compresses to half a die frame, and the reader
+      // refuses the pair; the companion test below pins that refusal. From a
+      // camera high enough to keep the estimate inside
+      // [PipPattern.tolerance], the same tented board reads its pair across
+      // two planes — which is what THIS test pins.
+      const overhead = FoldingView(
+        ridgeHeight: 0.05,
+        eye: (0.25, -0.45, 0.9),
+        target: (0.5, 0.33, 0.02),
+        focal: 760,
+      );
+      final start =
+          renderFoldingShot(board: BoardState.initial(), view: overhead);
       final vision = BoardVision(_calibrate(start));
 
       final rolled = renderFoldingShot(
         board: BoardState.initial(),
+        view: overhead,
         dicePlacements: const <DicePlacement>[
           DicePlacement(face: 5, center: Pt(0.20, 0.5)),
           DicePlacement(face: 2, center: Pt(0.75, 0.5)),
@@ -180,6 +199,32 @@ void main() {
         <int>[reading!.first.face, reading.second.face]..sort(),
         <int>[2, 5],
       );
+    });
+
+    test('the usual low viewpoint refuses the same pair rather than '
+        'misreading it', () {
+      // The other half of the shape-reading trade, measured the day counting
+      // retired: at [kFoldingTent]'s near-table camera the die-height
+      // estimate comes out 2.78 against a painted truth of 1.5, framed
+      // patterns compress to 0.54 of a die frame, and no face matches — so
+      // the pair that used to be COUNTED here is refused. A refusal is a tap
+      // on the dice pad; the misreads counting waved through on the real
+      // footage went into the game state. A die-frame height the camera
+      // cannot pollute — the measured checker pitch is the obvious source —
+      // is the queued fix, and turning this refusal back into a read is
+      // exactly what it will be measured by.
+      final start = renderFoldingShot(board: BoardState.initial());
+      final vision = BoardVision(_calibrate(start));
+      final rolled = renderFoldingShot(
+        board: BoardState.initial(),
+        dicePlacements: const <DicePlacement>[
+          DicePlacement(face: 5, center: Pt(0.20, 0.5)),
+          DicePlacement(face: 2, center: Pt(0.75, 0.5)),
+        ],
+      );
+      expect(vision.readDice(rolled.frame), isNull,
+          reason: 'a pattern squashed past recognition must refuse, not '
+              'guess');
     });
   });
 

@@ -40,7 +40,13 @@ enum RoiId {
   offBlack(-1),
 
   /// The strip of felt the point triangles do not reach, across both halves
-  /// and the bar. Where settled dice are looked for.
+  /// and the bar.
+  ///
+  /// The dice reader searches the whole playing surface — real dice settle
+  /// wherever they stop — but inside this strip it judges what it sees
+  /// against the strip's own two measured surfaces rather than the owning
+  /// region's, which is the narrower and sharper test; `DiceReader` says why
+  /// with numbers.
   diceZone(-1);
 
   const RoiId(this.pointIndex);

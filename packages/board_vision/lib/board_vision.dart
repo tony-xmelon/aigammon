@@ -24,6 +24,7 @@ export 'src/frame.dart';
 export 'src/geometry_types.dart';
 export 'src/homography.dart';
 export 'src/occupancy.dart';
+export 'src/pip_pattern.dart';
 export 'src/roi_atlas.dart';
 export 'src/roi_sampler.dart';
 export 'src/targets.dart';

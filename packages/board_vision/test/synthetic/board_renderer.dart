@@ -738,10 +738,21 @@ class DicePlacement {
   /// Rotation about [center], radians, clockwise in image coordinates.
   final double angle;
 
+  /// Pip positions overriding [face]'s own layout, in quarter-sides from the
+  /// die's centre — the units `_pipOffsets` speaks.
+  ///
+  /// For painting the ILLEGAL patterns real optics produce and no [face] can
+  /// express: the line of three a blurred six's columns merge into, the
+  /// split dot that makes a four count six. The reader has to refuse those
+  /// shapes, and only a bed that can paint them can prove it does. [face] is
+  /// still what the spot reports as ground truth.
+  final List<(double, double)>? pipOffsets;
+
   const DicePlacement({
     required this.face,
     required this.center,
     this.angle = 0.0,
+    this.pipOffsets,
   });
 
   @override
@@ -757,11 +768,16 @@ class DieSpot {
   /// Rotation about [center], radians, clockwise in image coordinates.
   final double angle;
 
+  /// Pips painted instead of [value]'s own layout, when the placement asked
+  /// for an illegal pattern — see [DicePlacement.pipOffsets].
+  final List<(double, double)>? pipOffsets;
+
   const DieSpot({
     required this.value,
     required this.center,
     required this.side,
     required this.angle,
+    this.pipOffsets,
   });
 
   @override
@@ -2041,6 +2057,7 @@ List<DieSpot> _drawDice(
       center: Pt(placement.center.x * w, placement.center.y * h),
       side: side,
       angle: placement.angle,
+      pipOffsets: placement.pipOffsets,
     );
     _drawDie(image, spot, palette);
     spots.add(spot);
@@ -2075,7 +2092,7 @@ void _drawDie(img.Image image, DieSpot die, BoardPalette palette) {
 
   final pipRadius = (BoardLayout.pipRadiusFraction * die.side).round();
   final step = die.side / 4;
-  for (final (px, py) in _pipOffsets(die.value)) {
+  for (final (px, py) in die.pipOffsets ?? _pipOffsets(die.value)) {
     final p = place(px * step, py * step);
     img.fillCircle(
       image,

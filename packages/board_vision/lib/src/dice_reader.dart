@@ -7,6 +7,7 @@ import 'calibration.dart';
 import 'color_model.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
+import 'pip_pattern.dart';
 import 'roi_atlas.dart';
 import 'roi_sampler.dart';
 
@@ -71,7 +72,8 @@ class DiceReading {
       '@${confidence.toStringAsFixed(2)})';
 }
 
-/// Finding two dice in the band the atlas reserves, and reading their faces.
+/// Finding two settled dice anywhere on the playing surface, and reading
+/// their faces.
 ///
 /// ## Why this query is different
 ///
@@ -88,31 +90,68 @@ class DiceReading {
 /// manual dice pad, which the design keeps one tap away for exactly this
 /// reason.
 ///
+/// ## Where the reader looks
+///
+/// The whole playing surface: every point's column, the bar, and the band
+/// between the triangle rows, from the board's far edge to its near one. The
+/// reader once looked only in the band the atlas reserves as
+/// [RoiId.diceZone], on the theory that dice are thrown into the middle.
+/// The first real footage measured the theory and it failed: of the four
+/// rolls its corpus carries, one pair settled entirely among the far-half
+/// points, one had a die just past the band's far edge, and one lay out of
+/// the band on both halves at once. Real players roll wherever the dice
+/// stop, and a reader that cannot look there answers null to most of a real
+/// session's rolls. What each patch of surface is judged AGAINST differs by
+/// where the patch is — see [_sampleSurface], which is where the band still
+/// earns its keep.
+///
 /// ## Telling a die from a checker
 ///
-/// The dice band overlaps every point's headroom and the whole bar — that
-/// overlap is deliberate, it is the same felt seen two ways (see [RoiAtlas]).
-/// So the band is full of round things that are not dice and the reader
-/// cannot assume otherwise. Three gates, in order of how much they cost:
+/// The surface is full of round things that are not dice — every checker on
+/// every point, and the band's own overlap with the points' headroom (see
+/// [RoiAtlas]) was always full of them. Rejecting them is not an edge case,
+/// it is the job. Three gates, in order of how much they cost:
 ///
-/// 1. **Foreign to the board.** A cell counts only if it is further than
-///    [minForeignDistance] from every surface calibration learned for the
-///    band. This finds dice AND checkers AND hands — anything the board does
-///    not account for. It cannot be asked to find dice specifically, because
-///    there is no learned distribution for a die: calibration has never been
-///    shown one, and there is no colour constant anywhere in this package to
-///    fall back on.
+/// 1. **Foreign to what its own patch of board showed calibration.** A cell
+///    counts only if it is further than [minForeignDistance] from every
+///    surface calibration learned for the region the cell sits in — the
+///    band's own two surfaces inside the band, the owning point's or the
+///    bar's outside it. This finds dice AND checkers AND hands — anything
+///    the board does not account for. It cannot be asked to find dice
+///    specifically, because there is no learned distribution for a die:
+///    calibration has never been shown one, and there is no colour constant
+///    anywhere in this package to fall back on.
 /// 2. **Square, not round.** The blob's outline is measured about its own
 ///    middle after its covariance has been normalized away, which makes the
 ///    test blind to the perspective stretch that turns a circle into an
 ///    ellipse and a square into a parallelogram. A circle scores near zero
 ///    whatever angle it is seen from; a square scores near an eighth.
-/// 3. **It has pips.** A die's face carries one to six small dark blobs well
-///    inside its body; a checker is flat colour all the way across. This is
-///    both the face reading and the last word on whether the thing is a die,
-///    and it is the gate that catches the awkward cases gate 2 lets through —
-///    a checker sliced by the edge of the band is not round any more, but it
-///    still has nothing inside it.
+/// 3. **It has pips — and pips stand where a face's pips stand.** A die's
+///    face carries one to six small marks set off from the body that
+///    carries them, arranged as one of the six shapes every die ever made
+///    shares — [PipPattern] is that test, and what it retired is counting.
+///    A checker is flat colour all the way across; a stack's shadow seams
+///    and a blurred board edge make marks no face's shape contains; a dark
+///    mass with BRIGHT marks is smeared checkers around windows of felt;
+///    and a settled die lies ON the surface, so a candidate centred nearer
+///    than half a die to the surface's edge is something standing against
+///    the board's wall. This gate is both the face reading and the last
+///    word on whether the thing is a die at all.
+///
+/// ## What colour cannot see, measured
+///
+/// A region's learned surfaces cover its whole column, so a die within
+/// [minForeignDistance] of ANY of them is invisible anywhere in that
+/// column's territory. Measured on the bed: the classic palette's die body
+/// sits 2.3 spreads from a cream triangle's mode against 13.1 from a dark
+/// one's, so out of the band that palette's dice are found in the dark
+/// columns and camouflaged in the cream ones. Measured on the first real
+/// footage: the left leaf's pale wood holds dice at 0.7 spreads from the
+/// leaf's own surfaces — only the band's narrower vocabulary separates them
+/// (3.2 spreads), and only inside the band. Both cases fail closed: a die
+/// colour cannot separate from the board is a null and a tap on the dice
+/// pad, never a guess. Finding such dice by their pips rather than their
+/// bodies is the queued follow-up.
 ///
 /// ## Numbers, provisionally
 ///
@@ -130,42 +169,49 @@ class DiceReader {
   /// same seam every other query goes through, and for the same reason.
   final ColorModel colors;
 
-  /// Cells across and down the band, for THIS session's dice.
+  /// Cells across and down the playing surface, for THIS session's dice.
   ///
   /// See [baseLatticeAcross]: the pair is scaled so that a die always spans
-  /// the same number of cells, whatever size it is.
+  /// the same number of cells, whatever size it is. The across count is the
+  /// band's own, since the surface spans the same columns; the down count
+  /// carries the band's cell size over the surface's full unit height — see
+  /// [_surfaceRows].
   final int latticeAcross;
   final int latticeDown;
 
   DiceReader(this.calibration, this.frame)
       : colors = calibration.colorsIn(frame),
         latticeAcross = _scaledLattice(baseLatticeAcross, calibration.dieSide),
-        latticeDown = _scaledLattice(baseLatticeDown, calibration.dieSide);
+        latticeDown = _surfaceRows(calibration);
 
-  /// Cells across and down the band, for a die of [BoardCalibration
-  /// .defaultDieSide].
+  /// Cells across the surface, and down the BAND, for a die of
+  /// [BoardCalibration.defaultDieSide].
   ///
   /// Sized so a pip — about a sixth of a die across — spans the best part of
   /// ten cells, which is what it takes to separate the six pips of a six from
-  /// each other and from the die's rim.
+  /// each other and from the die's rim. [baseLatticeDown] stays anchored to
+  /// the band — the strip [RoiId.diceZone] reserves — because that is where
+  /// the density was measured and validated; the whole surface is sampled at
+  /// the same cell size, so its row count is derived, not written down.
   ///
-  /// **Everything below is a share of a DIE, not of the band.** These two were
-  /// the last absolute size in the reader: they described how finely to sample
-  /// a band containing the bed's dice, and a board whose dice are a third of
-  /// that size got a third of the cells per die and fell through every gate
-  /// that follows. So the pair scales with [BoardCalibration.dieSide] and the
-  /// numbers here are what the scaling is anchored to.
+  /// **Everything below is a share of a DIE, not of the lattice.** These two
+  /// were the last absolute size in the reader: they described how finely to
+  /// sample a band containing the bed's dice, and a board whose dice are a
+  /// third of that size got a third of the cells per die and fell through
+  /// every gate that follows. So the pair scales with
+  /// [BoardCalibration.dieSide] and the numbers here are what the scaling is
+  /// anchored to.
   static const int baseLatticeAcross = 600;
   static const int baseLatticeDown = 80;
 
-  /// The band is never sampled finer than this many cells across, whatever
-  /// the dice.
+  /// The surface is never sampled finer than this many cells across,
+  /// whatever the dice.
   ///
   /// Sampling finer than the frame's own pixels cannot recover detail the
   /// sensor did not capture, and the cost is quadratic: the cap is what stops
   /// a mis-measured `dieSide` of a thousandth from asking for forty-five
-  /// thousand cells across and a hundred million cells of work. Dice small
-  /// enough to reach it are refused by [minDiePixels] long before it binds.
+  /// thousand cells across and billions of cells of work. Dice small enough
+  /// to reach it are refused by [minDiePixels] long before it binds.
   static const int maxLatticeAcross = 2400;
 
   static int _scaledLattice(int base, double dieSide) {
@@ -175,19 +221,36 @@ class DiceReader {
     return math.max(1, (base * capped).round());
   }
 
-  /// How far in from the band's own sides to sample, as a fraction of its
-  /// width. The band ends where the bear-off wells begin — or, on a board with
-  /// no wells, at the board's own edge — and what is immediately outside
-  /// belongs to neither.
+  /// Rows for the whole playing surface, at the cell size the band anchors.
+  ///
+  /// The band is [baseLatticeDown] scaled rows tall over its own height; the
+  /// surface is the unit rectangle's full height at the same cell size. Kept
+  /// as a division rather than a constant so that the band's measured
+  /// density remains the single thing the row count follows.
+  static int _surfaceRows(BoardCalibration calibration) {
+    final band = boundsOf(calibration.atlas.roi(RoiId.diceZone));
+    final scaled = _scaledLattice(baseLatticeDown, calibration.dieSide);
+    return math.max(1, (scaled / (band.maxY - band.minY)).round());
+  }
+
+  /// How far in from the playing surface's own sides to sample, as a
+  /// fraction of its width. The surface ends where the bear-off wells begin —
+  /// or, on a board with no wells, at the board's own edge — and what is
+  /// immediately outside belongs to neither. The far and near edges get no
+  /// such margin, exactly as the band's own edges never did: a row's cells
+  /// are sampled at their middles, half a cell inside.
   static const double insetX = 0.004;
 
-  /// How far from every surface the band is known to show, in spreads, before
-  /// a cell counts as something the board does not account for.
+  /// How far from every surface its region is known to show, in spreads,
+  /// before a cell counts as something the board does not account for.
   ///
   /// Measured: on the hardest of the three palettes — pale wood dice on pale
   /// wood felt — a die's body sits 6.3 spreads from the felt and 9.2 from the
   /// bar's wood, and the band's own surfaces sit within about 1.5 of
-  /// themselves. Three leaves room on both sides.
+  /// themselves. Three leaves room on both sides. Outside the band the same
+  /// three is asked of the owning region's surfaces, whose triangles sit
+  /// further from a die than that on every column that is not camouflage
+  /// outright (see the class doc's measured section).
   static const double minForeignDistance = 3.0;
 
   /// How much of a DIE a blob has to cover to be worth considering, and how
@@ -237,6 +300,13 @@ class DiceReader {
 
   /// The share of a die's body one pip covers, at the extremes. A pip is
   /// about a sixth of the die across, so about a fortieth of its area.
+  ///
+  /// There briefly stood a third pip gate beside these — a cap on how far a
+  /// pip blob may run, added the day the widened search met the shadow
+  /// seams of checker stacks reading as rows of "pips". [PipPattern]
+  /// retired it: a seam's centroid never stands where a face's pips stand,
+  /// and with the shape test in place the cap refused nothing more on the
+  /// bed's whole suite or on all seventy real windows, measured both ways.
   static const double minPipShare = 0.003;
   static const double maxPipShare = 0.08;
 
@@ -258,6 +328,55 @@ class DiceReader {
   /// sets; a pair that disagrees about its own size is a pair with something
   /// else in it.
   static const double maxSizeDisagreement = 0.45;
+
+  /// How close together a pair's two middles may stand, in die sides, before
+  /// the pair is one die seen twice rather than a roll.
+  ///
+  /// Two SETTLED dice cannot hold their middles much nearer than one die —
+  /// that close their blobs have merged, and [maxDieSpanShare] refuses the
+  /// union — so two SEPARATE candidates that close are the halves of one
+  /// thing. Measured on the real footage: a die tilted into two visible
+  /// faces splits at the dark roll of its edge into a top-face and a
+  /// side-face candidate 0.8 to 1.1 dies apart, and three stable windows
+  /// paired those halves into 2-3, 1-3 and 1-2 — rolls nobody threw — while
+  /// the footage's true pairs never stood separate blobs closer than two
+  /// dies. The price is refusing a pair lying genuinely shoulder to
+  /// shoulder, which the bed can paint and the pin test does paint: that
+  /// refusal costs a tap on the dice pad, and the split die cost three
+  /// wrong rolls in seventy windows.
+  static const double minPairGap = 1.25;
+
+  /// How far across a candidate may be, as a share of the die the session
+  /// measured, before it is not a die at all.
+  ///
+  /// **The session is TOLD how big its dice are** —
+  /// [BoardCalibration.dieSide] exists precisely because no constant could
+  /// know — and until the search widened, nothing ever held a candidate to
+  /// it: only the PAIR was asked to agree with itself. Measured the day the
+  /// search left the band, that is not enough. A die is wider than a point
+  /// column, so it always straddles a column boundary, and where the
+  /// neighbouring column's own surfaces sit within [minForeignDistance] of
+  /// the die's body — the camouflage the class doc measures — the blob is
+  /// the die CUT AT THE SEAM. A truncated five reads as a three or a two,
+  /// and when both dice of a roll land that way their fragments AGREE about
+  /// their wrong size: a true 5-6 came back 3-3 at a confidence of 0.63,
+  /// above the lowest reading the corpus knows to be correct, through every
+  /// other gate. A wrong roll into the game state is the one output this
+  /// class exists to prevent, and this pair of bounds is what refuses it:
+  /// the fragments measure 0.63 of a die across and under, a merely-clipped
+  /// die that still reads right measures 0.77, and a flat die is 1.0.
+  ///
+  /// The upper bound is the same idea against mergers — a die fused with a
+  /// checker measures 1.77 dice across, against 1.41 for a die rotated a
+  /// full half-turn of its symmetry — and turns the die-against-a-stack
+  /// refusal from a lucky cascade of gate failures into a stated rule.
+  ///
+  /// [PipPattern] arrived after these bounds and refuses the measured
+  /// fragment cases by shape as well — a truncated face's dots stand
+  /// wrong — so today they are the stated physical rule with the shape test
+  /// behind it, not the only thing standing.
+  static const double minDieSpanShare = 0.70;
+  static const double maxDieSpanShare = 1.60;
 
   /// The contrast at which a reading is worth half of what a perfect one
   /// would be, in the sensor's own levels. Deliberately a soft curve with no
@@ -336,7 +455,7 @@ class DiceReader {
     // guess here goes into the authoritative game state.
     if (diePixels < minDiePixels) return null;
 
-    final grid = _sampleBand();
+    final grid = _sampleSurface();
     if (grid == null) return null;
 
     final candidates = <DieReading>[];
@@ -351,6 +470,11 @@ class DiceReader {
 
     candidates.sort((a, b) => a.center.x.compareTo(b.center.x));
     final first = candidates[0], second = candidates[1];
+
+    // One die seen twice is not a pair — see [minPairGap].
+    final gapX = (second.center.x - first.center.x) / calibration.dieSide;
+    final gapY = (second.center.y - first.center.y) / _dieDownUnits(grid);
+    if (math.sqrt(gapX * gapX + gapY * gapY) < minPairGap) return null;
 
     final bigger = math.max(first.span, second.span);
     final smaller = math.min(first.span, second.span);
@@ -378,20 +502,21 @@ class DiceReader {
   /// **Board space is a unit square whatever shape the board is**, so a die —
   /// which is square in the WORLD — is not square in board space, and nothing
   /// tells the reader the board's proportions. So it measures them: one cell
-  /// is so many pixels across and so many down at the band's middle, and the
+  /// is so many pixels across and so many down at the board's middle, and the
   /// ratio of the two is the local aspect. A die that spans `n` cells across
   /// spans `n * (pixels per cell across) / (pixels per cell down)` cells down,
   /// because those are the same distance on the table.
   ///
-  /// Measured at the band's middle rather than at the blob, deliberately: the
-  /// gates this feeds are about what a die IS, and a size that moved with
-  /// where a die happened to land would make them mean something different in
-  /// each half of the board.
+  /// Measured at the board's middle — the band's own middle, which is the
+  /// same point — rather than at the blob, deliberately: the gates this feeds
+  /// are about what a die IS, and a size that moved with where a die happened
+  /// to land would make them mean something different in each half of the
+  /// board.
   ({double across, double down, double pixels}) get _dieOnLattice {
     final b = boundsOf(calibration.atlas.roi(RoiId.diceZone));
     final midX = (b.minX + b.maxX) / 2, midY = (b.minY + b.maxY) / 2;
     final cellX = (b.maxX - b.minX) / latticeAcross;
-    final cellY = (b.maxY - b.minY) / latticeDown;
+    final cellY = 1.0 / latticeDown;
 
     double pixelsBetween(Pt a, Pt c) {
       final p = calibration.geometry.imagePointOf(a);
@@ -414,94 +539,193 @@ class DiceReader {
   /// How wide one die is in the picture, in pixels.
   double get diePixels => _dieOnLattice.pixels;
 
-  /// The band, sampled onto a regular lattice in board space.
+  /// The playing surface, sampled onto a regular lattice in board space.
+  ///
+  /// ## One lattice, two vocabularies
+  ///
+  /// Every cell is judged against the surfaces ITS OWN patch of board showed
+  /// calibration — the owning point's, or the bar's — except inside the
+  /// band, which keeps the two surfaces measured for [RoiId.diceZone].
+  /// Neither choice can stand in for the other, and both directions are
+  /// measured:
+  ///
+  /// * A point's territory MUST be judged by its own surfaces, because its
+  ///   triangle is one of them. Judged against the band's felt-and-wood
+  ///   instead, every triangle on the board is one giant foreign blob, and a
+  ///   die landing on a triangle merges into that blob and is thrown away
+  ///   with it.
+  /// * The band MUST keep its own narrower pair, because extra vocabulary
+  ///   can only HIDE a foreign object, and it measurably does: a pale die on
+  ///   a brown board is 13 spreads from the band's felt and 2.3 from a cream
+  ///   point triangle the band does not contain — and the first real
+  ///   footage's left leaf is paler still, holding its in-band dice at 0.7
+  ///   spreads from the leaf's own surfaces against 3.2 from the band's.
+  ///   Only the band can afford the narrow pair: it showed calibration
+  ///   almost the whole of itself, and its two surfaces — felt and the bar's
+  ///   wood — are both measured from hundreds of samples.
+  ///
+  /// For the same reason, NO cell borrows the board-wide vocabulary
+  /// `ColorModel.classify` lends a partly-hidden region. That loan exists so
+  /// a region whose surface was under a checker at calibration does not
+  /// invent a phantom checker out of felt it never measured — the right
+  /// trade when the question is "which checker is this", and the wrong one
+  /// here, where vocabulary only hides.
   ///
   /// Shape is measured on where those cells landed in the PICTURE, not on
   /// where they sit in board space: board space is a unit square whatever
   /// shape the board is, so a round checker is an ellipse there and would
   /// out-score a square on any test of roundness.
-  _Band? _sampleBand() {
-    final b = boundsOf(calibration.atlas.roi(RoiId.diceZone));
-    final pad = (b.maxX - b.minX) * insetX;
-    final x0 = b.minX + pad, x1 = b.maxX - pad;
-    final y0 = b.minY, y1 = b.maxY;
+  _Surface? _sampleSurface() {
+    final band = boundsOf(calibration.atlas.roi(RoiId.diceZone));
+    final pad = (band.maxX - band.minX) * insetX;
+    final x0 = band.minX + pad, x1 = band.maxX - pad;
+    const y0 = 0.0, y1 = 1.0;
 
     final n = latticeAcross * latticeDown;
-    final band = _Band(
-      boardX: Float64List(n),
-      boardY: Float64List(n),
-      imageX: Float64List(n),
-      imageY: Float64List(n),
-      luma: Float64List(n),
+    final owners = _ownersByColumn(x0, x1);
+    final surface = _Surface(
+      x0: x0,
+      x1: x1,
+      y0: y0,
+      y1: y1,
+      bandMinY: band.minY,
+      bandMaxY: band.maxY,
+      bandBackground: colors.backgroundOf(RoiId.diceZone),
+      ownersFar: owners.far,
+      ownersNear: owners.near,
       foreign: Uint8List(n),
     );
 
-    final background = colors.backgroundOf(RoiId.diceZone);
     var seen = 0;
-    for (var row = 0; row < latticeDown; row++) {
-      final y = y0 + (row + 0.5) / latticeDown * (y1 - y0);
-      for (var col = 0; col < latticeAcross; col++) {
-        final i = row * latticeAcross + col;
-        final x = x0 + (col + 0.5) / latticeAcross * (x1 - x0);
-        band.boardX[i] = x;
-        band.boardY[i] = y;
-        final p = calibration.geometry.imagePointOf(Pt(x, y));
-        if (!p.x.isFinite || !p.y.isFinite) continue;
-        final px = p.x.round(), py = p.y.round();
-        if (px < 0 || py < 0 || px >= frame.width || py >= frame.height) {
-          continue;
-        }
-        seen++;
-        band.imageX[i] = p.x;
-        band.imageY[i] = p.y;
-        final sample = frame.pixelAt(px, py);
-        band.luma[i] = lumaOf(sample);
-        // The band's OWN surfaces, and deliberately not the board-wide
-        // vocabulary `ColorModel.classify` would lend it. That loan exists so
-        // a region whose surface was under a checker at calibration does not
-        // invent a phantom checker out of felt it never measured — the right
-        // trade when the question is "which checker is this". It is the wrong
-        // trade here: extra vocabulary can only HIDE a foreign object, and it
-        // measurably does. A pale die on a brown board is 13 spreads from the
-        // band's own felt and 2.3 from a cream point triangle the band does
-        // not contain and never will.
-        //
-        // The band can afford to go without the loan because, unlike the
-        // points, it showed calibration almost the whole of itself: only the
-        // tops of the four tallest stacks stand in it, and its two surfaces —
-        // felt and the bar's wood — are both measured from hundreds of
-        // samples.
-        final f = ColorModel.feature(
-          sample,
-          background.color,
-          exposure: colors.exposure,
-        );
-        if (background.distanceTo(f) > minForeignDistance) {
-          band.foreign[i] = 1;
-        }
+    for (var i = 0; i < n; i++) {
+      final p = _imageAt(surface, i);
+      if (!p.x.isFinite || !p.y.isFinite) continue;
+      final px = p.x.round(), py = p.y.round();
+      if (px < 0 || py < 0 || px >= frame.width || py >= frame.height) {
+        continue;
+      }
+      final background = _referenceOf(surface, i);
+      // The atlas's points and bar tile the surface, so a cell with no
+      // owner is a board this code has never met; not counting it as seen
+      // lets the visibility gate below say so rather than reading around
+      // the hole.
+      if (background == null) continue;
+      seen++;
+      final sample = frame.pixelAt(px, py);
+      final f = ColorModel.feature(
+        sample,
+        background.color,
+        exposure: colors.exposure,
+      );
+      if (background.distanceTo(f) > minForeignDistance) {
+        surface.foreign[i] = 1;
       }
     }
-    // A band hanging over the edge of the picture is not one to read dice
+    // A board hanging over the edge of the picture is not one to read dice
     // from. Saying nothing is the designed answer; the readability light is
     // what tells the user why.
-    return seen / n < RoiSampler.minVisibleFraction ? null : band;
+    return seen / n < RoiSampler.minVisibleFraction ? null : surface;
+  }
+
+  /// Which region's background judges each lattice column, per half.
+  ///
+  /// The points and the bar tile the whole playing surface (see [RoiAtlas]),
+  /// so every column belongs to exactly one region in each half. Resolved
+  /// once per read from the atlas's own rectangles, because the atlas is the
+  /// one place a session's board is described; the trays take no part — the
+  /// surface the lattice spans ends where they begin.
+  ({List<RoiBackground?> far, List<RoiBackground?> near}) _ownersByColumn(
+    double x0,
+    double x1,
+  ) {
+    final far = List<RoiBackground?>.filled(latticeAcross, null);
+    final near = List<RoiBackground?>.filled(latticeAcross, null);
+    for (final id in calibration.atlas.regions) {
+      if (id == RoiId.diceZone ||
+          id == RoiId.offWhite ||
+          id == RoiId.offBlack) {
+        continue;
+      }
+      final b = boundsOf(calibration.atlas.roi(id));
+      final background = colors.backgroundOf(id);
+      for (var col = 0; col < latticeAcross; col++) {
+        final x = x0 + (col + 0.5) / latticeAcross * (x1 - x0);
+        if (x < b.minX || x > b.maxX) continue;
+        if (b.minY < RoiAtlas.midline) far[col] = background;
+        if (b.maxY > RoiAtlas.midline) near[col] = background;
+      }
+    }
+    return (far: far, near: near);
+  }
+
+  /// The background cell [i] is judged against — the band's own two
+  /// surfaces inside the band, the owning point's or the bar's outside it.
+  /// One rule, used by the sampling pass and by every later question about a
+  /// cell, so the two can never quietly disagree.
+  RoiBackground? _referenceOf(_Surface s, int i) {
+    final y = _boardYAt(s, i);
+    if (y >= s.bandMinY && y <= s.bandMaxY) return s.bandBackground;
+    final col = i % latticeAcross;
+    return y >= RoiAtlas.midline ? s.ownersNear[col] : s.ownersFar[col];
+  }
+
+  /// One die's y-extent in board units, from the board middle's aspect.
+  ///
+  /// The same estimate everything else uses ([_dieOnLattice]), named because
+  /// the pip-shape frame leans on it and its error is now measured. The
+  /// pixel aspect at any point carries the CAMERA's own y-foreshortening on
+  /// top of the board's true proportions, so this over-estimates on a low
+  /// camera — by about 1.35 on the first real footage (framed patterns
+  /// compress to about 0.74 of a die frame, inside [PipPattern.tolerance])
+  /// and by 1.85 at the tented bed's hinge crown, which is outside any
+  /// tolerance that still refuses the wrong shapes. A die-frame divisor the
+  /// camera cannot pollute needs a physical vertical reference; the
+  /// measured checker pitch (`StackMetrics.pitch` is a disc's diameter in
+  /// y-units) is the obvious candidate, queued with the tent findings.
+  double _dieDownUnits(_Surface s) =>
+      _dieOnLattice.down * (s.y1 - s.y0) / latticeDown;
+
+  /// Board-space x of cell [i]'s middle.
+  double _boardXAt(_Surface s, int i) =>
+      s.x0 + (i % latticeAcross + 0.5) / latticeAcross * (s.x1 - s.x0);
+
+  /// Board-space y of cell [i]'s middle.
+  double _boardYAt(_Surface s, int i) =>
+      s.y0 + (i ~/ latticeAcross + 0.5) / latticeDown * (s.y1 - s.y0);
+
+  /// Where cell [i]'s middle lands in the picture.
+  Pt _imageAt(_Surface s, int i) =>
+      calibration.geometry.imagePointOf(Pt(_boardXAt(s, i), _boardYAt(s, i)));
+
+  /// Cell [i]'s brightness, re-read from the frame.
+  ///
+  /// Zero for a cell the picture does not contain — which can only reach the
+  /// pip arithmetic as a hole enclosed by a blob at the picture's very edge,
+  /// on a frame the visibility gate already found barely acceptable.
+  double _lumaAt(_Surface s, int i) {
+    final p = _imageAt(s, i);
+    if (!p.x.isFinite || !p.y.isFinite) return 0;
+    final px = p.x.round(), py = p.y.round();
+    if (px < 0 || py < 0 || px >= frame.width || py >= frame.height) return 0;
+    return lumaOf(frame.pixelAt(px, py));
   }
 
   /// Connected runs of foreign cells, four-connected, big enough to matter.
-  List<List<int>> _blobsIn(_Band band) {
+  List<List<int>> _blobsIn(_Surface surface) {
     final n = latticeAcross * latticeDown;
     final die = _dieOnLattice;
     final dieCells = die.across * die.down;
     final minCells = math.max(1, (dieCells * minDieShare).round());
-    // Never past the whole band: a share of a die is the right unit, but a
-    // blob bigger than the band it was found in is a bug rather than a hand.
+    // Never past the whole lattice: a share of a die is the right unit, but a
+    // blob bigger than the surface it was found on is a bug rather than a
+    // hand.
     final maxCells = math.min(n, (dieCells * maxDieShare).round());
     final seen = Uint8List(n);
     final blobs = <List<int>>[];
     final stack = <int>[];
 
     for (var start = 0; start < n; start++) {
-      if (band.foreign[start] == 0 || seen[start] == 1) continue;
+      if (surface.foreign[start] == 0 || seen[start] == 1) continue;
       seen[start] = 1;
       stack
         ..clear()
@@ -511,10 +735,10 @@ class DiceReader {
         final i = stack.removeLast();
         cells.add(i);
         final col = i % latticeAcross, row = i ~/ latticeAcross;
-        if (col > 0) _push(band, seen, stack, i - 1);
-        if (col < latticeAcross - 1) _push(band, seen, stack, i + 1);
-        if (row > 0) _push(band, seen, stack, i - latticeAcross);
-        if (row < latticeDown - 1) _push(band, seen, stack, i + latticeAcross);
+        if (col > 0) _push(surface, seen, stack, i - 1);
+        if (col < latticeAcross - 1) _push(surface, seen, stack, i + 1);
+        if (row > 0) _push(surface, seen, stack, i - latticeAcross);
+        if (row < latticeDown - 1) _push(surface, seen, stack, i + latticeAcross);
       }
       if (cells.length >= minCells && cells.length <= maxCells) {
         blobs.add(cells);
@@ -523,34 +747,73 @@ class DiceReader {
     return blobs;
   }
 
-  static void _push(_Band band, Uint8List seen, List<int> stack, int i) {
-    if (band.foreign[i] == 1 && seen[i] == 0) {
+  static void _push(_Surface surface, Uint8List seen, List<int> stack, int i) {
+    if (surface.foreign[i] == 1 && seen[i] == 0) {
       seen[i] = 1;
       stack.add(i);
     }
   }
 
   /// A blob, if it turns out to be a die.
-  DieReading? _readDie(_Band band, List<int> raw) {
+  DieReading? _readDie(_Surface surface, List<int> raw) {
     final cells = _fillHoles(raw);
-    final outline = _outlineOf(band, cells);
+    // The picture positions and brightness only this blob needs, computed
+    // here: the surface keeps nothing per cell but the foreign mask (see
+    // [_Surface] for the arithmetic that says why).
+    final image = <int, Pt>{for (final i in cells) i: _imageAt(surface, i)};
+    final outline = _outlineOf(image);
     if (outline == null || outline.scatter < minSquareness) return null;
 
-    final rounds = math.max(
-      1,
-      (_dieOnLattice.across * pipErosionShare).round(),
-    );
+    final die = _dieOnLattice;
+    var cx = 0.0, cy = 0.0;
+    for (final i in cells) {
+      cx += _boardXAt(surface, i);
+      cy += _boardYAt(surface, i);
+    }
+    final center = Pt(cx / cells.length, cy / cells.length);
+
+    // A settled die LIES on the surface, so its middle is at least half a
+    // die from every edge of it — nearer than that is up the board's wall,
+    // which is not a place dice settle. What actually stands there is the
+    // outermost checker of a far-edge stack, smeared die-sized by a steep
+    // viewpoint and a sigma of blur: a bare classic board's stacks paired up
+    // and read 2-4 at a confidence of 0.24 through every other gate, centred
+    // 0.039 and 0.047 of the board from its far edge against a half-die of
+    // 0.050 — and the first real footage grew a 4-4 the same way, one of its
+    // "dice" centred 0.02 of the board from the rim.
+    final halfAcross = calibration.dieSide / 2;
+    final dieDownUnits = _dieDownUnits(surface);
+    if (center.x < surface.x0 + halfAcross ||
+        center.x > surface.x1 - halfAcross ||
+        center.y < surface.y0 + dieDownUnits / 2 ||
+        center.y > surface.y1 - dieDownUnits / 2) {
+      return null;
+    }
+
+    final rounds = math.max(1, (die.across * pipErosionShare).round());
     final interior = _erode(cells, rounds);
     if (interior.length < cells.length * 0.1) return null;
 
-    final lumas = <double>[for (final i in interior) band.luma[i]]..sort();
+    final luma = <int, double>{
+      for (final i in interior) i: _lumaAt(surface, i),
+    };
+    final lumas = luma.values.toList()..sort();
     final body = lumas[lumas.length ~/ 2];
     final low = lumas[(lumas.length * pipPercentile).floor()];
     final high = lumas[
         math.min(lumas.length - 1, (lumas.length * (1 - pipPercentile)).ceil())];
 
     // Dice are usually pale with dark pips and occasionally the other way
-    // round. Whichever tail is further from the body is the pips.
+    // round. Whichever tail is further from the body is the pips — a
+    // two-sidedness that was briefly withdrawn while the search widened,
+    // because a blurred black stack at a steep far edge is a dark mass
+    // enclosing windows of plain felt, [_fillHoles] hands the windows back
+    // as brilliant marks, and the "dark die with pale pips" read 2-4 on a
+    // bare board. [PipPattern] made the withdrawal unnecessary and it was
+    // reinstated, measured both ways: window marks never stand where a
+    // face's pips stand, and with the shape test in place the two-sided
+    // reader scores identically on the bed's whole suite and on all seventy
+    // real windows.
     final darker = body - low >= high - body;
     final spread = darker ? body - low : high - body;
     if (spread < minPipContrast) return null;
@@ -558,32 +821,50 @@ class DiceReader {
 
     final pipCells = <int>{
       for (final i in interior)
-        if (darker ? band.luma[i] <= cut : band.luma[i] >= cut) i,
+        if (darker ? luma[i]! <= cut : luma[i]! >= cut) i,
     };
     final minPip = (interior.length * minPipShare).round();
     final maxPip = (interior.length * maxPipShare).round();
-    var face = 0;
+    final pips = <Pt>[];
     var pipLuma = 0.0, pipCount = 0;
     for (final pip in _componentsOf(pipCells)) {
       if (pip.length < minPip) continue;
       if (pip.length > maxPip) return null;
-      face++;
+      var px = 0.0, py = 0.0;
       for (final i in pip) {
-        pipLuma += band.luma[i];
+        px += _boardXAt(surface, i);
+        py += _boardYAt(surface, i);
+        pipLuma += luma[i]!;
         pipCount++;
       }
+      pips.add(Pt(px / pip.length, py / pip.length));
     }
-    if (face < 1 || face > 6) return null;
 
-    var cx = 0.0, cy = 0.0;
-    for (final i in cells) {
-      cx += band.boardX[i];
-      cy += band.boardY[i];
-    }
+    // The face is the SHAPE the pips stand in, not their count — see
+    // [PipPattern] for the misreads that retired counting. Positions are
+    // scaled by the die the session measured and anchored on the blob's own
+    // middle, so a fragment's dots and a two-face union's dots land outside
+    // every face's shape instead of re-scaling into one.
+    final face = PipPattern.faceOf(<Pt>[
+      for (final p in pips)
+        Pt(
+          (p.x - center.x) / calibration.dieSide + 0.5,
+          (p.y - center.y) / dieDownUnits + 0.5,
+        ),
+    ]);
+    if (face == null) return null;
+
+    // A die is the size the session said dice are. Too narrow is a fragment
+    // cut at a camouflage seam — the wrong-smaller-face machine the constant
+    // documents — and too wide is a die fused with something else.
+    final span = _boardSpan(surface, cells);
+    final share = span / calibration.dieSide;
+    if (share < minDieSpanShare || share > maxDieSpanShare) return null;
+
     return DieReading(
       face: face,
-      center: Pt(cx / cells.length, cy / cells.length),
-      span: _boardSpan(band, cells),
+      center: center,
+      span: span,
       pipContrast: (body - pipLuma / pipCount).abs(),
       squareness: outline.scatter,
     );
@@ -597,25 +878,25 @@ class DiceReader {
   /// to a small patch — leaves the number alone. A circle comes out near zero
   /// however it is squashed, and a square near an eighth however it is
   /// sheared.
-  ({double scatter, double radius})? _outlineOf(_Band band, List<int> cells) {
+  ({double scatter, double radius})? _outlineOf(Map<int, Pt> image) {
     var mx = 0.0, my = 0.0;
-    for (final i in cells) {
-      mx += band.imageX[i];
-      my += band.imageY[i];
+    for (final p in image.values) {
+      mx += p.x;
+      my += p.y;
     }
-    mx /= cells.length;
-    my /= cells.length;
+    mx /= image.length;
+    my /= image.length;
 
     var sxx = 0.0, sxy = 0.0, syy = 0.0;
-    for (final i in cells) {
-      final dx = band.imageX[i] - mx, dy = band.imageY[i] - my;
+    for (final p in image.values) {
+      final dx = p.x - mx, dy = p.y - my;
       sxx += dx * dx;
       sxy += dx * dy;
       syy += dy * dy;
     }
-    sxx /= cells.length;
-    sxy /= cells.length;
-    syy /= cells.length;
+    sxx /= image.length;
+    sxy /= image.length;
+    syy /= image.length;
 
     final trace = sxx + syy;
     final gap = math.sqrt((sxx - syy) * (sxx - syy) + 4 * sxy * sxy);
@@ -633,8 +914,8 @@ class DiceReader {
     final sMajor = math.sqrt(major), sMinor = math.sqrt(minor);
 
     final reach = List<double>.filled(outlineBins, 0);
-    for (final i in cells) {
-      final dx = band.imageX[i] - mx, dy = band.imageY[i] - my;
+    for (final p in image.values) {
+      final dx = p.x - mx, dy = p.y - my;
       final u = (dx * ex + dy * ey) / sMajor;
       final v = (-dx * ey + dy * ex) / sMinor;
       final r = math.sqrt(u * u + v * v);
@@ -667,7 +948,7 @@ class DiceReader {
   ///
   /// Measured, and the reason this exists: a pip's edge blends into the die's
   /// body, and on a pale board that blend passes straight through the colour
-  /// of the felt. Every pip therefore comes ringed by cells the band accounts
+  /// of the felt. Every pip therefore comes ringed by cells the board accounts
   /// for perfectly well, which punches the pips out of the blob as holes —
   /// and then eroding the blob eats the pips before it reaches the rim, which
   /// is the opposite of what the erosion is for. A pip that is a hole in a die
@@ -775,33 +1056,51 @@ class DiceReader {
 
   /// How far across the blob is in board-space x — a size two dice from the
   /// same set have to agree about.
-  double _boardSpan(_Band band, List<int> cells) {
+  double _boardSpan(_Surface surface, List<int> cells) {
     var lo = double.infinity, hi = double.negativeInfinity;
     for (final i in cells) {
-      lo = math.min(lo, band.boardX[i]);
-      hi = math.max(hi, band.boardX[i]);
+      final x = _boardXAt(surface, i);
+      lo = math.min(lo, x);
+      hi = math.max(hi, x);
     }
     return hi - lo;
   }
 }
 
-/// The dice band, sampled: where each cell is in board space and in the
-/// picture, how bright it was, and whether it is something the board does not
-/// account for.
-class _Band {
-  final Float64List boardX;
-  final Float64List boardY;
-  final Float64List imageX;
-  final Float64List imageY;
-  final Float64List luma;
+/// The playing surface, sampled: which cells hold something the board does
+/// not account for, and the rectangle they were sampled over.
+///
+/// Deliberately nothing per cell but the mask. The band this grew from
+/// carried five parallel arrays — board position, picture position,
+/// brightness — and at the band's size that was cheap. The surface is six
+/// times the band, four million cells on a small-dice board, and everything
+/// except the mask matters only for the few thousand cells inside candidate
+/// blobs — so those are recomputed from the cell's own index when a blob
+/// asks, instead of being stored for millions of cells nothing will look at
+/// again.
+class _Surface {
+  final double x0, x1, y0, y1;
+
+  /// The band's extent and reference, and each column's owning region per
+  /// half — everything `DiceReader._referenceOf` needs to answer for any
+  /// cell, carried so the sampling pass and the pip gates judge colour
+  /// against the very same surfaces.
+  final double bandMinY, bandMaxY;
+  final RoiBackground bandBackground;
+  final List<RoiBackground?> ownersFar, ownersNear;
+
   final Uint8List foreign;
 
-  const _Band({
-    required this.boardX,
-    required this.boardY,
-    required this.imageX,
-    required this.imageY,
-    required this.luma,
+  const _Surface({
+    required this.x0,
+    required this.x1,
+    required this.y0,
+    required this.y1,
+    required this.bandMinY,
+    required this.bandMaxY,
+    required this.bandBackground,
+    required this.ownersFar,
+    required this.ownersNear,
     required this.foreign,
   });
 }
