@@ -1,3 +1,4 @@
+import 'board_geometry.dart';
 import 'calibration.dart';
 import 'dice_reader.dart';
 import 'frame.dart';
@@ -51,6 +52,33 @@ class BoardVision {
         corners: corners,
         orientation: orientation,
         proportions: proportions,
+      );
+
+  /// Learns a **folding-case** board from a frame of its starting position.
+  ///
+  /// The other door, for the board a great many homes actually have: a case
+  /// that folds in half, with no bear-off wells and a raised hinge for a bar.
+  /// Its two leaves are not coplanar — a case standing open on a table sits
+  /// slightly tented — so no four corners describe it, however carefully they
+  /// are dragged. Measured on the first real board, a single-plane fit lands
+  /// mid-board columns half a column out and every gate here refuses it.
+  ///
+  /// So this asks for eight points instead of four: the same outer corners,
+  /// plus the four seams where the hinge meets the board's far and near edges.
+  /// See [FoldingCorners] — and note there is no `proportions` argument,
+  /// because those eight points already say what shape the board is.
+  ///
+  /// Everything else is [calibrate]: same starting position, same colour
+  /// learning, same read-back gate, same sentence-carrying failures.
+  static CalibrationResult calibrateFolding({
+    required Frame frame,
+    required FoldingCorners corners,
+    required BoardOrientation orientation,
+  }) =>
+      Calibrator.learnFoldingStartingPosition(
+        frame: frame,
+        corners: corners,
+        orientation: orientation,
       );
 
   /// Checks the board in [frame] against the position every game starts from,

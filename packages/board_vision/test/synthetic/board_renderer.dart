@@ -746,8 +746,28 @@ RenderedBoard renderTopDown({
     destination,
   ).inverted;
 
-  // Flatten the source once: `getPixel` per bilinear tap would be four object
-  // reads per output pixel, and a warp is over a million output pixels.
+  final sw = source.width, sh = source.height;
+  final rgb = _filled(outWidth, outHeight, backgroundColor);
+  _paintWarp(
+    rgb,
+    outWidth,
+    outHeight,
+    _flatten(source),
+    sw,
+    sh,
+    inverse,
+    0,
+    sw - 1.0,
+  );
+  return (
+    frame: Frame(rgb, outWidth, outHeight),
+    groundTruthQuad: destination,
+  );
+}
+
+/// Flattens an image once: `getPixel` per bilinear tap would be four object
+/// reads per output pixel, and a warp is over a million output pixels.
+Uint8List _flatten(img.Image source) {
   final sw = source.width, sh = source.height;
   final src = Uint8List(sw * sh * 3);
   var s = 0;
@@ -759,23 +779,48 @@ RenderedBoard renderTopDown({
       src[s++] = p.b.toInt();
     }
   }
+  return src;
+}
 
-  final bgR = (backgroundColor >> 16) & 0xFF;
-  final bgG = (backgroundColor >> 8) & 0xFF;
-  final bgB = backgroundColor & 0xFF;
-
+Uint8List _filled(int outWidth, int outHeight, int color) {
   final rgb = Uint8List(outWidth * outHeight * 3);
-  var o = 0;
+  final r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+  for (var o = 0; o < rgb.length; o += 3) {
+    rgb[o] = r;
+    rgb[o + 1] = g;
+    rgb[o + 2] = b;
+  }
+  return rgb;
+}
+
+/// Inverse-samples one slab of a source image into an output buffer.
+///
+/// [minSourceX] and [maxSourceX] bound the slab: output pixels whose source
+/// falls outside them are left alone, so several slabs can be painted into one
+/// buffer without any of them overwriting a neighbour's pixels. A single-slab
+/// warp passes the whole width and paints everything the quad covers.
+void _paintWarp(
+  Uint8List rgb,
+  int outWidth,
+  int outHeight,
+  Uint8List src,
+  int sw,
+  int sh,
+  PlaneHomography inverse,
+  double minSourceX,
+  double maxSourceX,
+) {
   for (var y = 0; y < outHeight; y++) {
     for (var x = 0; x < outWidth; x++) {
       final p = inverse.map(Pt(x.toDouble(), y.toDouble()));
-      if (p.x < 0 || p.y < 0 || p.x > sw - 1 || p.y > sh - 1 || p.x.isNaN) {
-        rgb[o++] = bgR;
-        rgb[o++] = bgG;
-        rgb[o++] = bgB;
+      if (p.x < minSourceX ||
+          p.y < 0 ||
+          p.x > maxSourceX ||
+          p.y > sh - 1 ||
+          p.x.isNaN) {
         continue;
       }
-      final x0 = p.x.floor(), y0 = p.y.floor();
+      final x0 = math.min(p.x.floor(), sw - 1), y0 = p.y.floor();
       final x1 = math.min(x0 + 1, sw - 1), y1 = math.min(y0 + 1, sh - 1);
       final fx = p.x - x0, fy = p.y - y0;
       final w00 = (1 - fx) * (1 - fy);
@@ -786,6 +831,7 @@ RenderedBoard renderTopDown({
       final i10 = (y0 * sw + x1) * 3;
       final i01 = (y1 * sw + x0) * 3;
       final i11 = (y1 * sw + x1) * 3;
+      var o = (y * outWidth + x) * 3;
       for (var c = 0; c < 3; c++) {
         rgb[o++] = (src[i00 + c] * w00 +
                 src[i10 + c] * w10 +
@@ -796,10 +842,6 @@ RenderedBoard renderTopDown({
       }
     }
   }
-  return (
-    frame: Frame(rgb, outWidth, outHeight),
-    groundTruthQuad: destination,
-  );
 }
 
 /// [renderTopDown] followed by [warpToQuad] — the one call almost every
@@ -870,6 +912,319 @@ SyntheticShot renderShot({
       actualQuad,
     ),
   );
+}
+
+// --- the folding case, which is not one plane -------------------------------
+
+/// A folding-case board standing open on a table, seen by a pinhole camera.
+///
+/// ## Why the test bed needs a third dimension
+///
+/// Everything above warps a flat board onto a quad, because a flat board seen
+/// by a pinhole IS a homography and a quad says all there is to say. A folding
+/// case is not flat. Its two leaves hinge, and a case resting on a table sits
+/// slightly tented — the spine in the middle stands higher than the outer
+/// edges, which is where the hinge strip is and where hit checkers sit.
+///
+/// Measured on the first real board's calibration frame: fit one homography to
+/// the four outer corners, rectify, and the two halves come out with column
+/// pitches **13% apart** — impossible for two identical leaves, and the
+/// signature of the tent. Rectify each leaf under its own quad instead and the
+/// pitch is uniform to within 5%.
+///
+/// So the bed models the board in three dimensions and projects it, rather
+/// than picking three quads by hand. Hand-picked quads would be a tent someone
+/// invented; this one is a tent, and the skew it produces is a consequence
+/// rather than a setting. The camera is deliberately **off to one side**: a
+/// dead-centre camera sees the two leaves as mirror images and a single
+/// homography fits them equally badly, so the skew — the thing the real frame
+/// showed — needs an asymmetric viewpoint to appear at all.
+///
+/// ## The world
+///
+/// In units of the board's own width: `x` across the playing field (0 at its
+/// left edge, 1 at its right), `y` away from the camera (0 at the board's NEAR
+/// edge, [BoardLayout] aspect at its far one), `z` up from the table.
+class FoldingView {
+  /// How far the hinge ridge stands above the leaves' outer edges, as a
+  /// fraction of the board's width. Zero is a folding board lying dead flat —
+  /// a real case, and one that has to go on working.
+  final double ridgeHeight;
+
+  final (double, double, double) eye;
+  final (double, double, double) target;
+
+  /// Focal length in output pixels.
+  final double focal;
+
+  const FoldingView({
+    required this.ridgeHeight,
+    required this.eye,
+    required this.target,
+    required this.focal,
+  });
+
+  /// The same viewpoint over a board that is not tented at all.
+  FoldingView get flat => FoldingView(
+        ridgeHeight: 0,
+        eye: eye,
+        target: target,
+        focal: focal,
+      );
+}
+
+/// The tent the folding tests run on: a phone leaning low at the near-left
+/// corner of the table, and a spine standing 5% of the board's width proud of
+/// the leaves.
+///
+/// Tuned to reproduce the first real frame's diagnostic and its character
+/// together, both measured rather than eyeballed:
+///
+/// | | this view | the real frame |
+/// |---|---|---|
+/// | single-plane pitch skew | 12.7% | 13% |
+/// | far edge over near edge | 0.55 | 0.66 |
+/// | shorter side edge over longer | 0.97 | 0.99 |
+///
+/// The last row is the one that is easy to get wrong. The real phone was very
+/// nearly square-on to the board left-to-right — its two side edges are 566 and
+/// 569 px — so the skew there is NOT an off-to-one-side camera looking across a
+/// flat board. It is the tent. A view that produced the same 13% by leaning
+/// hard to one side would be a different phenomenon wearing the same number,
+/// and the mismatch test below would then be pinning the wrong thing.
+///
+/// `test/folding_board_test.dart` asserts the skew, so this constant cannot
+/// drift into a board that is only nominally tented.
+const FoldingView kFoldingTent = FoldingView(
+  ridgeHeight: 0.05,
+  eye: (0.25, -0.45, 0.45),
+  target: (0.5, 0.33, 0.02),
+  focal: 760,
+);
+
+/// The hinge strip's width on the rendered folding boards, as a fraction of
+/// the playing field. Close to the first real board's, which measures between
+/// 6.7% of its far edge and 7.5% of its near one.
+const double kFoldingBarWidth = 0.07;
+
+/// A warped shot of a folding board, plus its ground truth.
+///
+/// The eight points are what a person taps during calibration on such a board:
+/// the four outer corners, plus where the hinge strip meets the far and near
+/// edges. There is no single [BoardQuad] here on purpose — a folding board
+/// does not have one, and offering one would invite exactly the fit that fails.
+class FoldingShot {
+  final Frame frame;
+
+  /// The eight points, as calibration wants them.
+  final FoldingCorners groundTruthCorners;
+
+  final RenderedBoard board;
+
+  /// The proportions this board was drawn with — trayless, with a hinge for a
+  /// bar, and the same ones [FoldingCorners] derives for itself.
+  final BoardProportions proportions;
+
+  const FoldingShot({
+    required this.frame,
+    required this.groundTruthCorners,
+    required this.board,
+    required this.proportions,
+  });
+}
+
+/// Renders a folding-case board and projects it through [view].
+///
+/// The top-down render is the same one every other shot uses — the board's
+/// paint does not know it is about to be folded. What differs is the warp:
+/// the render is cut into three vertical slabs at the hinge, and each is
+/// thrown onto its OWN quad, so the output frame carries three planes that do
+/// not agree with each other. That is the whole point of the bed.
+FoldingShot renderFoldingShot({
+  required BoardState board,
+  Dice? dice,
+  BoardPalette palette = BoardPalette.classic,
+  double lightingGain = 1.0,
+  BoardOrientation orientation = BoardOrientation.whiteHomeNear,
+  List<DicePlacement>? dicePlacements,
+  double barWidth = kFoldingBarWidth,
+  bool starInlays = false,
+  int topDownWidth = kTopDownWidth,
+  int topDownHeight = kTopDownHeight,
+  FoldingView view = kFoldingTent,
+  int outWidth = kFrameWidth,
+  int outHeight = kFrameHeight,
+  int backgroundColor = kBackdropColor,
+  ShotDegradation degradation = ShotDegradation.none,
+}) {
+  final proportions = BoardProportions(trayWidth: 0, barWidth: barWidth);
+  final rendered = renderTopDown(
+    board: board,
+    dice: dice,
+    palette: palette,
+    lightingGain: lightingGain,
+    orientation: orientation,
+    dicePlacements: dicePlacements,
+    proportions: proportions,
+    starInlays: starInlays,
+    width: topDownWidth,
+    height: topDownHeight,
+  );
+
+  final corners = foldingCornersOf(
+    view,
+    barWidth: barWidth,
+    aspect: topDownHeight / topDownWidth,
+    principal: Pt(outWidth / 2, outHeight / 2),
+  );
+
+  // The three slabs, in top-down pixels. The cuts are exactly where the atlas
+  // puts the bar, which is what makes a checker on the hinge land on the hinge
+  // strip's own plane rather than on either leaf.
+  final sw = rendered.image.width, sh = rendered.image.height;
+  final xLeft = corners.leftLeafEnd * sw;
+  final xRight = corners.rightLeafStart * sw;
+  final src = _flatten(rendered.image);
+  final rgb = _filled(outWidth, outHeight, backgroundColor);
+  for (final (x0, x1, destination) in <(double, double, BoardQuad)>[
+    (0, xLeft, corners.leftLeaf),
+    (xLeft, xRight, corners.hinge),
+    (xRight, sw.toDouble(), corners.rightLeaf),
+  ]) {
+    _paintWarp(
+      rgb,
+      outWidth,
+      outHeight,
+      src,
+      sw,
+      sh,
+      PlaneHomography.fromQuads(
+        BoardQuad(
+          topLeft: Pt(x0, 0),
+          topRight: Pt(x1, 0),
+          bottomRight: Pt(x1, sh.toDouble()),
+          bottomLeft: Pt(x0, sh.toDouble()),
+        ),
+        destination,
+      ).inverted,
+      x0,
+      x1,
+    );
+  }
+
+  var frame = Frame(rgb, outWidth, outHeight);
+  if (degradation.blurSigma > 0) {
+    frame = _blurred(frame, degradation.blurSigma);
+  }
+  if (degradation.noise > 0) {
+    frame = _noised(frame, degradation.noise, degradation.seed);
+  }
+  return FoldingShot(
+    frame: frame,
+    groundTruthCorners: corners,
+    board: rendered,
+    proportions: proportions,
+  );
+}
+
+/// Where [view] puts the eight points of a board with a [barWidth] hinge.
+///
+/// The tent's profile: each leaf is a flat plane running from its outer edge
+/// on the table up to the ridge, and the strip between them is flat at the
+/// ridge's own height. Three planes, meeting along two lines, which is what a
+/// folding case actually is.
+FoldingCorners foldingCornersOf(
+  FoldingView view, {
+  required double barWidth,
+  required double aspect,
+  required Pt principal,
+}) {
+  final leftLeafEnd = (1 - barWidth) / 2;
+  final rightLeafStart = (1 + barWidth) / 2;
+
+  double heightAt(double x) {
+    if (x <= leftLeafEnd) return view.ridgeHeight * x / leftLeafEnd;
+    if (x >= rightLeafStart) {
+      return view.ridgeHeight * (1 - x) / (1 - rightLeafStart);
+    }
+    return view.ridgeHeight;
+  }
+
+  final camera = _Pinhole(view, principal);
+  // Board space's y runs far edge to near edge; the world's runs away from the
+  // camera, so the far edge is at the larger y.
+  Pt at(double x, double boardY) =>
+      camera.project(x, (1 - boardY) * aspect, heightAt(x));
+
+  return FoldingCorners(
+    topLeft: at(0, 0),
+    topRight: at(1, 0),
+    bottomRight: at(1, 1),
+    bottomLeft: at(0, 1),
+    hingeFarLeft: at(leftLeafEnd, 0),
+    hingeFarRight: at(rightLeafStart, 0),
+    hingeNearLeft: at(leftLeafEnd, 1),
+    hingeNearRight: at(rightLeafStart, 1),
+  );
+}
+
+/// A pinhole camera: look-at rotation, then a perspective divide.
+///
+/// Image axes are the usual ones — x right, y down, z forward — which with a
+/// world whose z is up means the image's "down" is `f x r`.
+class _Pinhole {
+  final List<double> _rows;
+  final (double, double, double) _eye;
+  final double _focal;
+  final Pt _principal;
+
+  factory _Pinhole(FoldingView view, Pt principal) {
+    final f = _normalize((
+      view.target.$1 - view.eye.$1,
+      view.target.$2 - view.eye.$2,
+      view.target.$3 - view.eye.$3,
+    ));
+    final r = _normalize(_cross(f, (0, 0, 1)));
+    final d = _cross(f, r);
+    return _Pinhole._(
+      <double>[r.$1, r.$2, r.$3, d.$1, d.$2, d.$3, f.$1, f.$2, f.$3],
+      view.eye,
+      view.focal,
+      principal,
+    );
+  }
+
+  const _Pinhole._(this._rows, this._eye, this._focal, this._principal);
+
+  Pt project(double x, double y, double z) {
+    final dx = x - _eye.$1, dy = y - _eye.$2, dz = z - _eye.$3;
+    final cx = _rows[0] * dx + _rows[1] * dy + _rows[2] * dz;
+    final cy = _rows[3] * dx + _rows[4] * dy + _rows[5] * dz;
+    final cz = _rows[6] * dx + _rows[7] * dy + _rows[8] * dz;
+    if (cz <= 0) {
+      throw ArgumentError('the point ($x, $y, $z) is behind the camera');
+    }
+    return Pt(
+      _principal.x + _focal * cx / cz,
+      _principal.y + _focal * cy / cz,
+    );
+  }
+}
+
+(double, double, double) _cross(
+  (double, double, double) a,
+  (double, double, double) b,
+) =>
+    (
+      a.$2 * b.$3 - a.$3 * b.$2,
+      a.$3 * b.$1 - a.$1 * b.$3,
+      a.$1 * b.$2 - a.$2 * b.$1,
+    );
+
+(double, double, double) _normalize((double, double, double) v) {
+  final n = math.sqrt(v.$1 * v.$1 + v.$2 * v.$2 + v.$3 * v.$3);
+  if (n == 0) throw ArgumentError('cannot normalize a zero vector');
+  return (v.$1 / n, v.$2 / n, v.$3 / n);
 }
 
 /// Each corner of [quad] moved by up to [amplitude] pixels in x and y.

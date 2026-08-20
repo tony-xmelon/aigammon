@@ -571,7 +571,64 @@ class Calibrator {
         'corner of the playing field and try again.',
       );
     }
+    return _learn(
+      frame: frame,
+      geometry: geometry,
+      orientation: orientation,
+      proportions: proportions,
+      misfitHint: 'the tray and bar widths it was measured with are probably '
+          "not this board's",
+    );
+  }
 
+  /// The same, for a board that folds — see [FoldingBoardGeometry] for why
+  /// such a board needs its own entry point rather than better corners.
+  ///
+  /// Nothing downstream of here knows the difference: the atlas, the colour
+  /// model, the stack pitch and the read-back gate are the ones above, run
+  /// over a board space that happens to reach the picture through three planes
+  /// instead of one. The proportions are not a parameter because there is
+  /// nothing left to measure — [FoldingCorners] derives them.
+  static CalibrationResult learnFoldingStartingPosition({
+    required Frame frame,
+    required FoldingCorners corners,
+    required BoardOrientation orientation,
+  }) {
+    final FoldingBoardGeometry geometry;
+    try {
+      geometry = FoldingBoardGeometry(corners);
+    } on ArgumentError {
+      return CalibrationResult.failure(
+        CalibrationProblem.cornersNotABoard,
+        'Those eight points do not outline a folding board. Four go on the '
+        'corners of the playing field and four on the seams where the hinge '
+        'meets the far and near edges — left seam then right seam on each. '
+        'Drag them there and try again.',
+      );
+    }
+    return _learn(
+      frame: frame,
+      geometry: geometry,
+      orientation: orientation,
+      proportions: geometry.proportions,
+      misfitHint: 'the eight points it was measured through — four corners '
+          'and the four hinge seams — are probably not quite on it',
+    );
+  }
+
+  /// Everything both entry points do once they have a geometry.
+  ///
+  /// [misfitHint] is the clause the two "this does not read as a start"
+  /// failures end on: what a user should suspect about their measurements when
+  /// the board itself looks right to them. It differs between the two paths
+  /// because what was measured differs.
+  static CalibrationResult _learn({
+    required Frame frame,
+    required BoardGeometry geometry,
+    required BoardOrientation orientation,
+    required BoardProportions proportions,
+    required String misfitHint,
+  }) {
     final atlas =
         RoiAtlas.forOrientation(orientation, proportions: proportions);
     final sampler = RoiSampler(frame, geometry, atlas);
@@ -775,8 +832,7 @@ class Calibrator {
           'The checkers are not in the starting position — the $number-point '
           'is holding the wrong colour. Set the board up for the start of a '
           'game, then calibrate again. If the board is already set up right, '
-          'the tray and bar widths it was measured with are probably not '
-          "this board's.",
+          '$misfitHint.',
           <RoiId>[RoiId.point(entry.key)],
         );
       }
@@ -834,8 +890,7 @@ class Calibrator {
         'I can read this board, but not as a game about to start: '
         '${readBack.discrepancies.first.message}. Set the men up for the '
         'start of a game, then calibrate again. If the board is already set '
-        'up right, the tray and bar widths it was measured with are probably '
-        "not this board's.",
+        'up right, $misfitHint.',
         readBack.discrepancies.map((d) => d.region).toList(),
       );
     }
