@@ -257,6 +257,44 @@ class BoardLayout {
   static bool isNearHalf(int index) => index <= 11;
 }
 
+/// Where a stack actually sits on its point, as opposed to where a tidy
+/// renderer would put it.
+///
+/// Every render before this one seated the outermost checker of every stack
+/// hard against its own board edge and dead in the middle of its column,
+/// because that is what a drawing program does. It is not what a person does.
+/// Measured on the first real board's calibration frame: not one of the eight
+/// starting stacks was flush, the gaps differed from point to point, and one
+/// stack sat far enough off its column's centre to half-miss a patch taken at
+/// the centre. That is the whole reason the checker patch had to become a
+/// checker finder, so the bed has to be able to express it.
+///
+/// [flush] is the default everywhere, so every render that does not ask for
+/// this draws exactly the bytes it drew before.
+class StackPlacement {
+  /// How far the first checker's edge sits from the board edge it stacks
+  /// from, as a fraction of the board's height — which is also board space's
+  /// own `y` unit, so an inset of 0.06 here is 0.06 in everything the
+  /// pipeline measures. Added to the hair of clearance
+  /// [BoardLayout.stackEdgeMargin] always leaves.
+  final double edgeInset;
+
+  /// How far the stack sits from the middle of its column, as a fraction of
+  /// the column's width. Positive is toward increasing x, whichever board
+  /// edge the stack belongs to.
+  final double centerOffset;
+
+  const StackPlacement({this.edgeInset = 0, this.centerOffset = 0});
+
+  /// Hard against the edge, dead centre: what every render did before this
+  /// type existed, and what every one still does unless told otherwise.
+  static const StackPlacement flush = StackPlacement();
+
+  @override
+  String toString() => 'StackPlacement(inset $edgeInset, '
+      'offset $centerOffset)';
+}
+
 /// One physical board's colours: felt, frame, both point colours, both
 /// checker colours, and the dice.
 ///
@@ -684,6 +722,8 @@ RenderedBoard renderTopDown({
   List<DicePlacement>? dicePlacements,
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
+  StackPlacement stackPlacement = StackPlacement.flush,
+  Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int width = kTopDownWidth,
   int height = kTopDownHeight,
 }) {
@@ -706,7 +746,14 @@ RenderedBoard renderTopDown({
   _drawFrameAndFelt(image, palette, layout);
   _drawPoints(image, palette, layout);
   if (starInlays) _drawStarInlays(image, palette, layout);
-  final checkers = _drawCheckers(image, board, palette, layout);
+  final checkers = _drawCheckers(
+    image,
+    board,
+    palette,
+    layout,
+    stackPlacement,
+    pointPlacements,
+  );
   final drawnDice = _drawDice(
     image,
     dicePlacements ?? _defaultPlacements(dice, diceAngle),
@@ -886,6 +933,8 @@ SyntheticShot renderShot({
   List<DicePlacement>? dicePlacements,
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
+  StackPlacement stackPlacement = StackPlacement.flush,
+  Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int topDownWidth = kTopDownWidth,
   int topDownHeight = kTopDownHeight,
   BoardQuad quad = kCameraQuad,
@@ -904,6 +953,8 @@ SyntheticShot renderShot({
     dicePlacements: dicePlacements,
     proportions: proportions,
     starInlays: starInlays,
+    stackPlacement: stackPlacement,
+    pointPlacements: pointPlacements,
     width: topDownWidth,
     height: topDownHeight,
   );
@@ -1079,6 +1130,8 @@ FoldingShot renderFoldingShot({
   List<DicePlacement>? dicePlacements,
   double barWidth = kFoldingBarWidth,
   bool starInlays = false,
+  StackPlacement stackPlacement = StackPlacement.flush,
+  Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int topDownWidth = kTopDownWidth,
   int topDownHeight = kTopDownHeight,
   FoldingView view = kFoldingTent,
@@ -1097,6 +1150,8 @@ FoldingShot renderFoldingShot({
     dicePlacements: dicePlacements,
     proportions: proportions,
     starInlays: starInlays,
+    stackPlacement: stackPlacement,
+    pointPlacements: pointPlacements,
     width: topDownWidth,
     height: topDownHeight,
   );
@@ -1449,11 +1504,18 @@ void _drawStarInlays(img.Image image, BoardPalette palette, BoardLayout layout) 
 }
 
 /// Every checker on the board, the bar and both trays; returns where they went.
+///
+/// [placement] moves every stack on a point; [pointPlacements] overrides it for
+/// named points. Neither touches the bar or the trays: what a hand does to a
+/// point's stack is what the checker finder had to be built for, and a queue in
+/// a well is not that.
 List<CheckerSpot> _drawCheckers(
   img.Image image,
   BoardState board,
   BoardPalette palette,
   BoardLayout layout,
+  StackPlacement placement,
+  Map<int, StackPlacement> pointPlacements,
 ) {
   final spots = <CheckerSpot>[];
   final w = image.width, h = image.height;
@@ -1474,17 +1536,19 @@ List<CheckerSpot> _drawCheckers(
     if (count == 0) continue;
     final owner = board.points[i] > 0 ? Player.white : Player.black;
     final (left, right) = layout.pointSpan(i);
+    final seat = pointPlacements[i] ?? placement;
     spots.addAll(_drawCheckerStack(
       image: image,
       palette: palette,
       owner: owner,
       area: SpotArea.point,
       pointIndex: i,
-      centerX: (left + right) / 2 * w,
+      centerX:
+          ((left + right) / 2 + seat.centerOffset * p.columnWidth) * w,
       fromNearEdge: BoardLayout.isNearHalf(i),
       count: count,
       radius: radius,
-      firstOffset: edgeOffset,
+      firstOffset: edgeOffset + seat.edgeInset * h,
       lastOffsetLimit: midlineOffset,
     ));
   }
