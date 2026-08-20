@@ -165,7 +165,8 @@ void _scoreSession(
     // side: a frame lit 40% over its calibration passes `exposureMatches`
     // while `clippedFraction` catches it, and Task 9 needs both to decide
     // what the light means. Recorded per shot, judged by nothing yet.
-    final fingerprint = CalibrationFingerprint.fromFrame(frame, calibration.h);
+    final fingerprint =
+        CalibrationFingerprint.fromFrame(frame, calibration.geometry);
     board
       ..signal('clipped fraction', fingerprint.clippedFraction)
       ..signal(
@@ -214,7 +215,8 @@ void _scoreRefusal(
       // the position at all — the question is only whether the pipeline
       // notices that its own calibration has stopped being true, which is the
       // session-long contract the spec makes of calibration.
-      final now = CalibrationFingerprint.fromFrame(frame, calibration.h);
+      final now =
+          CalibrationFingerprint.fromFrame(frame, calibration.geometry);
       board.record(
         CorpusMetric.expectedRefusal,
         ok: !calibration.fingerprint.geometryMatches(now),

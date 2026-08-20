@@ -486,7 +486,7 @@ void main() {
       final calibration = _calibrate(shot);
       final again = CalibrationFingerprint.fromFrame(
         _withNoise(shot.frame),
-        calibration.h,
+        calibration.geometry,
       );
 
       expect(calibration.fingerprint.matches(again), isTrue);
@@ -505,7 +505,7 @@ void main() {
         quad: _shifted(kCameraQuad, 62, 41),
       );
       final after =
-          CalibrationFingerprint.fromFrame(nudged.frame, calibration.h);
+          CalibrationFingerprint.fromFrame(nudged.frame, calibration.geometry);
 
       expect(calibration.fingerprint.geometryMatches(after), isFalse);
       expect(calibration.fingerprint.matches(after), isFalse);
@@ -525,7 +525,7 @@ void main() {
               palette: BoardPalette.blueRed,
               lightingGain: gain,
             ).frame,
-            Homography.fromQuad(quad),
+            PlanarBoardGeometry.fromQuad(quad),
           ).clippedFraction;
 
       expect(clipped(1.0), lessThan(0.01));
@@ -537,7 +537,8 @@ void main() {
       final calibration = _calibrate(shot);
 
       final dim = renderShot(board: BoardState.initial(), lightingGain: 0.6);
-      final after = CalibrationFingerprint.fromFrame(dim.frame, calibration.h);
+      final after =
+          CalibrationFingerprint.fromFrame(dim.frame, calibration.geometry);
 
       expect(calibration.fingerprint.exposureMatches(after), isFalse);
       expect(calibration.fingerprint.matches(after), isFalse);

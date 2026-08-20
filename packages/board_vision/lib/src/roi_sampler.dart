@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
+import 'board_geometry.dart';
 import 'color_model.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
-import 'homography.dart';
 import 'roi_atlas.dart';
 
 /// Reading a frame in board space — the one instrument every query shares.
@@ -42,15 +42,19 @@ class RoiScan {
 /// Reads a frame at arbitrary board-space coordinates.
 class FrameSampler {
   final Frame frame;
-  final Homography homography;
 
-  const FrameSampler(this.frame, this.homography);
+  /// How board space reaches the picture. The one seam: every sample below
+  /// goes through it, so a board with two leaves and a hinge is read by
+  /// exactly this code with a different [BoardGeometry] behind it.
+  final BoardGeometry geometry;
+
+  const FrameSampler(this.frame, this.geometry);
 
   /// The pixel at board-space `(x, y)`, or null when that is outside the
   /// picture — including the non-finite coordinates a point on the horizon
   /// produces, which the range test subsumes.
   Rgb? at(double x, double y) {
-    final p = homography.mapToImage(Pt(x, y));
+    final p = geometry.imagePointOf(Pt(x, y));
     if (!p.x.isFinite || !p.y.isFinite) return null;
     final px = p.x.round(), py = p.y.round();
     if (px < 0 || py < 0 || px >= frame.width || py >= frame.height) {
@@ -69,7 +73,7 @@ class FrameSampler {
       final sy = y + (2 * (iy + 0.5) / lattice - 1) * halfHeight;
       for (var ix = 0; ix < lattice; ix++) {
         final sx = x + (2 * (ix + 0.5) / lattice - 1) * halfWidth;
-        final p = homography.mapToImage(Pt(sx, sy));
+        final p = geometry.imagePointOf(Pt(sx, sy));
         if (!p.x.isFinite || !p.y.isFinite) continue;
         final px = p.x.round().clamp(0, frame.width - 1);
         final py = p.y.round().clamp(0, frame.height - 1);
@@ -89,7 +93,7 @@ class FrameSampler {
 class RoiSampler extends FrameSampler {
   final RoiAtlas atlas;
 
-  const RoiSampler(super.frame, super.homography, this.atlas);
+  const RoiSampler(super.frame, super.geometry, this.atlas);
 
   /// Lattice per side for a region's interior.
   static const int interiorLattice = 20;

@@ -358,7 +358,7 @@ void main() {
 
       final fingerprint = CalibrationFingerprint.fromFrame(
         shot.frame,
-        calibration.h,
+        calibration.geometry,
       );
       expect(fingerprint.clippedFraction,
           greaterThan(Calibrator.maxClippedFraction),

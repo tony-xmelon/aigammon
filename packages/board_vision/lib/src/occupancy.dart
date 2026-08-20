@@ -111,7 +111,7 @@ class OccupancyReader {
 
   OccupancyReader(this.calibration, this.frame)
       : colors = calibration.colorsIn(frame),
-        _sampler = RoiSampler(frame, calibration.h, calibration.atlas);
+        _sampler = RoiSampler(frame, calibration.geometry, calibration.atlas);
 
   /// What share of a region's profile has to read as one colour before a
   /// checker is called there.

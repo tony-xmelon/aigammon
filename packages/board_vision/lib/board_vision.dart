@@ -15,6 +15,7 @@
 /// `docs/superpowers/specs/2026-08-02-buddy-mode-design.md`.
 library;
 
+export 'src/board_geometry.dart';
 export 'src/board_vision_base.dart';
 export 'src/calibration.dart';
 export 'src/color_model.dart';

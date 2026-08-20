@@ -2,10 +2,10 @@ import 'dart:math' as math;
 
 import 'package:backgammon_core/backgammon_core.dart';
 
+import 'board_geometry.dart';
 import 'color_model.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
-import 'homography.dart';
 import 'roi_atlas.dart';
 import 'roi_sampler.dart';
 
@@ -106,14 +106,19 @@ class CalibrationFingerprint {
     required this.clippedFraction,
   }) : cornerPatches = List<int>.unmodifiable(cornerPatches);
 
-  /// Takes a fingerprint of [frame] through the calibration's [homography].
+  /// Takes a fingerprint of [frame] through the calibration's [geometry].
   ///
   /// Samples that fall outside the picture are clamped to its border rather
   /// than dropped: a fingerprint has to be the same size every time to be
   /// comparable, and a corner patch that reaches past the edge of the frame is
   /// itself stable information about where the board sits.
-  factory CalibrationFingerprint.fromFrame(Frame frame, Homography homography) {
-    final sampler = FrameSampler(frame, homography);
+  ///
+  /// The four corner patches are board space's own corners, which are the
+  /// board's outer corners on a folding case as much as on a flat board — so
+  /// this reads the same four places either way, through whichever geometry it
+  /// is handed.
+  factory CalibrationFingerprint.fromFrame(Frame frame, BoardGeometry geometry) {
+    final sampler = FrameSampler(frame, geometry);
     final patches = <int>[];
     for (final corner in const <Pt>[Pt(0, 0), Pt(1, 0), Pt(1, 1), Pt(0, 1)]) {
       final sx = corner.x == 0 ? 1.0 : -1.0;
@@ -172,8 +177,8 @@ class CalibrationFingerprint {
   ///
   /// Zero when none of the board falls inside the picture, which callers turn
   /// into "do not re-normalize" rather than a division by nothing.
-  static double boardLuma(Frame frame, Homography homography) {
-    final sampler = FrameSampler(frame, homography);
+  static double boardLuma(Frame frame, BoardGeometry geometry) {
+    final sampler = FrameSampler(frame, geometry);
     var sum = 0.0, n = 0.0;
     for (var iy = 0; iy < _lattice; iy++) {
       final y = _interiorAt(iy);
@@ -239,8 +244,9 @@ class CalibrationFingerprint {
 
 /// Everything a session knows about the board in front of it.
 class BoardCalibration {
-  /// Image pixels to board space and back.
-  final Homography h;
+  /// Board space into this frame's pixels — one plane on an ordinary board,
+  /// three on a folding case. See [BoardGeometry].
+  final BoardGeometry geometry;
 
   /// Which seat the board was calibrated from, which is what fixes the point
   /// numbering.
@@ -263,7 +269,7 @@ class BoardCalibration {
   final BoardProportions proportions;
 
   const BoardCalibration({
-    required this.h,
+    required this.geometry,
     required this.orientation,
     required this.colors,
     required this.fingerprint,
@@ -294,7 +300,7 @@ class BoardCalibration {
   /// One when the board is not in the picture at all, which leaves the model
   /// as learned rather than scaling it by nothing.
   double exposureIn(Frame frame) {
-    final luma = CalibrationFingerprint.boardLuma(frame, h);
+    final luma = CalibrationFingerprint.boardLuma(frame, geometry);
     if (luma <= 0 || fingerprint.meanLuma <= 0) return 1.0;
     return luma / fingerprint.meanLuma;
   }
@@ -555,9 +561,9 @@ class Calibrator {
     required BoardOrientation orientation,
     BoardProportions proportions = BoardProportions.standard,
   }) {
-    final Homography homography;
+    final BoardGeometry geometry;
     try {
-      homography = Homography.fromQuad(corners);
+      geometry = PlanarBoardGeometry.fromQuad(corners);
     } on ArgumentError {
       return CalibrationResult.failure(
         CalibrationProblem.cornersNotABoard,
@@ -568,7 +574,7 @@ class Calibrator {
 
     final atlas =
         RoiAtlas.forOrientation(orientation, proportions: proportions);
-    final sampler = RoiSampler(frame, homography, atlas);
+    final sampler = RoiSampler(frame, geometry, atlas);
     final start = BoardState.initial();
     final occupied = <int, CheckerColor>{
       for (var i = 0; i < 24; i++)
@@ -803,9 +809,9 @@ class Calibrator {
         ),
     ]);
 
-    final fingerprint = CalibrationFingerprint.fromFrame(frame, homography);
+    final fingerprint = CalibrationFingerprint.fromFrame(frame, geometry);
     final calibration = BoardCalibration(
-      h: homography,
+      geometry: geometry,
       orientation: orientation,
       colors: colors,
       fingerprint: fingerprint,
@@ -851,7 +857,7 @@ class Calibrator {
   /// than enough to turn every empty point into a phantom checker.
   static ConfirmResult confirm(Frame frame, BoardCalibration calibration) {
     final atlas = calibration.atlas;
-    final sampler = RoiSampler(frame, calibration.h, atlas);
+    final sampler = RoiSampler(frame, calibration.geometry, atlas);
     final colors = calibration.colorsIn(frame);
     final start = BoardState.initial();
     final discrepancies = <PointDiscrepancy>[];

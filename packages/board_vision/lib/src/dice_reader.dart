@@ -276,7 +276,7 @@ class DiceReader {
         final x = x0 + (col + 0.5) / latticeAcross * (x1 - x0);
         band.boardX[i] = x;
         band.boardY[i] = y;
-        final p = calibration.h.mapToImage(Pt(x, y));
+        final p = calibration.geometry.imagePointOf(Pt(x, y));
         if (!p.x.isFinite || !p.y.isFinite) continue;
         final px = p.x.round(), py = p.y.round();
         if (px < 0 || py < 0 || px >= frame.width || py >= frame.height) {
