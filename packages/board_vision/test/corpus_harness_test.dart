@@ -481,6 +481,16 @@ void main() {
 /// every run — see [_realFloorReport] — so the gap the Task 6 gate exists to
 /// discuss is never out of sight.
 ///
+/// **They are one-sided, and that is a real limit.** A floor catches a
+/// regression and says nothing about an improvement, so a number that rose
+/// because the session's corners were re-tapped more luckily would pass here
+/// in silence, with nothing in the pipeline having changed. The occupancy
+/// numbers in particular carry the corner-choice spread recorded in the plan
+/// doc's Task 6 note — every set in the accepting region passes the same
+/// calibration gate, and their counts on this frame span 13/24 to 23/24. Read
+/// these as a ratchet against regression, never as a measurement of the
+/// pipeline's accuracy to three decimal places.
+///
 /// The two that miss the spec today, and why they are recorded rather than
 /// asserted:
 ///
@@ -508,8 +518,11 @@ String _realFloorReport(Scoreboard board) {
     ..writeln()
     ..writeln('  real corpus: measured against its own floors, and the gap to '
         'the spec')
+    // The gap column is eleven wide because '(no target)' is eleven
+    // characters: a padLeft narrower than its own widest cell does not pad, it
+    // just runs into the column before it.
     ..writeln('  ${'metric'.padRight(28)}${'measured'.padLeft(9)}'
-        '${'floor'.padLeft(8)}${'spec'.padLeft(8)}${'gap'.padLeft(9)}');
+        '${'floor'.padLeft(8)}${'spec'.padLeft(8)}${'gap'.padLeft(12)}');
   for (final metric in CorpusMetric.values) {
     final tally = board.totalFor(metric);
     if (tally.attempts == 0) continue;
@@ -521,7 +534,7 @@ String _realFloorReport(Scoreboard board) {
         '${(floor?.toStringAsFixed(3) ?? '—').padLeft(8)}'
         '${(target?.toStringAsFixed(3) ?? '—').padLeft(8)}'
         '${(gap == null ? '(no target)' : '${gap >= 0 ? '+' : ''}'
-            '${gap.toStringAsFixed(3)}').padLeft(9)}');
+            '${gap.toStringAsFixed(3)}').padLeft(12)}');
   }
 
   final pairs = board.totalFor(CorpusMetric.dicePair);
