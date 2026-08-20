@@ -155,11 +155,30 @@ void main() {
     });
 
     test('every spec target that is scoreable today is met', () {
-      // Two of the spec's five, plus the refusal counterweight. Legal-play
-      // identification, placement verification and full-board resync arrive
-      // with the plan's Tasks 7 and 8, and their metrics slot into the same
-      // scoreboard when they do.
+      // Two of the spec's five, plus the refusal counterweight. Placement
+      // verification and full-board resync arrive with the plan's Task 8, and
+      // their metrics slot into the same scoreboard when they do. Legal-play
+      // identification exists now and is scored on the real corpus; this one
+      // cannot ask it — see the test below.
       expect(board.targetViolations(), isEmpty);
+    });
+
+    test('it says out loud that it cannot ask about plays', () {
+      // A synthetic session photographs two mid-game positions from two
+      // DIFFERENT seeded playouts, so no two of its shots are one turn apart
+      // and there is no play in it to identify. That is a property of how the
+      // capture plan was built, not a pipeline result, and the corpus has to
+      // say so rather than quietly reporting nothing: an empty metric that
+      // nobody notices is how a suite stops testing something.
+      //
+      // Where the target IS asserted on rendered before/after pairs is
+      // `play_matcher_test.dart`, over sixty-four seeded turns.
+      expect(board.totalFor(CorpusMetric.legalPlay).attempts, 0);
+      expect(
+        board.notes.where((n) => n.contains('one turn apart')).length,
+        board.sessions,
+        reason: 'every session must account for itself',
+      );
     });
 
     test('occupancy has not fallen off a cliff (a tripwire, not a target)',
@@ -317,6 +336,41 @@ void main() {
               'having — re-measure the floors deliberately.');
     });
 
+    test('the six windows that ARE one turn apart carry the play-ID score, '
+        'and the three that are not are named', () {
+      // The corpus's ten windows are not ten consecutive turns. The ledger
+      // covers turns 1-8 and turn 6's window never came (hands still in
+      // shot), so 013->018 spans two plays; the two end-game keyframes carry a
+      // board and no log at all, so nothing can be paired with them. Six pairs
+      // are genuinely one turn apart — 001->003, 003->005, 005->008, 008->010,
+      // 010->013 and 018->020 — and which six is derived from the sidecars'
+      // own event logs rather than from a list typed here.
+      expect(board.totalFor(CorpusMetric.legalPlay).attempts, 6);
+      final note = board.notes.firstWhere((n) => n.contains('one turn apart'));
+      for (final pair in <String>['013->018', '020->066', '066->070']) {
+        expect(note, contains(pair));
+      }
+      // Both movers are represented: a play is identified from the change on
+      // the board, and the two colours' checkers do not read alike on a real
+      // one (colour 0.942 near against 0.975 far).
+      expect(board.sliceOf(CorpusMetric.legalPlay, 'mover').keys,
+          containsAll(<String>['white', 'black']));
+    });
+
+    test('the play the transcript recorded is not always the play the '
+        'generator lists, and that is not a miss', () {
+      // Turn 3 is `W 5-2: 13/8 8/6` in the transcript because that is what the
+      // player's hand did. `MoveGenerator.legalMoves` dedupes by resulting
+      // position and lists `13/11 11/6` for that position instead — the same
+      // play by another transit, and one of only two things two settled frames
+      // can never tell apart. This is the plan's ambiguity-honesty case
+      // occurring in the wild rather than in a fixture, and it is the reason
+      // the harness scores positions and not hop multisets.
+      expect(board.signalOf(kTransitDifferedSignal).sum, 1,
+          reason: 'exactly one of the six filmed plays was written with hops '
+              'the generator does not list');
+    });
+
     test('the bar shot reports what it read on the worn hinge', () {
       // The flagship. Every other question about this board's hinge has been
       // asked of an EMPTY one; 066 has a Black checker standing on the rubbed
@@ -460,6 +514,39 @@ void main() {
       );
     });
 
+    test('a session whose shots are one turn apart has its plays identified',
+        () {
+      // Three shots, two of them one turn apart from their predecessor, so the
+      // harness has two plays to identify — which is a thing the committed
+      // synthetic corpus cannot ask (its two mid-game positions come from two
+      // different playouts) and the real one can only ask six times.
+      final board = _scoreFixture(_Fixture.playFollowed);
+      expect(board.totalFor(CorpusMetric.legalPlay).attempts, 2);
+      expect(board.totalFor(CorpusMetric.legalPlay).rate, 1.0);
+      expect(board.targetViolations(), isEmpty, reason: board.report());
+      expect(board.signalOf(kPlayAboveThresholdSignal).sum, 2);
+    });
+
+    test('and a photograph showing a different play fails the play-ID target',
+        () {
+      // The discriminator, and the shape of a genuine misidentification: the
+      // last shot's sidecar says one legal play was made and its picture shows
+      // a different one. If the harness were pairing shots by their position
+      // on disk rather than by their logs — or comparing anything other than
+      // what the frames actually show — this would score exactly as well as
+      // the test above.
+      final board = _scoreFixture(_Fixture.playedSomethingElse);
+      expect(board.totalFor(CorpusMetric.legalPlay).rate, lessThan(1.0));
+      expect(
+        board.targetViolations(),
+        contains(contains(CorpusMetric.legalPlay.label)),
+        reason: board.report(),
+      );
+      // And only that one: a planted failure that reddened everything would
+      // tell us nothing about which target caught it.
+      expect(board.targetViolations().length, 1, reason: board.report());
+    });
+
     test('a shot whose photograph never arrived is skipped by name', () {
       final directory = _writeFixture(_Fixture.correct);
       addTearDown(() => directory.deleteSync(recursive: true));
@@ -501,7 +588,21 @@ void main() {
 /// * **region occupancy 0.784.** Counts on this board run short, worst on tall
 ///   stacks, exactly as the plan doc's far-half note predicts. The design never
 ///   trusts a blind count anyway; it is Task 7's play matching that the spec
-///   sets a threshold for, and this number is what that will be built against.
+///   sets a threshold for, and this number is what that was built against.
+///
+/// And the one that arrived with Task 7 and **passes**:
+///
+/// * **legal-play identification 6/6.** The query the whole mode turns on, over
+///   the six windows of the filmed game that are genuinely one turn apart, with
+///   the actual legal-move list `backgammon_core` would have offered at each
+///   moment (7 to 18 candidates, 11.7 on average). All six also clear
+///   `PlayMatcher.minConfidence`, so a session would have acted on all six
+///   rather than prompting. **Six is a small denominator** and a floor of 1.0
+///   over it is a ratchet, not a claim that the pipeline is perfect: what it
+///   promises is that no later change may lose one of these six quietly. The
+///   number is exactly what the delta design predicts — the counts this corpus
+///   reads are biased and the bias cancels, which is why 0.784 per-region
+///   counting supports 1.000 play identification.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
   CorpusMetric.startConfirmed: 1.0,
@@ -509,6 +610,7 @@ const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.diceAbsence: 1.0,
   CorpusMetric.regionOccupancy: 189 / 241,
   CorpusMetric.regionColour: 230 / 241,
+  CorpusMetric.legalPlay: 6 / 6,
 };
 
 /// The floors, what was measured against them, and how far each still sits
@@ -669,6 +771,122 @@ Directory _writeFoldingCaseFixture({required bool measured}) {
   return directory;
 }
 
+/// A three-shot corpus of one game, each shot one turn on from the last.
+///
+/// The shape the legal-play query needs and neither committed corpus has much
+/// of: the synthetic one photographs positions from unrelated playouts, and the
+/// real one manages six pairs out of ten windows. Ground truth is the game's own
+/// event log, so the mover, the candidate list and the play made all come out of
+/// `backgammon_core` rather than out of this file.
+///
+/// Without [honest] the LAST photograph shows a different legal play from the
+/// one its sidecar's log records — the same pictures otherwise, so the
+/// difference between the two scoreboards is entirely what the frames showed.
+Directory _writePlayFixture({required bool honest}) {
+  final directory = Directory.systemTemp.createTempSync('corpus_play');
+  const conditions = CaptureConditions(
+    board: 'fixture board',
+    lighting: 'daylight',
+    angle: 'straight on',
+  );
+  const degradation = ShotDegradation(noise: 2, blurSigma: 0.8, seed: 11);
+  final quad = jitterQuad(kCameraQuad, 0.8, 11);
+
+  var game = Game.start(const OpeningRollEvent(whiteDie: 6, blackDie: 5));
+  final firstPlay = game.state.legalMoves.first;
+  game = game.append(MoveEvent(Player.white, firstPlay));
+  final afterOne = game;
+
+  game = game.append(RollEvent(Player.black, 3, 1));
+  final blacksChoices = game.state.legalMoves;
+  final secondPlay = blacksChoices.first;
+  // A different resulting position, which is what `legalMoves` guarantees
+  // about any two of its entries.
+  final somethingElse = blacksChoices.last;
+  game = game.append(MoveEvent(Player.black, secondPlay));
+  final afterTwo = game;
+
+  CorpusShot shotOf({
+    required String id,
+    required ShotKind kind,
+    required String? calibrateFrom,
+    required BoardState board,
+    required List<GameEvent>? events,
+    BoardQuad? corners,
+  }) =>
+      CorpusShot(
+        id: id,
+        session: 'one game',
+        kind: kind,
+        calibrateFrom: calibrateFrom,
+        corners: corners,
+        orientation: BoardOrientation.whiteHomeNear,
+        board: board,
+        events: events,
+        dice: null,
+        capture: conditions,
+        synthetic: null,
+        expectRefusal: null,
+        refusalReason: null,
+        title: 'one game $id',
+        instructions: const <String>['fixture'],
+      );
+
+  void write(CorpusShot shot, BoardState pictured) {
+    File('${directory.path}/${shot.id}.jpg').writeAsBytesSync(
+      encodeCorpusJpeg(
+        imageOfFrame(
+          renderShot(board: pictured, quad: quad, degradation: degradation)
+              .frame,
+        ),
+      ),
+    );
+    writeSidecar(directory, shot);
+  }
+
+  final calibration =
+      renderShot(board: BoardState.initial(), quad: quad, degradation: degradation);
+  File('${directory.path}/p01.jpg')
+      .writeAsBytesSync(encodeCorpusJpeg(imageOfFrame(calibration.frame)));
+  writeSidecar(
+    directory,
+    shotOf(
+      id: 'p01',
+      kind: ShotKind.calibration,
+      calibrateFrom: null,
+      board: BoardState.initial(),
+      events: null,
+      corners: calibration.groundTruthQuad,
+    ),
+  );
+
+  write(
+    shotOf(
+      id: 'p02',
+      kind: ShotKind.position,
+      calibrateFrom: 'p01',
+      board: afterOne.state.board,
+      events: afterOne.events,
+    ),
+    afterOne.state.board,
+  );
+
+  write(
+    shotOf(
+      id: 'p03',
+      kind: ShotKind.position,
+      calibrateFrom: 'p01',
+      board: afterTwo.state.board,
+      events: afterTwo.events,
+    ),
+    honest
+        ? afterTwo.state.board
+        : afterOne.state.board.applyMove(Player.black, somethingElse),
+  );
+
+  return directory;
+}
+
 /// A two-shot corpus on a folding case standing open and tented.
 ///
 /// With [asFolding] the sidecars carry the eight points a person tapped and
@@ -819,6 +1037,14 @@ enum _Fixture {
   /// ones they contain, plus the widths those eight would have derived. One
   /// plane through a board that has two, which is what the real frame did.
   tentedFoldingCaseFlatFit,
+
+  /// Three shots of one game, each one turn on from the last — the shape the
+  /// legal-play query needs and the committed synthetic corpus does not have.
+  playFollowed,
+
+  /// The same, with the last photograph showing a DIFFERENT legal play from
+  /// the one its sidecar's log records. The shape of a misidentification.
+  playedSomethingElse,
 }
 
 /// The folding-case board's shape: no wells, and a hinge for a bar.
@@ -842,6 +1068,10 @@ Directory _writeFixture(_Fixture fixture) {
   if (fixture == _Fixture.foldingCase ||
       fixture == _Fixture.foldingCaseUnmeasured) {
     return _writeFoldingCaseFixture(measured: fixture == _Fixture.foldingCase);
+  }
+  if (fixture == _Fixture.playFollowed ||
+      fixture == _Fixture.playedSomethingElse) {
+    return _writePlayFixture(honest: fixture == _Fixture.playFollowed);
   }
   if (fixture == _Fixture.tentedFoldingCase ||
       fixture == _Fixture.tentedFoldingCaseFlatFit) {

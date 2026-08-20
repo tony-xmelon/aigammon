@@ -56,7 +56,17 @@ enum CorpusMetric {
   /// reasons and a single number hides which: a wrong colour is a broken
   /// colour model, a wrong count on the right colour is a stack measured
   /// short.
-  regionColour('region colour alone');
+  regionColour('region colour alone'),
+
+  /// The right legal play ranked first, from the change between two shots one
+  /// turn apart. The spec's target for the query the whole mode turns on.
+  ///
+  /// Only pairs of shots that are **genuinely one turn apart** are scored, and
+  /// which those are is read off the sidecars' own event logs rather than from
+  /// their order on disk — see `_scoreLegalPlay`. A corpus of independent
+  /// positions has none, and says so in its notes instead of quietly scoring
+  /// nothing.
+  legalPlay('legal-play identification');
 
   const CorpusMetric(this.label);
 
@@ -74,6 +84,7 @@ const Map<CorpusMetric, double?> kMetricTargets = <CorpusMetric, double?>{
   CorpusMetric.dicePair: PerceptionTargets.dicePairRead,
   CorpusMetric.diceAbsence: PerceptionTargets.expectedRefusal,
   CorpusMetric.expectedRefusal: PerceptionTargets.expectedRefusal,
+  CorpusMetric.legalPlay: PerceptionTargets.legalPlayIdentification,
   CorpusMetric.startConfirmed: null,
   CorpusMetric.regionOccupancy: null,
   CorpusMetric.regionColour: null,

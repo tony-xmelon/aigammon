@@ -40,6 +40,7 @@ library;
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:backgammon_core/backgammon_core.dart';
 import 'package:board_vision/board_vision.dart';
 
 import 'capture_plan.dart';
@@ -52,6 +53,25 @@ import 'scoreboard.dart';
 /// The denominator is `CorpusMetric.dicePair`'s attempts, so between them the
 /// two say found, right and refused. See [_scoreDice].
 const String kDiceFoundSignal = 'dice found when a roll was there';
+
+/// Whether the play the matcher ranked first cleared [PlayMatcher.minConfidence]
+/// — 1 when the session would have acted on it, 0 when it would have prompted
+/// with the candidate list instead.
+///
+/// Separate from `CorpusMetric.legalPlay`, which is about being RIGHT. A play
+/// identified correctly but under the threshold is a fallback, not a failure,
+/// and the gap between the two rates is what a real session's prompt traffic
+/// looks like. See [_scoreLegalPlay].
+const String kPlayAboveThresholdSignal = 'legal play above the threshold';
+
+/// Whether the play identified correctly was written with DIFFERENT hops from
+/// the one the sidecar records — the same position by another transit.
+///
+/// One in six on the filmed game, and none at all on generated plays, because a
+/// generated play is drawn from the generator's own canonical list while a
+/// filmed one is what a person's hand did. See [_scoreLegalPlay] for why that
+/// still counts as right.
+const String kTransitDifferedSignal = 'the transit was not the listed one';
 
 /// Scores every shot in [directory], grouped into its sessions.
 ///
@@ -147,36 +167,233 @@ void _scoreSession(
   _scoreOccupancy(board, vision, calibrationFrame, calibrationShot);
   _scoreDice(board, vision, calibrationFrame, calibrationShot);
 
-  for (final shot in shots) {
-    if (shot.id == calibrationShot.id) continue;
-    final frame = _frameOf(board, directory, shot);
-    if (frame == null) continue;
+  // Play identification walks the same pass, keeping the previous shot's frame,
+  // so no image is decoded twice.
+  final plays = _PlayChain(board, vision, name);
 
-    if (shot.expectsRefusal) {
-      _scoreRefusal(board, calibration, frame, shot);
+  for (final shot in shots) {
+    final isCalibration = shot.id == calibrationShot.id;
+    final frame =
+        isCalibration ? calibrationFrame : _frameOf(board, directory, shot);
+    if (frame == null) {
+      plays.breakChain();
       continue;
     }
 
-    // The two readability signals the Task 4 reviewers asked to see side by
-    // side: a frame lit 40% over its calibration passes `exposureMatches`
-    // while `clippedFraction` catches it, and Task 9 needs both to decide
-    // what the light means. Recorded per shot, judged by nothing yet.
-    final fingerprint =
-        CalibrationFingerprint.fromFrame(frame, calibration.geometry);
-    board
-      ..signal('clipped fraction', fingerprint.clippedFraction)
-      ..signal(
-        'exposure still matched',
-        calibration.fingerprint.exposureMatches(fingerprint) ? 1 : 0,
-      )
-      ..signal(
-        'geometry still matched',
-        calibration.fingerprint.geometryMatches(fingerprint) ? 1 : 0,
-      );
+    if (shot.expectsRefusal) {
+      _scoreRefusal(board, calibration, frame, shot);
+      // A deliberately-spoiled shot is not a position: it pairs with neither
+      // neighbour, and the two on either side of it are not consecutive.
+      plays.breakChain();
+      continue;
+    }
 
-    _scoreOccupancy(board, vision, frame, shot);
-    _scoreDice(board, vision, frame, shot);
+    if (!isCalibration) {
+      // The two readability signals the Task 4 reviewers asked to see side by
+      // side: a frame lit 40% over its calibration passes `exposureMatches`
+      // while `clippedFraction` catches it, and Task 9 needs both to decide
+      // what the light means. Recorded per shot, judged by nothing yet.
+      final fingerprint =
+          CalibrationFingerprint.fromFrame(frame, calibration.geometry);
+      board
+        ..signal('clipped fraction', fingerprint.clippedFraction)
+        ..signal(
+          'exposure still matched',
+          calibration.fingerprint.exposureMatches(fingerprint) ? 1 : 0,
+        )
+        ..signal(
+          'geometry still matched',
+          calibration.fingerprint.geometryMatches(fingerprint) ? 1 : 0,
+        );
+
+      _scoreOccupancy(board, vision, frame, shot);
+      _scoreDice(board, vision, frame, shot);
+    }
+
+    plays.offer(shot, frame);
   }
+
+  plays.finish();
+}
+
+/// The query the whole mode turns on, over every pair of shots in [shots] that
+/// is genuinely **one turn apart**.
+///
+/// ## Which pairs those are, and why the sidecars decide it
+///
+/// Not "two shots next to each other on disk". A corpus of independent
+/// positions has plenty of those and none of them is a play: the seeded
+/// synthetic sessions photograph two positions from two different playouts, and
+/// the real session's windows skip turns wherever a hand was still in shot.
+/// Scoring those pairs would be asking the matcher which of seven legal plays
+/// produced three turns of backgammon.
+///
+/// So the pairing is derived from the event logs the sidecars already carry: a
+/// pair qualifies when the later shot's log is the earlier shot's log plus
+/// **exactly one** move, and replaying the earlier prefix reproduces the earlier
+/// shot's committed board. That is ground truth by construction for all three
+/// things the matcher needs — the mover, the legal-play list the app would have
+/// handed it at that moment, and the play that was actually made — and it is
+/// checked rather than asserted, so a pair that does not qualify is named in
+/// the notes rather than dropped.
+///
+/// The session's shots are offered to one of these in capture order, each with
+/// the frame the pass already decoded, so no image is read twice.
+class _PlayChain {
+  final Scoreboard board;
+  final BoardVision vision;
+  final String session;
+
+  /// The pairs that were adjacent but not one turn apart, by id.
+  final List<String> notPairs = <String>[];
+
+  int scored = 0;
+  CorpusShot? _previous;
+  Frame? _previousFrame;
+
+  _PlayChain(this.board, this.vision, this.session);
+
+  /// Nothing after this can be paired with anything before it — a missing
+  /// photograph, or a shot the corpus deliberately spoiled.
+  void breakChain() {
+    _previous = null;
+    _previousFrame = null;
+  }
+
+  void offer(CorpusShot shot, Frame frame) {
+    final earlier = _previous;
+    final earlierFrame = _previousFrame;
+    _previous = shot;
+    _previousFrame = frame;
+    if (earlier == null || earlierFrame == null) return;
+
+    final turn = _oneTurnApart(earlier, shot);
+    if (turn == null) {
+      notPairs.add('${earlier.id}->${shot.id}');
+      return;
+    }
+    _score(earlier, earlierFrame, shot, frame, turn);
+  }
+
+  void finish() {
+    if (scored == 0) {
+      board.notes.add(
+        '$session: no two shots in it are one turn apart, so no play could be '
+        'identified. '
+        '(${notPairs.isEmpty ? 'nothing to pair' : notPairs.join(', ')})',
+      );
+    } else if (notPairs.isNotEmpty) {
+      board.notes.add(
+        '$session: $scored consecutive pairs are one turn apart and were '
+        'scored; ${notPairs.length} are not and were not '
+        '(${notPairs.join(', ')}).',
+      );
+    }
+  }
+
+  void _score(
+    CorpusShot earlier,
+    Frame earlierFrame,
+    CorpusShot shot,
+    Frame frame,
+    ({Player mover, List<Move> legal, Move played}) turn,
+  ) {
+    final matches = vision.matchLegalPlay(
+      frame,
+      earlier.board,
+      turn.mover,
+      turn.legal,
+      beforeFrame: earlierFrame,
+    );
+    final top = matches.first;
+    // **Right means the right POSITION, not the right hops**, and the real
+    // corpus is what settled that.
+    //
+    // Turn 3 of the filmed game is `W 5-2: 13/8 8/6`, which is what the
+    // transcript recorded because it is what the player's hand did. That exact
+    // hop multiset is not in `state.legalMoves` at all: the generator dedupes
+    // by RESULTING POSITION and lists `13/11 11/6` as the representative of
+    // that position, the two being the same play by a different transit. So
+    // comparing hops would score the matcher against an answer it was never
+    // offered, and would call a correct identification a miss.
+    //
+    // It is also what the game itself means. `GameState.play` runs any
+    // decomposition through `canonicalPlay` before folding it, so `13/8 8/6`
+    // and `13/11 11/6` enter the authoritative state as the same move. And it
+    // is the only thing two settled frames can possibly say: an intermediate
+    // transit leaves no trace in either of them.
+    final target = earlier.board.applyMove(turn.mover, turn.played);
+    final right = top.after == target;
+    final rank = matches.indexWhere((m) => m.after == target);
+    scored++;
+    board
+      ..record(
+        CorpusMetric.legalPlay,
+        ok: right,
+        slices: _slicesOf(shot)..['mover'] = turn.mover.name,
+        detail: '${earlier.id}->${shot.id}: played ${turn.played}, ranked '
+            '${rank + 1} of ${matches.length}; top was ${top.play} at '
+            '${top.confidence.toStringAsFixed(3)} '
+            '(cost ${top.cost.toStringAsFixed(2)}, instability '
+            '${top.instability.toStringAsFixed(2)})',
+      )
+      // Watched, never judged. A play identified top-1 but under the
+      // threshold is a play the session would prompt about rather than act
+      // on, and the gap between the two rates is what a real session's
+      // fallback traffic looks like.
+      ..signal(kPlayAboveThresholdSignal, top.plausible ? 1 : 0)
+      // How often the transit the player's hand actually used is NOT the one
+      // the generator lists. Zero on a corpus of generated plays and one in
+      // six on the filmed game, which is the ambiguity-honesty case turning
+      // up in the wild rather than in a fixture — see the comment above.
+      ..signal(
+        kTransitDifferedSignal,
+        right && !top.play.sameAs(turn.played) ? 1 : 0,
+      )
+      ..signal('legal-play candidates', turn.legal.length.toDouble())
+      ..signal('legal-play top confidence', top.confidence)
+      ..signal('legal-play top cost', top.cost)
+      ..signal('legal-play instability', top.instability);
+  }
+}
+
+/// What [after] is to [before] when exactly one turn separates them, or null.
+///
+/// Returns the three things the matcher has to be handed: whose turn it was,
+/// the legal plays the rules engine would have offered at that moment, and the
+/// play that was actually made. All three come out of replaying the later
+/// shot's own log, so none of them is a second opinion about the corpus.
+({Player mover, List<Move> legal, Move played})? _oneTurnApart(
+  CorpusShot before,
+  CorpusShot after,
+) {
+  final log = after.events;
+  // A shot with no log carries a board and no story — the two end-game
+  // keyframes of the real corpus. Nothing can be paired with it.
+  if (log == null) return null;
+  final prefix = before.events?.length ?? 0;
+  if (log.length <= prefix) return null;
+
+  // The earlier shot must really be the position the later shot's log passes
+  // through at that point — otherwise the two are from different games.
+  final at = prefix == 0
+      ? BoardState.initial()
+      : Game.replay(log.sublist(0, prefix)).state.board;
+  if (at != before.board) return null;
+
+  // Exactly one move in between, and it is the last thing that happened.
+  final between = log.sublist(prefix);
+  if (between.whereType<MoveEvent>().length != 1) return null;
+  final last = between.last;
+  if (last is! MoveEvent) return null;
+
+  final state = Game.replay(log.sublist(0, log.length - 1)).state;
+  if (state.phase != GamePhase.moving) return null;
+  // A dance has no candidates and nothing to identify; the session announces
+  // it and passes the turn.
+  final legal = state.legalMoves;
+  if (legal.isEmpty) return null;
+  return (mover: state.turn, legal: legal, played: last.move);
 }
 
 /// Calibrates [frame] the way [shot]'s own sidecar says its board is shaped.
