@@ -140,7 +140,8 @@ class DiceReader {
   static const int latticeDown = 80;
 
   /// How far in from the band's own sides to sample, as a fraction of its
-  /// width. The band ends where the bear-off wells begin, and the wood there
+  /// width. The band ends where the bear-off wells begin — or, on a board with
+  /// no wells, at the board's own edge — and what is immediately outside
   /// belongs to neither.
   static const double insetX = 0.004;
 
