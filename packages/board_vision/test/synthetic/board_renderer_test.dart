@@ -13,35 +13,64 @@ import 'board_renderer.dart';
 /// perspective warp, not just in the top-down source), and that a die really
 /// carries the pips it claims.
 void main() {
+  // The three widths moved out of [BoardLayout] and into [BoardProportions]
+  // when they stopped being constants — a real board turned up with no trays
+  // at all — so the layout now names the board it is drawing. These are the
+  // same assertions about the same standard board, asked of the type that owns
+  // the numbers now; nothing has been relaxed. The trayless board gets the
+  // same questions in the group below.
   group('BoardLayout', () {
-    test('the twelve columns, two trays and the bar tile the unit width', () {
+    for (final (name, proportions) in <(String, BoardProportions)>[
+      ('the standard board', BoardProportions.standard),
+      ('a trayless board', BoardProportions(trayWidth: 0, barWidth: 0.03)),
+    ]) {
+      final layout = BoardLayout(proportions: proportions);
+
+      test('the twelve columns, two trays and the bar tile the unit width '
+          '($name)', () {
+        expect(
+          proportions.trayWidth * 2 +
+              proportions.barWidth +
+              proportions.columnWidth * 12,
+          closeTo(1.0, 1e-12),
+        );
+      });
+
+      test('point 1 sits bottom right and point 24 directly above it ($name)',
+          () {
+        final p1 = layout.pointSpan(0);
+        final p24 = layout.pointSpan(23);
+        expect(p1.$2, closeTo(proportions.rightHalfEnd, 1e-12));
+        expect(p1.$1, closeTo(p24.$1, 1e-12));
+        expect(BoardLayout.isNearHalf(0), isTrue);
+        expect(BoardLayout.isNearHalf(23), isFalse);
+      });
+
+      test('point 12 sits bottom left and point 13 directly above it ($name)',
+          () {
+        final p12 = layout.pointSpan(11);
+        final p13 = layout.pointSpan(12);
+        expect(p12.$1, closeTo(proportions.leftHalfStart, 1e-12));
+        expect(p12.$1, closeTo(p13.$1, 1e-12));
+      });
+
+      test('points 6 and 7 flank the bar ($name)', () {
+        expect(layout.pointSpan(5).$1, closeTo(proportions.barEnd, 1e-12));
+        expect(layout.pointSpan(6).$2, closeTo(proportions.barStart, 1e-12));
+      });
+    }
+
+    test('a trayless board has nowhere to draw a borne-off checker', () {
+      // Not a renderer limitation — a board one. Saying so loudly here is what
+      // keeps a test from quietly drawing checkers into a well that does not
+      // exist and then scoring the pipeline for not seeing them.
       expect(
-        BoardLayout.trayWidth * 2 +
-            BoardLayout.barWidth +
-            BoardLayout.columnWidth * 12,
-        closeTo(1.0, 1e-12),
+        () => renderTopDown(
+          board: BoardState(points: List<int>.filled(24, 0), whiteOff: 3),
+          proportions: const BoardProportions(trayWidth: 0, barWidth: 0.03),
+        ),
+        throwsArgumentError,
       );
-    });
-
-    test('point 1 sits bottom right and point 24 directly above it', () {
-      final p1 = BoardLayout.pointSpan(0);
-      final p24 = BoardLayout.pointSpan(23);
-      expect(p1.$2, closeTo(BoardLayout.rightHalfEnd, 1e-12));
-      expect(p1.$1, closeTo(p24.$1, 1e-12));
-      expect(BoardLayout.isNearHalf(0), isTrue);
-      expect(BoardLayout.isNearHalf(23), isFalse);
-    });
-
-    test('point 12 sits bottom left and point 13 directly above it', () {
-      final p12 = BoardLayout.pointSpan(11);
-      final p13 = BoardLayout.pointSpan(12);
-      expect(p12.$1, closeTo(BoardLayout.leftHalfStart, 1e-12));
-      expect(p12.$1, closeTo(p13.$1, 1e-12));
-    });
-
-    test('points 6 and 7 flank the bar', () {
-      expect(BoardLayout.pointSpan(5).$1, closeTo(BoardLayout.barEnd, 1e-12));
-      expect(BoardLayout.pointSpan(6).$2, closeTo(BoardLayout.barStart, 1e-12));
     });
   });
 
@@ -254,8 +283,8 @@ void main() {
     });
 
     test('pointSpan rejects an index off the board', () {
-      expect(() => BoardLayout.pointSpan(-1), throwsRangeError);
-      expect(() => BoardLayout.pointSpan(24), throwsRangeError);
+      expect(() => BoardLayout.standard.pointSpan(-1), throwsRangeError);
+      expect(() => BoardLayout.standard.pointSpan(24), throwsRangeError);
     });
 
     test('lightingGain scales the rendered image toward black', () {
@@ -429,8 +458,10 @@ void main() {
       final shot = renderShot(board: BoardState.initial(), dice: Dice(5, 2));
       final w = shot.board.image.width;
       for (final die in shot.board.dice) {
-        expect(die.center.x, greaterThan(w * BoardLayout.rightHalfStart));
-        expect(die.center.x, lessThan(w * BoardLayout.rightHalfEnd));
+        expect(die.center.x,
+            greaterThan(w * BoardProportions.standard.rightHalfStart));
+        expect(die.center.x,
+            lessThan(w * BoardProportions.standard.rightHalfEnd));
       }
       // Never overlapping a checker the renderer drew.
       for (final die in shot.board.dice) {

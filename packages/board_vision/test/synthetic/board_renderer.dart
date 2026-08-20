@@ -153,32 +153,29 @@ const int kBackdropColor = 0x101418;
 /// The board's layout in **board space**: the playing field as the unit
 /// rectangle (0,0)–(1,1), x rightward and y from the far edge to the near one.
 ///
-/// These fractions are the renderer's contract with Task 2's ROI atlas: the
-/// atlas addresses the same unit rectangle, so if the two disagree the ROIs
-/// land off the drawn elements and the atlas tests fail loudly — which is the
-/// intent. Under [BoardOrientation.whiteHomeNear] the standard diagram
-/// applies: points 1–6 bottom-right, 7–12 bottom-left, 13–18 top-left, 19–24
-/// top-right, with point 1 at the far right and point 12 at the far left.
+/// The renderer's contract with Task 2's ROI atlas: both read the SAME
+/// [BoardProportions], so a disagreement about where the columns are is not
+/// expressible — and where the two do their own arithmetic on those widths,
+/// the atlas tests check them against each other for a trayless board as well
+/// as a standard one. Under [BoardOrientation.whiteHomeNear] the standard
+/// diagram applies: points 1–6 bottom-right, 7–12 bottom-left, 13–18 top-left,
+/// 19–24 top-right, with point 1 at the far right and point 12 at the far left.
+///
+/// **Why this is an instance and not a bag of constants.** The tray, bar and
+/// column widths stopped being constants when a real board turned out to have
+/// no trays at all (see [BoardProportions]). So the renderer takes them the
+/// same way the atlas does, and [standard] is the board it draws when nothing
+/// says otherwise. What is left static here is what genuinely does not vary
+/// between boards: how far a triangle reaches, how big a checker is next to
+/// its column, how big a die is.
 class BoardLayout {
-  const BoardLayout._();
+  /// The board being drawn.
+  final BoardProportions proportions;
 
-  /// One bear-off tray column at each end of the board.
-  static const double trayWidth = 0.08;
+  const BoardLayout({this.proportions = BoardProportions.standard});
 
-  /// The bar down the middle.
-  static const double barWidth = 0.08;
-
-  /// Twelve point columns share what the trays and bar leave.
-  static const double columnWidth = (1.0 - 2 * trayWidth - barWidth) / 12.0;
-
-  static const double leftTrayEnd = trayWidth;
-  static const double leftHalfStart = trayWidth;
-  static const double leftHalfEnd = leftHalfStart + 6 * columnWidth;
-  static const double barStart = leftHalfEnd;
-  static const double barEnd = barStart + barWidth;
-  static const double rightHalfStart = barEnd;
-  static const double rightHalfEnd = rightHalfStart + 6 * columnWidth;
-  static const double rightTrayStart = rightHalfEnd;
+  /// The ordinary cased board, with wells at both ends.
+  static const BoardLayout standard = BoardLayout();
 
   /// How far a point triangle reaches from its own edge, as a fraction of the
   /// board's height. What is left in the middle is the dice band.
@@ -203,23 +200,24 @@ class BoardLayout {
 
   /// Horizontal span of point [index] (0-based, matching `BoardState.points`)
   /// in board space, as `(left, right)`.
-  static (double, double) pointSpan(int index) {
+  (double, double) pointSpan(int index) {
     if (index < 0 || index > 23) {
       throw RangeError.range(index, 0, 23, 'index', 'point index');
     }
+    final columnWidth = proportions.columnWidth;
     final double left;
     if (index <= 5) {
       // Points 1–6: bottom right, point 1 hard against the right tray.
-      left = rightHalfEnd - (index + 1) * columnWidth;
+      left = proportions.rightHalfEnd - (index + 1) * columnWidth;
     } else if (index <= 11) {
       // Points 7–12: bottom left, point 7 against the bar.
-      left = leftHalfEnd - (index - 6 + 1) * columnWidth;
+      left = proportions.leftHalfEnd - (index - 6 + 1) * columnWidth;
     } else if (index <= 17) {
       // Points 13–18: top left, point 13 above point 12.
-      left = leftHalfStart + (index - 12) * columnWidth;
+      left = proportions.leftHalfStart + (index - 12) * columnWidth;
     } else {
       // Points 19–24: top right, point 19 against the bar.
-      left = rightHalfStart + (index - 18) * columnWidth;
+      left = proportions.rightHalfStart + (index - 18) * columnWidth;
     }
     return (left, left + columnWidth);
   }
@@ -637,6 +635,15 @@ class PlaneHomography {
 }
 
 /// Draws [board] (and [dice], if given) straight down onto a rectangle.
+///
+/// [proportions] is which board is being drawn. The default is the ordinary
+/// cased one; a folding-case board (no bear-off wells, a hinge for a bar) is
+/// `BoardProportions(trayWidth: 0, barWidth: 0.03)` and is what makes the
+/// trayless half of the pipeline testable at all.
+///
+/// [starInlays] adds the small decorative inlay a great many real boards carry
+/// mid-field on each half — a third surface inside regions the pipeline models
+/// with two, which is the point of having it here.
 RenderedBoard renderTopDown({
   required BoardState board,
   Dice? dice,
@@ -645,6 +652,8 @@ RenderedBoard renderTopDown({
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
   List<DicePlacement>? dicePlacements,
+  BoardProportions proportions = BoardProportions.standard,
+  bool starInlays = false,
   int width = kTopDownWidth,
   int height = kTopDownHeight,
 }) {
@@ -654,11 +663,20 @@ RenderedBoard renderTopDown({
   if (lightingGain <= 0) {
     throw ArgumentError('lightingGain must be positive, got $lightingGain');
   }
+  if (!proportions.hasTrays && board.whiteOff + board.blackOff > 0) {
+    // Not a limitation of the renderer — a limitation of the board. A folding
+    // case has nowhere on the felt to put a borne-off checker, which is why
+    // its atlas has no tray regions either.
+    throw ArgumentError('a board with no bear-off wells has nowhere to draw '
+        '${board.whiteOff + board.blackOff} borne-off checkers');
+  }
 
+  final layout = BoardLayout(proportions: proportions);
   final image = img.Image(width: width, height: height);
-  _drawFrameAndFelt(image, palette);
-  _drawPoints(image, palette);
-  final checkers = _drawCheckers(image, board, palette);
+  _drawFrameAndFelt(image, palette, layout);
+  _drawPoints(image, palette, layout);
+  if (starInlays) _drawStarInlays(image, palette, layout);
+  final checkers = _drawCheckers(image, board, palette, layout);
   final drawnDice = _drawDice(
     image,
     dicePlacements ?? _defaultPlacements(dice, diceAngle),
@@ -794,6 +812,8 @@ SyntheticShot renderShot({
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
   List<DicePlacement>? dicePlacements,
+  BoardProportions proportions = BoardProportions.standard,
+  bool starInlays = false,
   int topDownWidth = kTopDownWidth,
   int topDownHeight = kTopDownHeight,
   BoardQuad quad = kCameraQuad,
@@ -810,6 +830,8 @@ SyntheticShot renderShot({
     orientation: orientation,
     diceAngle: diceAngle,
     dicePlacements: dicePlacements,
+    proportions: proportions,
+    starInlays: starInlays,
     width: topDownWidth,
     height: topDownHeight,
   );
@@ -954,12 +976,18 @@ img.Color _color(int rgb) =>
 
 /// The wood — surround, bar and both tray wells — then the felt of the two
 /// playing halves on top of it.
-void _drawFrameAndFelt(img.Image image, BoardPalette palette) {
+///
+/// On a board with no wells the felt runs to the picture's own edges and the
+/// only wood left is the hinge down the middle, which is exactly what a
+/// folding case looks like from above.
+void _drawFrameAndFelt(img.Image image, BoardPalette palette,
+    BoardLayout layout) {
   final w = image.width, h = image.height;
+  final p = layout.proportions;
   img.fill(image, color: _color(palette.frame));
   for (final (start, end) in <(double, double)>[
-    (BoardLayout.leftHalfStart, BoardLayout.leftHalfEnd),
-    (BoardLayout.rightHalfStart, BoardLayout.rightHalfEnd),
+    (p.leftHalfStart, p.leftHalfEnd),
+    (p.rightHalfStart, p.rightHalfEnd),
   ]) {
     img.fillRect(
       image,
@@ -972,16 +1000,21 @@ void _drawFrameAndFelt(img.Image image, BoardPalette palette) {
   }
 }
 
-void _drawPoints(img.Image image, BoardPalette palette) {
+void _drawPoints(img.Image image, BoardPalette palette, BoardLayout layout) {
   for (var i = 0; i < 24; i++) {
-    _drawPointTriangle(image, i, palette);
+    _drawPointTriangle(image, i, palette, layout);
   }
 }
 
 /// One triangle, pointing inward from its own edge of the board.
-void _drawPointTriangle(img.Image image, int index, BoardPalette palette) {
+void _drawPointTriangle(
+  img.Image image,
+  int index,
+  BoardPalette palette,
+  BoardLayout layout,
+) {
   final w = image.width, h = image.height;
-  final (left, right) = BoardLayout.pointSpan(index);
+  final (left, right) = layout.pointSpan(index);
   final x1 = left * w, x2 = right * w;
   final tip = BoardLayout.pointLength * h;
   final near = BoardLayout.isNearHalf(index);
@@ -999,15 +1032,48 @@ void _drawPointTriangle(img.Image image, int index, BoardPalette palette) {
   );
 }
 
+/// The decorative inlay a great many real boards carry in the middle of each
+/// half — a small star let into the felt, mid-field, one per half.
+///
+/// Drawn in the palette's own light point colour, which is what an inlay in a
+/// contrasting wood looks like and, more to the point, is not the felt and not
+/// the bar. That makes it a **third** surface inside the dice band and inside
+/// the headroom of the two middle points of each half — and calibration models
+/// a region's surfaces with two-means, i.e. with two. Whether that survives is
+/// a question worth having a bed for; see the calibration tests.
+void _drawStarInlays(img.Image image, BoardPalette palette, BoardLayout layout) {
+  final w = image.width, h = image.height;
+  final p = layout.proportions;
+  const outer = 0.05, inner = 0.019, points = 4;
+  for (final (start, end) in <(double, double)>[
+    (p.leftHalfStart, p.leftHalfEnd),
+    (p.rightHalfStart, p.rightHalfEnd),
+  ]) {
+    final cx = (start + end) / 2 * w, cy = h / 2;
+    final vertices = <img.Point>[];
+    for (var i = 0; i < points * 2; i++) {
+      final radius = (i.isEven ? outer : inner) * h;
+      final angle = i * math.pi / points - math.pi / 2;
+      vertices.add(img.Point(
+        cx + radius * math.cos(angle),
+        cy + radius * math.sin(angle),
+      ));
+    }
+    img.fillPolygon(image, vertices: vertices, color: _color(palette.pointLight));
+  }
+}
+
 /// Every checker on the board, the bar and both trays; returns where they went.
 List<CheckerSpot> _drawCheckers(
   img.Image image,
   BoardState board,
   BoardPalette palette,
+  BoardLayout layout,
 ) {
   final spots = <CheckerSpot>[];
   final w = image.width, h = image.height;
-  final radius = BoardLayout.columnWidth * w * BoardLayout.checkerRadiusFraction;
+  final p = layout.proportions;
+  final radius = p.columnWidth * w * BoardLayout.checkerRadiusFraction;
 
   // The two offsets every stack lives between, measured from the board edge
   // the stack belongs to. `edgeOffset` seats the first checker against that
@@ -1022,7 +1088,7 @@ List<CheckerSpot> _drawCheckers(
     final count = board.points[i].abs();
     if (count == 0) continue;
     final owner = board.points[i] > 0 ? Player.white : Player.black;
-    final (left, right) = BoardLayout.pointSpan(i);
+    final (left, right) = layout.pointSpan(i);
     spots.addAll(_drawCheckerStack(
       image: image,
       palette: palette,
@@ -1041,7 +1107,7 @@ List<CheckerSpot> _drawCheckers(
   // The bar grows the other way: from the middle of the board OUTWARD toward
   // each player's own edge, White toward the near one and Black toward the
   // far one, so however many checkers are sitting there the two never meet.
-  final barX = (BoardLayout.barStart + BoardLayout.barEnd) / 2 * w;
+  final barX = (p.barStart + p.barEnd) / 2 * w;
   for (final (player, count) in <(Player, int)>[
     (Player.white, board.whiteBar),
     (Player.black, board.blackBar),
@@ -1064,7 +1130,9 @@ List<CheckerSpot> _drawCheckers(
 
   // Both home boards are on the right, so both trays are the right-hand well:
   // White's borne-off checkers stack from the near edge, Black's from the far.
-  final trayX = (BoardLayout.rightTrayStart + 1.0) / 2 * w;
+  // A board with no wells never gets here — renderTopDown refuses a board
+  // state with checkers off, because there would be nowhere to draw them.
+  final trayX = (p.rightTrayStart + 1.0) / 2 * w;
   for (final (player, count) in <(Player, int)>[
     (Player.white, board.whiteOff),
     (Player.black, board.blackOff),

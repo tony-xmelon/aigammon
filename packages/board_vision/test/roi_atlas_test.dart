@@ -15,35 +15,49 @@ import 'synthetic/board_renderer.dart';
 /// show up as a mysterious occupancy bug three tasks later.
 void main() {
   group('the board coordinate system', () {
-    test('the atlas addresses the rectangle the renderer draws to', () {
-      // The contract Task 1 wrote its layout constants down for.
-      expect(RoiAtlas.trayWidth, BoardLayout.trayWidth);
-      expect(RoiAtlas.barWidth, BoardLayout.barWidth);
-      expect(RoiAtlas.columnWidth, closeTo(BoardLayout.columnWidth, 1e-15));
-      expect(RoiAtlas.pointLength, BoardLayout.pointLength);
+    // The renderer and the atlas now read the SAME [BoardProportions] rather
+    // than each keeping its own copy of three fractions, so this contract is
+    // checked for both boards the package can describe rather than only for
+    // the standard one — which is a stronger guard than the constant-equality
+    // it replaces, and the only one that could catch a trayless disagreement.
+    for (final (name, proportions) in <(String, BoardProportions)>[
+      ('the standard board', BoardProportions.standard),
+      ('a trayless board', BoardProportions(trayWidth: 0, barWidth: 0.03)),
+    ]) {
+      test('the atlas addresses the rectangle the renderer draws to ($name)',
+          () {
+        final layout = BoardLayout(proportions: proportions);
+        expect(RoiAtlas.pointLength, BoardLayout.pointLength);
 
-      final atlas = RoiAtlas.forOrientation(BoardOrientation.whiteHomeNear);
-      for (var i = 0; i < 24; i++) {
-        final (left, right) = BoardLayout.pointSpan(i);
-        final b = _bounds(atlas.roi(RoiId.point(i)));
-        expect(b.minX, closeTo(left, 1e-12), reason: 'point $i left');
-        expect(b.maxX, closeTo(right, 1e-12), reason: 'point $i right');
-        final near = BoardLayout.isNearHalf(i);
-        expect(b.minY, closeTo(near ? 0.5 : 0.0, 1e-12), reason: 'point $i');
-        expect(b.maxY, closeTo(near ? 1.0 : 0.5, 1e-12), reason: 'point $i');
-      }
+        final atlas = RoiAtlas.forOrientation(
+          BoardOrientation.whiteHomeNear,
+          proportions: proportions,
+        );
+        expect(atlas.proportions, proportions);
+        for (var i = 0; i < 24; i++) {
+          final (left, right) = layout.pointSpan(i);
+          final b = _bounds(atlas.roi(RoiId.point(i)));
+          expect(b.minX, closeTo(left, 1e-12), reason: 'point $i left');
+          expect(b.maxX, closeTo(right, 1e-12), reason: 'point $i right');
+          final near = BoardLayout.isNearHalf(i);
+          expect(b.minY, closeTo(near ? 0.5 : 0.0, 1e-12), reason: 'point $i');
+          expect(b.maxY, closeTo(near ? 1.0 : 0.5, 1e-12), reason: 'point $i');
+        }
 
-      final bar = _bounds(atlas.roi(RoiId.bar));
-      expect(bar.minX, closeTo(BoardLayout.barStart, 1e-12));
-      expect(bar.maxX, closeTo(BoardLayout.barEnd, 1e-12));
-      final tray = _bounds(atlas.roi(RoiId.offWhite));
-      expect(tray.minX, closeTo(BoardLayout.rightTrayStart, 1e-12));
-    });
+        final bar = _bounds(atlas.roi(RoiId.bar));
+        expect(bar.minX, closeTo(proportions.barStart, 1e-12));
+        expect(bar.maxX, closeTo(proportions.barEnd, 1e-12));
+        if (proportions.hasTrays) {
+          final tray = _bounds(atlas.roi(RoiId.offWhite));
+          expect(tray.minX, closeTo(proportions.rightTrayStart, 1e-12));
+        }
+      });
+    }
 
     test('point 0 is the 1-point, bottom right against the tray', () {
       final atlas = RoiAtlas.forOrientation(BoardOrientation.whiteHomeNear);
       final p0 = _bounds(atlas.roi(RoiId.point0));
-      expect(p0.maxX, closeTo(RoiAtlas.rightTrayStart, 1e-12));
+      expect(p0.maxX, closeTo(atlas.proportions.rightTrayStart, 1e-12));
       expect(p0.maxY, closeTo(1.0, 1e-12));
       // Point 24 (index 23) sits directly above it.
       final p23 = _bounds(atlas.roi(RoiId.point23));
@@ -53,17 +67,15 @@ void main() {
 
     test('points 5 and 18 flank the bar, 11 and 12 the far left', () {
       final atlas = RoiAtlas.forOrientation(BoardOrientation.whiteHomeNear);
-      expect(_bounds(atlas.roi(RoiId.point5)).minX,
-          closeTo(RoiAtlas.barEnd, 1e-12));
-      expect(_bounds(atlas.roi(RoiId.point18)).minX,
-          closeTo(RoiAtlas.barEnd, 1e-12));
-      expect(_bounds(atlas.roi(RoiId.point6)).maxX,
-          closeTo(RoiAtlas.barStart, 1e-12));
-      expect(_bounds(atlas.roi(RoiId.point17)).maxX,
-          closeTo(RoiAtlas.barStart, 1e-12));
+      final p = atlas.proportions;
+      expect(_bounds(atlas.roi(RoiId.point5)).minX, closeTo(p.barEnd, 1e-12));
+      expect(_bounds(atlas.roi(RoiId.point18)).minX, closeTo(p.barEnd, 1e-12));
+      expect(_bounds(atlas.roi(RoiId.point6)).maxX, closeTo(p.barStart, 1e-12));
+      expect(
+          _bounds(atlas.roi(RoiId.point17)).maxX, closeTo(p.barStart, 1e-12));
       final p11 = _bounds(atlas.roi(RoiId.point11));
       final p12 = _bounds(atlas.roi(RoiId.point12));
-      expect(p11.minX, closeTo(RoiAtlas.leftHalfStart, 1e-12));
+      expect(p11.minX, closeTo(p.leftHalfStart, 1e-12));
       expect(p12.minX, closeTo(p11.minX, 1e-12));
     });
 
@@ -185,10 +197,10 @@ void main() {
       }
       // Point 0 moves from the bottom-right quadrant to the top-left one:
       // hard against the left tray now, and in the far half.
+      final p = far.proportions;
       final flipped = _bounds(far.roi(RoiId.point0));
-      expect(flipped.minX, closeTo(RoiAtlas.trayWidth, 1e-12));
-      expect(flipped.maxX,
-          closeTo(RoiAtlas.trayWidth + RoiAtlas.columnWidth, 1e-12));
+      expect(flipped.minX, closeTo(p.trayWidth, 1e-12));
+      expect(flipped.maxX, closeTo(p.trayWidth + p.columnWidth, 1e-12));
       expect(flipped.minY, closeTo(0.0, 1e-12));
       expect(flipped.maxY, closeTo(RoiAtlas.midline, 1e-12));
     });
@@ -250,10 +262,10 @@ void main() {
 
       // Each point contributes one column of headroom, half the band tall.
       expect(_overlapArea(band, atlas.roi(RoiId.point0)),
-          closeTo(RoiAtlas.columnWidth * bandHeight / 2, 1e-12));
+          closeTo(atlas.proportions.columnWidth * bandHeight / 2, 1e-12));
       // The bar contributes its full width over the whole band.
       expect(_overlapArea(band, atlas.roi(RoiId.bar)),
-          closeTo(RoiAtlas.barWidth * bandHeight, 1e-12));
+          closeTo(atlas.proportions.barWidth * bandHeight, 1e-12));
 
       var covered = _overlapArea(band, atlas.roi(RoiId.bar));
       for (var i = 0; i < 24; i++) {
@@ -287,6 +299,160 @@ void main() {
           }
         }
       }
+    });
+  });
+
+  group('proportions are an input, not a constant', () {
+    // The moment `RoiAtlas`'s own class doc predicted: a real board turned up
+    // whose trays are not 8% of its width because it has no trays at all — a
+    // folding case whose bar is a hinge strip. So the three fractions became a
+    // per-session calibration input, and these are the tests that say what an
+    // atlas built from a different set of them is.
+
+    /// The board that forced this: no bear-off wells, and a hinge for a bar.
+    const trayless = BoardProportions(trayWidth: 0, barWidth: 0.03);
+
+    test('the standard proportions are the numbers the atlas always had', () {
+      const p = BoardProportions.standard;
+      expect(p.trayWidth, 0.08);
+      expect(p.barWidth, 0.08);
+      expect(p.columnWidth, closeTo((1 - 2 * 0.08 - 0.08) / 12, 1e-15));
+      expect(p.hasTrays, isTrue);
+
+      // And they are what an atlas asked for nothing else is built from, so
+      // every caller that predates this change is unmoved by it.
+      final atlas = RoiAtlas.forOrientation(BoardOrientation.whiteHomeNear);
+      expect(atlas.proportions, BoardProportions.standard);
+      expect(
+        identical(
+          atlas,
+          RoiAtlas.forOrientation(
+            BoardOrientation.whiteHomeNear,
+            proportions: BoardProportions.standard,
+          ),
+        ),
+        isTrue,
+        reason: 'the standard atlases are still built once and shared',
+      );
+    });
+
+    test('a board with no wells gives the whole width to its columns', () {
+      expect(trayless.hasTrays, isFalse);
+      expect(trayless.columnWidth, closeTo((1 - 0.03) / 12, 1e-15));
+
+      final atlas = RoiAtlas.forOrientation(
+        BoardOrientation.whiteHomeNear,
+        proportions: trayless,
+      );
+      // The outermost columns reach the board's own edges, there being nothing
+      // between them and it.
+      expect(_bounds(atlas.roi(RoiId.point0)).maxX, closeTo(1.0, 1e-12));
+      expect(_bounds(atlas.roi(RoiId.point11)).minX, closeTo(0.0, 1e-12));
+      expect(_bounds(atlas.roi(RoiId.point23)).maxX, closeTo(1.0, 1e-12));
+
+      // And that is why proportions cannot be a constant: the outermost point
+      // has moved further than a checker clears its column's boundary by. The
+      // class doc's own arithmetic, now measured.
+      final standard = RoiAtlas.forOrientation(BoardOrientation.whiteHomeNear);
+      final drift = (_bounds(atlas.roi(RoiId.point0)).minX -
+              _bounds(standard.roi(RoiId.point0)).minX)
+          .abs();
+      expect(drift, greaterThan(0.5 * standard.proportions.columnWidth),
+          reason: 'half a column out is a miss, not a wobble');
+    });
+
+    test('a hinge-width bar is still the bar, and the halves close on it', () {
+      final atlas = RoiAtlas.forOrientation(
+        BoardOrientation.whiteHomeNear,
+        proportions: trayless,
+      );
+      final bar = _bounds(atlas.roi(RoiId.bar));
+      expect(bar.maxX - bar.minX, closeTo(0.03, 1e-12));
+      expect(_bounds(atlas.roi(RoiId.point6)).maxX, closeTo(bar.minX, 1e-12));
+      expect(_bounds(atlas.roi(RoiId.point5)).minX, closeTo(bar.maxX, 1e-12));
+      // The dice band runs the whole way across, there being no wells for it
+      // to stop at.
+      final band = _bounds(atlas.roi(RoiId.diceZone));
+      expect(band.minX, closeTo(0.0, 1e-12));
+      expect(band.maxX, closeTo(1.0, 1e-12));
+    });
+
+    test('a board with no wells has no bear-off regions to ask about', () {
+      final atlas = RoiAtlas.forOrientation(
+        BoardOrientation.whiteHomeNear,
+        proportions: trayless,
+      );
+      expect(atlas.hasTrays, isFalse);
+      expect(atlas.has(RoiId.offWhite), isFalse);
+      expect(atlas.has(RoiId.offBlack), isFalse);
+      expect(atlas.has(RoiId.bar), isTrue);
+
+      // Asking anyway is a mistake in the caller, and it says so rather than
+      // handing back a rectangle of zero width that would read as empty felt.
+      expect(() => atlas.roi(RoiId.offWhite), throwsStateError);
+      expect(() => atlas.roi(RoiId.offBlack), throwsStateError);
+
+      // Everything that iterates regions gets exactly the ones this board has,
+      // in the enum's own order.
+      expect(
+        atlas.regions.toList(),
+        RoiId.values
+            .where((id) => id != RoiId.offWhite && id != RoiId.offBlack)
+            .toList(),
+      );
+    });
+
+    for (final orientation in BoardOrientation.values) {
+      test('a trayless atlas is still rectangles inside the unit square '
+          '(${orientation.name})', () {
+        final atlas = RoiAtlas.forOrientation(
+          orientation,
+          proportions: trayless,
+        );
+        for (final id in atlas.regions) {
+          final b = _bounds(atlas.roi(id)); // asserts axis-alignment
+          expect(b.minX, greaterThanOrEqualTo(-1e-12), reason: '$id');
+          expect(b.maxX, lessThanOrEqualTo(1 + 1e-12), reason: '$id');
+          expect(b.maxX - b.minX, greaterThan(0.0), reason: '$id');
+          expect(b.maxY - b.minY, greaterThan(0.0), reason: '$id');
+        }
+        // The overlap contract does not depend on the proportions either.
+        final ids = atlas.regions.toList();
+        for (var i = 0; i < ids.length; i++) {
+          for (var j = i + 1; j < ids.length; j++) {
+            final area = _overlapArea(atlas.roi(ids[i]), atlas.roi(ids[j]));
+            final pair = '${ids[i].name} x ${ids[j].name}';
+            if (_overlapsByDesign(ids[i], ids[j])) {
+              expect(area, greaterThan(0.0), reason: '$pair lost its overlap');
+            } else {
+              expect(area, closeTo(0.0, 1e-12), reason: '$pair overlaps');
+            }
+          }
+        }
+      });
+    }
+
+    test('numbers that do not describe a board are refused', () {
+      expect(() => BoardProportions(trayWidth: -0.01, barWidth: 0.08),
+          throwsA(isA<AssertionError>()));
+      expect(() => BoardProportions(trayWidth: 0.08, barWidth: 0),
+          throwsA(isA<AssertionError>()),
+          reason: 'every board has a bar, however thin');
+      expect(() => BoardProportions(trayWidth: 0.45, barWidth: 0.2),
+          throwsA(isA<AssertionError>()),
+          reason: 'twelve columns have to fit in what is left');
+    });
+
+    test('two sets of the same numbers are the same proportions', () {
+      expect(
+        const BoardProportions(trayWidth: 0, barWidth: 0.03),
+        trayless,
+      );
+      expect(
+        const BoardProportions(trayWidth: 0, barWidth: 0.03).hashCode,
+        trayless.hashCode,
+      );
+      expect(trayless, isNot(BoardProportions.standard));
     });
   });
 

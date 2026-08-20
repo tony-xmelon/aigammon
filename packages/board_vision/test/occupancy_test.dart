@@ -265,7 +265,7 @@ void main() {
       final vision = BoardVision(calibration);
       const stack = 8; // near half, five White
       final board = _boardOf(const <int, int>{stack: 5, 20: 10, 15: -15});
-      final (left, right) = BoardLayout.pointSpan(stack);
+      final (left, right) = BoardLayout.standard.pointSpan(stack);
 
       final clean = vision
           .occupancyIn(renderShot(board: board, palette: palette).frame)

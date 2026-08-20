@@ -250,10 +250,16 @@ Future<void> main(List<String> args) async {
 /// agree whichever seat the session is shot from.
 List<DicePlacement> _placeDice(Dice dice, BoardState board, int seed) {
   final rng = math.Random(seed);
+  // The synthetic corpus is shot entirely on ordinary cased boards — the
+  // trayless one is a real board and belongs to the real corpus — so the
+  // standard proportions are the right ones here, and saying so explicitly is
+  // what keeps the committed pictures byte-identical.
+  const layout = BoardLayout.standard;
+  const p = BoardProportions.standard;
   final blocked = <(double, double)>[
     for (var i = 0; i < 24; i++)
-      if (board.points[i].abs() >= 5) BoardLayout.pointSpan(i),
-    (BoardLayout.barStart, BoardLayout.barEnd),
+      if (board.points[i].abs() >= 5) layout.pointSpan(i),
+    (p.barStart, p.barEnd),
   ];
 
   // How far a die reaches along x once it has been turned as far as the corpus
@@ -273,8 +279,8 @@ List<DicePlacement> _placeDice(Dice dice, BoardState board, int seed) {
       );
 
   final clear = <double>[
-    for (var x = BoardLayout.leftHalfStart + halfSpan;
-        x <= BoardLayout.rightHalfEnd - halfSpan;
+    for (var x = p.leftHalfStart + halfSpan;
+        x <= p.rightHalfEnd - halfSpan;
         x += 0.004)
       if (clearAt(x)) x,
   ];

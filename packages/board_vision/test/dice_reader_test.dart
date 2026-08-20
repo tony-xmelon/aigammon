@@ -197,7 +197,7 @@ void main() {
       points[8] = 5;
       points[20] = 10;
       points[15] = -15;
-      final (left, right) = BoardLayout.pointSpan(8);
+      final (left, right) = BoardLayout.standard.pointSpan(8);
       final shot = renderShot(
         board: BoardState(points: points),
         dicePlacements: <DicePlacement>[

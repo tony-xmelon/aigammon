@@ -271,7 +271,20 @@ class ColorModel {
 
   /// What [region] looks like bare, as measured under the calibration frame's
   /// light.
-  RoiBackground backgroundOf(RoiId region) => _backgrounds[region]!;
+  ///
+  /// Throws [StateError] for a region the calibrated board does not have — a
+  /// trayless board's bear-off wells, which nothing was ever learned for. See
+  /// `RoiAtlas.hasTrays`; a null-check crash here would be a much worse way to
+  /// find out.
+  RoiBackground backgroundOf(RoiId region) {
+    final background = _backgrounds[region];
+    if (background == null) {
+      throw StateError('nothing was learned about ${region.name} — this board '
+          'does not have one. Ask RoiAtlas.hasTrays before asking for a '
+          'bear-off tray.');
+    }
+    return background;
+  }
 
   /// The two checker clouds' separation, in units of their own combined
   /// spread, per channel and then summed as a length.

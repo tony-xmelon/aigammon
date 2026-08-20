@@ -257,16 +257,28 @@ class BoardCalibration {
   /// length into a count; see [StackMetrics] for why it cannot be a constant.
   final StackMetrics stacks;
 
+  /// This board's widths — what makes [atlas] describe THIS board rather than
+  /// a standard one. Measured by hand off the calibration frame and handed to
+  /// `BoardVision.calibrate`; see [BoardProportions].
+  final BoardProportions proportions;
+
   const BoardCalibration({
     required this.h,
     required this.orientation,
     required this.colors,
     required this.fingerprint,
     required this.stacks,
+    this.proportions = BoardProportions.standard,
   });
 
-  /// Where everything is, for this seating.
-  RoiAtlas get atlas => RoiAtlas.forOrientation(orientation);
+  /// Where everything is, for this seating and this board.
+  ///
+  /// One atlas per calibration, built from the same [proportions] the colours
+  /// and the stack pitch were learned through — nothing in this package builds
+  /// an atlas any other way, because two atlases that disagreed about where
+  /// the columns are would put the learned colours on the wrong felt.
+  RoiAtlas get atlas =>
+      RoiAtlas.forOrientation(orientation, proportions: proportions);
 
   /// How much brighter [frame]'s board is than the frame the colours were
   /// learned from.
@@ -418,7 +430,9 @@ class PointDiscrepancy {
 ///
 /// **What [agrees] does and does not claim.** Every one of the twenty-four
 /// points holds the colour the starting position puts there, and the bar and
-/// both trays are empty. It does NOT claim the counts are right: a point
+/// both trays are empty — the trays only on a board that has any; a
+/// folding-case board is checked on its points and its bar alone. It does NOT
+/// claim the counts are right: a point
 /// showing two White where the game starts with five agrees here, because
 /// counting checkers is occupancy's job and stack verification's after it.
 /// For the calibration flow that is the right division — a mis-set count is
@@ -529,10 +543,17 @@ class Calibrator {
   static const double maxClippedFraction = 0.05;
 
   /// Learns [frame]'s board, which must be in the starting position.
+  ///
+  /// [proportions] is this board's own geometry — leave it out for a board
+  /// with ordinary bear-off wells. Get it wrong and this refuses rather than
+  /// hands over a calibration that reads the wrong columns: the read-back gate
+  /// at the end is measured to catch it, because the outermost points move
+  /// most and they are the ones the starting position labels.
   static CalibrationResult learnStartingPosition({
     required Frame frame,
     required BoardQuad corners,
     required BoardOrientation orientation,
+    BoardProportions proportions = BoardProportions.standard,
   }) {
     final Homography homography;
     try {
@@ -545,7 +566,8 @@ class Calibrator {
       );
     }
 
-    final atlas = RoiAtlas.forOrientation(orientation);
+    final atlas =
+        RoiAtlas.forOrientation(orientation, proportions: proportions);
     final sampler = RoiSampler(frame, homography, atlas);
     final start = BoardState.initial();
     final occupied = <int, CheckerColor>{
@@ -592,8 +614,11 @@ class Calibrator {
       return false;
     }
 
+    // Every region THIS board has. A folding-case board has no bear-off wells,
+    // so there is nothing there to measure a background from and nothing later
+    // that will ask — see [RoiAtlas.regions].
     final interiors = <RoiId, List<Rgb>>{};
-    for (final id in RoiId.values) {
+    for (final id in atlas.regions) {
       final scan = sampler.interior(
         id,
         skip: id == RoiId.diceZone ? underAStack : null,
@@ -633,7 +658,7 @@ class Calibrator {
       ],
     };
     final free = <RoiId, List<Rgb>>{};
-    for (final id in RoiId.values) {
+    for (final id in atlas.regions) {
       final against = filtered[id];
       free[id] = against == null
           ? interiors[id]!
@@ -642,7 +667,7 @@ class Calibrator {
               .toList();
     }
     final pooled = <Rgb>[
-      for (final id in RoiId.values)
+      for (final id in atlas.regions)
         if (free[id]!.length >= minBackgroundSamples) ...free[id]!,
     ];
     if (pooled.isEmpty) {
@@ -656,7 +681,7 @@ class Calibrator {
     final pooledColor = _medianRgb(pooled);
 
     final backgrounds = <RoiId, RoiBackground>{};
-    for (final id in RoiId.values) {
+    for (final id in atlas.regions) {
       final samples = free[id]!;
       if (samples.isEmpty) {
         // Nothing in the region could be told apart from the checkers standing
@@ -783,6 +808,7 @@ class Calibrator {
       colors: colors,
       fingerprint: fingerprint,
       stacks: stacks,
+      proportions: proportions,
     );
     final readBack = confirm(frame, calibration);
     if (readBack.discrepancies.length > maxLearningMisreads) {
@@ -820,7 +846,8 @@ class Calibrator {
   /// on a live preview, and a phone's auto-exposure moves between them by more
   /// than enough to turn every empty point into a phantom checker.
   static ConfirmResult confirm(Frame frame, BoardCalibration calibration) {
-    final sampler = RoiSampler(frame, calibration.h, calibration.atlas);
+    final atlas = calibration.atlas;
+    final sampler = RoiSampler(frame, calibration.h, atlas);
     final colors = calibration.colorsIn(frame);
     final start = BoardState.initial();
     final discrepancies = <PointDiscrepancy>[];
@@ -865,7 +892,15 @@ class Calibrator {
     // These are areas rather than stacks with a known foot — the bar grows
     // outward from the middle, a tray inward from the edge — so they are
     // judged by how much of the region is checker-coloured at all.
-    for (final id in const <RoiId>[RoiId.bar, RoiId.offWhite, RoiId.offBlack]) {
+    //
+    // On a board with no bear-off wells the tray half of this check simply
+    // does not run: there is no felt to leave a checker on, and the reason
+    // this check exists — a stray checker being folded into the authoritative
+    // state — cannot happen where there is nowhere for one to sit.
+    for (final id in <RoiId>[
+      RoiId.bar,
+      if (atlas.hasTrays) ...<RoiId>[RoiId.offWhite, RoiId.offBlack],
+    ]) {
       final scan = sampler.interior(id);
       if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
         outOfPicture ??= id;

@@ -3,6 +3,7 @@ import 'dice_reader.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
 import 'occupancy.dart';
+import 'roi_atlas.dart';
 
 /// The perception core, as the app sees it.
 ///
@@ -30,6 +31,12 @@ class BoardVision {
   /// game: that is what labels the thirty checker samples and the sixteen bare
   /// points this board's colours are learned from.
   ///
+  /// [proportions] is how wide this board's trays and bar are, as fractions of
+  /// its width — measured by a person off the calibration frame, and left out
+  /// for a board with ordinary bear-off wells. A folding-case board, which has
+  /// no wells at all and a hinge for a bar, is a different board and says so
+  /// here; see [BoardProportions].
+  ///
   /// Failure is a named, sentence-carrying [CalibrationResult], not an
   /// exception — every reason is something the user can act on, and the
   /// calibration screen shows the sentence as it stands.
@@ -37,11 +44,13 @@ class BoardVision {
     required Frame frame,
     required BoardQuad corners,
     required BoardOrientation orientation,
+    BoardProportions proportions = BoardProportions.standard,
   }) =>
       Calibrator.learnStartingPosition(
         frame: frame,
         corners: corners,
         orientation: orientation,
+        proportions: proportions,
       );
 
   /// Checks the board in [frame] against the position every game starts from,

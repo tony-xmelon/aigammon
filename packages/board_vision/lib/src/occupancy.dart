@@ -196,10 +196,14 @@ class OccupancyReader {
     );
   }
 
-  /// Every region a game is played on: the twenty-four points, the bar and
-  /// both trays.
+  /// Every region a game is played on: the twenty-four points, the bar, and
+  /// both trays on a board that has them.
+  ///
+  /// A folding-case board has no bear-off wells — borne-off checkers leave it
+  /// — so this yields twenty-five regions there rather than twenty-seven. It
+  /// asks the atlas rather than the enum for exactly that reason.
   Map<RoiId, RegionOccupancy> readAll() => <RoiId, RegionOccupancy>{
-        for (final id in RoiId.values)
+        for (final id in calibration.atlas.regions)
           if (id != RoiId.diceZone) id: read(id),
       };
 

@@ -230,7 +230,7 @@ void main() {
 
       for (var i = 0; i < 24; i++) {
         if (start.points[i] != 0) continue;
-        final (left, right) = BoardLayout.pointSpan(i);
+        final (left, right) = BoardLayout.standard.pointSpan(i);
         final y = BoardLayout.isNearHalf(i) ? 1 - 0.03 : 0.03;
         final p = h.mapToImage(Pt((left + right) / 2, y));
         final sample = shot.frame.pixelAt(p.x.round(), p.y.round());
