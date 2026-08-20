@@ -229,9 +229,14 @@ never reaches one), on a board with wells and on a folding case without. On the
 apart — 001→003, 003→005, 005→008, 008→010, 010→013, 018→020, against the actual
 legal-move lists (7 to 18 candidates, 11.7 mean) — score **6/6, all six above
 `PlayMatcher.minConfidence`**, so a session would have acted on all six rather
-than prompting. Pinned as a floor in `corpus_harness_test.dart` beside the
-others; **six is a small denominator and the floor is a ratchet, not a claim of
-perfection**. Which pairs qualify is derived from the sidecars' own event logs
+than prompting. Both are pinned as floors in `corpus_harness_test.dart` beside
+the others, and the second needs its own: being right and being acted on are
+different things, and any of the matcher's confidence constants can move
+without disturbing the ranking at all. Measured — `noiseTolerance` 2.0 → 0.8
+leaves identification at 6/6 and the entire synthetic suite green while pushing
+**four of the six** under the threshold, which is a hands-free turn becoming
+four taps. **Six is a small denominator and both floors are ratchets, not
+claims of perfection**. Which pairs qualify is derived from the sidecars' own event logs
 rather than typed in, and the three that do not (013→018 spans two turns because
 turn 6's window never came; the two end-game keyframes carry no log) are named in
 the scoreboard rather than dropped.
@@ -263,14 +268,40 @@ on the synthetic bed the winner is 1.000 and the best rival (a legal play
 differing by one hop, on regions the reader was unsure of) reaches 0.562, while
 the real corpus's worst correct answer is 0.542 — overlapping bands, so telling
 two *legal* plays apart is the ranking's job. What the threshold separates is
-diffs no legal play produced: a checker run backwards scores 0.281, the wrong
-player's move 0.162, an untouched board 0.217. (c) The two frames are read in
+diffs no legal play produced, and four of those were measured separately: one
+checker moved backwards to a point no roll reaches scores **0.243**, a whole
+legal play run in reverse along its own four regions **0.281** (the hardest —
+right about every region and amount, wrong only about direction, and the case
+that pins the deltas being signed), the wrong player's move **0.162**, an
+untouched board **0.217**. (c) The two frames are read in
 their own light each; the pair survives a **35% exposure swing** between them at
 no cost at all and loses the play at 56%, where the classic palette's white
 checkers start clipping — a colour-model limit `occupancy_test` already pins.
 (d) `PlayMatch.instability` — change on regions no candidate claims — is the
 unmodelled-event signal the design asked for: it cannot reorder candidates, it
 lowers the whole list together, and on the real corpus it runs 0.00 to 2.93.
+(e) **A submitted hop order is never applied.** `BoardState.applyMove` is
+order-dependent for a hit and documents itself as safe only for an
+assumed-legal play — `GameState.canonicalPlay` exists in `backgammon_core` for
+exactly that reason — and this matcher applies candidates to work out what each
+would have left behind, from an arbitrary `List<Move>`. Measured on a Black
+blot on White's 11-point: `13/11* 11/6` written the other way round applies to a
+board with a phantom second Black checker on the 11 and nobody on the bar, and
+that board scored **0.540 and came back plausible at rank 1**. Nothing in the
+app produces such an order today (neither `legalMoves` nor `legalVariants`
+does), but a replayed log, a remote peer or hops reassembled from a tap-by-tap
+correction all can. `PlayMatcher._settle` now tries the order given and falls
+back to the hop multiset's permutations (at most 24, only ever reached by input
+already wrong); a multiset no order can play is not a candidate at all and is
+dropped rather than ranked against an invented board. (f) The two frames must
+share a **calibration epoch** — recalibrate between them and the difference is
+noise shaped like a play, silently. A `Frame` is bytes and carries no
+provenance, so nothing here can check it: Task 9's drift path owns invalidating
+any held before-frame, and the precondition is stated on the API. Likewise
+`isAmbiguous` is position-equality only and **not** a near-margin signal (real
+top-to-runner-up margins run 0.179–0.608 with rivals reaching 0.444, every one
+of them with `isAmbiguous` false), and `unobservable` deliberately does not
+lower the confidence — the verifier must read the field, not the number.
 
 ### Task 8: Expected-board verification, stack verify, drift recovery
 
