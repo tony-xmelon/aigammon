@@ -204,6 +204,74 @@ List<PlayMatch> matchLegalPlay(Frame frame, BoardState before, Player mover,
 - [ ] Step 2: Implement; green. Extend the corpus harness with play-ID scoring over the mid-game shots; thresholds asserted.
 - [ ] Step 3: Commit `feat(vision): state-primed legal-play matcher`.
 
+**As implemented (Task 7): the signature could not be one frame, and Phase 1 is
+why.** The plan pinned `matchLegalPlay(Frame, BoardState before, Player, List<Move>)`
+— read the board now, compare against what each candidate would produce. Task 6
+measured why that cannot be the instrument: this board's per-region colour comes
+back at 0.954 and colour-with-count at 0.784, and the counting misses are not
+scattered — a tall stack on the far half reads short because of the seat the
+phone is in, so it reads short in *every* frame of the session. An absolute
+comparison pays that bias on every region of every candidate; a difference
+between two frames of one session subtracts it from itself. So the settled frame
+from **before** the play is a required named argument (`beforeFrame:`) and the
+positional signature is otherwise exactly the plan's. The session already holds
+that frame — it is the one the previous query ran on. **The proof that the
+difference is the right instrument is the pair of numbers themselves: 0.784
+per-region counting supports 1.000 play identification on the same ten frames.**
+
+**As measured (Task 7): synthetic 64/64, real 6/6.** Sixty-four seeded turns from
+two `backgammon_core` playouts (32 each, no dance in either), rendered before and
+after at the corpus's own grade across two palettes and two viewpoints: **top-1
+100%**, every one above threshold, including 29 hits, 30 checkers coming in off
+the bar and 7 rolls of doubles. Bear-offs get their own beds (a random opening
+never reaches one), on a board with wells and on a folding case without. On the
+**real corpus**, the six windows of the filmed game that are genuinely one turn
+apart — 001→003, 003→005, 005→008, 008→010, 010→013, 018→020, against the actual
+legal-move lists (7 to 18 candidates, 11.7 mean) — score **6/6, all six above
+`PlayMatcher.minConfidence`**, so a session would have acted on all six rather
+than prompting. Pinned as a floor in `corpus_harness_test.dart` beside the
+others; **six is a small denominator and the floor is a ratchet, not a claim of
+perfection**. Which pairs qualify is derived from the sidecars' own event logs
+rather than typed in, and the three that do not (013→018 spans two turns because
+turn 6's window never came; the two end-game keyframes carry no log) are named in
+the scoreboard rather than dropped.
+
+**The plan's ambiguity example does not arrive from the door the plan expected —
+and then it arrived from the corpus.** `MoveGenerator.legalMoves` **already
+dedupes by resulting position**, so 13/9-via-the-10 and 13/9-via-the-12 are one
+entry there and a matcher fed that list never sees the tie. It is
+`legalVariants`' decompositions that carry it — the door a session takes when it
+wants to name the transit a user's hand actually used — and that is what the
+ambiguity-honesty test feeds it. Then the real corpus produced the case
+unprompted: **turn 3 of the filmed game is `W 5-2: 13/8 8/6`**, which is what the
+player's hand did, and that hop multiset is not in `legalMoves` at all — the
+generator lists `13/11 11/6` for the same position. So the harness scores
+**positions, not hop multisets**: that is what the game itself means (`GameState.play`
+folds any decomposition through `canonicalPlay`) and the only thing two settled
+frames can possibly say. Scored by hops, the pipeline would have been marked
+wrong on a play it identified correctly. Note also that `Move.sameAs` is *not*
+this equivalence — it is order-insensitive over hops and says nothing about
+transits — so the matcher folds re-orderings with `sameAs` (the same play written
+twice is not an ambiguity) and ties by resulting board.
+
+**Other things the task turned up, each measured.** (a) A folding case has no
+bear-off wells, so a bear-off is **count-by-absence** — the point that lost a man
+— and `PlayMatch.unobservable` names the tray that could not confirm it rather
+than scoring a region the board does not have. (b) `PlayMatcher.minConfidence`
+does **not** separate the right play from the runners-up and no threshold could:
+on the synthetic bed the winner is 1.000 and the best rival (a legal play
+differing by one hop, on regions the reader was unsure of) reaches 0.562, while
+the real corpus's worst correct answer is 0.542 — overlapping bands, so telling
+two *legal* plays apart is the ranking's job. What the threshold separates is
+diffs no legal play produced: a checker run backwards scores 0.281, the wrong
+player's move 0.162, an untouched board 0.217. (c) The two frames are read in
+their own light each; the pair survives a **35% exposure swing** between them at
+no cost at all and loses the play at 56%, where the classic palette's white
+checkers start clipping — a colour-model limit `occupancy_test` already pins.
+(d) `PlayMatch.instability` — change on regions no candidate claims — is the
+unmodelled-event signal the design asked for: it cannot reorder candidates, it
+lowers the whole list together, and on the real corpus it runs 0.00 to 2.93.
+
 ### Task 8: Expected-board verification, stack verify, drift recovery
 
 **Files:**
