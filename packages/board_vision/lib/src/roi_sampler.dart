@@ -823,8 +823,8 @@ class RoiSampler extends FrameSampler {
   ///     #.........#############################################…
   ///
   /// — a single covered row hard against the board's edge, a nine-row gap,
-  /// and then all five checkers. The gap is wider than [maxProfileGapDepth],
-  /// so the
+  /// and then all five checkers. Nine rows is deeper than
+  /// [maxProfileGapDepth] — it is where a checker could be standing — so the
   /// run ended after that one row and a five-stack measured 0.004: one row out
   /// of a hundred and twenty. Its twins measured 0.45.
   ///
@@ -1038,9 +1038,9 @@ class StackMeasurement {
   ///
   /// A *run*, not a scattering: the walk takes the first covered row within
   /// [RoiSampler.checkerReachLeadIn] of the origin and stops at the first gap
-  /// wider than [RoiSampler.maxProfileGapDepth] after it. A blob floating in
-  /// the middle of a
-  /// region — a die in a point's headroom, a hand's shadow — is therefore not
+  /// deeper than [RoiSampler.maxProfileGapDepth] after it — the first gap, that
+  /// is, that a checker could be standing in. A blob floating in the middle of
+  /// a region — a die in a point's headroom, a hand's shadow — is therefore not
   /// counted as part of the stack unless it is touching it, and does not start
   /// a run of its own.
   ///
