@@ -182,9 +182,10 @@ class BoardProportions {
 ///
 /// **The board is the unit rectangle `(0,0)`–`(1,1)`.** `x` runs left to
 /// right and `y` from the board's far edge (0) to its near edge (1), "near"
-/// meaning the edge closest to the camera. [Homography] is what carries a
-/// frame's pixels into this rectangle; nothing downstream of calibration
-/// works in pixels.
+/// meaning the edge closest to the camera. A [BoardGeometry] is what carries
+/// this rectangle into a frame's pixels — one homography for a flat board, two
+/// leaves and a hinge for a folding case — and nothing downstream of
+/// calibration works in pixels.
 ///
 /// The rectangle is the **whole playing surface including both bear-off
 /// trays** — the four corners the user drags onto the board during
@@ -350,8 +351,10 @@ class RoiAtlas {
   ///
   /// Throws [StateError] when this board does not have [id] — see the class
   /// doc. Always an axis-aligned rectangle today; it is typed as a [BoardQuad]
-  /// because callers immediately push it through [Homography.mapToImage],
-  /// where it stops being one.
+  /// because callers immediately push it through
+  /// [BoardGeometry.imagePointOf], where it stops being one — and on a board
+  /// that folds it stops being a quadrilateral at all, since a region crossing
+  /// the hinge has its corners on different planes.
   BoardQuad roi(RoiId id) {
     final quad = _regions[id];
     if (quad == null) {
