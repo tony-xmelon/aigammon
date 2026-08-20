@@ -295,6 +295,70 @@ class StackPlacement {
       'offset $centerOffset)';
 }
 
+/// How far back a hand may leave this board's stacks and still have the whole
+/// pipeline read them — **measured, per palette, and not the same number**.
+///
+/// It lives here, with the palettes, because that is what it belongs to: what
+/// limits it is which two colours a board happens to put next to each other,
+/// not anything about how a stack is placed. Two test files ask the question
+/// and neither may hold its own copy of the answer.
+///
+/// Measured over the whole palette matrix at every gain from 0.6 to 1.4, with
+/// the stacks all at one inset — calibrated, confirmed, and every point
+/// counted back:
+///
+/// * **classic 0.09** and **low-contrast wood 0.09** — this is the finder's own
+///   ceiling, `checkerSearchNear + checkerHoldDepth`, so on these two boards
+///   nothing but the walk's reach limits how a hand may leave the men. One
+///   step past it, both refuse: classic for checkers not in the starting
+///   position, wood because the dice band stops being readable.
+/// * **blue-red 0.03**, and its limit is a different thing entirely. The
+///   finder is not what gives out — at every inset up to 0.07 it settles on
+///   the right checker of the right colour, and a model learned from a TIDY
+///   blue-red board reads all 24 samples of every one of those patches
+///   correctly. What gives out is what the model LEARNS from an inset frame:
+///   a stack sitting back uncovers the base of its own triangle, and this is
+///   the palette whose pale points sit closest to its white checkers (0.28 in
+///   the model's feature space, against 0.70 for felt — see
+///   `Calibrator.checkerExclusionRadius`). Enough of that paint joins the
+///   region's background and the white five-stack on the 13-point then reads
+///   as bare. It is not monotonic in the inset — 0.04 refuses and 0.05 does
+///   not — which is what a limit looks like when it is really about how much
+///   triangle is showing.
+///
+/// So the ceiling is palette-dependent and the worst case is a third of the
+/// best. A board whose colours shout gets the walk's whole reach; a board that
+/// puts its points near its checkers gets what its own colours allow.
+double insetCeilingOf(BoardPalette palette) =>
+    palette == BoardPalette.blueRed ? 0.03 : 0.09;
+
+/// The eight stacks the starting position puts out, at insets a hand might
+/// leave — the SHAPE of a hand's carelessness, scaled to what [palette] can
+/// take.
+///
+/// The shape is the thing being tested: insets differ from stack to stack, so
+/// no single offset fixes them, which is why the finder is a search. The deep
+/// ones are deliberately on the short stacks — a five-stack inset that far
+/// would have to compress to stay off the midline, which is a different
+/// measurement (the pitch) getting harder rather than this one.
+Map<int, StackPlacement> handPlacedStacks(BoardPalette palette) {
+  const shape = <int, double>{
+    0: 0.08,
+    5: 0.04,
+    7: 0.09,
+    11: 0.02,
+    12: 0.06,
+    16: 0.075,
+    18: 0.03,
+    23: 0.08,
+  };
+  final scale = insetCeilingOf(palette) / 0.09;
+  return <int, StackPlacement>{
+    for (final entry in shape.entries)
+      entry.key: StackPlacement(edgeInset: entry.value * scale),
+  };
+}
+
 /// How worn a folding case's spine is — the raised hinge strip that such a
 /// board uses for a bar.
 ///

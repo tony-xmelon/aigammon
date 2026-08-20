@@ -179,6 +179,27 @@ class RoiSampler extends FrameSampler {
   /// column reads as bare board — and it is not a limit worth fighting, since
   /// nothing local can tell a stack left a tenth of the board up its column
   /// from a piece of board a tenth of the board deep.
+  ///
+  /// ## What `near + hold` is and is not a ceiling on
+  ///
+  /// It is the ceiling on THIS walk. It is not the ceiling on the pipeline,
+  /// and the difference is a whole palette wide. What a hand may leave and
+  /// still have a board calibrate, confirm and count is measured per palette
+  /// in the bed's `insetCeilingOf`, and it comes out:
+  ///
+  /// * classic **0.09** and low-contrast wood **0.09** — the walk's reach, so
+  ///   on these two the number here is the pipeline's number;
+  /// * blue-red **0.03** — a third of it, and nothing to do with the walk. Its
+  ///   finder settles on the right checker at every inset tested; what gives
+  ///   out is what a stack sitting back UNCOVERS. The base of its own triangle
+  ///   comes out from under it, and this is the palette whose pale points sit
+  ///   nearest its white checkers, so enough of that paint joins the region's
+  ///   background that the white five-stack on the 13-point reads as bare.
+  ///
+  /// So: palette-dependent, worst case a third of what this constant allows,
+  /// and the hard case is a colour-model limit wearing a placement limit's
+  /// clothes. Before the brightness bound in [checkerHoldLumaTolerance] the
+  /// wood board sat at 0.03 too, for a third reason again.
   static const double checkerHoldDepth = 0.07;
 
   /// How far a block has to hold before a walk that already knows this board's
@@ -214,6 +235,49 @@ class RoiSampler extends FrameSampler {
   /// over the drift.
   static const double checkerHoldTolerance = 0.08;
 
+  /// How much BRIGHTER or darker the same surface may get along a column, as a
+  /// log ratio of [lumaOf] — the bound [checkerHoldTolerance] cannot supply,
+  /// because taking brightness out is exactly what it does.
+  ///
+  /// **A board made of one wood is why this exists.** With brightness gone,
+  /// two things of the same hue are the same surface however far apart they
+  /// are: on the low-contrast wood palette, the dark point paint (156,128,85)
+  /// and the dark checker standing on it (107,86,58) are 0.019 apart in
+  /// colour, against a tolerance of 0.08. So a block that started on the board
+  /// went on "holding" straight through the checker in front of it, the blind
+  /// walk settled on board, the board's own paint was learned as a checker
+  /// colour, and calibration refused the frame — from an inset of 0.04 up,
+  /// at every light level. They differ by 0.39 of a log unit in brightness,
+  /// which is the whole of the difference and all that is left to measure.
+  ///
+  /// So it has to sit above the light and below that. The light is measured on
+  /// the real frame, and it is the same measurement [checkerHoldTolerance]
+  /// quotes: down the white two-stack on the far half, foot to top, luma runs
+  /// 157 to 191, which is **0.196** of a log unit — a window on one side of a
+  /// table. This is a little over half again as much, and 0.09 under the wood
+  /// board's board-against-checker step.
+  ///
+  /// What it bought, measured over the palette matrix at uniform insets: the
+  /// low-contrast wood board's ceiling went from 0.03 to **0.09** at every
+  /// gain from 0.6 to 1.4, and the classic board's at gain 1.4 did the same.
+  /// The synthetic corpus scoreboard did not move. Set it to 0.40 and the wood
+  /// board's ceiling falls straight back to 0.03, which is the check that this
+  /// number is the one doing the work.
+  ///
+  /// The cost, stated plainly: a real stack lit with a gradient steeper than
+  /// this from foot to top will stop holding partway up itself. That ends as a
+  /// REFUSAL — the walk settles nowhere, or on something the read-back gate
+  /// throws out — rather than as a wrong reading, which is the direction this
+  /// package errs in on purpose.
+  ///
+  /// **The bed can only bound this from above.** It paints in flat colour with
+  /// no gradient down a stack, so a tolerance set far too TIGHT costs it
+  /// nothing — set this to 0.15 and the wood board's ceiling rises further
+  /// rather than falling. The floor is the real frame's 0.196 and nothing in
+  /// the committed tests measures it; the corpus gate is where a photograph
+  /// gets to argue.
+  static const double checkerHoldLumaTolerance = 0.30;
+
   /// How much a patch's own samples may scatter and still count as one
   /// surface: the mean per-channel distance from its median, in sensor levels.
   ///
@@ -222,6 +286,20 @@ class RoiSampler extends FrameSampler {
   /// never be learned as a checker colour. Measured on the real frame: faces
   /// and felt come out at 2 to 9, a patch straddling a checker's leading edge
   /// at 28 to 50.
+  ///
+  /// **Absolute, where [checkerHoldTolerance] is relative, and the asymmetry
+  /// is deliberate.** The two measure different things. The hold test compares
+  /// two patches taken at different DEPTHS down a column, where the light
+  /// genuinely differs — the top of a stack is nearer the window than its foot
+  /// — so it has to be a ratio or it measures the lamp. This one compares the
+  /// samples of a SINGLE patch against each other: 24 samples spanning a
+  /// fortieth of the board, over which no lighting varies. What it is really
+  /// asking is whether the patch straddles an edge, and an edge shows up as
+  /// levels of scatter rather than as a fraction of anything. A relative
+  /// version would also do the wrong thing at the two ends of the range it has
+  /// to work over — 18 levels is a seventh of a dark checker's mean and a
+  /// fourteenth of a pale one's — while what a straddling patch produces (28
+  /// to 50) is well clear of what a face produces (2 to 9) in levels, on both.
   static const double checkerPatchMaxSpread = 18.0;
 
   /// How much of a lattice has to land inside the picture before the region
@@ -508,7 +586,7 @@ class RoiSampler extends FrameSampler {
     for (var k = 1; k <= limit && at + k < profile.length; k++) {
       final block = profile[at + k];
       if (block.scan.samples.isEmpty) break;
-      if (_colourGap(block.median, reference) > checkerHoldTolerance) break;
+      if (!_sameSurface(block.median, reference)) break;
       if (block.spread < best.spread) best = block;
     }
     return best;
@@ -523,12 +601,37 @@ class RoiSampler extends FrameSampler {
       if (next >= profile.length) return k - 1;
       final block = profile[next];
       if (block.scan.samples.isEmpty) return k - 1;
-      if (_colourGap(block.median, reference) > checkerHoldTolerance) {
-        return k - 1;
-      }
+      if (!_sameSurface(block.median, reference)) return k - 1;
     }
     return limit;
   }
+
+  /// Whether two block medians are the same thing seen twice — the one
+  /// definition of "still the same surface" the whole walk uses.
+  ///
+  /// Two tests, and they answer different questions. [_colourGap] asks whether
+  /// the COLOUR changed, with brightness taken out, so a stack lit brighter at
+  /// its top than at its foot still holds. [checkerHoldLumaTolerance] asks
+  /// whether the brightness changed by more than light ever does, because a
+  /// colour test with brightness taken out cannot tell a dark board from a
+  /// dark checker of the same hue — and on a board made of one wood, that is
+  /// exactly what it is asked to do.
+  static bool _sameSurface(Rgb a, Rgb b) {
+    if (_colourGap(a, b) > checkerHoldTolerance) return false;
+    return math
+            .log((lumaOf(a) + _darkPedestal) / (lumaOf(b) + _darkPedestal))
+            .abs() <=
+        checkerHoldLumaTolerance;
+  }
+
+  /// A pedestal under every channel before a ratio is taken.
+  ///
+  /// A near-black checker — the classic palette paints one at 20/18/15, and
+  /// real ones photograph darker still — differs from itself by a level or two
+  /// of grain, and a bare ratio turns two levels on fifteen into an eighth of
+  /// a log unit of "different colour". Measured: without this, a black stack's
+  /// own block stops holding partway down itself.
+  static const double _darkPedestal = 8.0;
 
   /// How far apart two colours are once brightness is taken out of them.
   ///
@@ -538,15 +641,6 @@ class RoiSampler extends FrameSampler {
   /// the same amount and so moves this not at all. That is what lets a block
   /// hold down a stack that is lit brighter at its top than at its foot while
   /// still ending where the surface changes.
-  /// A pedestal under every channel before the ratio is taken.
-  ///
-  /// A near-black checker — the classic palette paints one at 20/18/15, and
-  /// real ones photograph darker still — differs from itself by a level or two
-  /// of grain, and a bare ratio turns two levels on fifteen into an eighth of
-  /// a log unit of "different colour". Measured: without this, a black stack's
-  /// own block stops holding partway down itself.
-  static const double _darkPedestal = 8.0;
-
   static double _colourGap(Rgb a, Rgb b) {
     final r = math.log((a.$1 + _darkPedestal) / (b.$1 + _darkPedestal));
     final g = math.log((a.$2 + _darkPedestal) / (b.$2 + _darkPedestal));

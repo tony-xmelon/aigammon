@@ -155,55 +155,118 @@ void main() {
     //
     // Insets are a hand's work, so they differ from stack to stack: no single
     // offset fixes them, which is why this is a search and not a bigger
-    // number. The three renders below are that failure, in the bed.
+    // number. The renders below are that failure, in the bed.
+    //
+    // **Across the palette matrix, at each palette's own ceiling.** This group
+    // used to run on the default render alone — classic, flat, one light —
+    // and so pinned the easiest cell of the bed while every other calibration
+    // group ran the full matrix. What that hid: the ceiling is not one number.
+    // It is [insetCeilingOf], it differs by a factor of three between the
+    // easiest palette and the hardest, and what limits the hard one is not the
+    // finder at all. Both halves of that live with the palettes, measured.
 
-    /// The eight stacks the starting position puts out, at insets a hand
-    /// might leave: a hundredth of the board's height apart at the tightest
-    /// and an eighth at the loosest. The deep ones are deliberately on the
-    /// short stacks — a five-stack inset that far would have to compress to
-    /// stay off the midline, which is a different measurement (the pitch)
-    /// getting harder rather than this one.
-    const varied = <int, StackPlacement>{
-      0: StackPlacement(edgeInset: 0.08),
-      5: StackPlacement(edgeInset: 0.04),
-      7: StackPlacement(edgeInset: 0.09),
-      11: StackPlacement(edgeInset: 0.02),
-      12: StackPlacement(edgeInset: 0.06),
-      16: StackPlacement(edgeInset: 0.075),
-      18: StackPlacement(edgeInset: 0.03),
-      23: StackPlacement(edgeInset: 0.08),
-    };
+    for (final palette in BoardPalette.all) {
+      for (final gain in <double>[0.6, 1.0, 1.4]) {
+        // The one cell no palette matrix in this file runs: lit 40% over its
+        // own colours, the blue-red board's pale points and its white checkers
+        // both clip to 255. See the group above.
+        if (palette == BoardPalette.blueRed && gain == 1.4) continue;
+        final ceiling = insetCeilingOf(palette);
 
-    test('every stack sitting the same little way off its edge', () {
-      final shot = renderShot(
-        board: BoardState.initial(),
-        stackPlacement: const StackPlacement(edgeInset: 0.06),
-      );
-      final calibration = _calibrate(shot);
+        test('${palette.name} at gain $gain: stacks left up to $ceiling in '
+            'from their edges', () {
+          // All eight at the ceiling, which is the tightest case: with every
+          // stack back the same distance, every triangle has the same amount
+          // of its base uncovered, so whatever that does to a region's learned
+          // surface it does everywhere at once.
+          final uniform = renderShot(
+            board: BoardState.initial(),
+            palette: palette,
+            lightingGain: gain,
+            stackPlacement: StackPlacement(edgeInset: ceiling),
+          );
+          final atCeiling = _calibrate(uniform);
+          expect(atCeiling.colors.separation,
+              greaterThanOrEqualTo(ColorModel.minSeparation),
+              reason: 'the two checker colours did not come out apart');
+          _expectEveryCheckerReadsBack(uniform, atCeiling.colors);
+          expect(
+            BoardVision(atCeiling).confirmStartingPosition(uniform.frame).agrees,
+            isTrue,
+          );
 
-      expect(calibration.colors.separation,
-          greaterThanOrEqualTo(ColorModel.minSeparation),
-          reason: 'the two checker colours did not come out apart');
-      _expectEveryCheckerReadsBack(shot, calibration.colors);
-      final confirmed =
-          BoardVision(calibration).confirmStartingPosition(shot.frame);
-      expect(confirmed.agrees, isTrue, reason: confirmed.message);
-    });
+          // And at insets that differ from stack to stack, as a hand leaves
+          // them — with the finder asked where it found each one, because a
+          // finder that returned the right colour from the wrong place would
+          // pass everything else here.
+          final placements = handPlacedStacks(palette);
+          final varied = renderShot(
+            board: BoardState.initial(),
+            palette: palette,
+            lightingGain: gain,
+            pointPlacements: placements,
+          );
+          final calibration = _calibrate(varied);
+          expect(calibration.colors.separation,
+              greaterThanOrEqualTo(ColorModel.minSeparation));
+          _expectEveryCheckerReadsBack(varied, calibration.colors);
+          final confirmed =
+              BoardVision(calibration).confirmStartingPosition(varied.frame);
+          expect(confirmed.agrees, isTrue, reason: confirmed.message);
 
-    test('insets that differ from stack to stack, as a hand leaves them', () {
-      final shot = renderShot(
-        board: BoardState.initial(),
-        pointPlacements: varied,
-      );
-      final calibration = _calibrate(shot);
+          final sampler = RoiSampler(
+            varied.frame,
+            calibration.geometry,
+            calibration.atlas,
+          );
+          for (final entry in placements.entries) {
+            final found = sampler.findChecker(entry.key);
+            expect(found.settled, isTrue,
+                reason: 'the walk down point ${entry.key + 1} never settled');
+            // Within a checker's own thickness of where the renderer put it:
+            // the patch starts at the first depth the disc reads as one
+            // colour, which is a little past its leading edge.
+            expect(
+              found.depth,
+              closeTo(entry.value.edgeInset, 0.05),
+              reason: 'point ${entry.key + 1} was drawn at an inset of '
+                  '${entry.value.edgeInset} and found at ${found.depth}',
+            );
+          }
+        });
 
-      expect(calibration.colors.separation,
-          greaterThanOrEqualTo(ColorModel.minSeparation));
-      _expectEveryCheckerReadsBack(shot, calibration.colors);
-      final confirmed =
-          BoardVision(calibration).confirmStartingPosition(shot.frame);
-      expect(confirmed.agrees, isTrue, reason: confirmed.message);
-    });
+        test('${palette.name} at gain $gain: a step past $ceiling is refused, '
+            'not guessed at', () {
+          // The other half of pinning a ceiling: that it IS one. A ceiling
+          // asserted only from below would still pass if the pipeline had
+          // quietly started reading such boards wrong instead of refusing
+          // them, which is the failure this whole package is arranged around.
+          //
+          // If this fails, read it before reverting anything: it fails when
+          // the ceiling MOVES, in either direction. A ceiling that has gone up
+          // is good news and wants [insetCeilingOf] re-measured and raised in
+          // the same commit; one that has gone down is the regression.
+          final shot = renderShot(
+            board: BoardState.initial(),
+            palette: palette,
+            lightingGain: gain,
+            stackPlacement: StackPlacement(edgeInset: ceiling + 0.01),
+          );
+          final result = BoardVision.calibrate(
+            frame: shot.frame,
+            corners: shot.groundTruthQuad,
+            orientation: BoardOrientation.whiteHomeNear,
+          );
+          expect(result.ok, isFalse,
+              reason: 'a stack past the finder\'s reach was read anyway');
+          expect(result.message, isNotEmpty);
+        });
+      }
+    }
+
+    /// The shape a hand leaves, on the palette this group's remaining tests
+    /// are written against.
+    final varied = handPlacedStacks(BoardPalette.classic);
 
     test('and stacks pushed off the middle of their columns', () {
       // The other half of what a hand does. A patch taken at the column's
@@ -261,38 +324,6 @@ void main() {
       final confirmed =
           BoardVision(calibration).confirmStartingPosition(shot.frame);
       expect(confirmed.agrees, isTrue, reason: confirmed.message);
-    });
-
-    test('the finder says how far in it found each stack', () {
-      // What it found, not just what colour: the depth is the one number that
-      // says how a stack was placed, and the pitch regression is the obvious
-      // consumer for it. Asserted here because a finder that returned the
-      // right colour from the wrong place would pass everything above.
-      final shot = renderShot(
-        board: BoardState.initial(),
-        pointPlacements: varied,
-      );
-      final atlas = RoiAtlas.forOrientation(BoardOrientation.whiteHomeNear);
-      final sampler = RoiSampler(
-        shot.frame,
-        PlanarBoardGeometry.fromQuad(shot.groundTruthQuad),
-        atlas,
-      );
-
-      for (final entry in varied.entries) {
-        final found = sampler.findChecker(entry.key);
-        expect(found.settled, isTrue,
-            reason: 'the walk down point ${entry.key + 1} never settled');
-        // Within a checker's own thickness of where the renderer put it: the
-        // patch starts at the first depth the disc reads as one colour, which
-        // is a little past its leading edge.
-        expect(
-          found.depth,
-          closeTo(entry.value.edgeInset, 0.05),
-          reason: 'point ${entry.key + 1} was drawn at an inset of '
-              '${entry.value.edgeInset} and found at ${found.depth}',
-        );
-      }
     });
   });
 

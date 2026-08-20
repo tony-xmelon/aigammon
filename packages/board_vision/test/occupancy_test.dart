@@ -492,49 +492,63 @@ void main() {
       expect(stacks.pitch, lessThan(0.12));
     });
 
-    test('is the same on a board whose stacks are not flush', () {
-      // The pitch is how far one more checker reaches, and that cannot depend
-      // on where a person happened to set the stack down. It used to: the
-      // reach walk started at the board's edge and stopped at the first wide
-      // gap, so a stack sitting a hand's width inside its edge had a gap
-      // before it, the walk stopped before it started, and every stack on the
-      // board measured zero. Calibration still learned the colours and said
-      // yes — and then occupancy counted one checker on all eight stacks,
-      // which is the worst kind of failure this pipeline can have.
-      final insets = <int, StackPlacement>{
-        0: const StackPlacement(edgeInset: 0.08),
-        5: const StackPlacement(edgeInset: 0.04),
-        7: const StackPlacement(edgeInset: 0.09),
-        11: const StackPlacement(edgeInset: 0.02),
-        12: const StackPlacement(edgeInset: 0.06),
-        16: const StackPlacement(edgeInset: 0.075),
-        18: const StackPlacement(edgeInset: 0.03),
-        23: const StackPlacement(edgeInset: 0.08),
-      };
-      final flush = _calibrate(renderShot(board: BoardState.initial()));
-      final shot = renderShot(
-        board: BoardState.initial(),
-        pointPlacements: insets,
-      );
-      final calibration = _calibrate(shot);
+    // The pitch is how far one more checker reaches, and that cannot depend on
+    // where a person happened to set the stack down. It used to: the reach
+    // walk started at the board's edge and stopped at the first wide gap, so a
+    // stack sitting a hand's width inside its edge had a gap before it, the
+    // walk stopped before it started, and every stack on the board measured
+    // zero. Calibration still learned the colours and said yes — and then
+    // occupancy counted one checker on all eight stacks, which is the worst
+    // kind of failure this pipeline can have.
+    //
+    // Run over the whole matrix, at each palette's own measured ceiling: this
+    // used to be one classic render in one light, which is the easiest cell of
+    // the bed, and the ceiling turns out to differ by a factor of three
+    // between palettes. See [insetCeilingOf].
+    for (final palette in BoardPalette.all) {
+      for (final gain in <double>[0.6, 1.0, 1.4]) {
+        if (palette == BoardPalette.blueRed && gain == 1.4) continue;
 
-      expect(calibration.stacks.wellConditioned, isTrue);
-      expect(
-        calibration.stacks.pitch,
-        closeTo(flush.stacks.pitch, 0.01),
-        reason: 'the same board, the same checkers, stacks left where a hand '
-            'left them: ${calibration.stacks} against ${flush.stacks}',
-      );
+        test('is the same on a ${palette.name} board at gain $gain whose '
+            'stacks are not flush', () {
+          final insets = handPlacedStacks(palette);
+          final flush = _calibrate(renderShot(
+            board: BoardState.initial(),
+            palette: palette,
+            lightingGain: gain,
+          ));
+          final shot = renderShot(
+            board: BoardState.initial(),
+            palette: palette,
+            lightingGain: gain,
+            pointPlacements: insets,
+          );
+          final calibration = _calibrate(shot);
 
-      final reader = BoardVision(calibration).occupancyIn(shot.frame);
-      final start = BoardState.initial();
-      for (final index in insets.keys) {
-        final reading = reader.read(RoiId.point(index));
-        expect(reading.count, start.points[index].abs(),
-            reason: 'point ${index + 1} holds ${start.points[index]}, sitting '
-                '${insets[index]!.edgeInset} in from its edge, read $reading');
+          expect(calibration.stacks.wellConditioned, isTrue);
+          expect(
+            calibration.stacks.pitch,
+            closeTo(flush.stacks.pitch, 0.01),
+            reason: 'the same board, the same checkers, stacks left where a '
+                'hand left them: ${calibration.stacks} against ${flush.stacks}',
+          );
+
+          final reader = BoardVision(calibration).occupancyIn(shot.frame);
+          final start = BoardState.initial();
+          // Every point, not only the eight with stacks: a triangle whose base
+          // an inset stack has uncovered is exactly where a phantom checker
+          // would turn up, and the sixteen empty ones are where nothing is
+          // watching otherwise.
+          for (var index = 0; index < 24; index++) {
+            final reading = reader.read(RoiId.point(index));
+            expect(reading.count, start.points[index].abs(),
+                reason: 'point ${index + 1} holds ${start.points[index]}, '
+                    'sitting ${insets[index]?.edgeInset ?? 0} in from its '
+                    'edge, read $reading');
+          }
+        });
       }
-    });
+    }
 
     test('holds across palettes and seatings', () {
       final pitches = <double>[];
