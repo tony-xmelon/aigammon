@@ -295,6 +295,85 @@ class StackPlacement {
       'offset $centerOffset)';
 }
 
+/// How worn a folding case's spine is — the raised hinge strip that such a
+/// board uses for a bar.
+///
+/// **A real board said this was needed.** The first real folding calibration
+/// frame's hinge is not one colour. It is a ridge, and a ridge that has been
+/// rubbed by thirty years of checkers being swept off it: a dark seam down the
+/// very middle where the two leaves meet, a pale crown either side of the seam
+/// where the wood has worn, and the untouched wood on the flanks. Measured over
+/// the bar band's four hundred calibration samples, its brightness runs from 0
+/// to 206 — three surfaces, not one.
+///
+/// That matters because the pipeline models a region's surfaces with
+/// two-means, i.e. with two. The dark seam is the furthest thing from the
+/// wood, so it takes one mode; the wood takes the other; and the pale crown is
+/// left over. Forty-two percent of that band came back classified as checkers
+/// — 29% White on the crowns, 13% Black in the shadows — and calibration
+/// refused a board that was set up perfectly.
+///
+/// Every colour here is derived from the palette's own family, because a spine
+/// is made of the board's own wood: the crown is that wood rubbed toward the
+/// colour of a pale checker — which is precisely why it is dangerous, and
+/// exactly what the real board's is — and the seam is that wood in shadow.
+class SpineWear {
+  /// How far the crowns have been rubbed toward the colour of the board's own
+  /// pale checkers, 0 to 1.
+  final double paleness;
+
+  /// How wide each crown is, as a fraction of the hinge strip's width.
+  final double crownWidth;
+
+  /// How wide the dark seam down the middle is, in the same units.
+  final double seamWidth;
+
+  /// How deep the seam's shadow is, 0 (none) to 1 (black).
+  final double seamShade;
+
+  const SpineWear({
+    required this.paleness,
+    required this.crownWidth,
+    required this.seamWidth,
+    required this.seamShade,
+  });
+
+  /// A spine straight out of the shop: one flat colour, which is what every
+  /// folding render drew before this type existed and what they all still draw
+  /// unless told otherwise.
+  static const SpineWear none =
+      SpineWear(paleness: 0, crownWidth: 0, seamWidth: 0, seamShade: 0);
+
+  /// A spine worn the way the first real board's is.
+  ///
+  /// The shape matters more than the exact numbers, and it is the shape the
+  /// photograph has: a **minority** pale stripe either side of a near-black
+  /// crack, with the untouched wood the majority. That is what defeats a
+  /// two-surface model — the crack is the furthest thing from the wood, so it
+  /// takes the second mode, and the stripe is left with nowhere to go.
+  ///
+  /// [paleness] is set so the crown lands about a spread and a half from the
+  /// White cloud, which is where the photograph's does (1.40 measured). Every
+  /// combination of `crownWidth` 0.07–0.17 and `paleness` 0.35–0.55 produces
+  /// the same refusal on all three palettes, so nothing here is balanced on a
+  /// knife edge.
+  static const SpineWear worn = SpineWear(
+    paleness: 0.45,
+    crownWidth: 0.12,
+    seamWidth: 0.06,
+    seamShade: 0.9,
+  );
+
+  bool get isNothing =>
+      (paleness <= 0 || crownWidth <= 0) && (seamShade <= 0 || seamWidth <= 0);
+
+  @override
+  String toString() => isNothing
+      ? 'SpineWear(none)'
+      : 'SpineWear(crowns $crownWidth at $paleness, seam $seamWidth at '
+          '$seamShade)';
+}
+
 /// One physical board's colours: felt, frame, both point colours, both
 /// checker colours, and the dice.
 ///
@@ -722,6 +801,7 @@ RenderedBoard renderTopDown({
   List<DicePlacement>? dicePlacements,
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
+  SpineWear spine = SpineWear.none,
   StackPlacement stackPlacement = StackPlacement.flush,
   Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int width = kTopDownWidth,
@@ -745,6 +825,7 @@ RenderedBoard renderTopDown({
   final image = img.Image(width: width, height: height);
   _drawFrameAndFelt(image, palette, layout);
   _drawPoints(image, palette, layout);
+  _drawSpineWear(image, palette, layout, spine);
   if (starInlays) _drawStarInlays(image, palette, layout);
   final checkers = _drawCheckers(
     image,
@@ -933,6 +1014,7 @@ SyntheticShot renderShot({
   List<DicePlacement>? dicePlacements,
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
+  SpineWear spine = SpineWear.none,
   StackPlacement stackPlacement = StackPlacement.flush,
   Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int topDownWidth = kTopDownWidth,
@@ -953,6 +1035,7 @@ SyntheticShot renderShot({
     dicePlacements: dicePlacements,
     proportions: proportions,
     starInlays: starInlays,
+    spine: spine,
     stackPlacement: stackPlacement,
     pointPlacements: pointPlacements,
     width: topDownWidth,
@@ -1130,6 +1213,7 @@ FoldingShot renderFoldingShot({
   List<DicePlacement>? dicePlacements,
   double barWidth = kFoldingBarWidth,
   bool starInlays = false,
+  SpineWear spine = SpineWear.none,
   StackPlacement stackPlacement = StackPlacement.flush,
   Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int topDownWidth = kTopDownWidth,
@@ -1150,6 +1234,7 @@ FoldingShot renderFoldingShot({
     dicePlacements: dicePlacements,
     proportions: proportions,
     starInlays: starInlays,
+    spine: spine,
     stackPlacement: stackPlacement,
     pointPlacements: pointPlacements,
     width: topDownWidth,
@@ -1470,6 +1555,69 @@ void _drawPointTriangle(
     // Alternating so no two neighbouring points share a colour.
     color: _color(index.isEven ? palette.pointDark : palette.pointLight),
   );
+}
+
+/// The wear down a folding case's spine: a shadowed seam where the two leaves
+/// meet, and a worn crown either side of it. See [SpineWear] for the board
+/// this was measured off and why it is three surfaces rather than two.
+///
+/// Painted over the whole height of the hinge strip, because that is what wear
+/// down a spine looks like — a stripe running the length of the ridge, not a
+/// blob sitting on it. That difference is the whole point of the bed: a
+/// checker standing on the spine is a blob, and calibration has to go on
+/// telling the two apart.
+void _drawSpineWear(
+  img.Image image,
+  BoardPalette palette,
+  BoardLayout layout,
+  SpineWear wear,
+) {
+  if (wear.isNothing) return;
+  final w = image.width, h = image.height;
+  final p = layout.proportions;
+  final left = p.barStart * w, right = p.barEnd * w;
+  final centre = (left + right) / 2;
+  final strip = right - left;
+  final crown = _blend(palette.frame, palette.whiteChecker, wear.paleness);
+  final seam = _scaled(palette.frame, 1 - wear.seamShade);
+
+  for (final (from, to, colour) in <(double, double, int)>[
+    (wear.seamWidth / 2, wear.seamWidth / 2 + wear.crownWidth, crown),
+    (0, wear.seamWidth / 2, seam),
+  ]) {
+    for (final sign in <double>[-1, 1]) {
+      final a = centre + sign * from * strip;
+      final b = centre + sign * to * strip;
+      img.fillRect(
+        image,
+        x1: math.min(a, b).round(),
+        y1: 0,
+        x2: math.max(a, b).round(),
+        y2: h - 1,
+        color: _color(colour),
+      );
+    }
+  }
+}
+
+/// [a] mixed toward [b], channel by channel.
+int _blend(int a, int b, double t) {
+  var out = 0;
+  for (var shift = 16; shift >= 0; shift -= 8) {
+    final ca = (a >> shift) & 0xFF, cb = (b >> shift) & 0xFF;
+    out |= (ca + (cb - ca) * t).round().clamp(0, 255) << shift;
+  }
+  return out;
+}
+
+/// [a] with every channel multiplied — the same colour in less light, which is
+/// what a shadow on a board's own wood is.
+int _scaled(int a, double factor) {
+  var out = 0;
+  for (var shift = 16; shift >= 0; shift -= 8) {
+    out |= (((a >> shift) & 0xFF) * factor).round().clamp(0, 255) << shift;
+  }
+  return out;
 }
 
 /// The decorative inlay a great many real boards carry in the middle of each
