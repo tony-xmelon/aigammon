@@ -328,13 +328,26 @@ gradient and read with the stacks left a hand's width in, a four-stack measures
 4.37, so a man missing from a five-stack *there* is 0.63 out and inside it. At
 the corpus's own grade the same residuals run under 0.05.
 
-**As measured (Task 8): the prior is worth nineteen regions on real photographs
-and costs none.** Per region, on the same ten frames and the same sidecars,
-verification scores **0.858** against a blind count's **0.784** — nineteen
-regions rescued, zero lost, both recorded as harness signals so the claim is a
-number rather than an argument. On the synthetic corpus, **0.987** against
-0.963, eighteen rescued and none lost. The `regionVerified` row is scored beside
-`regionOccupancy` for exactly this comparison.
+**As measured (Task 8): the prior is worth fifteen regions on real photographs
+and costs none.** Compared **like for like** — the 240 point-reads both rows
+score, on the same ten frames and the same sidecars — verification is
+**203/240 = 0.846** against a blind count's **189/240 = 0.787**. Fifteen regions
+rescued, zero lost, counted one `(region, side)` at a time inside a single pass
+so that every mark is the two instruments answering about the identical read.
+On the synthetic corpus, **713/720 = 0.990** against **695/720 = 0.965**,
+eighteen rescued and none lost. Both pinned exactly, not bounded:
+`greaterThan(0)` would pass on one rescued region out of eighteen, which is the
+difference between a query that earns its complexity and one that does not.
+
+**The two per-region rows' totals are NOT the comparison, and saying so is part
+of the finding.** `regionVerified` asks both ends of the bar on every shot,
+because a man left on the bar is exactly the drift the query exists to find;
+`regionOccupancy` scores a bar side only where the game puts men on it. On the
+real corpus that is 260 reads against 241, and the nineteen extra are bare-bar
+agreements — free marks worth about a point. Reported as 0.858 vs 0.784 the
+verifier looks better than it is, which is why the harness now prints the
+like-for-like pair under both corpora and the tests pin that pair rather than
+the totals.
 
 **The 066 bar is the acceptance case and it agrees.** Blind occupancy reads the
 worn hinge as empty — run 0.025 where a checker on that board is 0.087 deep, so
@@ -343,11 +356,16 @@ cannot tell that run from the rim-and-shadow nine bare points of the same sessio
 produce (0.021 to 0.042). Asked whether one Black man is standing there, the same
 run divides into **1.28** checkers through the calibration's own fitted line and
 the region agrees. Asked of 070's bare bar — run exactly zero — it disagrees.
-**Calling a region bare takes both instruments and it has to**: the run (too
-short to be a checker) *and* the fitted line (agreeing it is under one), because
-this board's line does not behave at zero — its origin is −0.0857, so a run of
-nothing reads 0.99 checkers and the line alone would call every bare region
-occupied. Drop either half and one of the two 066 tests goes red.
+**Calling a region bare takes both instruments and each half is holding up a
+case the other gets wrong** — measured by deleting each in turn. The *line*
+keeps 066: a run under `holdsAnything`'s floor that this board's own fit makes
+1.28 checkers of, so the run test alone calls the bar bare with a Black man
+standing on it. The *run* keeps a genuine lone checker: one man measures
+**about** one checker and "about" straddles one, so `height < 1` alone calls
+real single men bare — delete the run test and a White man standing alone on the
+4-point comes back as "the camera sees nothing", on both palettes at once. Drop
+either half and a test goes red, and the two failures are in opposite
+directions.
 
 **The two whole-board rates MISS the spec, and the reason is arithmetic rather
 than perception.** Placement verification **0/6** and full-board resync **0/10**
@@ -355,8 +373,14 @@ on the real corpus; resync **22/30** on the synthetic one (placement is unaskabl
 there — no two shots are one turn apart). Both are floored at what they measured
 and the gap is printed on every run, exactly as the dice are. These are the only
 two targets in the spec's table whose denominator is a **whole board** rather
-than one answer: at 0.987 per region, a clean twenty-seven-region board is 0.73,
-and reaching ≥0.90 per board would need per-region accuracy of **0.9962**. Every
+than one answer — twenty-six regions on a folding case and twenty-eight on a
+cased one, the bar counted twice because its two colours stack away from each
+other. On the synthetic corpus (all cased): 0.9869 per region, twenty-eight in a
+row, is **0.691** if the misses were independent; the measured **0.733** is a
+little better because they are not — one bad shot tends to lose several regions
+together. Either way the ceiling is nowhere near 0.90, and reaching it per board
+would need per-region accuracy of **0.9962** (0.9960 over the real board's
+twenty-six). That is not a threshold anybody chose; it is what 0.90 costs. Every
 one of the synthetic corpus's eight failing shots fails on a region a blind count
 also gets wrong — a three-stack lost under a lamp, a phantom stack, a man lost on
 the bar — so the verifier is not what is missing. On the real corpus it is the

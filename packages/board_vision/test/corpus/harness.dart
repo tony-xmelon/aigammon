@@ -80,7 +80,7 @@ const String kPriorRescuedSignal = 'the prior rescued a region';
 /// "by construction" is how a claim survives its own refutation — colour and
 /// presence are asked differently by the two instruments, so this is not a
 /// theorem, it is a measurement.
-const String kPriorLostSignal = 'the prior lost a region a blind count had';
+const String kPriorLostSignal = 'the prior lost a region';
 
 /// Scores every shot in [directory], grouped into its sessions.
 ///
@@ -623,12 +623,27 @@ void _scoreOccupancy(
 ///
 /// * **per board**, which is what the spec's table promises and what a session
 ///   actually acts on — one contradicted region and the attempt has failed;
-/// * **per region**, which is the only number directly comparable with
-///   [CorpusMetric.regionOccupancy]. The two are computed from the same frames
-///   and the same sidecar, so the difference between them is exactly what
-///   knowing the expected position is worth. Regions that disagree are
-///   recorded either way, so the report names them rather than reporting a
-///   rate to argue about.
+/// * **per region**, so that the state-primed read can be set against the blind
+///   one. Regions that disagree are recorded either way, so the report names
+///   them rather than reporting a rate to argue about.
+///
+/// ## The two per-region rows do NOT share a denominator
+///
+/// [CorpusMetric.regionVerified] and [CorpusMetric.regionOccupancy] count
+/// different things and their totals must not be compared as if they did. This
+/// row asks **both ends of the bar on every shot**, because a man left on the
+/// bar is exactly the drift the query exists to find; `_scoreOccupancy` scores
+/// a bar side only when the game puts men on it. On the real corpus that is
+/// 260 reads against 241, and the nineteen extra are bare-bar agreements — free
+/// marks that flatter this row by about a point.
+///
+/// So there are two honest comparisons and the harness carries both:
+///
+/// * the **point** slice of each row, which is the same 240 reads on both
+///   sides — the like-for-like rate, printed under every run;
+/// * [kPriorRescuedSignal] and [kPriorLostSignal], computed below on identical
+///   `(region, side)` pairs one at a time, which is the same question asked
+///   without any denominator at all.
 void _scoreResync(
   Scoreboard board,
   BoardVision vision,

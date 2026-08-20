@@ -101,12 +101,16 @@ enum CorpusMetric {
 
   /// The same reads, one region at a time rather than one board at a time.
   ///
-  /// No target — the spec's table is about boards — but this is the number
-  /// that says whether the state-primed query is doing anything at all,
-  /// because it is directly comparable with [regionOccupancy] over the very
-  /// same regions of the very same frames. A verifier that agreed exactly
-  /// where a blind count is right would be an expensive way to round.
-  regionVerified('region verified against the game');
+  /// No target — the spec's table is about boards — but this is where the
+  /// state-primed query is set against the blind one.
+  ///
+  /// **Its total is NOT comparable with [regionOccupancy]'s.** The two rows
+  /// count different sets: this one asks both ends of the bar on every shot,
+  /// while [regionOccupancy] scores a bar side only where the game puts men on
+  /// it. Compare the **point** slices, which are the same reads on both sides
+  /// and are printed under every run, or read the per-pair rescued/lost
+  /// signals. See `_scoreResync`.
+  regionVerified('region verified vs game');
 
   const CorpusMetric(this.label);
 

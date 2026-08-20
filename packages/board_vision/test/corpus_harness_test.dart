@@ -40,7 +40,9 @@ void main() {
         Directory('test/corpus/synthetic'),
         name: 'synthetic',
       );
-      stdout.write(board.report());
+      stdout
+        ..write(board.report())
+        ..write(priorReport(board));
     });
 
     test('is committed and was scored', () {
@@ -170,14 +172,19 @@ void main() {
       // **It misses for an arithmetic reason, and the arithmetic is the
       // finding.** Every other target in the spec's table has ONE answer under
       // it: a calibration completed, a roll read, a play identified. This one's
-      // denominator is a whole board — twenty-five regions on a folding case,
-      // twenty-seven on a cased one — and it succeeds only when every one of
-      // them agrees at once. Per region this corpus verifies at 0.987; a clean
-      // twenty-seven-region board out of that is 0.70 even if the misses were
-      // independent, and the measured 0.733 says they very nearly are. To reach
-      // the spec's 0.90 per BOARD, per-region accuracy would have to be
-      // **0.9962** — which is not a threshold anybody chose, it is what 0.90
-      // over twenty-seven regions costs.
+      // denominator is a whole board — twenty-six regions on a folding case and
+      // **twenty-eight** on a cased one, the bar counted twice because its two
+      // colours stack away from each other — and it succeeds only when every
+      // one of them agrees at once. Every board in this corpus is cased, so
+      // twenty-eight it is: 840 region-reads over 30 shots.
+      //
+      // Per region this corpus verifies at 0.9869. Twenty-eight of those in a
+      // row is **0.691** if the misses were independent; the measured **0.733**
+      // is a little better, because they are not — the same shot tends to lose
+      // several regions at once. Either way the ceiling is nowhere near 0.90.
+      // To reach it per BOARD, per-region accuracy would have to be **0.9962**,
+      // which is not a threshold anybody chose: it is what 0.90 over
+      // twenty-eight regions costs.
       //
       // And the regions that miss are not the verifier's. All eight failing
       // shots fail on regions a blind count gets wrong too — a three-stack
@@ -226,20 +233,36 @@ void main() {
       // rounding sits on — and every region a blind count gets right is inside
       // that window by construction.
       //
-      // Checked here rather than argued: over the same 840 regions of the same
-      // frames, verification agrees on eighteen that a blind count reports
-      // wrongly, and on none that it reports rightly. The second half is the
-      // one that could fail — colour and presence are asked differently by the
-      // two instruments, so the superset is not a theorem.
-      final verified = board.totalFor(CorpusMetric.regionVerified);
-      final blind = board.totalFor(CorpusMetric.regionOccupancy);
-      expect(verified.rate!, greaterThan(blind.rate!),
-          reason: 'verification ${verified.rate} against a blind count\'s '
-              '${blind.rate} — the prior bought nothing');
+      // **Compared like for like, and the denominators are why that has to be
+      // said out loud.** The two rows' totals are 829/840 and 760/789: the
+      // verifier asks both ends of the bar on every shot and `_scoreOccupancy`
+      // does not, so the totals are over different sets, and setting one
+      // against the other credits the verifier with bar reads nobody else
+      // attempted. The point slices ARE the same reads on both sides — 720 of
+      // them — and that is the comparison below.
+      //
+      // The counts are pinned rather than bounded. `greaterThan(0)` would pass
+      // on one rescued region out of eighteen, which is the difference between
+      // a query that earns its complexity and one that does not.
+      final verified =
+          board.sliceOf(CorpusMetric.regionVerified, 'region')['point']!;
+      final blind =
+          board.sliceOf(CorpusMetric.regionOccupancy, 'region')['point']!;
+      expect(verified.attempts, blind.attempts,
+          reason: 'the like-for-like comparison stopped being like for like');
+      expect(verified.attempts, 720);
+      expect(verified.successes, 713, reason: '$verified');
+      expect(blind.successes, 695, reason: '$blind');
+
+      // The same claim with no denominator at all: computed one (region, side)
+      // at a time, so every mark is the two instruments answering about the
+      // identical read of the identical frame.
+      expect(board.signalOf(kPriorRescuedSignal).sum, 18,
+          reason: 'the prior rescued a different number of regions than it did '
+              'on the day this landed — re-measure deliberately');
       expect(board.signalOf(kPriorLostSignal).sum, 0,
           reason: 'a region a blind count got RIGHT was called wrong by the '
               'verifier, which the tolerance is meant to make impossible');
-      expect(board.signalOf(kPriorRescuedSignal).sum, greaterThan(0));
     });
 
     test('it says out loud that it cannot ask about plays', () {
@@ -312,6 +335,7 @@ void main() {
       board = scoreCorpus(Directory('test/corpus/real'), name: 'real');
       stdout
         ..write(board.report())
+        ..write(priorReport(board))
         ..write(_realFloorReport(board));
     });
 
@@ -479,28 +503,42 @@ void main() {
       // — and the six pairs that are one turn apart verified as placements.
       expect(board.totalFor(CorpusMetric.boardResynced).attempts, 10);
       expect(board.totalFor(CorpusMetric.placementVerified).attempts, 6);
-      expect(board.totalFor(CorpusMetric.regionVerified).attempts, 260,
-          reason: 'twenty-four points and both ends of the bar, ten times');
+      // Twenty-six regions a shot: twenty-four points and both ends of the
+      // bar. This board is a folding case, so it has no bear-off wells to ask
+      // about — those two come back `unobservable` and are not scored.
+      expect(board.totalFor(CorpusMetric.regionVerified).attempts, 26 * 10);
     });
 
     test('the state-primed read beats the blind one on real photographs too',
         () {
       // The claim the verifier exists to make, on the only frames that can
-      // settle it. Nineteen regions of the two hundred and sixty are ones a
-      // blind count reports wrongly and verification agrees with; none go the
-      // other way.
+      // settle it — **fifteen** regions a blind count reports wrongly and
+      // verification agrees with, none the other way.
       //
-      // **And it is still not enough for a clean board**, which is the finding
-      // rather than a caveat — see `kRealCorpusFloors`.
-      final verified = board.totalFor(CorpusMetric.regionVerified);
-      final blind = board.totalFor(CorpusMetric.regionOccupancy);
-      expect(verified.rate!, greaterThan(blind.rate!),
-          reason: 'verification ${verified.rate} against a blind count\'s '
-              '${blind.rate}');
+      // Over the 240 point-reads both rows score, that is 203 against 189:
+      // **0.846 against 0.787**. Not the rows' totals, which are 223/260 and
+      // 189/241 — the verifier asks both ends of the bar on every shot and
+      // nineteen of those extra reads are bare-bar agreements, so comparing
+      // the totals would hand it about a point it did not earn.
+      //
+      // **And fifteen regions is still not enough for a clean board**, which is
+      // the finding rather than a caveat — see `kRealCorpusFloors`.
+      final verified =
+          board.sliceOf(CorpusMetric.regionVerified, 'region')['point']!;
+      final blind =
+          board.sliceOf(CorpusMetric.regionOccupancy, 'region')['point']!;
+      expect(verified.attempts, blind.attempts,
+          reason: 'the like-for-like comparison stopped being like for like');
+      expect(verified.attempts, 240);
+      expect(verified.successes, 203, reason: '$verified');
+      expect(blind.successes, 189, reason: '$blind');
+
+      expect(board.signalOf(kPriorRescuedSignal).sum, 15,
+          reason: 'the prior rescued a different number of regions than it did '
+              'on the day this landed — re-measure deliberately');
       expect(board.signalOf(kPriorLostSignal).sum, 0,
           reason: 'a region a blind count got RIGHT was called wrong by the '
               'verifier');
-      expect(board.signalOf(kPriorRescuedSignal).sum, greaterThan(0));
     });
 
     test('the bar shot verifies the checker a blind count cannot see', () {
@@ -774,21 +812,29 @@ void main() {
 ///
 /// * **placement verification 0/6, full-board resync 0/10.** Both ask whether a
 ///   board that is in fact correct comes back with nothing contradicted, over
-///   twenty-five regions at once. Per region this corpus verifies at **0.858**
-///   — against a blind count's 0.784 on the same frames, so the prior is worth
-///   nineteen regions and costs none — but 0.858 over twenty-five regions is
-///   not a clean board, and it is the same regions every frame: the far-half
-///   Black five-stacks on the 12- and 19-points read as two and three, every
-///   window. **This is the far-half undercount the whole design was built
-///   around, arriving where it cannot be differenced away.** Task 7's matcher
-///   subtracts that bias from itself and scores 6/6; a single frame compared
-///   against a position pays it in full, on every region, every time.
+///   **twenty-six** regions at once — twenty-four points and both ends of the
+///   bar; this board is a folding case, so it has no wells to ask about.
+///
+///   Per region the prior is doing real work: over the 240 point-reads both
+///   rows score, verification is **203/240 = 0.846** against a blind count's
+///   **189/240 = 0.787**, fifteen regions rescued and none lost. (Not the rows'
+///   totals — 223/260 against 189/241 — since the verifier asks both ends of
+///   the bar on every shot and nineteen of those extra reads are bare-bar
+///   agreements. See [priorReport].)
+///
+///   But fifteen rescued regions is not a clean board, and the ones left are
+///   the same ones every frame: the far-half Black five-stacks on the 12- and
+///   19-points read as two and three in every window. **This is the far-half
+///   undercount the whole design was built around, arriving where it cannot be
+///   differenced away.** Task 7's matcher subtracts that bias from itself and
+///   scores 6/6; a single frame compared against a position pays it in full, on
+///   every region, every time.
 ///
 ///   Two things follow, and they belong at the Task 6 gate rather than here.
 ///   The spec's ≥0.95 and ≥0.90 are stated **per attempt where an attempt is a
 ///   whole board**, which is the only place in its table a denominator is not
-///   one answer; to reach 0.90 over twenty-five regions a per-region rate of
-///   0.9958 is needed, which this board does not give from this seat. And the
+///   one answer; to reach 0.90 over twenty-six regions a per-region rate of
+///   0.9960 is needed, which this board does not give from this seat. And the
 ///   query the session actually needs after dictating a move is narrower than
 ///   the API's whole-board sweep — the regions that move are named, and
 ///   `BoardDiscrepancies.regions` already carries them per region, which is why
@@ -816,11 +862,53 @@ const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
 /// `targets.dart` itself. Full-board resync is the first thing it does not, so
 /// it gets the same treatment for the same reason: a number that is recorded
 /// rather than asserted is a number nobody notices moving. See the test above
-/// for why 0.733 is what twenty-seven regions at 0.987 apiece comes to.
+/// for why twenty-eight regions at 0.9869 apiece cannot make a clean board much
+/// more often than this: 0.691 if their misses were independent, 0.733
+/// measured, against a target of 0.900.
 const Map<CorpusMetric, double> kSyntheticFloors = <CorpusMetric, double>{
   CorpusMetric.boardResynced: 22 / 30,
   CorpusMetric.regionVerified: 829 / 840,
 };
+
+/// What knowing the expected position is worth, printed under both corpora.
+///
+/// **The two per-region rows in the table above do not share a denominator**,
+/// so their totals must never be set against each other: `region verified vs
+/// game` asks both ends of the bar on every shot, while `region colour and
+/// count` scores a bar side only where the game puts men on it — 260 reads
+/// against 241 on the real corpus, and the nineteen extra are bare-bar
+/// agreements that flatter the verifier by about a point.
+///
+/// This prints the two comparisons that ARE honest. The **point** slice is the
+/// same 240 (or 720) reads on both sides. The **rescued / lost** pair is the
+/// same question with no denominator at all: it is computed one `(region,
+/// side)` at a time inside a single pass, so every mark is the two instruments
+/// answering about the identical read of the identical frame.
+String priorReport(Scoreboard board) {
+  final vp = board.sliceOf(CorpusMetric.regionVerified, 'region')['point'];
+  final bp = board.sliceOf(CorpusMetric.regionOccupancy, 'region')['point'];
+  if (vp == null || bp == null) return '';
+  final out = StringBuffer()
+    ..writeln()
+    ..writeln('  what the prior is worth, like for like')
+    ..writeln('  ${'the points both rows score'.padRight(30)}'
+        '${'n'.padLeft(6)}${'ok'.padLeft(6)}${'rate'.padLeft(8)}')
+    ..writeln('  ${'state-primed verification'.padRight(30)}'
+        '${vp.attempts.toString().padLeft(6)}'
+        '${vp.successes.toString().padLeft(6)}'
+        '${vp.rate!.toStringAsFixed(3).padLeft(8)}')
+    ..writeln('  ${'a blind count'.padRight(30)}'
+        '${bp.attempts.toString().padLeft(6)}'
+        '${bp.successes.toString().padLeft(6)}'
+        '${bp.rate!.toStringAsFixed(3).padLeft(8)}')
+    ..writeln()
+    ..writeln('  per region AND side, over all '
+        '${board.signalOf(kPriorRescuedSignal).n} reads: '
+        '${board.signalOf(kPriorRescuedSignal).sum.round()} rescued from a '
+        'blind count, ${board.signalOf(kPriorLostSignal).sum.round()} lost to '
+        'it.');
+  return (out..writeln('=' * 64)).toString();
+}
 
 /// The floors, what was measured against them, and how far each still sits
 /// from the spec — printed under the real corpus's scoreboard every run.

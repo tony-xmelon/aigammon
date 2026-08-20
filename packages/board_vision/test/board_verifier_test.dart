@@ -176,7 +176,8 @@ void main() {
       // verifier is handed "one Black on the bar" and has to agree.
       final session = _realSession();
       final shot = session.shot('066');
-      expect(shot.board.blackBar, 1, reason: 'the corpus moved under this test');
+      expect(shot.board.blackBar, 1,
+          reason: 'the corpus moved under this test');
 
       final result = session.verify('066', shot.board);
       final bar = result.regions.singleWhere(
@@ -396,7 +397,8 @@ void main() {
       test('${plan.name}: a correct board still verifies clean', () {
         final bed = _bedOf(plan);
         final result = bed.verify(BoardState.initial(), BoardState.initial());
-        expect(result.agrees, isTrue, reason: '${plan.name}: ${result.message}');
+        expect(result.agrees, isTrue,
+            reason: '${plan.name}: ${result.message}');
       });
     }
 

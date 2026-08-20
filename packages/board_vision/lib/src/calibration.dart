@@ -851,9 +851,9 @@ class Calibrator {
         // from here, so the message names both.
         return CalibrationResult.failure(
           CalibrationProblem.regionUnreadable,
-          'I cannot make out ${describeRegion(id)} — something may be resting on '
-          'it, or that corner of the board may be too dark to read. Clear it, '
-          'or add some light, and try again.',
+          'I cannot make out ${describeRegion(id)} — something may be '
+          'resting on it, or that corner of the board may be too dark to '
+          'read. Clear it, or add some light, and try again.',
           <RoiId>[id],
         );
       }

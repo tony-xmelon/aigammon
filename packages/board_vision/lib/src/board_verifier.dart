@@ -340,8 +340,9 @@ class BoardDiscrepancies {
 /// ## One instance per use
 ///
 /// Constructing one of these reads nothing; [verify] reads every region the
-/// expectation touches — twenty-five on a folding case and twenty-seven on a
-/// board with wells, the bar twice over because it holds both colours at once.
+/// expectation touches — **twenty-six** on a folding case and **twenty-eight**
+/// on a board with wells, the bar counted twice because its two colours stack
+/// away from each other and neither can be read off the other's profile.
 /// A session verifying the same frame against more than one candidate position
 /// should hold one of these and call [verify] repeatedly rather than going
 /// through the `BoardVision.verifyExpectedBoard` convenience, which rebuilds
@@ -617,30 +618,38 @@ class BoardVerifier {
 
     // 2. Presence — is anything standing here at all?
     //
-    // **Asked of two instruments, and it takes both to call a region bare.**
-    // The RUN is what was measured: how far a queue of this colour's rows
-    // reaches from the region's origin, judged against a checker's own depth by
-    // `StackMetrics.holdsAnything`. The fitted LINE is what the calibration
-    // makes of that length. They agree on almost every region and the places
-    // they part are the whole reason this is written as a conjunction:
+    // **Two instruments, and a region is bare only when BOTH say so.** The RUN
+    // is what was measured — how far a queue of this colour's rows reaches from
+    // the region's origin, judged against a checker's own depth by
+    // `StackMetrics.holdsAnything`. The fitted LINE is what this board's
+    // calibration makes of that length. Each half of the conjunction is holding
+    // up a case the other half gets wrong, and both were measured by deleting
+    // it:
     //
-    // * on the real corpus the line does not behave at zero — a fit through
-    //   stacks of two, three and five came back with an origin of -0.0857, so a
-    //   run of NOTHING divides into 0.99 checkers. The line alone would call
-    //   every bare region occupied;
-    // * on a board whose stacks are lost to a lamp gradient, a black five-stack
-    //   leaves a run of 0.03 where a checker is 0.09 deep — under the run test
-    //   AND under a checker by the line. Nothing is visible there, and saying
-    //   the count is merely wrong would send the user to count checkers they
-    //   cannot see.
+    // * **the run keeps a genuine lone checker.** One man measures *about* one
+    //   checker, and "about" straddles one — so `height < 1` on its own calls
+    //   real single men bare. Delete the run test and a White man standing
+    //   alone on the 4-point of the corpus-grade bed comes back as "the camera
+    //   sees nothing", on both palettes at once. Its run is nowhere near
+    //   marginal: it clears `holdsAnything` comfortably, which is precisely the
+    //   evidence the line was too coarse to keep;
+    // * **the line keeps 066.** A run of 0.025 on a worn hinge is under
+    //   `holdsAnything`'s floor, and the run test alone therefore calls the bar
+    //   bare — with a Black man genuinely standing on it. This board's own
+    //   fitted line makes 1.28 checkers of that run, and delete the height test
+    //   and the flagship case goes red.
     //
-    // So: bare when the run is too short to be a checker and the line agrees it
-    // is under one. Where they DISAGREE — a run too short to count, that this
-    // board's own line says is more than a checker — the region is one the
-    // instrument cannot resolve, and the honest move is to fall through to the
-    // consistency check rather than to declare it empty. **That is 066**: a run
-    // of 0.025 that the line makes 1.28 checkers of, on a worn hinge, with one
-    // Black man genuinely standing on it.
+    // So the two disagree in both directions, and a region is empty only where
+    // neither can find a checker's worth. Where they part, the region is one
+    // the instrument cannot resolve on its own and the honest move is to fall
+    // through to the consistency check with the prior rather than to declare it
+    // empty.
+    //
+    // `mine <= 0` is there for a board the conjunction would not cover: a fit
+    // whose origin puts a run of nothing at one checker or more. The real
+    // board's origin is -0.0857, so its `heightOf(0)` is 0.99 and the height
+    // test happens to catch it; that is a property of one fit and not a
+    // guarantee, and nothing standing anywhere is not a judgement call.
     final bare = !calibration.stacks.holdsAnything(mine) && height < 1;
     if (mine <= 0 || bare) {
       return verdict(
