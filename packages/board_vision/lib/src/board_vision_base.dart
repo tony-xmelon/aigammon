@@ -142,6 +142,16 @@ class BoardVision {
   /// [PlayMatch.play], and see [PlayMatcher.match] for the whole contract
   /// (ties, dances, and the first-class "none of these").
   ///
+  /// **Both frames must come from the same calibration epoch** — recalibrate
+  /// between them and the difference is noise shaped like a play, quietly and
+  /// without an error. The session invalidates any held before-frame when
+  /// calibration is invalidated; see [PlayMatcher] for the whole precondition.
+  ///
+  /// This convenience reads every region of both frames on every call. A
+  /// session asking about the same before-frame more than once (waiting for a
+  /// player to finish, say) should hold a [PlayMatcher] instead and call
+  /// [PlayMatcher.match] on it.
+  ///
   /// ## Why there are two frames here and one in the plan
   ///
   /// The plan pinned this as `matchLegalPlay(Frame, BoardState, Player,

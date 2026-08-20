@@ -228,6 +228,86 @@ void main() {
     });
   });
 
+  group('hop order is the submitter\'s business', () {
+    // `BoardState.applyMove` is order-dependent for a hit — it reads the
+    // landing point's count off the board as it stands at that moment — and
+    // `GameState.canonicalPlay` exists in `backgammon_core` precisely so that
+    // a submitted order is never applied. This matcher applies a candidate to
+    // work out what it would have left behind, so it inherits that hazard, and
+    // its input is an arbitrary `List<Move>` rather than something it
+    // generated.
+    //
+    // Neither `legalMoves` nor `legalVariants` emits an unplayable order, so
+    // nothing in the app reaches this today. A replayed log, a remote peer, or
+    // a session that reassembles hops from a tap-by-tap correction all can.
+    test('a hit listed after the hop that depends on it still lands on the '
+        'right board', () {
+      final bed = _bedOf(_beds.first);
+      final before = _blotOnTheEleven;
+      final legal = MoveGenerator.legalMoves(before, Player.white, Dice(2, 5));
+      final canonical = legal.firstWhere(
+        (m) =>
+            m.checkerMoves.any((h) => h.from == 12 && h.to == 10) &&
+            m.checkerMoves.any((h) => h.from == 10 && h.to == 5),
+        orElse: () => throw StateError('13/11* 11/6 is not legal here: $legal'),
+      );
+      final sound = before.applyMove(Player.white, canonical);
+      expect(sound.blackBar, 1, reason: 'the bed must contain a real hit');
+
+      // The same hop multiset with the two hops the other way round. Applied
+      // in this order a checker leaves the 11 before the hit puts one there:
+      // the blot is decremented to a phantom SECOND black checker, no man
+      // reaches the bar, and the board that comes out belongs to no game.
+      final misOrdered = Move(<CheckerMove>[
+        const CheckerMove(10, 5),
+        const CheckerMove(12, 10, isHit: true),
+      ]);
+      expect(misOrdered.sameAs(canonical), isTrue,
+          reason: 'the same play, written the other way round');
+
+      final matches = bed.matchBoards(
+        before,
+        sound,
+        Player.white,
+        // Listed FIRST, so `_distinct` keeps this one and drops the canonical.
+        <Move>[misOrdered, ...legal],
+      );
+      expect(matches.length, legal.length, reason: 'the two are one play');
+
+      final top = matches.first;
+      expect(top.play.sameAs(canonical), isTrue, reason: '$matches');
+      expect(top.after, sound,
+          reason: 'the submitted order was applied as given, and the board it '
+              'produced is not one any game can reach');
+      expect(top.after.checkerCount(Player.white), 15);
+      expect(top.after.checkerCount(Player.black), 15);
+      expect(top.plausible, isTrue);
+    });
+
+    test('a hop multiset no order can play is not a candidate at all', () {
+      // The other half: not a bad ORDER but a play this board cannot take in
+      // any order — here a checker lifted off a point that is empty. There is
+      // no position it would have left behind, so there is nothing to score it
+      // against, and it comes back as nothing rather than as a candidate with
+      // an invented board under it.
+      final bed = _bedOf(_beds.first);
+      final before = BoardState.initial();
+      final legal = MoveGenerator.legalMoves(before, Player.white, Dice(5, 3));
+      final fromNowhere = Move(const <CheckerMove>[CheckerMove(3, 0)]);
+      expect(before.points[3], 0, reason: 'the 4-point must be bare');
+
+      final matches = bed.matchBoards(
+        before,
+        before.applyMove(Player.white, legal.first),
+        Player.white,
+        <Move>[fromNowhere, ...legal],
+      );
+      expect(matches.length, legal.length);
+      expect(matches.any((m) => m.play.sameAs(fromNowhere)), isFalse,
+          reason: '$matches');
+    });
+  });
+
   group('the plays a difference cannot tell apart', () {
     test('two transits of the same play come back tied, and both plausible',
         () {
@@ -708,6 +788,15 @@ final BoardState _bearingOff = BoardState(points: const <int>[
   0, 0, 0, 0, 0, 0, //  7-12
   0, 0, 0, -3, -3, -3, // 13-18
   -3, -3, 0, 0, 0, 0, // 19-24
+]);
+
+/// A Black blot standing on White's 11-point, where a 2-5 can hit it and run
+/// on with the same checker — so the play's two hops only work in one order.
+final BoardState _blotOnTheEleven = BoardState(points: const <int>[
+  -2, 0, 0, 0, 0, 5, //  1-6
+  0, 3, 0, 0, -1, -4, //  7-12   one Black man forward off the 12
+  5, 0, 0, 0, -3, 0, // 13-18
+  -5, 0, 0, 0, 0, 2, // 19-24
 ]);
 
 /// The starting position with a White blot on the 5-point and another on the

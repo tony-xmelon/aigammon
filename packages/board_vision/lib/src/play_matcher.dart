@@ -20,6 +20,12 @@ class PlayMatch {
 
   /// The position [play] leaves behind. The identity that decides ties: two
   /// plays reaching the same board are the same observation.
+  ///
+  /// Derived without trusting [play]'s hop ORDER or its hit flags — see
+  /// `PlayMatcher._settle`. This is the authoritative half of the pair: [play]
+  /// is the caller's own object, returned so it can be recognised in the list
+  /// it came from, and its hops may be written in an order that would not
+  /// apply.
   final BoardState after;
 
   /// The other candidates that reach [after] and are therefore impossible to
@@ -29,6 +35,17 @@ class PlayMatch {
   /// these appears in the returned list in its own right, at exactly the same
   /// [confidence] — see [PlayMatcher.match]'s doc for why a winner is not
   /// picked here.
+  ///
+  /// **This is position equality and nothing else. It is not a near-margin
+  /// signal, and a session must not use it as one.** [isAmbiguous] false means
+  /// "no other candidate reaches the same board"; it does not mean the winner
+  /// was clear. Measured on the real corpus, the gap between the top candidate
+  /// and the runner-up over the six filmed plays runs from 0.179 to 0.608, and
+  /// rivals reach 0.444 — every one of those with [isAmbiguous] false. A rule
+  /// for when to put the candidate list in front of the user therefore has to
+  /// come from the ranked list's own margins (compare the first two entries'
+  /// [confidence], or their [cost]), and this flag is the separate question of
+  /// whether picking one of them would even be answerable.
   final List<Move> tiedWith;
 
   /// How well the observed change fits this candidate, from 0 to 1.
@@ -60,6 +77,16 @@ class PlayMatch {
   /// board altogether. The play is then identified by count-by-absence — the
   /// point that lost a man — and this field is how the caller knows the
   /// confirming half of the evidence was never available.
+  ///
+  /// **A non-empty list does NOT lower [confidence], by design.** The evidence
+  /// that remains is as good as it was; what is missing is corroboration, and
+  /// docking the number would double-count the same fact and make a perfectly
+  /// clean bear-off look like a doubtful play. So a consumer that cares — the
+  /// placement verifier especially, since "the checker is in the tray" is the
+  /// thing it would normally check — has to **read this field, not the
+  /// number**: on a trayless board there is nothing in the picture to verify a
+  /// borne-off man against, and the honest response is to accept the point's
+  /// loss as the whole of the evidence rather than to look for a tray.
   final List<RoiId> unobservable;
 
   PlayMatch({
@@ -126,10 +153,40 @@ class PlayMatch {
 /// Up to four hops, and between two settled frames only the NET change is
 /// observable — nobody photographs the intermediate positions. That falls out
 /// of the design rather than needing handling: expected deltas are computed
-/// from `before.applyMove(mover, play)`, which is the net position, so a play
-/// that passes through a point and leaves it again claims nothing about it.
-/// It is also the reason two plays reaching the same board are returned tied
-/// (see [match]).
+/// from the position each candidate settles on (`_settle`), which is the net
+/// one, so a play that passes through a point and leaves it again claims
+/// nothing about it. It is also the reason two plays reaching the same board
+/// are returned tied (see [match]).
+///
+/// ## Two frames of ONE calibration — a precondition, not a preference
+///
+/// Both frames must have been taken under the **same calibration epoch**: the
+/// same corners, the same learned colours, the same board in the same place.
+/// The whole method is a subtraction of two readings, and a subtraction is only
+/// meaningful when both sides were measured with the same instrument. Calibrate
+/// again between the two frames — because the phone was nudged, or the light
+/// changed enough to route the session through the recalibration flow — and
+/// every region is being read from somewhere slightly different in each frame,
+/// so the difference is noise shaped like a play. It will not throw and it will
+/// not look wrong; it will quietly answer.
+///
+/// Nothing here can check that, because a [Frame] is bytes and carries no
+/// provenance. **The session owns it**: a held before-frame is invalidated the
+/// moment calibration is, which is Task 9's readability/drift path, and the
+/// next query starts from a fresh pair.
+///
+/// ## One instance per turn
+///
+/// Constructing a matcher reads **every region of both frames** — twenty-five
+/// on a folding case and twenty-seven on a board with trays, the bar counted
+/// twice over because it holds both colours at once, so fifty-two or
+/// fifty-six stack measurements through the warp for the pair. [match] itself
+/// is then cheap arithmetic over the candidates. So a session waiting for a
+/// player to finish should build one of
+/// these per settled pair and call [match] on it, rather than calling the
+/// `BoardVision.matchLegalPlay` convenience repeatedly with the same
+/// before-frame: that re-reads both frames every time, and the spec's budget is
+/// 300 ms per query on a mid-range phone.
 ///
 /// ## Every threshold here is provisional
 ///
@@ -229,9 +286,20 @@ class PlayMatcher {
   /// ranking's job, not this number's.
   ///
   /// What it separates is diffs no legal play produced at all, and there the
-  /// gap is real: on the same bed a checker moved backwards scores 0.243, the
-  /// wrong player's move 0.162, and a board nobody touched 0.217. Half of that
-  /// gap is where this sits.
+  /// gap is real. Four of them, measured on the same bed and each a different
+  /// way for the board to disagree with the game:
+  ///
+  /// | the picture shows | scores |
+  /// |---|---|
+  /// | one checker moved backwards, to a point no roll reaches | 0.243 |
+  /// | a whole legal play run in reverse, along its own regions | 0.281 |
+  /// | the wrong player's move | 0.162 |
+  /// | a board nobody touched | 0.217 |
+  ///
+  /// The second is the hardest of the four and the one that pins the deltas
+  /// being signed: it is right about every region and every amount, and wrong
+  /// only about which way. Half the gap between it and the 0.542 above is
+  /// where this sits.
   static const double minConfidence = 0.5;
 
   final Set<RoiId> _observable;
@@ -303,6 +371,11 @@ class PlayMatcher {
   /// the session announces the dance and passes the turn, exactly as the
   /// digital game does. A caller that wants "did nothing happen?" answered from
   /// the frames puts `Move.none` in the list instead.
+  ///
+  /// The empty list comes back for one other reason: every candidate offered
+  /// was one this board cannot play in any hop order (see `_settle`). There is
+  /// then nothing to rank, and answering with an invented board apiece would
+  /// be worse than answering with nothing.
   List<PlayMatch> match(
     BoardState before,
     Player mover,
@@ -310,15 +383,19 @@ class PlayMatcher {
   ) {
     if (legalPlays.isEmpty) return const <PlayMatch>[];
 
-    final candidates = _distinct(legalPlays);
     final was = _countsOf(before);
+    final candidates = <Move>[];
     final becomes = <Map<RoiId, (int, int)>>[];
     final afters = <BoardState>[];
-    for (final play in candidates) {
-      final after = before.applyMove(mover, play);
+    for (final play in _distinct(legalPlays)) {
+      // NEVER the submitted order — see [_settle].
+      final after = _settle(before, mover, play);
+      if (after == null) continue;
+      candidates.add(play);
       afters.add(after);
       becomes.add(_countsOf(after));
     }
+    if (candidates.isEmpty) return const <PlayMatch>[];
 
     // Which regions ANY candidate claims. Scoring every candidate over the same
     // set is what makes them comparable: a candidate that touches fewer regions
@@ -445,6 +522,161 @@ class PlayMatcher {
         RoiId.offWhite: (board.whiteOff, 0),
         RoiId.offBlack: (0, board.blackOff),
       };
+
+  /// The position [play]'s hops leave behind when applied in an order the
+  /// board can actually take, or **null** when no order can.
+  ///
+  /// ## Why the submitted order is never applied
+  ///
+  /// `BoardState.applyMove` reads a landing point's occupancy off the board as
+  /// it stands at that moment, so it is order-dependent wherever a hit or a
+  /// transit is involved, and it documents itself as safe only for a play that
+  /// is "assumed legal" — violating that precondition "produces a silently
+  /// corrupt board, not an error". `GameState.canonicalPlay` exists in
+  /// `backgammon_core` for exactly this reason and resolves a submission
+  /// against the generator's own decompositions rather than applying it.
+  ///
+  /// This class has no dice and so cannot ask the generator anything, but it
+  /// takes an arbitrary `List<Move>` and must not inherit the hazard. Measured
+  /// on a Black blot standing on White's 11-point: the play `13/11* 11/6`
+  /// written the other way round applies to a board with a phantom second
+  /// Black checker on the 11 and nobody on the bar — a position no game can
+  /// reach — and, being a near-miss of the real one, scored 0.540 and came
+  /// back plausible at rank 1. Neither `legalMoves` nor `legalVariants` emits
+  /// such an order, so nothing in the app produces it today; a replayed log, a
+  /// remote peer, or hops reassembled from a tap-by-tap correction all can.
+  ///
+  /// ## What it does instead
+  ///
+  /// Tries the order given, since that is what every generated play already
+  /// is, and falls back to searching the permutations of the hop multiset for
+  /// one the board takes. A turn is at most four hops, so the search is at
+  /// most twenty-four orders of at most four steps, and it is only ever
+  /// reached by input that was already wrong.
+  ///
+  /// Where more than one order is playable they agree on the position, because
+  /// a hop can only leave a point the mover already occupies: an order that
+  /// would change which hop does the hitting is an order in which the earlier
+  /// hop had no man to lift. The first playable one is therefore taken.
+  ///
+  /// Null — no order at all — is not a "worse" candidate, it is not a
+  /// candidate: there is no position it would have left behind, so there is
+  /// nothing to score it against, and [match] drops it rather than inventing a
+  /// board to rank. That covers a hop off an empty point, a hop onto a made
+  /// point, a hop off an empty bar, and a hop index outside the board (which
+  /// `applyMove` would throw on).
+  static BoardState? _settle(BoardState before, Player mover, Move play) {
+    final asGiven = _applyIfPlayable(before, mover, play.checkerMoves);
+    if (asGiven != null) return asGiven;
+    if (play.checkerMoves.length > _maxHops) return null;
+    for (final ordering in _reorderings(play.checkerMoves)) {
+      final settled = _applyIfPlayable(before, mover, ordering);
+      if (settled != null) return settled;
+    }
+    return null;
+  }
+
+  /// The most hops one turn can have — four, on doubles. A longer list is
+  /// malformed rather than merely mis-ordered, and is not permuted.
+  static const int _maxHops = 4;
+
+  /// [hops] applied in the order given, or null at the first one the board
+  /// cannot take.
+  ///
+  /// The same arithmetic `BoardState.applyMove` does, with the precondition it
+  /// assumes turned into a check: a hop must lift a man of [mover]'s from
+  /// somewhere one is standing, and must land somewhere the opponent does not
+  /// hold with two or more.
+  static BoardState? _applyIfPlayable(
+    BoardState before,
+    Player mover,
+    List<CheckerMove> hops,
+  ) {
+    final points = List<int>.of(before.points);
+    var whiteBar = before.whiteBar;
+    var blackBar = before.blackBar;
+    var whiteOff = before.whiteOff;
+    var blackOff = before.blackOff;
+    final white = mover == Player.white;
+    final sign = white ? 1 : -1;
+
+    for (final hop in hops) {
+      if (hop.from == CheckerMove.bar) {
+        if ((white ? whiteBar : blackBar) <= 0) return null;
+        if (white) {
+          whiteBar--;
+        } else {
+          blackBar--;
+        }
+      } else {
+        if (hop.from < 0 || hop.from > 23) return null;
+        if (points[hop.from] * sign < 1) return null;
+        points[hop.from] -= sign;
+      }
+
+      if (hop.to == CheckerMove.off) {
+        if (white) {
+          whiteOff++;
+        } else {
+          blackOff++;
+        }
+        continue;
+      }
+      if (hop.to < 0 || hop.to > 23) return null;
+      final theirs = -points[hop.to] * sign;
+      if (theirs > 1) return null;
+      // A hit, worked out from the board rather than from the flag the
+      // submitter set — which is the other half of what `canonicalPlay` warns
+      // about, and the reason `Move.sameAs` ignores those flags.
+      if (theirs == 1) {
+        points[hop.to] = 0;
+        if (white) {
+          blackBar++;
+        } else {
+          whiteBar++;
+        }
+      }
+      points[hop.to] += sign;
+    }
+
+    return BoardState(
+      points: points,
+      whiteBar: whiteBar,
+      blackBar: blackBar,
+      whiteOff: whiteOff,
+      blackOff: blackOff,
+    );
+  }
+
+  /// Every ordering of [hops] except the one given, which the caller has
+  /// already tried.
+  static Iterable<List<CheckerMove>> _reorderings(
+    List<CheckerMove> hops,
+  ) sync* {
+    var first = true;
+    for (final ordering in _permutations(hops)) {
+      if (first) {
+        first = false;
+        continue;
+      }
+      yield ordering;
+    }
+  }
+
+  static Iterable<List<CheckerMove>> _permutations(
+    List<CheckerMove> hops,
+  ) sync* {
+    if (hops.length <= 1) {
+      yield hops;
+      return;
+    }
+    for (var i = 0; i < hops.length; i++) {
+      final rest = <CheckerMove>[...hops.take(i), ...hops.skip(i + 1)];
+      for (final tail in _permutations(rest)) {
+        yield <CheckerMove>[hops[i], ...tail];
+      }
+    }
+  }
 
   /// [plays] with re-orderings of the same hops folded together.
   ///
