@@ -270,6 +270,20 @@ class CorpusShot {
   /// calibrates through, since one session is one board.
   final BoardProportions? proportions;
 
+  /// The eight points a **folding** board is calibrated from, or null when the
+  /// board does not fold.
+  ///
+  /// The second thing the first real board turned out to be, after its widths:
+  /// a case whose two leaves tent, which no four corners can describe. Present
+  /// means the harness takes `BoardVision.calibrateFolding` and the board's
+  /// widths are DERIVED from these eight — so [proportions] plays no part on
+  /// such a shot and there is nothing for a person to measure twice.
+  ///
+  /// Absent means the board is flat, which is every sidecar written before
+  /// this field existed. Additive exactly like [proportions], and pinned so by
+  /// the same tests.
+  final FoldingCorners? foldingCorners;
+
   /// The position the board is in. Authoritative for scoring.
   final BoardState board;
 
@@ -317,6 +331,7 @@ class CorpusShot {
     required this.title,
     required List<String> instructions,
     this.proportions,
+    this.foldingCorners,
   }) : instructions = List<String>.unmodifiable(instructions);
 
   bool get expectsRefusal => expectRefusal != null;
@@ -357,6 +372,7 @@ class CorpusShot {
     BoardQuad? corners,
     SyntheticRecipe? synthetic,
     BoardProportions? proportions,
+    FoldingCorners? foldingCorners,
   }) =>
       CorpusShot(
         id: id,
@@ -375,6 +391,7 @@ class CorpusShot {
         title: title,
         instructions: instructions,
         proportions: proportions ?? this.proportions,
+        foldingCorners: foldingCorners ?? this.foldingCorners,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -400,6 +417,9 @@ class CorpusShot {
         // drift against every committed sidecar, of exactly the class the
         // fromJson->toJson drift guards cannot see.
         if (proportions != null) 'proportions': proportions!.toJson(),
+        // Same rule, same reason: no key at all on a board that does not fold.
+        if (foldingCorners != null)
+          'foldingCorners': _foldingToJson(foldingCorners!),
       };
 
   factory CorpusShot.fromJson(Map<String, dynamic> json) {
@@ -453,6 +473,11 @@ class CorpusShot {
           ? null
           : BoardProportions.fromJson(
               json['proportions'] as Map<String, dynamic>),
+      // Likewise absent on every sidecar written before boards that fold
+      // turned up, and absent means the board is flat.
+      foldingCorners: json['foldingCorners'] == null
+          ? null
+          : _foldingFromJson(json['foldingCorners'] as Map<String, dynamic>),
     );
   }
 
@@ -886,6 +911,35 @@ Map<String, dynamic> _boardToJson(BoardState board) => <String, dynamic>{
       'whiteOff': board.whiteOff,
       'blackOff': board.blackOff,
     };
+
+/// The eight points, as the four outer ones plus the four hinge seams. Written
+/// out under the same names the type uses, so a person editing a sidecar by
+/// hand can see which point is which.
+Map<String, dynamic> _foldingToJson(FoldingCorners c) => <String, dynamic>{
+      ..._quadToJson(c.outer),
+      'hingeFarLeft': <double>[c.hingeFarLeft.x, c.hingeFarLeft.y],
+      'hingeFarRight': <double>[c.hingeFarRight.x, c.hingeFarRight.y],
+      'hingeNearLeft': <double>[c.hingeNearLeft.x, c.hingeNearLeft.y],
+      'hingeNearRight': <double>[c.hingeNearRight.x, c.hingeNearRight.y],
+    };
+
+FoldingCorners _foldingFromJson(Map<String, dynamic> json) {
+  Pt at(String key) {
+    final pair = json[key] as List<dynamic>;
+    return Pt((pair[0] as num).toDouble(), (pair[1] as num).toDouble());
+  }
+
+  return FoldingCorners(
+    topLeft: at('topLeft'),
+    topRight: at('topRight'),
+    bottomRight: at('bottomRight'),
+    bottomLeft: at('bottomLeft'),
+    hingeFarLeft: at('hingeFarLeft'),
+    hingeFarRight: at('hingeFarRight'),
+    hingeNearLeft: at('hingeNearLeft'),
+    hingeNearRight: at('hingeNearRight'),
+  );
+}
 
 BoardState _boardFromJson(Map<String, dynamic> json) => BoardState(
       points: <int>[

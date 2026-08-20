@@ -34,6 +34,16 @@
 /// that shows pixel coordinates, put them in `corners.json` clockwise from the
 /// top left as the picture shows them, and run the tool again.
 ///
+/// ## Eight taps, when the board folds
+///
+/// A folding case is not one plane: its two leaves tent, so four corners
+/// cannot describe it however carefully they are read off the picture. Such a
+/// shot gets **eight** points in the same `corners.json` — the four corners,
+/// then the four seams where the hinge meets the far and near edges — and the
+/// tool takes the folding door for it. See [readFoldingCorners]. That is the
+/// whole measurement: a folding board's widths come out of those eight points,
+/// so it wants no `proportions.json` entry at all.
+///
 /// ## The other measurement: what shape the board is
 ///
 /// The ROI atlas used to assume one set of tray, bar and column widths. The
@@ -43,6 +53,9 @@
 /// prepared calibration frame, in `proportions.json` beside `corners.json`,
 /// keyed by session name; see [readProportions]. A session that says nothing
 /// is read as a board of the usual shape.
+///
+/// This is for a board that is trayless but FLAT. A board that folds says so
+/// with eight taps instead, and derives these.
 ///
 /// It goes through this tool rather than into a sidecar by hand because every
 /// run rewrites every sidecar from the live plan, and a number typed straight
@@ -85,15 +98,25 @@ Future<void> main(List<String> args) async {
   final shapePath =
       _option(args, '--proportions') ?? '${source.path}/proportions.json';
   final measured = readProportions(File(shapePath));
+  final folding = readFoldingCorners(File(cornersPath));
   final report = prepareCorpus(
     source: source,
     destination: out,
     corners: readCorners(File(cornersPath)),
+    foldingCorners: folding,
     proportions: measured,
   );
 
   stdout
     ..writeln(report.summary)
+    ..writeln(folding.isEmpty
+        ? '  No session has been tapped as a board that folds. If yours is a '
+            'folding case, tap EIGHT points for its calibration shot instead '
+            'of four — the four corners, then the four seams where the hinge '
+            'meets the far and near edges; see readFoldingCorners. Its widths '
+            'then need no measuring at all.'
+        : '  ${folding.length} shots were tapped as folding boards: '
+            '${folding.keys.join(', ')}')
     ..writeln(measured.isEmpty
         ? '  Every session is being read as a board of the usual shape. If '
             'yours is a folding case — no bear-off wells, a hinge for a bar — '
@@ -176,6 +199,8 @@ PrepareReport prepareCorpus({
   required Directory source,
   required Directory destination,
   Map<String, BoardQuad> corners = const <String, BoardQuad>{},
+  Map<String, FoldingCorners> foldingCorners =
+      const <String, FoldingCorners>{},
   Map<String, BoardProportions> proportions =
       const <String, BoardProportions>{},
   int maxDimension = kMaxCorpusDimension,
@@ -216,17 +241,27 @@ PrepareReport prepareCorpus({
     // Corners are given in the PREPARED image's pixels, so a re-run at a
     // different size would invalidate them. Saying so here is cheaper than
     // debugging a corpus whose homographies are all slightly wrong.
-    final tapped = corners[shot.id];
+    //
+    // Eight points mean a folding case, and they carry the four outer ones
+    // inside them: those are written to `corners` as well, so nothing that
+    // only understands a quad is handed a null where the board's outline is
+    // perfectly well known.
+    final folded = foldingCorners[shot.id];
+    final tapped = corners[shot.id] ?? folded?.outer;
     if (shot.needsCorners && tapped == null) needCorners.add(shot.id);
 
     // Measured per session, because a session is one board — and written by
     // this tool rather than into a sidecar by hand, since every run rewrites
     // every sidecar from the live plan and would wipe anything typed in.
+    //
+    // A folding case needs no widths: its eight points derive them, and
+    // writing both would be two answers to one question.
     writeSidecar(
       destination,
       shot.copyWith(
         corners: tapped,
-        proportions: proportions[shot.session],
+        foldingCorners: folded,
+        proportions: folded == null ? proportions[shot.session] : null,
       ),
     );
     written.add(shot.id);
@@ -240,31 +275,81 @@ PrepareReport prepareCorpus({
   );
 }
 
-/// Hand-tapped corners, keyed by shot id.
+/// Hand-tapped corners of an ordinary board, keyed by shot id.
 ///
 /// Four `[x, y]` pairs, clockwise from the top left as the prepared photograph
 /// shows them — the order [BoardQuad] promises. An entry that is null or
 /// missing means "not done yet", which the harness reports rather than guesses
 /// around.
+///
+/// **An eight-point entry is skipped here**, not refused: it belongs to
+/// [readFoldingCorners], which reads the same file. One file because a person
+/// tapping at a board is doing one job, and splitting it across two files
+/// keyed differently is how a session ends up half-measured.
 Map<String, BoardQuad> readCorners(File file) {
-  if (!file.existsSync()) return const <String, BoardQuad>{};
-  final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
   final out = <String, BoardQuad>{};
+  for (final entry in _tappedPoints(file).entries) {
+    if (entry.value.length != 4) continue;
+    out[entry.key] = BoardQuad.fromCorners(entry.value);
+  }
+  return out;
+}
+
+/// Hand-tapped points of a board that **folds**, keyed by shot id, from the
+/// same `corners.json`.
+///
+/// Eight `[x, y]` pairs: the four outer corners clockwise from the top left,
+/// exactly as [readCorners] wants them, and then the four seams where the
+/// hinge meets the board's edges — far-left, far-right, near-left, near-right.
+/// A folding case is two leaves that tent, so no four corners describe it; see
+/// [FoldingCorners].
+///
+/// Nothing else has to be measured for such a board. Its tray and bar widths
+/// come out of these eight points, so a session that has them does not want a
+/// `proportions.json` entry as well.
+///
+/// A four-point entry is skipped here, for the reason [readCorners] gives.
+Map<String, FoldingCorners> readFoldingCorners(File file) {
+  final out = <String, FoldingCorners>{};
+  for (final entry in _tappedPoints(file).entries) {
+    final p = entry.value;
+    if (p.length != 8) continue;
+    out[entry.key] = FoldingCorners(
+      topLeft: p[0],
+      topRight: p[1],
+      bottomRight: p[2],
+      bottomLeft: p[3],
+      hingeFarLeft: p[4],
+      hingeFarRight: p[5],
+      hingeNearLeft: p[6],
+      hingeNearRight: p[7],
+    );
+  }
+  return out;
+}
+
+/// Every filled-in entry of `corners.json`, as points, with the one check both
+/// readers share: a board is described by four points or by eight, and any
+/// other count is a typo rather than a board.
+Map<String, List<Pt>> _tappedPoints(File file) {
+  if (!file.existsSync()) return const <String, List<Pt>>{};
+  final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+  final out = <String, List<Pt>>{};
   for (final entry in json.entries) {
     final value = entry.value;
     if (value == null) continue;
     final points = value as List<dynamic>;
-    if (points.length != 4) {
-      throw FormatException('shot ${entry.key} needs four corners, '
-          'got ${points.length}');
+    if (points.length != 4 && points.length != 8) {
+      throw FormatException('shot ${entry.key} needs four corners — or eight '
+          'points if its board folds — got ${points.length}');
     }
-    out[entry.key] = BoardQuad.fromCorners(<Pt>[
+    out[entry.key] = <Pt>[
       for (final p in points)
         Pt(
           ((p as List<dynamic>)[0] as num).toDouble(),
           (p[1] as num).toDouble(),
         ),
-    ]);
+    ];
   }
   return out;
 }

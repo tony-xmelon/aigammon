@@ -234,6 +234,22 @@ class FoldingCorners {
   }
 
   @override
+  bool operator ==(Object other) =>
+      other is FoldingCorners &&
+      other.topLeft == topLeft &&
+      other.topRight == topRight &&
+      other.bottomRight == bottomRight &&
+      other.bottomLeft == bottomLeft &&
+      other.hingeFarLeft == hingeFarLeft &&
+      other.hingeFarRight == hingeFarRight &&
+      other.hingeNearLeft == hingeNearLeft &&
+      other.hingeNearRight == hingeNearRight;
+
+  @override
+  int get hashCode => Object.hash(topLeft, topRight, bottomRight, bottomLeft,
+      hingeFarLeft, hingeFarRight, hingeNearLeft, hingeNearRight);
+
+  @override
   String toString() => 'FoldingCorners(outer $outer, hinge far $hingeFarLeft '
       '$hingeFarRight, near $hingeNearLeft $hingeNearRight)';
 }

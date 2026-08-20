@@ -324,6 +324,32 @@ void main() {
       );
     });
 
+    test('a session on a board that FOLDS is read through its eight points',
+        () {
+      // The other thing the first real board turned out to be: a case whose
+      // two leaves tent, so no four corners describe it. Its sidecars carry
+      // eight points, and the harness has to notice and take the folding door.
+      final board = _scoreFixture(_Fixture.tentedFoldingCase);
+      expect(board.targetViolations(), isEmpty, reason: board.report());
+      expect(board.totalFor(CorpusMetric.calibration).rate, 1.0);
+      expect(board.totalFor(CorpusMetric.dicePair).rate, 1.0);
+      expect(board.skipped, isEmpty, reason: board.report());
+    });
+
+    test('and the same photographs fitted to one plane do not calibrate', () {
+      // The discriminator, and the same shape as the widths one above: same
+      // pictures, same session, the eight points replaced by the four they
+      // contain and the widths those eight would have derived. If the harness
+      // ignored the field this would score exactly as well as the test above.
+      final board = _scoreFixture(_Fixture.tentedFoldingCaseFlatFit);
+      expect(board.totalFor(CorpusMetric.calibration).rate, 0.0);
+      expect(
+        board.targetViolations(),
+        contains(contains(CorpusMetric.calibration.label)),
+        reason: board.report(),
+      );
+    });
+
     test('a shot whose photograph never arrived is skipped by name', () {
       final directory = _writeFixture(_Fixture.correct);
       addTearDown(() => directory.deleteSync(recursive: true));
@@ -454,6 +480,99 @@ Directory _writeFoldingCaseFixture({required bool measured}) {
   return directory;
 }
 
+/// A two-shot corpus on a folding case standing open and tented.
+///
+/// With [asFolding] the sidecars carry the eight points a person tapped and
+/// the harness takes the folding door. Without it they carry the four outer
+/// points those eight contain, plus the widths the eight would have derived —
+/// which is to say, everything a careful person could measure while still
+/// believing the board is flat. The pictures are identical, so the difference
+/// between the two scoreboards is entirely how the harness read the field.
+Directory _writeTentedFixture({required bool asFolding}) {
+  final directory = Directory.systemTemp.createTempSync('corpus_tented');
+  const conditions = CaptureConditions(
+    board: 'folding case, tented',
+    lighting: 'daylight',
+    angle: 'low, near-left corner',
+  );
+  const degradation = ShotDegradation(noise: 2, blurSigma: 0.5, seed: 11);
+  final roll = Dice(5, 2);
+  // NOT the classic palette, and the reason is measured rather than a
+  // preference: see the JPEG note on [kCorpusDegradation]. At a steep
+  // viewpoint, quality-95 JPEG puts that palette's far-half black stack on a
+  // knife edge — with nothing folding involved — and a fixture whose job is
+  // the harness's routing must not be sitting on somebody else's cliff. This
+  // palette is the hardest of the three for telling felt from triangles and
+  // the steadiest through the encoder; checked over three grain seeds.
+  const palette = BoardPalette.lowContrastWood;
+
+  final calibration = renderFoldingShot(
+    board: BoardState.initial(),
+    palette: palette,
+    degradation: degradation,
+  );
+  final eight = calibration.groundTruthCorners;
+
+  CorpusShot shotOf({
+    required String id,
+    required ShotKind kind,
+    required String? calibrateFrom,
+    Dice? dice,
+    bool carriesCorners = false,
+  }) =>
+      CorpusShot(
+        id: id,
+        session: 'tented',
+        kind: kind,
+        calibrateFrom: calibrateFrom,
+        corners: carriesCorners ? eight.outer : null,
+        orientation: BoardOrientation.whiteHomeNear,
+        board: BoardState.initial(),
+        events: null,
+        dice: dice,
+        capture: conditions,
+        synthetic: null,
+        expectRefusal: null,
+        refusalReason: null,
+        title: 'tented $id',
+        instructions: const <String>['fixture'],
+        proportions: asFolding ? null : eight.proportions,
+        foldingCorners: asFolding && carriesCorners ? eight : null,
+      );
+
+  void write(CorpusShot shot, Frame frame) {
+    File('${directory.path}/${shot.id}.jpg')
+        .writeAsBytesSync(encodeCorpusJpeg(imageOfFrame(frame)));
+    writeSidecar(directory, shot);
+  }
+
+  write(
+    shotOf(
+      id: 't01',
+      kind: ShotKind.calibration,
+      calibrateFrom: null,
+      carriesCorners: true,
+    ),
+    calibration.frame,
+  );
+  write(
+    shotOf(id: 't02', kind: ShotKind.dice, calibrateFrom: 't01', dice: roll),
+    renderFoldingShot(
+      board: BoardState.initial(),
+      palette: palette,
+      // Clear of every stack and off the hinge, one on each leaf — so the
+      // pair is read through two different planes in one pass.
+      dicePlacements: <DicePlacement>[
+        DicePlacement(face: roll.die1, center: const Pt(0.20, 0.5)),
+        DicePlacement(face: roll.die2, center: const Pt(0.75, 0.5)),
+      ],
+      degradation: degradation,
+    ).frame,
+  );
+
+  return directory;
+}
+
 /// Redraws [shot] from nothing but its own sidecar, and encodes it the way the
 /// corpus is committed.
 ///
@@ -501,6 +620,16 @@ enum _Fixture {
   /// Every region is then read a column out of true, and the session must not
   /// calibrate.
   foldingCaseUnmeasured,
+
+  /// A folding case standing open and TENTED — two leaf planes and a raised
+  /// hinge, which is what such a board actually looks like on a table. Its
+  /// sidecars carry the eight points a person tapped.
+  tentedFoldingCase,
+
+  /// The same photographs with the eight points replaced by the four outer
+  /// ones they contain, plus the widths those eight would have derived. One
+  /// plane through a board that has two, which is what the real frame did.
+  tentedFoldingCaseFlatFit,
 }
 
 /// The folding-case board's shape: no wells, and a hinge for a bar.
@@ -524,6 +653,12 @@ Directory _writeFixture(_Fixture fixture) {
   if (fixture == _Fixture.foldingCase ||
       fixture == _Fixture.foldingCaseUnmeasured) {
     return _writeFoldingCaseFixture(measured: fixture == _Fixture.foldingCase);
+  }
+  if (fixture == _Fixture.tentedFoldingCase ||
+      fixture == _Fixture.tentedFoldingCaseFlatFit) {
+    return _writeTentedFixture(
+      asFolding: fixture == _Fixture.tentedFoldingCase,
+    );
   }
   final directory = Directory.systemTemp.createTempSync('corpus_fixture');
   const conditions = CaptureConditions(

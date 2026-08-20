@@ -93,7 +93,8 @@ void _scoreSession(
 
   final calibrationFrame = _frameOf(board, directory, calibrationShot);
   if (calibrationFrame == null) return;
-  if (calibrationShot.corners == null) {
+  if (calibrationShot.corners == null &&
+      calibrationShot.foldingCorners == null) {
     for (final shot in shots) {
       board.skip(
         shot.id,
@@ -103,19 +104,7 @@ void _scoreSession(
     return;
   }
 
-  // One board per session, so one set of proportions per session, taken from
-  // the shot the session calibrates through. Absent means the usual shape;
-  // present means somebody measured a folding case off this very frame, and
-  // reading its shots through the standard widths would score every region a
-  // column out of true.
-  final proportions =
-      calibrationShot.proportions ?? BoardProportions.standard;
-  final result = BoardVision.calibrate(
-    frame: calibrationFrame,
-    corners: calibrationShot.corners!,
-    orientation: calibrationShot.orientation,
-    proportions: proportions,
-  );
+  final result = _calibrateShot(calibrationFrame, calibrationShot);
   board.record(
     CorpusMetric.calibration,
     ok: result.ok,
@@ -183,6 +172,38 @@ void _scoreSession(
   }
 }
 
+/// Calibrates [frame] the way [shot]'s own sidecar says its board is shaped.
+///
+/// Two doors, and which one a shot goes through is a property of the board it
+/// was photographed on:
+///
+/// * eight points in the sidecar means a **folding case** — two leaf planes
+///   and a raised hinge. Its widths are derived from those eight, so nothing
+///   else is consulted;
+/// * otherwise one plane through the four corners, at the widths the sidecar
+///   measured. Absent means the usual shape.
+///
+/// One board per session, so one of these per session, taken from the shot the
+/// session calibrates through. Reading a folding case as one plane — or a
+/// folding case's shots through the standard widths — scores every region out
+/// of true, which is the whole reason both fields exist.
+CalibrationResult _calibrateShot(Frame frame, CorpusShot shot) {
+  final folding = shot.foldingCorners;
+  if (folding != null) {
+    return BoardVision.calibrateFolding(
+      frame: frame,
+      corners: folding,
+      orientation: shot.orientation,
+    );
+  }
+  return BoardVision.calibrate(
+    frame: frame,
+    corners: shot.corners!,
+    orientation: shot.orientation,
+    proportions: shot.proportions ?? BoardProportions.standard,
+  );
+}
+
 /// A shot the corpus says perception must decline.
 void _scoreRefusal(
   Scoreboard board,
@@ -193,16 +214,11 @@ void _scoreRefusal(
   final slices = _slicesOf(shot)..['refusal'] = shot.expectRefusal!.name;
   switch (shot.expectRefusal!) {
     case ExpectedRefusal.calibration:
-      if (shot.corners == null) {
+      if (shot.corners == null && shot.foldingCorners == null) {
         board.skip(shot.id, 'a calibration-refusal shot needs its own corners');
         return;
       }
-      final attempt = BoardVision.calibrate(
-        frame: frame,
-        corners: shot.corners!,
-        orientation: shot.orientation,
-        proportions: shot.proportions ?? BoardProportions.standard,
-      );
+      final attempt = _calibrateShot(frame, shot);
       board.record(
         CorpusMetric.expectedRefusal,
         ok: !attempt.ok,

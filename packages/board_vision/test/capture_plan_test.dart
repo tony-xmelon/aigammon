@@ -243,6 +243,14 @@ void main() {
       final unmeasured = shots.firstWhere((s) => s.proportions == null);
       expect(jsonEncode(unmeasured.toJson()), isNot(contains('proportions')));
     });
+
+    test('a shot on a board that does not fold emits NO foldingCorners key',
+        () {
+      // The same lesson as the line above, applied the moment a second
+      // additive field arrived rather than after it broke something.
+      final flat = shots.firstWhere((s) => s.foldingCorners == null);
+      expect(jsonEncode(flat.toJson()), isNot(contains('foldingCorners')));
+    });
   });
 
   group('the board\'s own shape, which a session may have to say', () {
@@ -264,9 +272,38 @@ void main() {
     });
 
     test('a sidecar written before the field existed still loads', () {
-      final json = shots.first.toJson()..remove('proportions');
-      expect(CorpusShot.fromJson(json).proportions, isNull,
+      final json = shots.first.toJson()
+        ..remove('proportions')
+        ..remove('foldingCorners');
+      final decoded = CorpusShot.fromJson(json);
+      expect(decoded.proportions, isNull,
           reason: 'absent means the board is the usual shape');
+      expect(decoded.foldingCorners, isNull,
+          reason: 'and absent here means it does not fold');
+    });
+
+    test('a session on a board that FOLDS carries its eight points', () {
+      // The other thing a real board turned out to be. A folding case is not
+      // one plane — its two leaves tent — so four corners cannot describe it
+      // and the sidecar carries eight points instead. Additive exactly like
+      // the widths above, and with no widths of its own: those are derived
+      // from the eight.
+      const eight = FoldingCorners(
+        topLeft: Pt(120.5, 88),
+        topRight: Pt(1150, 80.25),
+        bottomRight: Pt(1210, 860),
+        bottomLeft: Pt(60, 880.75),
+        hingeFarLeft: Pt(600, 84),
+        hingeFarRight: Pt(645.5, 83.5),
+        hingeNearLeft: Pt(615, 870),
+        hingeNearRight: Pt(672, 869),
+      );
+      final shot = shots.first.copyWith(foldingCorners: eight);
+      final decoded = CorpusShot.fromJson(
+        jsonDecode(jsonEncode(shot.toJson())) as Map<String, dynamic>,
+      );
+      expect(decoded.foldingCorners, eight);
+      expect(jsonEncode(decoded.toJson()), jsonEncode(shot.toJson()));
     });
 
     test('a session on a folding-case board carries its measurements', () {

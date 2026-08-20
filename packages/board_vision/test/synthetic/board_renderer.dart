@@ -137,6 +137,36 @@ const List<BoardQuad> kCorpusQuads = <BoardQuad>[
 /// scores is accuracy and not a coin toss. The committed corpus adds one more
 /// degradation on top — JPEG at quality 95 — for which see the corpus
 /// generator.
+///
+/// ## The JPEG is closer to a cliff than the blur is, and it was not known
+///
+/// Found while building the folding bed, and recorded here because it is about
+/// the corpus encoder rather than about folding boards. At the corpus's own
+/// steep viewpoints, quality-95 JPEG puts the **classic palette's far-half
+/// black stack** on a knife edge — the 19-point, five near-black checkers
+/// (20/18/15) on an oxblood triangle, in the half the perspective renders
+/// smallest. Calibrated with `renderShot` and `BoardVision.calibrate`, nothing
+/// folding involved:
+///
+/// | quad | degradation | raw | JPEG q95 |
+/// |---|---|---|---|
+/// | kCorpusSteepQuad | none | passes | ragged |
+/// | kCorpusSteepQuad | kCorpusDegradation | passes | ragged |
+/// | kCorpusLowQuad | none | passes | ragged |
+/// | kCorpusLowQuad | kCorpusDegradation | passes | ragged |
+///
+/// **Ragged** is the word for it. Every raw frame calibrates; whether the same
+/// frame calibrates after a JPEG round trip flips on changes with no business
+/// deciding it — a bar width of 0.07 against 0.08, a tray of 0.02 against
+/// 0.05. It is the same shape as the blur raggedness above, at a knob nobody
+/// was watching, and the committed corpus does not catch it because its six
+/// sessions happen to land on the passing side.
+///
+/// Not fixed here — it is a sampler-and-colour question, not a geometry one,
+/// and the honest place to answer it is the real corpus with real photographs
+/// of dark checkers. What it changes today is one thing: a fixture that has to
+/// go through the corpus encoder at a steep viewpoint should not be shot on
+/// the classic palette, or it is measuring this rather than what it meant to.
 const ShotDegradation kCorpusDegradation = ShotDegradation(
   noise: 2,
   blurSigma: 0.5,

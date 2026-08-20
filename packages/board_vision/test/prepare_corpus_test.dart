@@ -199,6 +199,71 @@ void main() {
           ],
         }));
       expect(() => readCorners(file), throwsFormatException);
+      expect(() => readFoldingCorners(file), throwsFormatException);
+    });
+
+    test('eight points in corners.json are a folding board, four are not', () {
+      // One file, one job for the person holding the phone: point at the
+      // board. A board that folds needs four more taps — the seams where the
+      // hinge meets the far and near edges — so its entry is eight points
+      // instead of four, and each reader takes only the entries that are its
+      // own.
+      final file = File('${source.path}/corners.json')
+        ..writeAsStringSync(jsonEncode(<String, dynamic>{
+          '001': <List<double>>[
+            <double>[10, 20],
+            <double>[900, 15],
+            <double>[950, 700],
+            <double>[5, 720],
+            <double>[440, 17],
+            <double>[480, 17],
+            <double>[450, 710],
+            <double>[500, 709],
+          ],
+          '011': <List<double>>[
+            <double>[10, 20],
+            <double>[900, 15],
+            <double>[950, 700],
+            <double>[5, 720],
+          ],
+        }));
+
+      final folding = readFoldingCorners(file);
+      expect(folding.keys, <String>['001'],
+          reason: 'a four-point entry is an ordinary board, not a folding one');
+      expect(folding['001']!.topLeft, const Pt(10, 20));
+      expect(folding['001']!.hingeFarLeft, const Pt(440, 17));
+      expect(folding['001']!.hingeNearRight, const Pt(500, 709));
+
+      expect(readCorners(file).keys, <String>['011'],
+          reason: 'and the eight-point entry belongs to the other reader, '
+              'which is what stops one board being prepared as two');
+    });
+
+    test('eight tapped points land in the sidecar, outer four included', () {
+      final tapped = foldingCornersOf(
+        kFoldingTent,
+        barWidth: kFoldingBarWidth,
+        aspect: kTopDownHeight / kTopDownWidth,
+        principal: const Pt(kFrameWidth / 2, kFrameHeight / 2),
+      );
+      final report = prepareCorpus(
+        source: source,
+        destination: destination,
+        foldingCorners: <String, FoldingCorners>{'001': tapped},
+      );
+      expect(report.needCorners, isEmpty,
+          reason: 'eight points are more than four, not fewer');
+
+      final sidecar = CorpusShot.fromJson(
+        jsonDecode(File('${destination.path}/001.expected.json')
+            .readAsStringSync()) as Map<String, dynamic>,
+      );
+      expect(sidecar.foldingCorners, tapped);
+      expect(sidecar.corners, tapped.outer,
+          reason: 'the outer four are written too, so anything that only '
+              'understands a quad still gets the board\'s outline rather than '
+              'a null');
     });
 
     test('measured board widths land in the sidecar, by session', () {
