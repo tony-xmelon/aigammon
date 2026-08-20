@@ -1,9 +1,12 @@
+import 'package:backgammon_core/backgammon_core.dart';
+
 import 'board_geometry.dart';
 import 'calibration.dart';
 import 'dice_reader.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
 import 'occupancy.dart';
+import 'play_matcher.dart';
 import 'roi_atlas.dart';
 
 /// The perception core, as the app sees it.
@@ -128,4 +131,38 @@ class BoardVision {
   /// a wrong roll goes into the authoritative game state and stays there.
   DiceReading? readDice(Frame frame) =>
       DiceReader(calibration, frame).read();
+
+  /// Which of [legalPlays] happened, from the change between two settled
+  /// frames — the query the whole mode turns on.
+  ///
+  /// [before] is the position the game says the board was in and [beforeFrame]
+  /// is the settled frame of it; [frame] is the settled frame after [mover]
+  /// played. The answer is every candidate, ranked by fit — read
+  /// [PlayMatch.plausible] and [PlayMatch.isAmbiguous] before reading
+  /// [PlayMatch.play], and see [PlayMatcher.match] for the whole contract
+  /// (ties, dances, and the first-class "none of these").
+  ///
+  /// ## Why there are two frames here and one in the plan
+  ///
+  /// The plan pinned this as `matchLegalPlay(Frame, BoardState, Player,
+  /// List<Move>)` — one frame, compared against what each candidate would
+  /// produce. Phase 1 measured why that cannot be the instrument: per-region
+  /// counts on a real board are biased, and the bias is a property of the seat
+  /// the phone is in rather than of the frame, so it is the same in every shot
+  /// of one session (Task 6: colour 0.954, colour-and-count 0.784, the misses
+  /// all in the direction the perspective predicts). An absolute comparison
+  /// pays that bias on every region; a difference between two frames of one
+  /// session subtracts it from itself. So the settled frame from before the
+  /// play is a required argument, and the positional signature is otherwise
+  /// exactly the plan's. The session already holds that frame — it is the one
+  /// the previous query ran on.
+  List<PlayMatch> matchLegalPlay(
+    Frame frame,
+    BoardState before,
+    Player mover,
+    List<Move> legalPlays, {
+    required Frame beforeFrame,
+  }) =>
+      PlayMatcher(calibration, beforeFrame: beforeFrame, afterFrame: frame)
+          .match(before, mover, legalPlays);
 }
