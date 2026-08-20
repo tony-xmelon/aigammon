@@ -164,12 +164,12 @@ void main() {
     /// stay off the midline, which is a different measurement (the pitch)
     /// getting harder rather than this one.
     const varied = <int, StackPlacement>{
-      0: StackPlacement(edgeInset: 0.12),
+      0: StackPlacement(edgeInset: 0.08),
       5: StackPlacement(edgeInset: 0.04),
       7: StackPlacement(edgeInset: 0.09),
       11: StackPlacement(edgeInset: 0.02),
       12: StackPlacement(edgeInset: 0.06),
-      16: StackPlacement(edgeInset: 0.11),
+      16: StackPlacement(edgeInset: 0.075),
       18: StackPlacement(edgeInset: 0.03),
       23: StackPlacement(edgeInset: 0.08),
     };
@@ -227,7 +227,7 @@ void main() {
         pointPlacements: <int, StackPlacement>{
           ...varied,
           12: const StackPlacement(edgeInset: 0.06, centerOffset: 0.15),
-          0: const StackPlacement(edgeInset: 0.12, centerOffset: -0.15),
+          0: const StackPlacement(edgeInset: 0.08, centerOffset: -0.15),
         },
       );
       final colors = calibration.colorsIn(shot.frame);

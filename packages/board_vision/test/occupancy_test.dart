@@ -399,12 +399,12 @@ void main() {
       // yes — and then occupancy counted one checker on all eight stacks,
       // which is the worst kind of failure this pipeline can have.
       final insets = <int, StackPlacement>{
-        0: const StackPlacement(edgeInset: 0.12),
+        0: const StackPlacement(edgeInset: 0.08),
         5: const StackPlacement(edgeInset: 0.04),
         7: const StackPlacement(edgeInset: 0.09),
         11: const StackPlacement(edgeInset: 0.02),
         12: const StackPlacement(edgeInset: 0.06),
-        16: const StackPlacement(edgeInset: 0.11),
+        16: const StackPlacement(edgeInset: 0.075),
         18: const StackPlacement(edgeInset: 0.03),
         23: const StackPlacement(edgeInset: 0.08),
       };

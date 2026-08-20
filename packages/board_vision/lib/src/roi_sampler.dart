@@ -120,11 +120,10 @@ class RoiSampler extends FrameSampler {
   ///
   /// [checkerSearchNear] leaves the warp's sliver of room at the board's own
   /// edge. [checkerSearchFar] is how far a stack may sit back from that edge
-  /// and still be read as sitting on the point at all — an eighth of the
-  /// board's height past it and a person would say the checkers had been left
-  /// halfway up the column, which is not the starting position.
+  /// and still be read as sitting on the point at all — see
+  /// [checkerHoldDepth], which is what sets the ceiling on it.
   static const double checkerSearchNear = 0.02;
-  static const double checkerSearchFar = 0.15;
+  static const double checkerSearchFar = 0.10;
   static const double checkerSearchStep = 0.01;
 
   /// How far either side of the column's centre the walk also looks, as a
@@ -143,28 +142,60 @@ class RoiSampler extends FrameSampler {
   /// This is the number that separates the two things a column can show near
   /// its edge. **Board holds briefly**: the wooden rim inside a tapped corner,
   /// or the felt a hand left in front of a stack, runs out where the checkers
-  /// start. **A checker holds for the whole stack**: the starting position
-  /// never stands fewer than two, and two checkers reach about a fifth of the
-  /// board.
+  /// start. **A checker holds for the stack behind it**: the starting position
+  /// never stands fewer than two.
   ///
-  /// So it wants to sit above the deepest gap a hand plausibly leaves and
-  /// below two checkers' reach. Measured: the first real board's tapped near
-  /// edge put about 0.04 of wooden rim inside the field; the synthetic bed's
-  /// checkers reach 0.087 each on a standard board and 0.107 on a folding one.
-  /// A gap deeper than this reads as bare board — and a stack left that far up
-  /// its column is not a starting position anyway.
-  static const double checkerHoldDepth = 0.12;
+  /// So it wants to sit above the deepest gap a stack may sit behind and below
+  /// the shallowest stack of two. The ceiling is the tighter of the two and it
+  /// is a measurement off the real board, not arithmetic: a two-stack on the
+  /// FAR half, seen at the shallow angle a phone propped on the table gives,
+  /// projects into **0.09** of the board along its column — the checkers stand
+  /// above the felt, so the far one is largely behind the near one from where
+  /// the camera is, and the pair covers barely more depth than one. The bed's
+  /// flat-drawn checkers reach 0.087 each on a standard board and 0.107 on a
+  /// folding one, so the bed is the generous case and the photograph sets the
+  /// number.
+  ///
+  /// [checkerSearchFar] follows from it: a walk starting at
+  /// [checkerSearchNear] rejects a gap of at most `hold + near`, which is
+  /// where a stack may still sit and be found. Deeper in than that and a
+  /// column reads as bare board — and it is not a limit worth fighting, since
+  /// nothing local can tell a stack left a tenth of the board up its column
+  /// from a piece of board a tenth of the board deep.
+  static const double checkerHoldDepth = 0.07;
 
-  /// How different two medians may be and still count as the same surface, in
-  /// the log-ratio units [ColorModel.feature] measures everything in — so a
-  /// dimmer end of the board does not turn one surface into two.
+  /// How far a block has to hold before a walk that already knows this board's
+  /// colours will call it a checker.
   ///
-  /// Measured both ways: down one surface, medians move by under 0.1 over a
-  /// hold's depth (0.065 on the real board's felt, less on the bed's flat
-  /// paint); across the tightest surface pair any of this package's boards
-  /// has — the pale points and white checkers of the low-contrast wood
-  /// palette — they move 0.31. This sits between them.
-  static const double checkerHoldTolerance = 0.2;
+  /// Half of [checkerHoldDepth], because that walk is looking for as little as
+  /// a single checker rather than a stack of two. What it has to refuse is a
+  /// LINE rather than a disc: measured on the real frame, the shadow in the
+  /// seam between the felt and the far rim is a coherent near-black strip
+  /// about a hundredth of the board deep, and on a board with black checkers
+  /// it classifies as one — six empty points and the bar came back holding
+  /// phantom Black before this. The shallowest real checker block on the same
+  /// frame is 0.09.
+  static const double checkerMinBody = 0.035;
+
+  /// How different two medians may be and still count as the same surface —
+  /// **in colour, with brightness taken out**: the log-ratio feature
+  /// [ColorModel.feature] measures in, less its own mean across the three
+  /// channels.
+  ///
+  /// Brightness has to come out or the test measures the light rather than the
+  /// board. Measured on the real frame: down the white two-stack on its far
+  /// half, the medians run from (166,157,136) to (198,193,164) — a fifth of a
+  /// log unit brighter at the top of the stack than at its foot, which is a
+  /// window on one side of a table, not a change of surface. Judged whole,
+  /// that gradient ends a checker's block halfway up itself; judged on colour
+  /// alone it is 0.02.
+  ///
+  /// What has to stay outside: on the same frame, checker against felt is 0.24
+  /// and checker against the rim's wood 0.25, and the tightest pair any of the
+  /// bed's palettes has — the pale points and white checkers of the
+  /// low-contrast wood board — is 0.11. This sits under all of them and well
+  /// over the drift.
+  static const double checkerHoldTolerance = 0.08;
 
   /// How much a patch's own samples may scatter and still count as one
   /// surface: the mean per-channel distance from its median, in sensor levels.
@@ -292,8 +323,10 @@ class RoiSampler extends FrameSampler {
     ];
 
     // With the colours in hand, a checker of either colour is what the walk
-    // is looking for, and it may be standing alone.
+    // is looking for, and it may be standing alone — but it is still a disc
+    // with a body, not a line: see [checkerMinBody].
     if (colors != null) {
+      final bodySteps = (checkerMinBody / checkerSearchStep).ceil();
       final seen = _firstBlock(
         profile,
         offsets,
@@ -301,7 +334,8 @@ class RoiSampler extends FrameSampler {
         holdSteps,
         (o, s) =>
             colors.classifyIn(RoiId.point(index), profile[o][s].median) !=
-            CheckerColor.none,
+                CheckerColor.none &&
+            _holdOf(profile[o], s, bodySteps) >= bodySteps,
       );
       if (seen != null) return seen;
     }
@@ -420,7 +454,7 @@ class RoiSampler extends FrameSampler {
     for (var k = 1; k <= limit && at + k < profile.length; k++) {
       final block = profile[at + k];
       if (block.scan.samples.isEmpty) break;
-      if (_logDistance(block.median, reference) > checkerHoldTolerance) break;
+      if (_colourGap(block.median, reference) > checkerHoldTolerance) break;
       if (block.spread < best.spread) best = block;
     }
     return best;
@@ -435,19 +469,37 @@ class RoiSampler extends FrameSampler {
       if (next >= profile.length) return k - 1;
       final block = profile[next];
       if (block.scan.samples.isEmpty) return k - 1;
-      if (_logDistance(block.median, reference) > checkerHoldTolerance) {
+      if (_colourGap(block.median, reference) > checkerHoldTolerance) {
         return k - 1;
       }
     }
     return limit;
   }
 
-  /// How far apart two colours are, in the log-ratio units the colour model
-  /// judges every other sample in. Relative, so the answer is the same on the
-  /// dim end of a board as on the bright one.
-  static double _logDistance(Rgb a, Rgb b) {
-    final f = ColorModel.feature(a, b);
-    return math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+  /// How far apart two colours are once brightness is taken out of them.
+  ///
+  /// The log-ratio feature the colour model judges every other sample in, less
+  /// its mean across the three channels: what is left is the difference in
+  /// colour, and lighting one of the two samples harder moves every channel by
+  /// the same amount and so moves this not at all. That is what lets a block
+  /// hold down a stack that is lit brighter at its top than at its foot while
+  /// still ending where the surface changes.
+  /// A pedestal under every channel before the ratio is taken.
+  ///
+  /// A near-black checker — the classic palette paints one at 20/18/15, and
+  /// real ones photograph darker still — differs from itself by a level or two
+  /// of grain, and a bare ratio turns two levels on fifteen into an eighth of
+  /// a log unit of "different colour". Measured: without this, a black stack's
+  /// own block stops holding partway down itself.
+  static const double _darkPedestal = 8.0;
+
+  static double _colourGap(Rgb a, Rgb b) {
+    final r = math.log((a.$1 + _darkPedestal) / (b.$1 + _darkPedestal));
+    final g = math.log((a.$2 + _darkPedestal) / (b.$2 + _darkPedestal));
+    final c = math.log((a.$3 + _darkPedestal) / (b.$3 + _darkPedestal));
+    final mean = (r + g + c) / 3;
+    final dr = r - mean, dg = g - mean, dc = c - mean;
+    return math.sqrt(dr * dr + dg * dg + dc * dc);
   }
 
   /// Rows along a stack axis. Enough that one checker spans about twenty of
