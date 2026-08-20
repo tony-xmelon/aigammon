@@ -770,22 +770,62 @@ class RoiSampler extends FrameSampler {
   /// headroom from starting a run of its own: it sits three or four times
   /// further in than this, so it goes on measuring zero, which is the
   /// signature occupancy uses to tell it from a checker.
+  ///
+  /// ## The longest run that may start, not the first
+  ///
+  /// **One stray row used to be able to take the whole measurement.** This
+  /// took the first covered row within the lead-in and stopped at the first
+  /// wide gap after it, which is right when the first thing it meets is the
+  /// stack and catastrophic when it is not. Measured on the folding bed with
+  /// the stacks left a hand's width in, the 19-point's profile came back
+  ///
+  ///     #.........#############################################…
+  ///
+  /// — a single covered row hard against the board's edge, a nine-row gap,
+  /// and then all five checkers. The gap is wider than [maxProfileGap], so the
+  /// run ended after that one row and a five-stack measured 0.004: one row out
+  /// of a hundred and twenty. Its twins measured 0.45.
+  ///
+  /// That single row is the board's own edge — a rim or the shadow in the seam
+  /// catching the dark checker colour across enough of one row to clear
+  /// [minRowCoverage]. It is not a stack, and the profile says so plainly: it
+  /// is one row long and the stack behind it is a hundred and ten.
+  ///
+  /// So the walk now takes the LONGEST run that starts within the lead-in
+  /// rather than the first one. Nothing about the die is weakened — it is
+  /// outside the lead-in and still cannot start a run at all — and inside the
+  /// lead-in there is only ever the stack and, sometimes, a row of rim.
   static double _runReach(List<double> coverage, double rowDepth) {
     final maxLeadIn =
         rowDepth <= 0 ? 0 : (checkerReachLeadIn / rowDepth).floor();
+    var longest = 0;
     var first = -1, last = -1;
+
+    void bank() {
+      if (first >= 0 && first <= maxLeadIn && last - first + 1 > longest) {
+        longest = last - first + 1;
+      }
+    }
+
     for (var r = 0; r < coverage.length; r++) {
       if (coverage[r] < minRowCoverage) continue;
-      if (first < 0) {
-        if (r > maxLeadIn) break;
-        first = r;
+      if (first >= 0 && r - last <= maxProfileGap + 1) {
         last = r;
         continue;
       }
-      if (r - last > maxProfileGap + 1) break;
+      // Whatever was being measured has ended; a new run starts at r.
+      bank();
+      // Past the lead-in nothing may START a run, so there is nothing left to
+      // find — an in-progress run would have been extended above.
+      if (r > maxLeadIn) {
+        first = -1;
+        break;
+      }
+      first = r;
       last = r;
     }
-    return last < 0 ? 0.0 : (last - first + 1) * rowDepth;
+    bank();
+    return longest * rowDepth;
   }
 }
 
@@ -1047,16 +1087,58 @@ class StackMetrics {
   static const double minPitch = 0.02;
   static const double maxPitch = 0.15;
 
+  /// How little of what its twins reached a stack may reach before it is taken
+  /// as a measurement that FAILED rather than as evidence about this board.
+  ///
+  /// Half, and the halving is the whole argument: stacks of the same labelled
+  /// height stand on the same board in the same frame, so they reach the same
+  /// distance. Two that differ by a factor of two are not two measurements of
+  /// one board, they are one measurement and one failure — a run that stopped
+  /// at a gap partway up a stack rather than at its top.
+  ///
+  /// Note what this does NOT need: any idea of what a pitch should be. A floor
+  /// on the ratio would be a second [minPitch] in disguise and would refuse a
+  /// board whose checkers are genuinely close-stacked. This asks the board
+  /// about itself and only ever throws out the low side, because that is the
+  /// only side the failure has — a run can stop early, it cannot run long.
+  static const double minStackAgreement = 0.5;
+
   /// Least squares through `(height, reach)` pairs.
   ///
   /// Falls back to the median of `reach / height` when the heights on offer do
   /// not span enough to fit a line — one ratio is a worse instrument than a
   /// regression, but it is a great deal better than refusing to count.
+  ///
+  /// ## Why the pairs are filtered first
+  ///
+  /// **A least squares fit believes everything it is given, and one of these
+  /// eight is sometimes a lie.** Measured on the first real folding frame: of
+  /// the eight stacks the starting position labels, the 13-point's five-stack
+  /// came back reaching 0.0667 and the 20-point's 0.1458, where their two
+  /// twins reached 0.3333 and 0.3667. Those are not short stacks — they are
+  /// five men each, and the finder settled on all eight correctly. They are
+  /// runs that stopped at a gap. Regressed through anyway, they pulled the
+  /// pitch to 0.0429 against a true 0.0874, and since
+  /// `Calibrator.minPitch` is 0.02 nothing objected: separation 7.1, `confirm`
+  /// agreeing, and ten of the twenty-four points then counted wrong on the
+  /// frame the whole session is calibrated from. The tall stacks over-counted
+  /// (five read as eight) and the collapsed ones under-counted (five read as
+  /// one).
+  ///
+  /// So the pairs are checked against each other before any line is fitted,
+  /// by [minStackAgreement], and what survives is what the pitch is measured
+  /// from. On that frame six of the eight survive, at three distinct heights,
+  /// and the pitch comes back 0.0874.
+  ///
+  /// [wellConditioned] is then computed over the SURVIVORS, so a board that
+  /// lost too many says so — and `Calibrator` turns that into a refusal rather
+  /// than shipping a pitch that halves every count.
   factory StackMetrics.fit(List<(int height, double reach)> samples) {
-    final usable = samples.where((s) => s.$1 > 0 && s.$2 > 0).toList();
-    if (usable.isEmpty) {
+    final measured = samples.where((s) => s.$1 > 0 && s.$2 > 0).toList();
+    if (measured.isEmpty) {
       return const StackMetrics(pitch: 0, origin: 0, wellConditioned: false);
     }
+    final usable = _agreeingStacks(measured);
     final heights = usable.map((s) => s.$1).toSet();
     if (heights.length >= 2) {
       var meanK = 0.0, meanR = 0.0;
@@ -1089,9 +1171,58 @@ class StackMetrics {
     );
   }
 
+  /// The pairs that agree with their own twins, by [minStackAgreement].
+  ///
+  /// Each labelled height is judged against the median reach of the stacks
+  /// that share it. A height with only one stack has nothing to disagree with
+  /// and is always kept: this rejects measurements the board itself
+  /// contradicts, and invents no evidence where there is none.
+  static List<(int, double)> _agreeingStacks(List<(int, double)> samples) {
+    final byHeight = <int, List<double>>{};
+    for (final sample in samples) {
+      (byHeight[sample.$1] ??= <double>[]).add(sample.$2);
+    }
+    final floors = <int, double>{};
+    for (final entry in byHeight.entries) {
+      final reaches = List<double>.of(entry.value)..sort();
+      floors[entry.key] =
+          reaches[reaches.length ~/ 2] * minStackAgreement;
+    }
+    final kept = samples.where((s) => s.$2 >= floors[s.$1]!).toList();
+    // A filter that threw everything out would be worse than none: fall back
+    // to the raw pairs and let the conditioning check downstream say so.
+    return kept.isEmpty ? samples : kept;
+  }
+
   /// How many checkers a run of [reach] is, before any rounding.
   double heightOf(double reach) =>
       pitch <= 0 ? 0.0 : (reach - origin) / pitch;
+
+  /// What share of a whole checker a run has to be before it is one at all.
+  ///
+  /// Half, which is the same boundary [heightOf]'s rounding uses — but asked
+  /// of the RUN, which was measured, rather than of the line, which was
+  /// extrapolated. That is the whole point of it existing: see [holdsAnything].
+  static const double minRunFraction = 0.5;
+
+  /// Whether a run of [reach] is long enough to be a checker at all.
+  ///
+  /// **A line fitted to stacks of two, three and five does not have to behave
+  /// at zero, and on real frames it does not.** Measured on the first real
+  /// folding frame: the eight labelled stacks fit a pitch of 0.0874 with an
+  /// origin of **-0.0905**, which is an honest least-squares line through
+  /// honest measurements and also says that a run of nothing at all is 1.04
+  /// checkers. So every empty region whose mass cleared the presence threshold
+  /// came back holding a man — four of them on that frame, at runs of 0.008 to
+  /// 0.037 where a checker is 0.0874 deep.
+  ///
+  /// Rounding cannot catch that, because rounding asks the poisoned line. This
+  /// asks the measurement instead: a run under half a checker is not a
+  /// checker, whatever the line extrapolates. A stack of one measures most of
+  /// a pitch — the coverage threshold shaves each end of a round disc, which
+  /// is what [origin] is for — so this sits well under the smallest real
+  /// reading and well over the rim and shadow that produce these.
+  bool holdsAnything(double reach) => reach >= pitch * minRunFraction;
 
   @override
   String toString() => 'StackMetrics(pitch ${pitch.toStringAsFixed(4)}, '

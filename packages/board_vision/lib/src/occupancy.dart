@@ -229,7 +229,39 @@ class OccupancyReader {
 
     final reach = measured.reachOf(color);
     final height = calibration.stacks.heightOf(reach);
-    final count = math.max(1, height.round());
+    final count = height.round();
+    // **A measurement that says "less than half a checker" is not a checker,
+    // and this used to say it was.** The count was floored at one, so a region
+    // whose mass cleared [minPresenceMass] came back holding a man however
+    // little was standing in it — which is a reading the frame never made.
+    //
+    // What the floor was insuring against is real: a lone checker measures
+    // barely over half a pitch on some boards, and losing it would be worse
+    // than inventing one, because a checker that vanishes contradicts nothing
+    // and is never asked about. But that case ROUNDS TO ONE on its own. The
+    // floor only ever changed answers the measurement had already rounded to
+    // zero, and those were the phantoms: a die lying in a point's headroom
+    // (see occupancy_test), and on the first real folding frame three empty
+    // points at measured heights of -0.18, 0.21 and 0.21.
+    //
+    // Mass says whether to look; the profile says what is there. Where they
+    // disagree the profile is the one that measured something.
+    //
+    // [StackMetrics.holdsAnything] is the same judgement made against the
+    // measured run rather than against the fitted line, and it is there
+    // because on a real frame the line does not have to behave at zero — see
+    // its own doc for the -0.0905 origin that made four empty points on the
+    // first real folding frame read as holding a man each.
+    if (count <= 0 || !calibration.stacks.holdsAnything(reach)) {
+      return RegionOccupancy(
+        region: region,
+        color: CheckerColor.none,
+        count: 0,
+        confidence: _confidenceOfEmpty(background, measured),
+        reach: reach,
+        mass: measured.massOf(color),
+      );
+    }
     final fractional = (height - height.roundToDouble()).abs();
 
     var confidence = 1.0;

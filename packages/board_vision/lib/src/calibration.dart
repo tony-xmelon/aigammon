@@ -340,6 +340,11 @@ enum CalibrationProblem {
   /// The board's colours cannot be told apart in this light — the two sets of
   /// checkers from each other, or a set of checkers from the board under it.
   checkerColoursNotSeparable,
+
+  /// The board reads, but too few of the eight stacks the starting position
+  /// labels measured for the checker pitch to be fitted — so how many men are
+  /// on a point could not be answered for any point, all session.
+  stackPitchNotMeasurable,
 }
 
 /// The outcome of a calibration attempt.
@@ -983,6 +988,38 @@ class Calibrator {
         'start of a game, then calibrate again. If the board is already set '
         'up right, $misfitHint.',
         readBack.discrepancies.map((d) => d.region).toList(),
+      );
+    }
+
+    // Said last, because it is the least likely and the least actionable: the
+    // board is set up right and its colours read back, but not enough of its
+    // eight labelled stacks measured for the pitch to be a regression.
+    //
+    // **Handing this over would be the worst thing this class can do.** The
+    // pitch divides every count for the whole session, so a bad one is not one
+    // wrong region — it is every region wrong at once, on a board that
+    // calibrated and confirmed and gave the user no reason to doubt it. That
+    // is exactly the failure `StackMetrics.fit` was measured against, and the
+    // conditioning flag is what it hands out when its own filtering could not
+    // save the fit.
+    //
+    // **Nothing on the bed reaches this, and that is the honest state of it.**
+    // Swept over 432 frames — three palettes, three light levels, four
+    // viewpoints from level to steeply off-axis, blur to five sigma, and
+    // stacks left up to a sixteenth of the board in — and the pitch was never
+    // the first thing to give out: every frame degraded enough to lose three
+    // of its eight stacks had already lost its colours, and one of the gates
+    // above caught it. So this is defence in depth rather than a measured
+    // limit, and what pins its trigger is the unit test over
+    // `StackMetrics.fit`'s conditioning rather than any frame. If a real
+    // photograph ever lands here, it will be the first.
+    if (!stacks.wellConditioned) {
+      return CalibrationResult.failure(
+        CalibrationProblem.stackPitchNotMeasurable,
+        'I can read this board, but I cannot make out how far one checker '
+        'sits behind another from here — so I would get the numbers wrong. '
+        'A little more light on the near points, or a slightly higher camera '
+        'angle, usually fixes it.',
       );
     }
 

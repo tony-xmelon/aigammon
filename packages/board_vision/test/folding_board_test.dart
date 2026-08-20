@@ -93,6 +93,52 @@ void main() {
       }
     });
 
+    for (final inset in <double>[0.03, 0.04, 0.07]) {
+      test('stacks left $inset in are counted, or the frame is refused', () {
+        // **The worst reading this pipeline can produce, and it was here.**
+        // On this board with the stacks left a hand's width in, one of the
+        // eight labelled stacks measured a run of a SINGLE row out of 120 —
+        // reach 0.004 where its twins reach 0.45. Least squares regressed
+        // through it anyway, the pitch collapsed from 0.087 to 0.039,
+        // `StackMetrics.minPitch` is 0.02 so nothing fired, and every count on
+        // the board was then divided by less than half the truth: the
+        // five-stacks read 8, the short ones read 1. Calibration said yes and
+        // `confirm` agreed, so nothing anywhere told the user a word.
+        //
+        // The same defect, on the first real folding photograph, put ten of
+        // twenty-four points wrong on the frame a whole session calibrates
+        // from — see `occupancy_test`'s 'a stack that failed to measure is not
+        // data', which carries that frame's eight pairs.
+        //
+        // Both outcomes are acceptable and the geometry decides which: either
+        // the failed stack is excluded and the surviving ones give a pitch
+        // that counts the board correctly, or too few survive and calibration
+        // refuses. What is not acceptable is a confident wrong number.
+        final shot = renderFoldingShot(
+          board: BoardState.initial(),
+          stackPlacement: StackPlacement(edgeInset: inset),
+        );
+        final result = BoardVision.calibrateFolding(
+          frame: shot.frame,
+          corners: shot.groundTruthCorners,
+          orientation: BoardOrientation.whiteHomeNear,
+        );
+        if (!result.ok) {
+          expect(result.message, isNotEmpty);
+          return;
+        }
+        final vision = BoardVision(result.calibration!);
+        final reader = vision.occupancyIn(shot.frame);
+        final start = BoardState.initial();
+        for (var i = 0; i < 24; i++) {
+          expect(reader.read(RoiId.point(i)).count, start.points[i].abs(),
+              reason: 'point ${i + 1} holds ${start.points[i].abs()} with '
+                  'every stack $inset in from its edge, and calibration was '
+                  'happy: ${result.calibration!.stacks}');
+        }
+      });
+    }
+
     test('a checker on the hinge strip reads as a checker on the bar', () {
       // Where a hit checker physically goes on this board — there is no well,
       // so it sits on the raised spine. That strip has its own plane, and this

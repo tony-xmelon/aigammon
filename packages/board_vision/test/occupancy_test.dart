@@ -571,31 +571,174 @@ void main() {
       final hi = pitches.reduce((a, b) => a > b ? a : b);
       expect(hi - lo, lessThan(0.01), reason: 'pitches: $pitches');
     });
+
+    // The eight stacks the starting position labels, as the first real folding
+    // frame measured them. Every number here came off that photograph and is
+    // written down for the same reason every other measurement in this package
+    // is: it is the case that broke, and arithmetic cannot be argued with.
+    //
+    // Two of the eight failed to measure. The 13-point's five-stack came back
+    // 0.0667 where its three twins reach 0.33 to 0.37, and the 20-point's came
+    // back 0.1458 — a run that stopped at a gap partway up the stack rather
+    // than a stack that is short. Least squares cannot know that, so it
+    // regressed through them anyway and returned a pitch of 0.0429 against a
+    // true 0.087. Nothing refused: separation was 7.1, `confirm` agreed, and
+    // then every count on the board was divided by half the truth — the tall
+    // stacks over-counting (5 read as 8), the collapsed ones under-counting
+    // (5 read as 1), ten of twenty-four points wrong on the frame the whole
+    // session is calibrated from.
+    const realFrameStacks = <(int, double)>[
+      (2, 0.0917), // the 1-point
+      (5, 0.3333), // the 6-point
+      (3, 0.2000), // the 8-point
+      (5, 0.0667), // the 13-point — collapsed
+      (5, 0.3667), // the 14-point
+      (3, 0.1208), // the 18-point
+      (5, 0.1458), // the 20-point — collapsed
+      (2, 0.0917), // the 24-point
+    ];
+
+    group('a stack that failed to measure is not data', () {
+      test('the pitch survives two of eight collapsing', () {
+        // The whole fix in one assertion. Stacks of the same labelled height
+        // stand on the same board, so they reach the same distance; one that
+        // measures a fraction of what its twins measure did not get measured,
+        // and a regression that treats it as evidence is fitting a line
+        // through a failure.
+        final fitted = StackMetrics.fit(realFrameStacks);
+        expect(fitted.pitch, closeTo(0.087, 0.005),
+            reason: 'the two collapsed stacks dragged the pitch to '
+                '${fitted.pitch} — every count on the board divides by this');
+        expect(fitted.wellConditioned, isTrue,
+            reason: 'six of the eight survived, at three distinct heights, '
+                'which is a better regression than most boards will offer');
+      });
+
+      test('and the stacks that measured cleanly count back', () {
+        // What the pitch is FOR, so the number above is not an abstraction.
+        // Under the old fit, only the two 2-stacks counted back; the 6- and
+        // 14-points read 7 and 8, the 8-point read 4, and the two collapsed
+        // ones read 1 and 3.
+        final fitted = StackMetrics.fit(realFrameStacks);
+        const cleanlyMeasured = <(int, double)>[
+          (2, 0.0917), // the 1-point
+          (5, 0.3333), // the 6-point
+          (3, 0.2000), // the 8-point
+          (5, 0.3667), // the 14-point
+          (2, 0.0917), // the 24-point
+        ];
+        for (final (height, reach) in cleanlyMeasured) {
+          expect(fitted.heightOf(reach).round(), height,
+              reason: 'a stack of $height reaching $reach came back as '
+                  '${fitted.heightOf(reach)}');
+        }
+
+        // And the honest edge of the rule. This frame has a THIRD stack that
+        // measured badly without measuring absurdly: the 18-point's three men
+        // reach 0.1208 where their twin on the 8-point reach 0.2000. Sixty
+        // percent is not the factor of two that says "this did not happen",
+        // so [StackMetrics.minStackAgreement] keeps it and it counts back as
+        // two rather than three. Tightening the rule until it caught this
+        // would start throwing away honest measurements off noisy boards,
+        // which trades a wrong count for a refused calibration. Pinned as the
+        // edge it is: the fix takes this frame from two of eight counting
+        // back to five, not to eight.
+        expect(fitted.heightOf(0.1208).round(), 2,
+            reason: 'if this becomes 3, the fit got better and the comment '
+                'above wants revisiting');
+      });
+
+      test('a run of almost nothing is not a checker, whatever the line says',
+          () {
+        // The second half of what that frame got wrong, and it survives a
+        // healthy pitch. Six honest stacks of two, three and five fit a pitch
+        // of 0.0874 with an origin of -0.0905 — a fine line through the data
+        // it was given, and one that says a run of NOTHING is 1.04 checkers.
+        // Every empty region whose mass cleared the presence threshold then
+        // came back holding a man: four of them on that frame, at runs of
+        // 0.008 to 0.037 against a checker 0.0874 deep.
+        //
+        // Rounding cannot catch it, because rounding asks the same poisoned
+        // line. The measured run is what has to be asked.
+        final fitted = StackMetrics.fit(realFrameStacks);
+        expect(fitted.origin, lessThan(0),
+            reason: 'the origin this test is about is the negative one');
+        expect(fitted.heightOf(0).round(), 1,
+            reason: 'the line really does say a run of nothing is a checker — '
+                'that is the trap, and holdsAnything is what avoids it');
+
+        // The four phantoms on that frame.
+        for (final reach in <double>[0.0, 0.008, 0.025, 0.037]) {
+          expect(fitted.holdsAnything(reach), isFalse,
+              reason: 'a run of $reach is a fraction of a checker '
+                  '(${fitted.pitch}) and cannot be one');
+        }
+        // And the shortest real stack on it — two men — is never in doubt.
+        expect(fitted.holdsAnything(0.0917), isTrue);
+
+        // Where this is and is not covered, stated so nobody trusts it
+        // further than it goes. The RULE is pinned here. Its wiring into
+        // `OccupancyReader._resolve` is exercised end to end only by the die
+        // in a point's headroom, whose run is exactly zero — because the bed
+        // fits a positive origin on every frame it can draw, so a run of a
+        // few hundredths already rounds to nothing there and the extra guard
+        // never has to fire. It takes a real photograph's negative origin to
+        // tell the two apart, and there is no real photograph in this repo.
+      });
+
+      test('a board where too many failed is not conditioned, and says so', () {
+        // The other side. Exclusion is only honest while enough survives to
+        // regress through; past that the answer is that this frame cannot say
+        // how the checkers stack, which calibration turns into a sentence.
+        final fitted = StackMetrics.fit(const <(int, double)>[
+          (2, 0.0917),
+          (5, 0.0667),
+          (3, 0.0300),
+          (5, 0.0700),
+        ]);
+        expect(fitted.wellConditioned, isFalse);
+      });
+
+      test('a board whose stacks all agree loses nothing', () {
+        // The rule must be inert on a board that measured cleanly, or it is
+        // trading real boards for broken ones.
+        final clean = <(int, double)>[
+          for (final (h, _) in realFrameStacks) (h, 0.02 + h * 0.087),
+        ];
+        final fitted = StackMetrics.fit(clean);
+        expect(fitted.pitch, closeTo(0.087, 1e-9));
+        expect(fitted.origin, closeTo(0.02, 1e-9));
+        expect(fitted.wellConditioned, isTrue);
+      });
+    });
   });
 
   group('what the corpus found', () {
-    test('a die lying in a point\'s headroom is counted as a checker there',
+    test('a die lying in a point\'s headroom is no longer a phantom checker',
         () {
       // Found by the corpus harness, which reads occupancy on shots that have
-      // dice on the board and so asks a question no test here had asked. It is
-      // the largest single source of miscounts in the synthetic corpus.
+      // dice on the board and so asks a question no test here had asked. It
+      // was the largest single source of miscounts in the synthetic corpus.
       //
-      // The mechanism, and why the two halves of the reading disagree: the
+      // The mechanism, and why the two halves of the reading disagreed: the
       // dice band overlaps every point's headroom (see [RoiAtlas]), so a die
       // sitting there is inside the point's region. Its pale body is not the
       // board's own surface, so it classifies as a checker and lifts the
       // region's MASS over the presence threshold. But the reach walk starts
-      // at the board's edge and stops at the first wide gap, so it finds
-      // nothing and returns zero — and `_resolve` floors the count at one.
-      // The reading that comes back is "one checker, reach zero", which is a
+      // at the board's edge and stops at the first wide gap, so it found
+      // nothing and returned zero — and `_resolve` floored the count at one.
+      // The reading that came back was "one checker, reach zero", which is a
       // combination a real stack cannot produce.
       //
-      // Left as a finding rather than fixed here: the plan puts diff-matching
-      // in Task 7, and it is diff-matching that has the context to dismiss a
-      // phantom checker (the expected position says that point is empty, and
-      // no legal play puts a lone checker there). Recorded so that the fix,
-      // when it comes, is aimed at something measured — the signature is
-      // `count >= 1` with `reach == 0`, and it is cheap to detect.
+      // This was left as a finding for Task 7's diff-matching to dismiss with
+      // context. It did not need context. The floor was overriding a
+      // measurement with a guess: the region was measured, the measurement
+      // said less than half a checker, and the floor said one anyway. Now the
+      // measurement is what comes back, and a region that measures under half
+      // a checker reads bare — which is what the frame shows.
+      //
+      // On the first real folding frame this floor alone invented checkers on
+      // three empty points, at measured heights of -0.18, 0.21 and 0.21.
       final calibration = _calibrate(
         renderShot(board: BoardState.initial()),
       );
@@ -612,12 +755,44 @@ void main() {
           .occupancyIn(withDice.frame)
           .read(RoiId.point(2));
 
-      expect(reading.color, isNot(CheckerColor.none),
-          reason: 'the die reads as something the board does not account for');
-      expect(reading.count, 1);
+      expect(reading.mass, greaterThan(OccupancyReader.minPresenceMass),
+          reason: 'the die still reads as something the board does not '
+              'account for — that half was never the bug');
       expect(reading.reach, 0.0,
           reason: 'nothing was found at the foot of the point, which is the '
               'signature that separates this from a real checker');
+      expect(reading.count, 0);
+      expect(reading.color, CheckerColor.none,
+          reason: 'count is zero exactly when the colour is none, and a '
+              'region that measured nothing standing in it holds nothing');
+    });
+
+    test('a lone checker is still a lone checker', () {
+      // The other side of dropping the floor, and the reason it was there. A
+      // single checker measures barely over half a pitch on some boards, so
+      // this is the reading that must NOT round away — the count where the
+      // design promises exactness.
+      final calibration = _calibrate(renderShot(board: BoardState.initial()));
+      final lone = List<int>.filled(24, 0);
+      lone[2] = 1;
+      lone[9] = -1;
+      // Thirty men on the board, so the exposure reference does not move.
+      lone[7] = 14;
+      lone[16] = -14;
+      final shot = renderShot(
+        board: BoardState(
+          points: lone,
+          whiteBar: 0,
+          blackBar: 0,
+          whiteOff: 0,
+          blackOff: 0,
+        ),
+      );
+      final reader = BoardVision(calibration).occupancyIn(shot.frame);
+      expect(reader.read(RoiId.point(2)).count, 1);
+      expect(reader.read(RoiId.point(2)).color, CheckerColor.white);
+      expect(reader.read(RoiId.point(9)).count, 1);
+      expect(reader.read(RoiId.point(9)).color, CheckerColor.black);
     });
   });
 }
