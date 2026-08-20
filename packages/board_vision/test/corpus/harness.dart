@@ -46,6 +46,13 @@ import 'capture_plan.dart';
 import 'corpus_io.dart';
 import 'scoreboard.dart';
 
+/// Whether a pair was FOUND on a shot the sidecar says has dice, right or
+/// wrong: 1 when the reader returned a reading, 0 when it declined.
+///
+/// The denominator is `CorpusMetric.dicePair`'s attempts, so between them the
+/// two say found, right and refused. See [_scoreDice].
+const String kDiceFoundSignal = 'dice found when a roll was there';
+
 /// Scores every shot in [directory], grouped into its sessions.
 ///
 /// [name] is what the report calls this corpus. An absent or empty directory
@@ -384,6 +391,14 @@ void _scoreDice(
     detail: '${shot.id}: expected ${expected.join('-')}, '
         '${got == null ? 'found no pair' : 'read ${got.join('-')}'}',
   );
+  // A pair that was not read is one of two completely different events, and
+  // the rate alone cannot tell them apart: the reader found two dice and read
+  // the wrong faces, or it found nothing and declined. The first is a misread
+  // entering the authoritative game state; the second is the refusal the
+  // design asks for, and a session recovers from it by asking for another
+  // roll. Recorded as a signal so both corpora carry the split and the report
+  // can say found / right / refused instead of one number.
+  board.signal(kDiceFoundSignal, reading == null ? 0 : 1);
   if (reading != null) {
     // Confidence has no ceiling by design — it is how much signal the frame
     // carried, not a probability — so it is watched, never thresholded here.
