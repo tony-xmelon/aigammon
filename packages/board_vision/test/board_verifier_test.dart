@@ -116,6 +116,98 @@ void main() {
     });
   });
 
+  group('the query a session asks after dictating a move', () {
+    // **The whole board is not the question.** A session that has just said
+    // "13/8, 8/6" and watched a hand move knows exactly which regions were
+    // touched, and those are the ones the placement query is about. The
+    // user's decision at the gate follow-up (2026-08-21) is that placement
+    // verification is scored on that set — see `PerceptionTargets`.
+    test('the regions a play touches are the ones its hops name', () {
+      final play = Move(<CheckerMove>[
+        const CheckerMove(CheckerMove.bar, 20, isHit: true),
+        const CheckerMove(5, CheckerMove.off),
+      ]);
+      expect(
+        regionsTouchedBy(play, Player.white).toSet(),
+        <TouchedRegion>{
+          // Entering from the bar touches the mover's own end of it...
+          (region: RoiId.bar, side: CheckerColor.white),
+          // ...the point entered...
+          (region: RoiId.point(20), side: null),
+          // ...and, because that entry hit, the OTHER player's end of the bar,
+          // which is where the man it hit is now standing.
+          (region: RoiId.bar, side: CheckerColor.black),
+          (region: RoiId.point(5), side: null),
+          (region: RoiId.offWhite, side: CheckerColor.white),
+        },
+      );
+    });
+
+    test('an intermediate landing point counts as touched', () {
+      // `13/11 11/6` and `13/8 8/6` leave the same position and a settled
+      // frame cannot tell them apart — but a hand went through the middle
+      // point, and the session that dictated the play knows which one. It is
+      // asked about, because a checker left standing there is exactly the
+      // placement error this query exists to catch.
+      final play = Move(<CheckerMove>[
+        const CheckerMove(12, 10),
+        const CheckerMove(10, 5),
+      ]);
+      expect(
+        regionsTouchedBy(play, Player.white).map((t) => t.region).toSet(),
+        <RoiId>{RoiId.point(12), RoiId.point(10), RoiId.point(5)},
+      );
+    });
+
+    test('a board wrong somewhere the play never went still verifies the '
+        'placement', () {
+      final bed = _bedOf(_beds.first);
+      // The frame holds the starting position; the game is told a lie about
+      // the 8-point, which no play below goes anywhere near.
+      final lie = BoardState(points: <int>[
+        for (final (i, c) in BoardState.initial().points.indexed)
+          i == 7 ? c - 1 : c,
+      ]);
+      final result = bed.verify(BoardState.initial(), lie);
+      expect(result.agrees, isFalse,
+          reason: 'the whole-board sweep must still see the lie');
+
+      final elsewhere = Move(<CheckerMove>[const CheckerMove(12, 8)]);
+      expect(
+        result.agreesOn(regionsTouchedBy(elsewhere, Player.white)),
+        isTrue,
+        reason: result.message,
+      );
+      // And the same frame, asked about a play that DID go there.
+      final through = Move(<CheckerMove>[const CheckerMove(7, 3)]);
+      expect(result.agreesOn(regionsTouchedBy(through, Player.white)), isFalse);
+      expect(
+        result.discrepanciesOn(regionsTouchedBy(through, Player.white))
+            .map((d) => d.region),
+        <RoiId>[RoiId.point(7)],
+      );
+    });
+
+    test('a region this board does not have cannot fail a placement', () {
+      // A folding case has no bear-off wells, so a play that bore a man off
+      // touches a region nothing in the picture can speak about. Consuming
+      // `BoardDiscrepancies.unobservable`'s philosophy exactly: not a
+      // contradiction, so not a failed placement.
+      final bed = _bedOf(_foldingBed);
+      final board = BoardState.initial();
+      final result = bed.verify(board, board);
+      final bearOff = Move(<CheckerMove>[
+        const CheckerMove(5, CheckerMove.off),
+      ]);
+      expect(
+        result.forRegion(RoiId.offWhite, side: CheckerColor.white)?.verdict,
+        RegionVerdict.unobservable,
+      );
+      expect(result.agreesOn(regionsTouchedBy(bearOff, Player.white)), isTrue,
+          reason: result.message);
+    });
+  });
+
   group('the prior earns its keep', () {
     test('a four-stack is not a five-stack, and the verifier says which '
         'region', () {

@@ -163,50 +163,38 @@ void main() {
       expect(board.totalFor(CorpusMetric.placementVerified).attempts, 0);
     });
 
-    test('every spec target that is scoreable today is met, except the one '
-        'whose denominator is a whole board', () {
-      // Three of the spec's five, plus the refusal counterweight. Legal-play
+    test('every spec target that is scoreable today is met', () {
+      // Four of the spec's five, plus the refusal counterweight. Legal-play
       // identification is scored on the real corpus; this one cannot ask it —
-      // see the test below. What is left is full-board resync, and it misses.
+      // see the test below.
       //
-      // **It misses for an arithmetic reason, and the arithmetic is the
-      // finding.** Every other target in the spec's table has ONE answer under
-      // it: a calibration completed, a roll read, a play identified. This one's
-      // denominator is a whole board — twenty-six regions on a folding case and
-      // **twenty-eight** on a cased one, the bar counted twice because its two
-      // colours stack away from each other — and it succeeds only when every
-      // one of them agrees at once. Every board in this corpus is cased, so
-      // twenty-eight it is: 840 region-reads over 30 shots.
+      // **Full-board resync is in that four now, and the reshape is why.**
+      // Until the gate follow-up (2026-08-21) it was scored per whole BOARD and
+      // missed here at 0.733, for an arithmetic reason rather than a perception
+      // one. A resync sweep asks twenty-six regions on a folding case and
+      // twenty-eight on a cased one — every board in this corpus is cased, so
+      // 840 region-reads over 30 shots — and a board succeeds only when all
+      // twenty-eight agree at once. At the measured 0.9869 a region, that is
+      // **0.691** if the misses were independent and **0.733** as measured (a
+      // little better, because a bad shot loses several regions together).
+      // Requiring 0.90 of the whole board is requiring **0.9962** of every
+      // region, which is not a threshold anybody chose.
       //
-      // Per region this corpus verifies at 0.9869. Twenty-eight of those in a
-      // row is **0.691** if the misses were independent; the measured **0.733**
-      // is a little better, because they are not — the same shot tends to lose
-      // several regions at once. Either way the ceiling is nowhere near 0.90.
-      // To reach it per BOARD, per-region accuracy would have to be **0.9962**,
-      // which is not a threshold anybody chose: it is what 0.90 over
-      // twenty-eight regions costs.
-      //
-      // And the regions that miss are not the verifier's. All eight failing
-      // shots fail on regions a blind count gets wrong too — a three-stack
-      // invisible under a lamp, a phantom stack on an empty point, a checker
-      // lost on the bar — which is why `region colour and count` lists the same
-      // shots. The state-primed query is doing its job (it rescues eighteen
-      // regions here and loses none); what it cannot do is rescue a region the
-      // colour model never saw.
-      //
-      // So this is recorded rather than met, the number is floored below, and
-      // the gap is printed on every run. Whether ≥0.90 per whole board is the
-      // right shape of promise at all is the plan's Task 6 gate's to answer —
-      // the spec's own note says the targets are "renegotiated only at the
-      // Task 6 gate with the user".
-      expect(
-        board.targetViolations(),
-        <String>[
-          'synthetic: ${CorpusMetric.boardResynced.label} scored 0.733 '
-              '(22/30), target 0.900',
-        ],
-        reason: board.report(),
-      );
+      // So the user reshaped the row to what the resolve screen actually
+      // consumes — the region list — and per region this corpus scores 0.986
+      // against the same 0.90. The whole-board rate is still counted, still
+      // printed, and floored below, so nothing was hidden by the change.
+      expect(board.targetViolations(), isEmpty, reason: board.report());
+    });
+
+    test('and the whole-board rate the reshape retired is still measured', () {
+      // The number that used to be the target, kept as a watched row. A
+      // reshape that deleted it would be indistinguishable from a reshape that
+      // hid it.
+      final board_ = board.totalFor(CorpusMetric.boardResynced);
+      expect(board_.attempts, 30);
+      expect(board_.successes, 22, reason: board.report());
+      expect(kMetricTargets[CorpusMetric.boardResynced], isNull);
     });
 
     test('the whole-board queries hold the rates they were committed at', () {
@@ -495,18 +483,48 @@ void main() {
               'or this corpus is not asking its own flagship question');
     });
 
-    test('the two whole-board queries were asked of every shot and every '
-        'pair', () {
-      // The denominators, pinned, because both rates are zero and a zero over
-      // an empty tally is indistinguishable from a zero over ten. Ten shots
-      // resynced — the calibration frame and both end-game keyframes included
-      // — and the six pairs that are one turn apart verified as placements.
+    test('the two board queries were asked of every shot and every pair, in '
+        'both shapes', () {
+      // The denominators, pinned, because the whole-board rates are zero and a
+      // zero over an empty tally is indistinguishable from a zero over ten. Ten
+      // shots resynced — the calibration frame and both end-game keyframes
+      // included — and the six pairs that are one turn apart verified as
+      // placements, each scored twice: once on the regions the play touched and
+      // once over the whole board.
       expect(board.totalFor(CorpusMetric.boardResynced).attempts, 10);
       expect(board.totalFor(CorpusMetric.placementVerified).attempts, 6);
+      expect(board.totalFor(CorpusMetric.placementVerifiedBoard).attempts, 6);
       // Twenty-six regions a shot: twenty-four points and both ends of the
       // bar. This board is a folding case, so it has no bear-off wells to ask
       // about — those two come back `unobservable` and are not scored.
       expect(board.totalFor(CorpusMetric.regionVerified).attempts, 26 * 10);
+    });
+
+    test('the reshaped placement query is the narrower one, and it is what '
+        'moved', () {
+      // **The user\'s decision, as the two numbers it is a decision between.**
+      // The same six attempts, the same six frames, the same verifier call: the
+      // only difference is which regions the answer is read off. Over the whole
+      // board every one of the six fails, because every one of these frames
+      // contradicts its sidecar SOMEWHERE — the 12-point reads two men for five
+      // or six in every window of the session. Over the regions the play
+      // actually touched, two come back clean.
+      //
+      // Pinned at 2/6 rather than bounded, because "the reshape helps" is not a
+      // finding and "the reshape is worth two turns in six, and the other four
+      // are the far-half undercount" is.
+      expect(board.totalFor(CorpusMetric.placementVerifiedBoard).successes, 0,
+          reason: board.report());
+      expect(board.totalFor(CorpusMetric.placementVerified).successes, 2,
+          reason: board.report());
+      // And the four that still fail are the three known stacks. Named, so
+      // that a change moving this number says which case it moved.
+      final missed = board.missesOf(CorpusMetric.placementVerified);
+      expect(missed, hasLength(4));
+      expect(missed[0], contains('the 23-point'));
+      expect(missed[1], contains('the 6-point'));
+      expect(missed[2], contains('the 12-point'));
+      expect(missed[3], contains('the 12-point'));
     });
 
     test('the state-primed read beats the blind one on real photographs too',
@@ -710,22 +728,36 @@ void main() {
         contains(contains(CorpusMetric.legalPlay.label)),
         reason: board.report(),
       );
-      // **And the two state-primed board queries catch it as well**, which is
-      // not noise — it is three instruments agreeing about one planted lie.
-      // The last shot's photograph shows a position its sidecar does not, so
-      // the play is misidentified, the position that play should have left
-      // behind does not verify, and the whole board does not resync. A fixture
-      // that reddened one of the three and not the others would mean one of
-      // them was not looking at the picture.
+      // **And the placement query catches it as well**, which is not noise —
+      // it is two instruments agreeing about one planted lie. The last shot's
+      // photograph shows a position its sidecar does not, so the play is
+      // misidentified AND the position that play should have left behind does
+      // not verify on the regions the play claims to have touched. A fixture
+      // that reddened one of the two and not the other would mean one of them
+      // was not looking at the picture.
       expect(
         board.targetViolations().map((v) => v.split(' scored').first).toSet(),
         <String>{
           'playedSomethingElse: ${CorpusMetric.legalPlay.label}',
           'playedSomethingElse: ${CorpusMetric.placementVerified.label}',
-          'playedSomethingElse: ${CorpusMetric.boardResynced.label}',
         },
         reason: board.report(),
       );
+
+      // **The resync rows move and do not go red, and that is the reshape
+      // working rather than a hole in it.** A misplayed turn is wrong on two
+      // or three regions out of the eighty-odd this fixture reads, so a
+      // per-region rate barely notices — 0.90 is not a whole-board alarm and
+      // was never meant to be one. The whole-board row is what notices, which
+      // is exactly why it is still counted after being demoted: it falls off
+      // 1.0 and names the shot.
+      final resync = board.totalFor(CorpusMetric.boardResynced);
+      expect(resync.rate, lessThan(1.0), reason: board.report());
+      expect(board.totalFor(CorpusMetric.regionVerified).rate,
+          greaterThan(PerceptionTargets.fullBoardResyncPerRegion),
+          reason: board.report());
+      expect(board.totalFor(CorpusMetric.placementVerifiedBoard).rate,
+          lessThan(1.0), reason: board.report());
     });
 
     test('a fixture whose only fault is the ROLL leaves the board queries '
@@ -808,12 +840,14 @@ void main() {
 ///   six** under the threshold: a hands-free turn becoming four taps, with
 ///   nothing anywhere going red. The margin here is real but thin (0.542 at
 ///   the worst of the six), which is the other reason to ratchet it.
-/// And the two that arrived with Task 8, which **miss and are recorded**:
+/// And the two that arrived with Task 8, **reshaped by the user at the gate
+/// follow-up (2026-08-21) and still missing**:
 ///
-/// * **placement verification 0/6, full-board resync 0/10.** Both ask whether a
-///   board that is in fact correct comes back with nothing contradicted, over
-///   **twenty-six** regions at once — twenty-four points and both ends of the
-///   bar; this board is a folding case, so it has no wells to ask about.
+/// * **placement verification 2/6, resync per region 0.858.** The reshape is
+///   the denominator and only the denominator — the two thresholds are still
+///   0.95 and 0.90. Placement is now the regions the play touched, one attempt
+///   per dictated turn; resync is per region, with the whole-board rate kept as
+///   a watched row (**0/6 and 0/10**, both still recorded below).
 ///
 ///   Per region the prior is doing real work: over the 240 point-reads both
 ///   rows score, verification is **203/240 = 0.846** against a blind count's
@@ -822,24 +856,17 @@ void main() {
 ///   the bar on every shot and nineteen of those extra reads are bare-bar
 ///   agreements. See [priorReport].)
 ///
-///   But fifteen rescued regions is not a clean board, and the ones left are
-///   the same ones every frame: the far-half Black five-stacks on the 12- and
-///   19-points read as two and three in every window. **This is the far-half
-///   undercount the whole design was built around, arriving where it cannot be
-///   differenced away.** Task 7's matcher subtracts that bias from itself and
-///   scores 6/6; a single frame compared against a position pays it in full, on
-///   every region, every time.
-///
-///   Two things follow, and they belong at the Task 6 gate rather than here.
-///   The spec's ≥0.95 and ≥0.90 are stated **per attempt where an attempt is a
-///   whole board**, which is the only place in its table a denominator is not
-///   one answer; to reach 0.90 over twenty-six regions a per-region rate of
-///   0.9960 is needed, which this board does not give from this seat. And the
-///   query the session actually needs after dictating a move is narrower than
-///   the API's whole-board sweep — the regions that move are named, and
-///   `BoardDiscrepancies.regions` already carries them per region, which is why
-///   the per-region rate is scored beside the per-board one rather than instead
-///   of it.
+///   **The reshape was measured, not assumed, and it buys 2/6.** The four turns
+///   it does not buy fail on three regions and for three different reasons: the
+///   23-point reads three men for two on 003→005, the 6-point four for five on
+///   005→008, and the 12-point two for six on both 008→010 and 018→020. Those
+///   are the far-half tall-stack cases the whole design was built around,
+///   arriving where they cannot be differenced away — Task 7's matcher
+///   subtracts that bias from itself and scores 6/6, while a single frame
+///   compared against a position pays it in full, on every region, every time.
+///   The perception work behind that number is where the rest has to come from;
+///   the arithmetic of the old shape is recorded in the synthetic corpus's own
+///   target test.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
   CorpusMetric.startConfirmed: 1.0,
@@ -849,7 +876,8 @@ const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.regionColour: 230 / 241,
   CorpusMetric.legalPlay: 6 / 6,
   CorpusMetric.legalPlayActed: 6 / 6,
-  CorpusMetric.placementVerified: 0.0,
+  CorpusMetric.placementVerified: 2 / 6,
+  CorpusMetric.placementVerifiedBoard: 0.0,
   CorpusMetric.boardResynced: 0.0,
   CorpusMetric.regionVerified: 223 / 260,
 };

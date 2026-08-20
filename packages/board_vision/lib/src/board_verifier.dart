@@ -194,6 +194,57 @@ class RegionVerification {
       '${confidence.toStringAsFixed(2)}: $message)';
 }
 
+/// One region a play touched, and — on the bar and the trays, where two
+/// queues share a region — whose men it touched there.
+///
+/// [side] is null on a point, because a point holds one queue and the verifier
+/// files it under whatever colour the game puts there; naming a colour would
+/// only be a second opinion about that.
+typedef TouchedRegion = ({RoiId region, CheckerColor? side});
+
+/// The regions [play] touches, as the session that dictated it knows them.
+///
+/// **This is the placement query's denominator**, per the user's decision at
+/// the gate follow-up (2026-08-21): after Buddy says "13/8, 8/6" and a hand
+/// moves, what has to be checked is where that hand went, not the other
+/// twenty-odd regions nobody claimed anything about. See
+/// [PerceptionTargets.placementVerification].
+///
+/// Every hop contributes both its ends, so an intermediate landing point is
+/// asked about even though the position does not record it — `13/11 11/6`
+/// leaves the same board as `13/8 8/6` and a settled frame cannot tell the two
+/// apart, but the session knows which one it dictated, and a man left standing
+/// on the middle point is precisely the placement error this query exists to
+/// catch.
+///
+/// A hop that **hits** touches one more region than it names: the man it hit is
+/// now on the other player's end of the bar, and that end is where a placement
+/// goes wrong when a hand knocks a checker somewhere instead of onto the bar.
+List<TouchedRegion> regionsTouchedBy(Move play, Player mover) {
+  final mine = CheckerColor.ofPlayer(mover);
+  final theirs = mine == CheckerColor.white
+      ? CheckerColor.black
+      : CheckerColor.white;
+  final out = <TouchedRegion>[];
+  void add(TouchedRegion region) {
+    if (!out.contains(region)) out.add(region);
+  }
+
+  for (final hop in play.checkerMoves) {
+    add(hop.from == CheckerMove.bar
+        ? (region: RoiId.bar, side: mine)
+        : (region: RoiId.point(hop.from), side: null));
+    add(hop.to == CheckerMove.off
+        ? (
+            region: mine == CheckerColor.white ? RoiId.offWhite : RoiId.offBlack,
+            side: mine
+          )
+        : (region: RoiId.point(hop.to), side: null));
+    if (hop.isHit) add((region: RoiId.bar, side: theirs));
+  }
+  return out;
+}
+
 /// Everything one frame had to say about one expected position.
 class BoardDiscrepancies {
   /// The position this was checked against.
@@ -241,6 +292,25 @@ class BoardDiscrepancies {
   /// borne off a folding case agrees here on the strength of the point that
   /// lost them, because the tray that would have confirmed it does not exist.
   bool get agrees => discrepancies.isEmpty;
+
+  /// The ones among [regions] that contradict [expected], strongest first.
+  ///
+  /// The narrow read of the same sweep: a session that has just dictated a move
+  /// asks about where the hand went, and [regionsTouchedBy] is that set. A
+  /// region this board does not have contributes nothing here for the same
+  /// reason it contributes nothing to [discrepancies] — see [unobservable].
+  List<RegionVerification> discrepanciesOn(Iterable<TouchedRegion> regions) {
+    final wanted = regions.toSet();
+    return List<RegionVerification>.unmodifiable(
+      discrepancies.where((d) => wanted.any((w) =>
+          w.region == d.region && (w.side == null || w.side == d.side))),
+    );
+  }
+
+  /// Whether nothing in the picture contradicts the game **on the regions the
+  /// play touched**. The placement query, at the width the user set for it.
+  bool agreesOn(Iterable<TouchedRegion> regions) =>
+      discrepanciesOn(regions).isEmpty;
 
   /// What [region] said, for the given [side] — the bar has one entry per
   /// colour and everything else exactly one.

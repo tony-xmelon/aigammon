@@ -24,6 +24,29 @@
 /// hold these. Until then they are what the design was approved on. A number
 /// here that quietly drops to match what the code happens to score is the one
 /// way this file can be worse than useless.
+///
+/// ## The one change made so far, and who made it
+///
+/// **The user, at the gate follow-up on 2026-08-21**, reshaped the two
+/// whole-board rows — and only their *shape*: both numbers are still 0.95 and
+/// 0.90, and neither was lowered. What moved is what an attempt is.
+///
+/// The gate's evidence was that ≥0.95 and ≥0.90 *per whole board* are not the
+/// promises the design actually needs, and are arithmetically out of reach on a
+/// board read region by region: twenty-six regions at 0.986 apiece make a clean
+/// board 0.69 of the time, so a whole-board 0.90 costs a per-region 0.996 that
+/// nothing in this pipeline offers. Worse, they are not the questions a session
+/// asks. After Buddy dictates a move, the session knows exactly which regions
+/// the hand went to; a sweep of the other twenty is a query nobody made. So:
+///
+/// * [placementVerification] is scored on **the regions the play touches**,
+///   one attempt per dictated turn — see `regionsTouchedBy`;
+/// * [fullBoardResyncPerRegion] is scored **per region**, and the whole-board
+///   rate stays in the report as a watched row that nothing is promised about.
+///
+/// The reshape is not the fix and was never sold as one: measured on the day it
+/// landed, it moved placement verification on the real corpus from 0/6 to
+/// **2/6** — the perception work behind it is where the rest has to come from.
 library;
 
 /// The spec's accuracy table, as thresholds the corpus harness asserts.
@@ -53,15 +76,36 @@ class PerceptionTargets {
   /// Scored by the plan's Task 7, which owns the matcher.
   static const double legalPlayIdentification = 0.95;
 
-  /// Buddy's dictated move verified as placed correctly. Missed in play, the
+  /// Buddy's dictated move verified as placed correctly, **over the regions
+  /// that play touches** — one attempt per dictated turn. Missed in play, the
   /// belief mirror plus tap-correct takes over. Scored by the plan's Task 8.
+  ///
+  /// The denominator is the session's own question and nothing wider: the hops
+  /// name the regions, `regionsTouchedBy` turns them into the set, and
+  /// `BoardDiscrepancies.agreesOn` answers about exactly those. A region the
+  /// play never went near cannot fail this — it is not part of the claim the
+  /// session made — and a whole-board sweep is still available and still
+  /// reported, as [fullBoardResyncPerRegion]'s watched row.
   static const double placementVerification = 0.95;
 
-  /// A whole board re-read against the expected position, for drift recovery.
+  /// A board re-read against the expected position for drift recovery, scored
+  /// **per region**.
+  ///
   /// The most permissive target because the fallback — the side-by-side
   /// "camera says / game says" resolve — is the cheapest to fall back to and
   /// the attempt is repeatable on the next stable frame. Scored by Task 8.
-  static const double fullBoardResync = 0.90;
+  ///
+  /// **Per region, because per board this number is arithmetic rather than a
+  /// promise.** A resync sweep asks twenty-six regions on a folding case and
+  /// twenty-eight on a cased one; at the synthetic corpus's measured 0.9869 a
+  /// region, twenty-eight of them come back clean 0.69 of the time if the
+  /// misses were independent and 0.733 as measured. Requiring 0.90 of the whole
+  /// board is requiring 0.996 of every region — a number nobody chose and the
+  /// spec never argued for. What the resolve screen actually consumes is the
+  /// region list, one line per contradiction, so that is what is promised. The
+  /// whole-board rate is still counted and still printed; nothing is promised
+  /// about it.
+  static const double fullBoardResyncPerRegion = 0.90;
 
   /// Shots the corpus labels expected-unreadable must be refused, every one.
   ///

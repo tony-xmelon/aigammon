@@ -242,11 +242,29 @@ builds and tests on Windows against the corpus, in keeping with this repo's
 | Calibration completes (guided) | ≥95% of attempts | retry with guidance |
 | Dice pair read (settled, stable) | ≥98% | tap-to-enter dice |
 | Legal-play identification (top-1) | ≥95%, ambiguity prompt otherwise | tap-to-pick candidate |
-| Placement verification | ≥95% | belief mirror + tap-correct |
-| Full-board resync (vs expected) | ≥90% per attempt | side-by-side resolve |
+| Placement verification (the regions the play touches) | ≥95% per dictated turn | belief mirror + tap-correct |
+| Full-board resync (vs expected) | ≥90% per region | side-by-side resolve |
 
 Targets are per-attempt on corpus conditions (see Testing); the spike's job
 is to confirm or renegotiate them with measurements before Phase 2 commits.
+
+**Reshaped by the user at the gate follow-up, 2026-08-21.** The last two rows
+used to be scored *per whole board*, and the first real corpus said that was
+the wrong shape twice over. It is not the question a session asks: after Buddy
+dictates a move the session knows exactly which regions the hand went to, and
+`BoardDiscrepancies` already carries the answer region by region, so sweeping
+the other twenty and failing on one of them measures something nobody asked.
+And per whole board the numbers are arithmetic rather than promises — a resync
+sweep is twenty-six regions on a folding case, so ≥90% of boards is ≥99.6% of
+regions, a figure this table never argued for and no classical pipeline offers.
+**Neither number moved: both are still 95% and 90%.** What moved is the
+denominator — per touched-region-set per turn, and per region. The whole-board
+rates are still measured and printed on every run, promised nothing.
+
+The reshape is honest about what it is worth on its own: measured on the day it
+landed, placement verification on the real corpus went from **0/6 boards to 2/6
+turns** — the far-half tall-stack undercount is what the rest depends on, and
+that is perception work rather than bookkeeping.
 
 ## Readability indicator
 

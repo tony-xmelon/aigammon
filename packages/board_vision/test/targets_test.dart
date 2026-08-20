@@ -55,7 +55,27 @@ void main() {
     });
 
     test('full-board resync', () {
-      expect(PerceptionTargets.fullBoardResync, targetIn('Full-board resync'));
+      expect(PerceptionTargets.fullBoardResyncPerRegion,
+          targetIn('Full-board resync'));
+    });
+
+    /// The whole first column of the row whose first column contains [row].
+    String rowFor(String row) => spec.readAsLinesSync().firstWhere(
+          (l) => l.startsWith('|') && l.contains(row),
+          orElse: () => '',
+        );
+
+    test('the two reshaped rows still say what an attempt is', () {
+      // **The number is half the promise and the denominator is the other
+      // half**, which is the whole content of the user's 2026-08-21 decision:
+      // 0.95 and 0.90 did not move, what an attempt is did. A row that lost
+      // its denominator would read as the per-whole-board promise the gate
+      // retired, and the constants here would quietly mean something else
+      // than the table does — which is the exact drift this file exists to
+      // catch, one level up from the numbers.
+      expect(rowFor('Placement verification'), contains('the play touches'));
+      expect(rowFor('Placement verification'), contains('per dictated turn'));
+      expect(rowFor('Full-board resync'), contains('per region'));
     });
 
     test('refusing an unreadable shot is not negotiable', () {

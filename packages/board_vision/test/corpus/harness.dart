@@ -380,14 +380,33 @@ class _PlayChain {
     // committed board with the logged move applied — so an attempt here is a
     // CORRECT board being asked to verify, which is what the spec's ≥95%
     // promises.
+    //
+    // **Scored on the regions the play touched**, which is the query the
+    // session actually asks and the shape the user set at the gate follow-up
+    // (2026-08-21): the hand went to those regions and nowhere else, so a
+    // contradiction anywhere else is drift for the resync query rather than a
+    // placement that went wrong. The whole-board answer over the identical call
+    // is recorded beside it, watched and unpromised, so the two shapes can be
+    // read against each other on every run.
     final verified = vision.verifyExpectedBoard(frame, target);
-    board.record(
-      CorpusMetric.placementVerified,
-      ok: verified.agrees,
-      slices: _slicesOf(shot)..['mover'] = turn.mover.name,
-      detail: '${earlier.id}->${shot.id}: after ${turn.played}, '
-          '${verified.message}',
-    );
+    final touched = regionsTouchedBy(turn.played, turn.mover);
+    final missed = verified.discrepanciesOn(touched);
+    board
+      ..record(
+        CorpusMetric.placementVerified,
+        ok: missed.isEmpty,
+        slices: _slicesOf(shot)..['mover'] = turn.mover.name,
+        detail: '${earlier.id}->${shot.id}: after ${turn.played}, the play '
+            'touched ${touched.map((t) => describeRegion(t.region)).join(', ')}'
+            ' — ${missed.map((d) => d.message).join('; ')}',
+      )
+      ..record(
+        CorpusMetric.placementVerifiedBoard,
+        ok: verified.agrees,
+        slices: _slicesOf(shot)..['mover'] = turn.mover.name,
+        detail: '${earlier.id}->${shot.id}: after ${turn.played}, '
+            '${verified.message}',
+      );
   }
 }
 

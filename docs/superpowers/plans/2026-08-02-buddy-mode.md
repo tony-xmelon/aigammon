@@ -392,6 +392,39 @@ promise at all, and that the query a session actually needs after dictating a
 move is **narrower** than the API's whole-board sweep — the regions that moved
 are known, and `BoardDiscrepancies.regions` already carries them one at a time.
 
+**USER DECISION (gate follow-up, 2026-08-21): the two rows are reshaped, and the
+real fix is scheduled.** The gate asked exactly the two questions above and the
+user answered both. Neither threshold moved — they are still **0.95** and
+**0.90** — and neither was allowed to drift down to meet a measurement. What
+moved is what an attempt is:
+
+- **Placement verification** is scored on **the regions the play touches**, one
+  attempt per dictated turn. That is the query a session actually makes: Buddy
+  says "13/8, 8/6", a hand goes to three regions, and those are the ones the
+  claim is about. `regionsTouchedBy(Move, Player)` derives the set from the
+  play's own hops — both ends of every hop, so an intermediate landing point is
+  asked about even though the position does not record it, plus the other
+  player's end of the bar on a hit — and `BoardDiscrepancies.agreesOn` answers
+  about exactly those.
+- **Full-board resync** targets **≥0.90 per region**. Per whole board the number
+  was arithmetic rather than a promise (the paragraph above), and what the
+  side-by-side resolve screen consumes is the region list anyway.
+- Both **whole-board rates stay in the report as watched rows** — `placement
+  verified (board)` and `full-board resync (board)` — floored at what they
+  measure and promised nothing. A demoted row that disappeared would be
+  indistinguishable from a row that was hidden.
+
+**What the reshape is worth on its own, measured on the day it landed: 2/6.**
+Placement verification on the real corpus goes 0/6 boards → **2/6 turns**, and
+per-region resync is unchanged at **0.858** (the reshape renames the row that
+was already being counted; it does not move the number). The four turns it does
+not buy fail on three regions for three different reasons — the 23-point reads
+three men for two on 003→005, the 6-point four for five on 005→008, the
+12-point two for six on 008→010 and again on 018→020 — and those are the
+far-half tall-stack cases below. The synthetic corpus, whose per-region rate is
+0.986, now meets every spec target it can ask. **The reshape is bookkeeping and
+was recorded as bookkeeping**; the perception work is what the rest depends on.
+
 **Other things the task turned up, each measured.** (a) **"A whole stack does not
 vanish into a misread" is false**, and the bed proved it: `checkersUnderLamp` on
 the classic palette — the only near-black checker the bed has — loses **four

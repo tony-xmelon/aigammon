@@ -80,29 +80,28 @@ enum CorpusMetric {
   /// anywhere going red.
   legalPlayActed('legal play acted on'),
 
-  /// The position a play left behind verified clean against the frame of it —
-  /// which is exactly what a session does after Buddy dictates a move and the
-  /// user places the men. One attempt per pair of shots that is genuinely one
-  /// turn apart, the same pairs [legalPlay] is scored on.
+  /// The position a play left behind verified clean **over the regions that
+  /// play touched** — which is exactly what a session does after Buddy
+  /// dictates a move and the user places the men. One attempt per pair of
+  /// shots that is genuinely one turn apart, the same pairs [legalPlay] is
+  /// scored on.
   ///
   /// An attempt SUCCEEDS when a board that is in fact correct comes back with
-  /// no discrepancies. Anything else is the belief mirror and tap-correct
-  /// taking over, which is the spec's own fallback for this query.
-  placementVerified('placement verified'),
+  /// nothing contradicting it on those regions. Anything else is the belief
+  /// mirror and tap-correct taking over, which is the spec's own fallback for
+  /// this query. The shape of the denominator is the user's decision at the
+  /// gate follow-up (2026-08-21) — see `PerceptionTargets` for the argument
+  /// and `regionsTouchedBy` for the set.
+  placementVerified('placement verified (touched)'),
 
-  /// A whole board re-read against the position the sidecar says is on it —
-  /// the drift-recovery read. One attempt per shot, every shot, including the
-  /// calibration frame and the two end-game keyframes that carry no log.
-  ///
-  /// The same success condition: a correct board with nothing contradicting
-  /// it. Regions this board does not have (a folding case's bear-off wells)
-  /// are neither, by construction — see `BoardDiscrepancies.unobservable`.
-  boardResynced('full-board resync'),
+  /// The same attempts, asked of the **whole board** — the shape the spec's
+  /// table used to promise, kept as a watched row so that the reshape can be
+  /// read against what it replaced rather than taken on trust.
+  placementVerifiedBoard('placement verified (board)'),
 
-  /// The same reads, one region at a time rather than one board at a time.
-  ///
-  /// No target — the spec's table is about boards — but this is where the
-  /// state-primed query is set against the blind one.
+  /// One region of a board re-read against the position the sidecar says is on
+  /// it — the drift-recovery read, scored per region, which is the shape the
+  /// user set for it at the gate follow-up (2026-08-21).
   ///
   /// **Its total is NOT comparable with [regionOccupancy]'s.** The two rows
   /// count different sets: this one asks both ends of the bar on every shot,
@@ -110,7 +109,17 @@ enum CorpusMetric {
   /// it. Compare the **point** slices, which are the same reads on both sides
   /// and are printed under every run, or read the per-pair rescued/lost
   /// signals. See `_scoreResync`.
-  regionVerified('region verified vs game');
+  regionVerified('resync, per region'),
+
+  /// The same reads, one whole board at a time: every region of a shot has to
+  /// agree or the attempt failed.
+  ///
+  /// **Watched, never asserted.** Twenty-six regions in a row is a compound
+  /// event and the spec's 0.90 over it is arithmetic rather than a promise —
+  /// see `PerceptionTargets.fullBoardResyncPerRegion`. It stays in the report
+  /// because it is the number the reshape moved away from, and a row that
+  /// disappears is a number nobody can check.
+  boardResynced('full-board resync (board)');
 
   const CorpusMetric(this.label);
 
@@ -130,12 +139,15 @@ const Map<CorpusMetric, double?> kMetricTargets = <CorpusMetric, double?>{
   CorpusMetric.expectedRefusal: PerceptionTargets.expectedRefusal,
   CorpusMetric.legalPlay: PerceptionTargets.legalPlayIdentification,
   CorpusMetric.placementVerified: PerceptionTargets.placementVerification,
-  CorpusMetric.boardResynced: PerceptionTargets.fullBoardResync,
+  CorpusMetric.regionVerified: PerceptionTargets.fullBoardResyncPerRegion,
   CorpusMetric.legalPlayActed: null,
   CorpusMetric.startConfirmed: null,
   CorpusMetric.regionOccupancy: null,
   CorpusMetric.regionColour: null,
-  CorpusMetric.regionVerified: null,
+  // The two whole-board rows the gate follow-up demoted. Counted and printed,
+  // promised nothing — see `CorpusMetric.boardResynced`.
+  CorpusMetric.placementVerifiedBoard: null,
+  CorpusMetric.boardResynced: null,
 };
 
 /// How many attempts, and how many of them went right.
