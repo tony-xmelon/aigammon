@@ -768,7 +768,9 @@ class Calibrator {
           CalibrationProblem.checkersNotInStartingPosition,
           'The checkers are not in the starting position — the $number-point '
           'is holding the wrong colour. Set the board up for the start of a '
-          'game, then calibrate again.',
+          'game, then calibrate again. If the board is already set up right, '
+          'the tray and bar widths it was measured with are probably not '
+          "this board's.",
           <RoiId>[RoiId.point(entry.key)],
         );
       }
@@ -825,7 +827,9 @@ class Calibrator {
         CalibrationProblem.checkersNotInStartingPosition,
         'I can read this board, but not as a game about to start: '
         '${readBack.discrepancies.first.message}. Set the men up for the '
-        'start of a game, then calibrate again.',
+        'start of a game, then calibrate again. If the board is already set '
+        'up right, the tray and bar widths it was measured with are probably '
+        "not this board's.",
         readBack.discrepancies.map((d) => d.region).toList(),
       );
     }

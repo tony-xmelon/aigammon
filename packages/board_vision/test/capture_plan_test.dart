@@ -233,6 +233,16 @@ void main() {
       final json = shots.first.toJson()..['schema'] = kSidecarSchema + 1;
       expect(() => CorpusShot.fromJson(json), throwsFormatException);
     });
+
+    test('a shot with no measured proportions emits NO proportions key', () {
+      // Review found `'proportions': proportions?.toJson()` writing an
+      // explicit null. The committed sidecars carry no such key, and both
+      // drift guards compare fromJson->toJson on BOTH sides, so a null key
+      // is exactly the class of byte drift they cannot see — "committed
+      // equals what the generator writes" must hold at the byte level.
+      final unmeasured = shots.firstWhere((s) => s.proportions == null);
+      expect(jsonEncode(unmeasured.toJson()), isNot(contains('proportions')));
+    });
   });
 
   group('the board\'s own shape, which a session may have to say', () {

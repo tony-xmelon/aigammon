@@ -396,7 +396,10 @@ class CorpusShot {
         'refusalReason': refusalReason,
         'title': title,
         'instructions': instructions,
-        'proportions': proportions?.toJson(),
+        // No key at all when unmeasured — an explicit null would be byte
+        // drift against every committed sidecar, of exactly the class the
+        // fromJson->toJson drift guards cannot see.
+        if (proportions != null) 'proportions': proportions!.toJson(),
       };
 
   factory CorpusShot.fromJson(Map<String, dynamic> json) {
