@@ -440,22 +440,10 @@ void main() {
       // two leaves tent, so no four corners describe it. Its sidecars carry
       // eight points, and the harness has to notice and take the folding door.
       //
-      // The dice on this fixture are REFUSED, and that is pinned rather than
-      // excused: its camera sits lower over the table than the dice reader's
-      // die-height estimate can survive, so the pip shapes frame squashed
-      // and no face matches (`test/folding_board_test.dart` carries the
-      // measurement, and reads the same tented board's pair from a kinder
-      // camera). What matters to the HARNESS — this test's actual subject —
-      // is that the folding door was taken: calibration passes through the
-      // eight points, and the refusal is a refusal, not a misread.
       final board = _scoreFixture(_Fixture.tentedFoldingCase);
-      final violations = board.targetViolations();
-      expect(violations, hasLength(1), reason: board.report());
-      expect(violations.single, contains(CorpusMetric.dicePair.label));
+      expect(board.targetViolations(), isEmpty, reason: board.report());
       expect(board.totalFor(CorpusMetric.calibration).rate, 1.0);
-      expect(board.totalFor(CorpusMetric.dicePair).rate, 0.0);
-      expect(board.signalOf(kDiceFoundSignal).sum, 0,
-          reason: 'the pair must be refused outright, never found-and-wrong');
+      expect(board.totalFor(CorpusMetric.dicePair).rate, 1.0);
       expect(board.skipped, isEmpty, reason: board.report());
     });
 
@@ -510,18 +498,19 @@ void main() {
 /// * **dice pair 0/4.** The reader declines every real roll — it finds no
 ///   pair at all rather than reading a wrong one. The BAND-LOCATION half of
 ///   the queued dice work is DONE: the reader searches the whole playing
-///   surface now, and on the bed it reads pairs anywhere; what its widened
-///   eye then met on this footage's seventy stable windows was every way a
-///   22-pixel die can lie — and the gates that grew from that (a face is a
-///   SHAPE, a candidate is die-sized, one die seen twice is not a pair)
-///   refuse all of it rather than misread it. What keeps these four
-///   particular rolls at null: 005's pair lies on the pale left leaf that
-///   camouflages die bodies outright, 010's and 013's dice tilt into two
-///   visible faces, and 003's far die miscounts its pips at this resolution
-///   — each now a shape refusal where several were wrong-face reads while
-///   faces were still counted. Dice this small and this tilted still want a
-///   closer camera, a pip-span measured per session the way `dieSide` is,
-///   or the ML hatch; the dice reader's own docs carry each measurement.
+///   surface, reads faces as SHAPES scaled by the board's own measured
+///   aspect, refuses one die seen twice, and can read a colour-camouflaged
+///   die straight off its pips — and on the same footage's OTHER windows it
+///   reads a tilted pair's up-faces right (frames 031's 1-2) where counting
+///   used to invent rolls from wood grain. What keeps these four particular
+///   rolls at null, each measured in the dice reader's and PipPattern's
+///   docs: 010's and 013's dice tilt into two faces whose pip subsets no
+///   shape accepts; 003's far die splits its pips at this resolution; and
+///   005's camouflaged pair needs BOTH the pip channel and its session's
+///   own 0.8 pip span — a span this footage cannot enable, because its
+///   glare washes a five's pips into the three inside them (frame 046).
+///   Dice this small, tilted and washed still want a closer camera or the
+///   ML hatch; every refusal here is the designed answer.
 /// * **region occupancy 0.784.** Counts on this board run short, worst on tall
 ///   stacks, exactly as the plan doc's far-half note predicts. The design never
 ///   trusts a blind count anyway; it is Task 7's play matching that the spec

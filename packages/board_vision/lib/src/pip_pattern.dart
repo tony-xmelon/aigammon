@@ -39,18 +39,22 @@ class PipPattern {
   /// How far a measured pairwise distance may sit from the face's own, in
   /// die sides.
   ///
-  /// Two measured pressures set it. From below: the caller's die frame is
-  /// only as true as its estimate of a die's height in board units, and that
-  /// estimate carries the camera's own foreshortening — on the first real
-  /// footage the framed patterns arrive compressed to about 0.74 of a die
-  /// frame, which puts a quad's vertical pairs 0.13 from their canonical
-  /// 0.5. From above: the closest wrong shapes the footage produced still
-  /// have to miss — a merged six's line of three misses its long span by
-  /// 0.21, a fragment's two adjacent dots miss the corner-to-corner two by
-  /// 0.21, a quad with split extras misses the six by 0.18. So 0.15: real
-  /// compression inside, every measured wrong shape outside. The pip
-  /// centroid wobble of a blurred twenty-pixel die (under a twentieth of a
-  /// side per dot) rides within the same margin.
+  /// This is a NOISE allowance, not a shape allowance, and the division is
+  /// what keeps the test sharp: how far a session's dice drill their pips
+  /// from the canon is a fact about the dice — [faceOf]'s `span` carries it,
+  /// measured once per session like `BoardCalibration.dieSide` — while this
+  /// covers only the centroid wobble of blurred twenty-pixel dots and the
+  /// residual error of the die frame's measured aspect. Two measured
+  /// pressures set it. From below: with its span given, the first real
+  /// footage's true quad sits every sorted distance within 0.072 of its
+  /// template. From above: the closest wrong shape has to miss — the same
+  /// footage's merged six, a line of three at half the six's own pip span,
+  /// misses the span-scaled three on its long run by 0.166; a quad with
+  /// split extras misses the six by 0.183 at canonical span; adjacent
+  /// fragment pairs miss the two by 0.207. Trying to buy the quad WITHOUT
+  /// the span — a wider tolerance over canonical templates — was measured
+  /// and refused: the quad's diagonal slot misses canon by 0.213, and any
+  /// tolerance past 0.207 reads merged sixes as threes.
   static const double tolerance = 0.15;
 
   /// How far an ace's single pip may stand from its die's middle, in die
@@ -62,8 +66,15 @@ class PipPattern {
   /// The face [pips] form, or null when they form none.
   ///
   /// [pips] are pip middles in the die's own frame — the unit square, one
-  /// side to the unit.
-  static int? faceOf(List<Pt> pips) {
+  /// side to the unit. [span] is how wide this session's dice drill their
+  /// pip square, as a share of the canonical one: real dice vary — the
+  /// first real footage's hold theirs at about ±0.21 of the side against
+  /// the canon's ±0.25, a span of 0.84 — and the variance is a fact about
+  /// the DICE, measured once per session the way
+  /// `BoardCalibration.dieSide` is, never searched for per blob: a span
+  /// left free to fit each candidate would let a merged six's line of
+  /// three pick the scale at which it becomes a three.
+  static int? faceOf(List<Pt> pips, {double span = 1.0}) {
     final face = pips.length;
     if (face < 1 || face > 6) return null;
     if (face == 1) {
@@ -71,10 +82,17 @@ class PipPattern {
       return math.sqrt(dx * dx + dy * dy) <= aceReach ? 1 : null;
     }
 
+    // Clamped to the range real dice occupy — pip squares run from about
+    // three quarters of the canon out to the canon itself — which is also,
+    // not by accident, the range where a merged six's line of three stays
+    // refusable: its miss against the three shrinks with the span, and
+    // under about 0.73 it would slip inside [tolerance]. The two bounds
+    // coincide because the tolerance was measured against the same dice.
+    final scale = span.clamp(0.78, 1.02);
     final measured = _sortedDistances(pips);
     final expected = _sortedDistances(_canonical(face));
     for (var i = 0; i < measured.length; i++) {
-      if ((measured[i] - expected[i]).abs() > tolerance) return null;
+      if ((measured[i] - expected[i] * scale).abs() > tolerance) return null;
     }
     return face;
   }

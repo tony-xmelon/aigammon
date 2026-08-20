@@ -292,6 +292,54 @@ class BoardCalibration {
   /// is the intended source; this field is what it will fill in.
   final double dieSide;
 
+  /// The playing surface's width-to-height ratio, measured from the starting
+  /// position's own checkers — or null when they could not be measured.
+  ///
+  /// Board space is a unit square whatever shape the board is, so knowing
+  /// how TALL anything is in board units — a die, above all — means knowing
+  /// this ratio. It used to be estimated from pixel lengths at the board's
+  /// middle, and every such estimate carries the camera's own
+  /// y-foreshortening on top of the board's true shape: measured at 1.35
+  /// times the truth on the first real footage's low camera, and 1.85 at
+  /// the tented bed's hinge crown, which is enough to squash the dice
+  /// reader's pip shapes past recognition. A CHECKER is the fact the camera
+  /// cannot pollute: a disc is as wide as it is deep on the table, its
+  /// depth in board-y units is [stacks]' own pitch, and its width in
+  /// board-x units is measured straight across the disc at calibration. The
+  /// ratio of the two is this number.
+  ///
+  /// Null — never a guess — when the pitch was not a well-conditioned
+  /// regression, when fewer than half the labelled stacks would measure, or
+  /// when the ratio came out shaped like no backgammon board; callers state
+  /// their own fallback (the dice reader falls back to the pixel estimate,
+  /// and says so where it does).
+  final double? surfaceAspect;
+
+  /// How wide this session's dice drill their pip square, as a share of the
+  /// canonical layout's — the same kind of fact as [dieSide], measured the
+  /// same way, and one because the canon is what the bed draws.
+  ///
+  /// Real dice vary: the first real footage's dice hold their pips at about
+  /// ±0.21 of the side where the canonical layout stands at ±0.25 — a span
+  /// of 0.84 — and at that spacing their true quad misses the canonical
+  /// shape by more than any tolerance that still refuses wrong shapes
+  /// (`PipPattern.tolerance` carries both measurements). Like [dieSide],
+  /// the intended source is the session's own first roll, not the user with
+  /// a ruler; unlike a per-blob fit, it is measured ONCE and then fixed,
+  /// because a span left free per candidate is the scale at which a merged
+  /// six becomes a three.
+  ///
+  /// **Whether to enable it is itself a measurement.** On the first real
+  /// footage, reading through its own measured 0.8 span returns the two
+  /// windows whose true quad the canon refuses — and also returns a five
+  /// with glare-washed pips reading as the three inside it (frame 046 of
+  /// the stable set), a wash too shallow for the faint-pip recount to
+  /// separate from grain at twenty-two pixels. A wrong roll outweighs two
+  /// right ones here by the design's own arithmetic, so that session stays
+  /// at the canon; a session with more pixels on its pips gets to choose
+  /// differently, with this note as the price list.
+  final double pipSpan;
+
   const BoardCalibration({
     required this.geometry,
     required this.orientation,
@@ -300,6 +348,8 @@ class BoardCalibration {
     required this.stacks,
     this.proportions = BoardProportions.standard,
     this.dieSide = defaultDieSide,
+    this.surfaceAspect,
+    this.pipSpan = 1.0,
   });
 
   /// The synthetic bed's die, as a fraction of the board's width.
@@ -645,6 +695,7 @@ class Calibrator {
     required BoardOrientation orientation,
     BoardProportions proportions = BoardProportions.standard,
     double dieSide = BoardCalibration.defaultDieSide,
+    double pipSpan = 1.0,
   }) {
     final BoardGeometry geometry;
     try {
@@ -662,6 +713,7 @@ class Calibrator {
       orientation: orientation,
       proportions: proportions,
       dieSide: dieSide,
+      pipSpan: pipSpan,
       misfitHint: 'the tray and bar widths it was measured with are probably '
           "not this board's",
     );
@@ -680,6 +732,7 @@ class Calibrator {
     required FoldingCorners corners,
     required BoardOrientation orientation,
     double dieSide = BoardCalibration.defaultDieSide,
+    double pipSpan = 1.0,
   }) {
     final FoldingBoardGeometry geometry;
     try {
@@ -699,6 +752,7 @@ class Calibrator {
       orientation: orientation,
       proportions: geometry.proportions,
       dieSide: dieSide,
+      pipSpan: pipSpan,
       misfitHint: 'the eight points it was measured through — four corners '
           'and the four hinge seams — are probably not quite on it',
     );
@@ -717,6 +771,7 @@ class Calibrator {
     required BoardProportions proportions,
     required String misfitHint,
     double dieSide = BoardCalibration.defaultDieSide,
+    double pipSpan = 1.0,
   }) {
     final atlas =
         RoiAtlas.forOrientation(orientation, proportions: proportions);
@@ -1008,6 +1063,14 @@ class Calibrator {
       stacks: stacks,
       proportions: proportions,
       dieSide: dieSide,
+      pipSpan: pipSpan,
+      surfaceAspect: _measureSurfaceAspect(
+        sampler: sampler,
+        atlas: atlas,
+        colors: model,
+        occupied: occupied,
+        pitch: stacks.wellConditioned ? stacks.pitch : 0,
+      ),
     );
     final readBack = confirm(frame, calibration);
     if (readBack.discrepancies.length > maxLearningMisreads) {
@@ -1256,6 +1319,49 @@ class Calibrator {
   /// tray with checkers in it shows exactly two surfaces, its felt and the
   /// men, which is exactly what the region model has room for. Both were
   /// learned, the read-back agreed, and the calibration was handed over.
+  /// The surface's width-to-height ratio, from the starting position's own
+  /// checkers — see [BoardCalibration.surfaceAspect] for what leans on it
+  /// and why no pixel estimate can serve.
+  ///
+  /// A checker is a disc: as wide as it is deep on the table. Its depth in
+  /// board-y units is [pitch], the regression the eight labelled stacks just
+  /// produced; its width is measured straight across the first checker of
+  /// each stack, at the disc's widest chord half a pitch behind the edge the
+  /// finder settled on. The median width over the stacks that measured
+  /// carries the ratio. Fewer than four of the eight measuring, a pitch that
+  /// was no regression, or a ratio shaped like no backgammon board — wider
+  /// than four to one, or taller than wide past a fifth — and the answer is
+  /// null, said honestly, rather than a number that would quietly misshape
+  /// every die frame of the session.
+  static double? _measureSurfaceAspect({
+    required RoiSampler sampler,
+    required RoiAtlas atlas,
+    required ColorModel colors,
+    required Map<int, CheckerColor> occupied,
+    required double pitch,
+  }) {
+    if (pitch <= 0) return null;
+    final widths = <double>[];
+    for (final entry in occupied.entries) {
+      final axis = StackAxis.forRegion(atlas, RoiId.point(entry.key));
+      final found = sampler.findChecker(entry.key, colors: colors);
+      if (!found.settled) continue;
+      final width = sampler.checkerWidth(
+        axis,
+        depth: found.depth + pitch / 2,
+        centreX: (axis.minX + axis.maxX) / 2 +
+            found.offset * (axis.maxX - axis.minX),
+        color: entry.value,
+        colors: colors,
+      );
+      if (width > 0) widths.add(width);
+    }
+    if (widths.length < 4) return null;
+    widths.sort();
+    final aspect = pitch / widths[widths.length ~/ 2];
+    return aspect < 0.8 || aspect > 4.0 ? null : aspect;
+  }
+
   static ({CalibrationResult? refused, ColorModel colors}) _settleEmptyRegions({
     required RoiSampler sampler,
     required RoiAtlas atlas,

@@ -51,6 +51,7 @@ class BoardVision {
     required BoardOrientation orientation,
     BoardProportions proportions = BoardProportions.standard,
     double dieSide = BoardCalibration.defaultDieSide,
+    double pipSpan = 1.0,
   }) =>
       Calibrator.learnStartingPosition(
         frame: frame,
@@ -58,6 +59,7 @@ class BoardVision {
         orientation: orientation,
         proportions: proportions,
         dieSide: dieSide,
+        pipSpan: pipSpan,
       );
 
   /// Learns a **folding-case** board from a frame of its starting position.
@@ -81,12 +83,14 @@ class BoardVision {
     required FoldingCorners corners,
     required BoardOrientation orientation,
     double dieSide = BoardCalibration.defaultDieSide,
+    double pipSpan = 1.0,
   }) =>
       Calibrator.learnFoldingStartingPosition(
         frame: frame,
         corners: corners,
         orientation: orientation,
         dieSide: dieSide,
+        pipSpan: pipSpan,
       );
 
   /// Checks the board in [frame] against the position every game starts from,

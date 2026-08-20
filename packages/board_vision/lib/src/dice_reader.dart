@@ -148,10 +148,11 @@ class DiceReading {
 /// columns and camouflaged in the cream ones. Measured on the first real
 /// footage: the left leaf's pale wood holds dice at 0.7 spreads from the
 /// leaf's own surfaces — only the band's narrower vocabulary separates them
-/// (3.2 spreads), and only inside the band. Both cases fail closed: a die
-/// colour cannot separate from the board is a null and a tap on the dice
-/// pad, never a guess. Finding such dice by their pips rather than their
-/// bodies is the queued follow-up.
+/// (3.2 spreads), and only inside the band. So the reader has a second
+/// channel: what camouflage cannot hide is the PIPS, and [_pipFirst] reads
+/// a face straight off its isolated dots when the body never made a blob.
+/// A die that hides its body AND washes its pips out is a null and a tap
+/// on the dice pad, never a guess.
 ///
 /// ## Numbers, provisionally
 ///
@@ -324,6 +325,23 @@ class DiceReader {
   /// fortieth of the die.
   static const double pipPercentile = 0.01;
 
+  /// Where the recount's kinder threshold sits between body and pips, as a
+  /// share of the pip depth — see the subset-trap note in [_readDie] for
+  /// what the recount is.
+  ///
+  /// Bounded on both sides by measurement. It must sit well under [pipCut]
+  /// or the recount sees nothing the count did not; the bed's washed pips
+  /// are painted at 0.42 of the depth, comfortably between the two. And it
+  /// cannot chase the real footage's shallowest glare: at a quarter of the
+  /// depth the recount caught grain instead — it refused two windows'
+  /// TRUE reads (031's tilted ace, 033's plain quad) and still missed the
+  /// washed five it was aimed at (046), whose lit pips sit shallower than
+  /// the grain does. That five stays refused another way — its session
+  /// keeps the canonical pip span, where the subset's shape misses — and
+  /// the recount holds the trap shut for sessions that measure a tighter
+  /// span. Refusal over guesswork, at every level of this file.
+  static const double faintPipCut = 0.35;
+
   /// How much bigger one die of a pair may be than the other. Dice come in
   /// sets; a pair that disagrees about its own size is a pair with something
   /// else in it.
@@ -458,12 +476,17 @@ class DiceReader {
     final grid = _sampleSurface();
     if (grid == null) return null;
 
+    final blobs = _blobsIn(grid);
     final candidates = <DieReading>[];
-    for (final blob in _blobsIn(grid)) {
+    for (final blob in blobs.dieSized) {
       final die = _readDie(grid, blob);
       if (die != null) candidates.add(die);
       // Three candidates is already an answer — nothing found later can make
       // this a pair again.
+      if (candidates.length > 2) return null;
+    }
+    for (final die in _pipFirst(grid, blobs.dieSized, blobs.dots)) {
+      candidates.add(die);
       if (candidates.length > 2) return null;
     }
     if (candidates.length != 2) return null;
@@ -669,21 +692,22 @@ class DiceReader {
     return y >= RoiAtlas.midline ? s.ownersNear[col] : s.ownersFar[col];
   }
 
-  /// One die's y-extent in board units, from the board middle's aspect.
+  /// One die's y-extent in board units.
   ///
-  /// The same estimate everything else uses ([_dieOnLattice]), named because
-  /// the pip-shape frame leans on it and its error is now measured. The
-  /// pixel aspect at any point carries the CAMERA's own y-foreshortening on
-  /// top of the board's true proportions, so this over-estimates on a low
-  /// camera — by about 1.35 on the first real footage (framed patterns
-  /// compress to about 0.74 of a die frame, inside [PipPattern.tolerance])
-  /// and by 1.85 at the tented bed's hinge crown, which is outside any
-  /// tolerance that still refuses the wrong shapes. A die-frame divisor the
-  /// camera cannot pollute needs a physical vertical reference; the
-  /// measured checker pitch (`StackMetrics.pitch` is a disc's diameter in
-  /// y-units) is the obvious candidate, queued with the tent findings.
-  double _dieDownUnits(_Surface s) =>
-      _dieOnLattice.down * (s.y1 - s.y0) / latticeDown;
+  /// From [BoardCalibration.surfaceAspect] — the board's own ratio, measured
+  /// off its checkers at calibration — because the pip-shape frame lives or
+  /// dies by this number and every pixel-based estimate carries the camera's
+  /// y-foreshortening on top of the board's true shape: 1.35 times the truth
+  /// on the first real footage's low camera, 1.85 at the tented bed's hinge
+  /// crown, both measured, the second far past any tolerance that still
+  /// refuses wrong shapes. When calibration could not measure the board
+  /// (see the field for when that is), the board middle's pixel estimate is
+  /// the stated fallback — the least-polluted point of a bad instrument.
+  double _dieDownUnits(_Surface s) {
+    final aspect = calibration.surfaceAspect;
+    if (aspect != null) return calibration.dieSide * aspect;
+    return _dieOnLattice.down * (s.y1 - s.y0) / latticeDown;
+  }
 
   /// Board-space x of cell [i]'s middle.
   double _boardXAt(_Surface s, int i) =>
@@ -710,8 +734,12 @@ class DiceReader {
     return lumaOf(frame.pixelAt(px, py));
   }
 
-  /// Connected runs of foreign cells, four-connected, big enough to matter.
-  List<List<int>> _blobsIn(_Surface surface) {
+  /// Connected runs of foreign cells, four-connected, in the two sizes that
+  /// matter: die-sized blobs for the body-first channel, and pip-sized dots
+  /// for [_pipFirst].
+  ({List<List<int>> dieSized, List<List<int>> dots}) _blobsIn(
+    _Surface surface,
+  ) {
     final n = latticeAcross * latticeDown;
     final die = _dieOnLattice;
     final dieCells = die.across * die.down;
@@ -720,8 +748,11 @@ class DiceReader {
     // blob bigger than the surface it was found on is a bug rather than a
     // hand.
     final maxCells = math.min(n, (dieCells * maxDieShare).round());
+    final minDot = math.max(1, (dieCells * minPipShare).round());
+    final maxDot = (dieCells * maxPipShare).round();
     final seen = Uint8List(n);
-    final blobs = <List<int>>[];
+    final dieSized = <List<int>>[];
+    final dots = <List<int>>[];
     final stack = <int>[];
 
     for (var start = 0; start < n; start++) {
@@ -741,10 +772,12 @@ class DiceReader {
         if (row < latticeDown - 1) _push(surface, seen, stack, i + latticeAcross);
       }
       if (cells.length >= minCells && cells.length <= maxCells) {
-        blobs.add(cells);
+        dieSized.add(cells);
+      } else if (cells.length >= minDot && cells.length <= maxDot) {
+        dots.add(cells);
       }
     }
-    return blobs;
+    return (dieSized: dieSized, dots: dots);
   }
 
   static void _push(_Surface surface, Uint8List seen, List<int> stack, int i) {
@@ -752,6 +785,196 @@ class DiceReader {
       seen[i] = 1;
       stack.add(i);
     }
+  }
+
+  /// Die candidates found by their pips alone — the channel for dice whose
+  /// BODIES the board's colours cannot separate.
+  ///
+  /// Measured on both beds this reader answers to: the classic palette's die
+  /// body sits 2.3 spreads from its cream triangles' mode, so a die in a
+  /// pale column never becomes a foreign blob at all, and the first real
+  /// footage's left leaf holds die bodies at 0.7 spreads from its own washed
+  /// wood. What neither can hide is the PIPS — small, dark, foreign
+  /// wherever they fall — which arrive in the mask as isolated pip-sized
+  /// dots. Dots that stand where a face's pips stand, around a middle that
+  /// reads a whole pip contrast brighter than they do, are that face; the
+  /// wall, the session's pip span, the pair gap, the size agreement and the
+  /// confidence all treat what this returns exactly as they treat the
+  /// body-first candidates.
+  ///
+  /// Three rules of its own, where the body channel's have nothing to hold:
+  ///
+  /// * a DOT must be a dot — a camouflaged die still casts body-edge
+  ///   slivers where its rim crosses into a column that CAN see it, and a
+  ///   sliver is pip-sized by area while running the die's whole height;
+  ///   let it join the cluster and every shape bends;
+  /// * a pip's middle must be a die's body, not wreckage — a cluster whose
+  ///   surroundings are shot through with foreign cells is the space
+  ///   between checkers, not a face;
+  /// * only faces of FOUR and up travel this road. Measured on the real
+  ///   footage's seventy windows the day the channel was built: its wood
+  ///   freckles pair off into corner-to-corner "2"s at will and even line
+  ///   up in threes — seven windows grew phantom pairs from exactly those,
+  ///   at recurring scenery spots, while quads of specks at the die's own
+  ///   scale grew none. An ace or a deuce with no visible body is grain;
+  ///   four dots in a square are starting to be a die.
+  ///
+  /// Dots inside a die-sized blob's own bounds are left alone: on a pale
+  /// board a pip's rim blends through the board's colour and the pip
+  /// arrives as its own small component beside the body the other channel
+  /// already holds — counted here too, two dice become three candidates.
+  List<DieReading> _pipFirst(
+    _Surface surface,
+    List<List<int>> dieSized,
+    List<List<int>> dots,
+  ) {
+    if (dots.length < 2) return const <DieReading>[];
+    final die = _dieOnLattice;
+    final dieDownUnits = _dieDownUnits(surface);
+    final claimed = <(int, int, int, int)>[
+      for (final blob in dieSized) _bboxOf(blob),
+    ];
+
+    final kept = <List<int>>[];
+    final centers = <Pt>[];
+    for (final dot in dots) {
+      final (minC, maxC, minR, maxR) = _bboxOf(dot);
+      if (maxC - minC + 1 > die.across / 6 * 2.5) continue;
+      if (maxR - minR + 1 > die.down / 6 * 2.5) continue;
+      final midC = (minC + maxC) / 2, midR = (minR + maxR) / 2;
+      final owned = claimed.any((b) =>
+          midC >= b.$1 - 2 && midC <= b.$2 + 2 &&
+          midR >= b.$3 - 2 && midR <= b.$4 + 2);
+      if (owned) continue;
+      var x = 0.0, y = 0.0;
+      for (final i in dot) {
+        x += _boardXAt(surface, i);
+        y += _boardYAt(surface, i);
+      }
+      kept.add(dot);
+      centers.add(Pt(x / dot.length, y / dot.length));
+    }
+    if (kept.length < 2) return const <DieReading>[];
+
+    // Clusters of dots within about one die of each other, by table
+    // distance — the same metric every other gate speaks.
+    final parent = List<int>.generate(kept.length, (i) => i);
+    int rootOf(int i) {
+      var r = i;
+      while (parent[r] != r) {
+        r = parent[r];
+      }
+      parent[i] = r;
+      return r;
+    }
+
+    for (var a = 0; a < kept.length; a++) {
+      for (var b = a + 1; b < kept.length; b++) {
+        final dx = (centers[a].x - centers[b].x) / calibration.dieSide;
+        final dy = (centers[a].y - centers[b].y) / dieDownUnits;
+        if (math.sqrt(dx * dx + dy * dy) <= 1.0) {
+          parent[rootOf(b)] = rootOf(a);
+        }
+      }
+    }
+    final clusters = <int, List<int>>{};
+    for (var i = 0; i < kept.length; i++) {
+      (clusters[rootOf(i)] ??= <int>[]).add(i);
+    }
+
+    final found = <DieReading>[];
+    for (final members in clusters.values) {
+      if (members.length < 4 || members.length > 6) continue;
+      var cx = 0.0, cy = 0.0;
+      for (final m in members) {
+        cx += centers[m].x;
+        cy += centers[m].y;
+      }
+      final center = Pt(cx / members.length, cy / members.length);
+      final halfAcross = calibration.dieSide / 2;
+      if (center.x < surface.x0 + halfAcross ||
+          center.x > surface.x1 - halfAcross ||
+          center.y < surface.y0 + dieDownUnits / 2 ||
+          center.y > surface.y1 - dieDownUnits / 2) {
+        continue;
+      }
+      final face = PipPattern.faceOf(
+        <Pt>[
+          for (final m in members)
+            Pt(
+              (centers[m].x - center.x) / calibration.dieSide + 0.5,
+              (centers[m].y - center.y) / dieDownUnits + 0.5,
+            ),
+        ],
+        span: calibration.pipSpan,
+      );
+      if (face == null) continue;
+
+      // The body around the pips: bright against them by a whole pip
+      // contrast, and mostly accounted for by the board — a middle shot
+      // through with OTHER foreign cells is the space between checkers.
+      final dotCells = <int>{
+        for (final m in members) ...kept[m],
+      };
+      var dotLuma = 0.0;
+      for (final i in dotCells) {
+        dotLuma += _lumaAt(surface, i);
+      }
+      dotLuma /= dotCells.length;
+
+      final centerCol =
+          ((center.x - surface.x0) / (surface.x1 - surface.x0) * latticeAcross)
+              .round();
+      final centerRow =
+          ((center.y - surface.y0) / (surface.y1 - surface.y0) * latticeDown)
+              .round();
+      final halfCols = (die.across / 2).round(), halfRows = (die.down / 2).round();
+      final bodyLumas = <double>[];
+      var bodyForeign = 0, bodyCells = 0;
+      for (var r = centerRow - halfRows; r <= centerRow + halfRows; r += 2) {
+        if (r < 0 || r >= latticeDown) continue;
+        for (var c = centerCol - halfCols; c <= centerCol + halfCols; c += 2) {
+          if (c < 0 || c >= latticeAcross) continue;
+          final i = r * latticeAcross + c;
+          if (dotCells.contains(i)) continue;
+          bodyCells++;
+          if (surface.foreign[i] == 1) bodyForeign++;
+          bodyLumas.add(_lumaAt(surface, i));
+        }
+      }
+      if (bodyLumas.isEmpty || bodyForeign > bodyCells * 0.25) continue;
+      bodyLumas.sort();
+      final body = bodyLumas[bodyLumas.length ~/ 2];
+      if (body - dotLuma < minPipContrast) continue;
+
+      found.add(DieReading(
+        face: face,
+        center: center,
+        // Both dice of a session are the session's own size, and a cluster
+        // has no rim to measure a span from: the stated size is the honest
+        // span, and the pair's size-agreement gate reads it as such.
+        span: calibration.dieSide,
+        pipContrast: body - dotLuma,
+        // No outline exists to score through pips alone; zero says so
+        // rather than inventing one.
+        squareness: 0,
+      ));
+    }
+    return found;
+  }
+
+  /// The bounding box of [cells], as (minCol, maxCol, minRow, maxRow).
+  (int, int, int, int) _bboxOf(List<int> cells) {
+    var minC = latticeAcross, maxC = -1;
+    var minR = latticeDown, maxR = -1;
+    for (final i in cells) {
+      final c = i % latticeAcross, r = i ~/ latticeAcross;
+      minC = math.min(minC, c);
+      maxC = math.max(maxC, c);
+      minR = math.min(minR, r);
+      maxR = math.max(maxR, r);
+    }
+    return (minC, maxC, minR, maxR);
   }
 
   /// A blob, if it turns out to be a die.
@@ -845,14 +1068,39 @@ class DiceReader {
     // scaled by the die the session measured and anchored on the blob's own
     // middle, so a fragment's dots and a two-face union's dots land outside
     // every face's shape instead of re-scaling into one.
-    final face = PipPattern.faceOf(<Pt>[
-      for (final p in pips)
-        Pt(
-          (p.x - center.x) / calibration.dieSide + 0.5,
-          (p.y - center.y) / dieDownUnits + 0.5,
-        ),
-    ]);
+    final face = PipPattern.faceOf(
+      <Pt>[
+        for (final p in pips)
+          Pt(
+            (p.x - center.x) / calibration.dieSide + 0.5,
+            (p.y - center.y) / dieDownUnits + 0.5,
+          ),
+      ],
+      span: calibration.pipSpan,
+    );
     if (face == null) return null;
+
+    // The subset trap: a washed-out pip is invisible at the pip cut and
+    // perfectly visible at a kinder one, and a face read minus its faintest
+    // pips is a SMALLER legal face — a quincunx contains the diagonal
+    // three, a six's corners are a quad. Measured on the footage the pip
+    // span was measured from: a five whose window-lit pips fell under the
+    // cut read as a clean three through every shape test (frame 046 of the
+    // stable set) and paired into a roll nobody threw. So the marks are
+    // counted again at half the cut's depth: dots that appear only now are
+    // pips that went unread, and a face with more marks than pips is a
+    // guess, not a reading. One-sided on purpose — at the kinder cut,
+    // neighbouring true pips can blur together and the count can only
+    // honestly fall, so fewer marks than pips refuses nothing.
+    final kinderCut = body - faintPipCut * spread;
+    var kinderMarks = 0;
+    for (final mark in _componentsOf(<int>{
+      for (final i in interior)
+        if (luma[i]! <= kinderCut) i,
+    })) {
+      if (mark.length >= minPip) kinderMarks++;
+    }
+    if (kinderMarks > face) return null;
 
     // A die is the size the session said dice are. Too narrow is a fragment
     // cut at a camouflage seam — the wrong-smaller-face machine the constant

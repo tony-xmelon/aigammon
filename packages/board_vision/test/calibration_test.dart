@@ -864,6 +864,54 @@ void main() {
     });
   });
 
+  group('the board\'s own vertical scale', () {
+    // Board space is a unit square whatever shape the board is, so knowing
+    // how TALL a thing is in board units means knowing the surface's true
+    // width-to-height ratio. Every pixel-based estimate of that ratio
+    // carries the camera's own y-foreshortening on top — measured at 1.35
+    // times the truth on the first real footage and 1.85 at the tented
+    // bed's hinge — and the dice reader's face shapes live or die by the
+    // number. What the camera cannot pollute is a CHECKER: a disc is as
+    // wide as it is deep on the table, its depth in board-y units is the
+    // pitch the eight labelled stacks already regressed, and its width in
+    // board-x units is measurable straight across the disc. The ratio is
+    // the board's aspect, taken from the board's own furniture.
+    const truth = kTopDownWidth / kTopDownHeight;
+
+    test('measured from the starting position\'s own checkers', () {
+      for (final palette in BoardPalette.all) {
+        final aspect = _calibrate(
+          renderShot(board: BoardState.initial(), palette: palette),
+        ).surfaceAspect;
+        expect(aspect, isNotNull, reason: palette.name);
+        expect(aspect!, closeTo(truth, truth * 0.12), reason: palette.name);
+      }
+    });
+
+    test('the steep viewpoint does not bend it', () {
+      // The pixel estimate at this viewpoint runs far over the truth; the
+      // checkers do not care where the camera stands.
+      final aspect = _calibrate(
+        renderShot(board: BoardState.initial(), quad: kCorpusSteepQuad),
+      ).surfaceAspect;
+      expect(aspect, isNotNull);
+      expect(aspect!, closeTo(truth, truth * 0.12));
+    });
+
+    test('nor does the tent', () {
+      final shot = renderFoldingShot(board: BoardState.initial());
+      final result = BoardVision.calibrateFolding(
+        frame: shot.frame,
+        corners: shot.groundTruthCorners,
+        orientation: BoardOrientation.whiteHomeNear,
+      );
+      expect(result.ok, isTrue, reason: result.message);
+      final aspect = result.calibration!.surfaceAspect;
+      expect(aspect, isNotNull);
+      expect(aspect!, closeTo(truth, truth * 0.12));
+    });
+  });
+
   group('no colour constants in the pipeline', () {
     test('lib/ contains no colour literals', () {
       // The spec's rule, made binding: this board's colours are learned from

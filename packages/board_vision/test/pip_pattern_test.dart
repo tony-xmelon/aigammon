@@ -134,6 +134,43 @@ void main() {
     expect(PipPattern.faceOf(union), isNull);
   });
 
+  test('a session\'s own pip span scales the shapes, and only a session '
+      'may set it', () {
+    // The first real footage's true quad, exactly as the reader framed it
+    // (frame 032 of the stable set, the 4 of a lying 4-2): its dice hold
+    // their pip square at about 0.8 of the canonical span, and with the
+    // centroid wobble of twenty-two-pixel dots on top, the pattern misses
+    // the canonical shape at its diagonal slots — while matching its own
+    // session's scale with room to spare. The span is a fact about the
+    // dice, like their size; given, never fitted.
+    const realQuad = <Pt>[
+      Pt(0.58, 0.27),
+      Pt(0.71, 0.58),
+      Pt(0.16, 0.39),
+      Pt(0.32, 0.69),
+    ];
+    expect(PipPattern.faceOf(realQuad), isNull,
+        reason: 'the real 0.8-span quad misses canonical templates');
+    expect(PipPattern.faceOf(realQuad, span: 0.8), 4);
+
+    // The same session's merged six — a line of three at HALF its own pip
+    // span — must still miss the three at that session's scale: the margin
+    // that makes a fixed measured span safe where a per-blob fit would let
+    // the line pick its own.
+    const mergedSix = <Pt>[
+      Pt(0.5, 0.3),
+      Pt(0.5, 0.5),
+      Pt(0.5, 0.7),
+    ];
+    expect(PipPattern.faceOf(mergedSix, span: 0.8), isNull);
+
+    // And the span cannot be pushed to where that margin collapses: under
+    // about three quarters of the canon — a spacing no real die uses — the
+    // line comes within tolerance of the three, so the clamp holds the
+    // floor whatever a caller passes.
+    expect(PipPattern.faceOf(mergedSix, span: 0.5), isNull);
+  });
+
   test('nothing, or too much, is no face', () {
     expect(PipPattern.faceOf(const <Pt>[]), isNull);
     expect(

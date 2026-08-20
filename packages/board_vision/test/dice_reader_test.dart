@@ -444,9 +444,9 @@ void main() {
     // triangles sit within [DiceReader.minForeignDistance] of its dice —
     // measured on the bed: the classic palette's die body is 2.3 spreads from
     // a cream triangle's mode, against 13.1 from a dark one's — a die in a
-    // pale column is genuinely invisible to a colour test, in the pale
-    // column's whole territory. That camouflage is a physical limit of this
-    // instrument, not a bug here: it reads as a refusal, never a wrong roll.
+    // pale column never becomes a foreign BLOB at all. Its pips still betray
+    // it — the pip-first test below reads exactly that die — but these
+    // placements pin the body channel, so they stay where bodies show.
 
     test('a pair among the far points is read', () {
       for (final palette in BoardPalette.all) {
@@ -505,6 +505,30 @@ void main() {
             reason: '${palette.name}: found no pair in the near half');
         expect(_facesOf(reading!), <int>[1, 5], reason: palette.name);
       }
+    });
+
+    test('a die the board\'s colours cannot see is read by its pips', () {
+      // The camouflage limit, closed from the other side. The classic
+      // palette's die body sits 2.3 spreads from a cream triangle's mode —
+      // under the foreign threshold — so a die in a pale column never
+      // becomes a foreign blob at all. Its PIPS are another matter: dark,
+      // pip-sized and foreign on any surface, they arrive in the mask as
+      // isolated dots and carry the face by themselves. This die sits
+      // mid-pale-column where its body vanishes; only the pip channel can
+      // read it, and the partner die checks that the two channels' finds
+      // pair like anything else.
+      final vision = BoardVision(calibrationFor(BoardPalette.classic));
+      final shot = renderShot(
+        board: BoardState.initial(),
+        dicePlacements: <DicePlacement>[
+          const DicePlacement(face: 4, center: Pt(0.301, 0.30)),
+          const DicePlacement(face: 3, center: Pt(0.70, 0.50)),
+        ],
+      );
+      final reading = vision.readDice(shot.frame);
+      expect(reading, isNotNull,
+          reason: 'the camouflaged die\'s pips went unread');
+      expect(_facesOf(reading!), <int>[3, 4]);
     });
 
     test('a die halved by a camouflage column is refused, not misread', () {
@@ -636,6 +660,75 @@ void main() {
       );
       expect(vision.readDice(shot.frame), isNull,
           reason: 'a line of three dots was read as a face');
+    });
+
+    test('dice that drill their pips tighter than the canon read through '
+        'their session\'s measured span', () {
+      // Real dice vary in where they put their pips: the first real
+      // footage's hold their pip square at about 0.8 of the canonical span,
+      // and with the centroid wobble of twenty-two-pixel dots on top their
+      // true quad misses the canonical shape at its diagonal slots — the
+      // measured pattern is pinned in `pip_pattern_test.dart`. The span is
+      // a session fact exactly like the die's size: measured once, fixed
+      // for the session, never fitted per blob. Here the bed paints such
+      // dice and the session says so.
+      const tightQuad = <(double, double)>[
+        (-0.8, -0.8),
+        (0.8, -0.8),
+        (-0.8, 0.8),
+        (0.8, 0.8),
+      ];
+      const tightPair = <(double, double)>[(-0.8, -0.8), (0.8, 0.8)];
+      final shot = renderShot(
+        board: BoardState.initial(),
+        dicePlacements: const <DicePlacement>[
+          DicePlacement(face: 4, center: Pt(0.30, 0.50), pipOffsets: tightQuad),
+          DicePlacement(face: 2, center: Pt(0.70, 0.50), pipOffsets: tightPair),
+        ],
+      );
+      final bare = renderShot(board: BoardState.initial());
+      final told = BoardVision.calibrate(
+        frame: bare.frame,
+        corners: bare.groundTruthQuad,
+        orientation: BoardOrientation.whiteHomeNear,
+        pipSpan: 0.8,
+      );
+      expect(told.ok, isTrue, reason: told.message);
+      final reading = BoardVision(told.calibration!).readDice(shot.frame);
+      expect(reading, isNotNull,
+          reason: 'the measured span should read these dice');
+      expect(_facesOf(reading!), <int>[2, 4]);
+    });
+
+    test('a face missing its faintest pips is not read as the smaller face '
+        'it resembles', () {
+      // The subset trap, measured on the real footage: window glare washes
+      // an up-face's pips toward the body's colour, the pip cut misses the
+      // faintest of them, and what remains of a five is a geometrically
+      // perfect diagonal three — a quincunx CONTAINS the three, a six's
+      // corners are a quad. Frame 046 of the stable set read a washed five
+      // as a clean 3 that way, through every shape test, and paired it into
+      // a roll nobody threw. The recount at a kinder cut is what refuses
+      // it: the washed pips are invisible at the pip cut and perfectly
+      // visible at half its depth, and a face with more marks than pips is
+      // a guess.
+      final vision = BoardVision(calibrationFor(BoardPalette.classic));
+      final shot = renderShot(
+        board: BoardState.initial(),
+        dicePlacements: const <DicePlacement>[
+          // A five whose two right-hand pips the light has washed: the cut
+          // sees the diagonal three.
+          DicePlacement(
+            face: 5,
+            center: Pt(0.30, 0.50),
+            pipOffsets: <(double, double)>[(-1, -1), (0, 0), (1, 1)],
+            faintPipOffsets: <(double, double)>[(1, -1), (-1, 1)],
+          ),
+          DicePlacement(face: 4, center: Pt(0.70, 0.50)),
+        ],
+      );
+      expect(vision.readDice(shot.frame), isNull,
+          reason: 'a washed five was read as the three inside it');
     });
 
     test('two die-perfect candidates half a die apart are one die, not a '

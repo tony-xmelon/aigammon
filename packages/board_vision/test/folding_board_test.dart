@@ -201,18 +201,18 @@ void main() {
       );
     });
 
-    test('the usual low viewpoint refuses the same pair rather than '
-        'misreading it', () {
-      // The other half of the shape-reading trade, measured the day counting
-      // retired: at [kFoldingTent]'s near-table camera the die-height
-      // estimate comes out 2.78 against a painted truth of 1.5, framed
-      // patterns compress to 0.54 of a die frame, and no face matches — so
-      // the pair that used to be COUNTED here is refused. A refusal is a tap
-      // on the dice pad; the misreads counting waved through on the real
-      // footage went into the game state. A die-frame height the camera
-      // cannot pollute — the measured checker pitch is the obvious source —
-      // is the queued fix, and turning this refusal back into a read is
-      // exactly what it will be measured by.
+    test('the usual low viewpoint reads the same pair, through the measured '
+        'aspect', () {
+      // This pin spent a day expecting a REFUSAL, and the history is the
+      // point. When the face became a shape, the die frame's height came
+      // from a pixel estimate — 2.78 at this camera against a painted truth
+      // of 1.5 — so framed patterns compressed to 0.54 of a die and no face
+      // matched. The fix the refusal was measured by is in:
+      // `BoardCalibration.surfaceAspect`, the board's ratio taken from its
+      // own checkers (a disc is as wide as it is deep), which this tented
+      // view measures at 1.35 — close enough that the shapes frame true and
+      // the pair reads again, from the same near-table camera that broke
+      // the estimate.
       final start = renderFoldingShot(board: BoardState.initial());
       final vision = BoardVision(_calibrate(start));
       final rolled = renderFoldingShot(
@@ -222,9 +222,13 @@ void main() {
           DicePlacement(face: 2, center: Pt(0.75, 0.5)),
         ],
       );
-      expect(vision.readDice(rolled.frame), isNull,
-          reason: 'a pattern squashed past recognition must refuse, not '
-              'guess');
+      final reading = vision.readDice(rolled.frame);
+      expect(reading, isNotNull,
+          reason: 'the measured aspect should frame these shapes true');
+      expect(
+        <int>[reading!.first.face, reading.second.face]..sort(),
+        <int>[2, 5],
+      );
     });
   });
 
