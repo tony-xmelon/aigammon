@@ -63,6 +63,25 @@ const String kDiceFoundSignal = 'dice found when a roll was there';
 /// counts as right.
 const String kTransitDifferedSignal = 'the transit was not the listed one';
 
+/// Whether ONE region agreed with the game and a blind count of the same region
+/// on the same frame did not.
+///
+/// The state-primed query's whole claim, as a number rather than an argument:
+/// verification is handed K and only has to decide whether the picture
+/// contradicts it, so it agrees on every region a blind count gets right plus
+/// the band a blind count rounds away. This counts that band. Zero here and the
+/// prior is buying nothing — see `CorpusMetric.regionVerified`.
+const String kPriorRescuedSignal = 'the prior rescued a region';
+
+/// The other direction: a region a blind count got RIGHT and verification
+/// called wrong.
+///
+/// Should be zero by construction on the count axis, and is recorded because
+/// "by construction" is how a claim survives its own refutation — colour and
+/// presence are asked differently by the two instruments, so this is not a
+/// theorem, it is a measurement.
+const String kPriorLostSignal = 'the prior lost a region a blind count had';
+
 /// Scores every shot in [directory], grouped into its sessions.
 ///
 /// [name] is what the report calls this corpus. An absent or empty directory
@@ -155,6 +174,7 @@ void _scoreSession(
     detail: '${calibrationShot.id} ($name): ${confirmed.message}',
   );
   _scoreOccupancy(board, vision, calibrationFrame, calibrationShot);
+  _scoreResync(board, vision, calibrationFrame, calibrationShot);
   _scoreDice(board, vision, calibrationFrame, calibrationShot);
 
   // Play identification walks the same pass, keeping the previous shot's frame,
@@ -197,6 +217,7 @@ void _scoreSession(
         );
 
       _scoreOccupancy(board, vision, frame, shot);
+      _scoreResync(board, vision, frame, shot);
       _scoreDice(board, vision, frame, shot);
     }
 
@@ -351,6 +372,22 @@ class _PlayChain {
       ..signal('legal-play top confidence', top.confidence)
       ..signal('legal-play top cost', top.cost)
       ..signal('legal-play instability', top.instability);
+
+    // The same pair, asked the OTHER state-primed question. A session that has
+    // just dictated a move holds exactly this: the position the play should
+    // have left behind, and a settled frame of the board somebody placed it on.
+    // `target` is that position by construction — it is the earlier shot's
+    // committed board with the logged move applied — so an attempt here is a
+    // CORRECT board being asked to verify, which is what the spec's ≥95%
+    // promises.
+    final verified = vision.verifyExpectedBoard(frame, target);
+    board.record(
+      CorpusMetric.placementVerified,
+      ok: verified.agrees,
+      slices: _slicesOf(shot)..['mover'] = turn.mover.name,
+      detail: '${earlier.id}->${shot.id}: after ${turn.played}, '
+          '${verified.message}',
+    );
   }
 }
 
@@ -571,6 +608,82 @@ void _scoreOccupancy(
       'off a board with no bear-off wells. They leave the board altogether on '
       'a folding case, so nothing in the picture can be scored for them.',
     );
+  }
+}
+
+/// The whole board, re-read against the position the sidecar says is on it.
+///
+/// The drift-recovery query: the game holds an authoritative state, something
+/// has stopped adding up, and the session asks a single frame whether the board
+/// in front of it is still that state. Every shot gets one attempt, the
+/// calibration frame included — a session's very first belief check is this
+/// same read.
+///
+/// Scored two ways over the same call, and the pair is the point:
+///
+/// * **per board**, which is what the spec's table promises and what a session
+///   actually acts on — one contradicted region and the attempt has failed;
+/// * **per region**, which is the only number directly comparable with
+///   [CorpusMetric.regionOccupancy]. The two are computed from the same frames
+///   and the same sidecar, so the difference between them is exactly what
+///   knowing the expected position is worth. Regions that disagree are
+///   recorded either way, so the report names them rather than reporting a
+///   rate to argue about.
+void _scoreResync(
+  Scoreboard board,
+  BoardVision vision,
+  Frame frame,
+  CorpusShot shot,
+) {
+  final verified =
+      BoardVerifier(vision.calibration, frame).verify(shot.board);
+  board.record(
+    CorpusMetric.boardResynced,
+    ok: verified.agrees,
+    slices: _slicesOf(shot),
+    detail: '${shot.id}: ${verified.message}',
+  );
+
+  // The blind reading of the same frame, for the comparison. Built once here
+  // rather than per region — it is the same reader `_scoreOccupancy` uses.
+  final occupancy = vision.occupancyIn(frame);
+
+  for (final region in verified.regions) {
+    if (region.verdict == RegionVerdict.unobservable) continue;
+    final slices = _slicesOf(shot)
+      ..['region'] = region.pointNumber != null
+          ? 'point'
+          : region.region == RoiId.bar
+              ? 'bar'
+              : 'tray'
+      ..['half'] = region.region.pointIndex < 0
+          ? 'not a point'
+          : region.region.pointIndex <= 11
+              ? 'near half'
+              : 'far half';
+    board.record(
+      CorpusMetric.regionVerified,
+      ok: !region.disagrees,
+      slices: slices,
+      detail: '${shot.id} ${region.message} '
+          '(${region.kind?.name ?? 'agreed'}, height '
+          '${region.observedHeight.toStringAsFixed(2)}, reach '
+          '${region.reach.toStringAsFixed(4)})',
+    );
+
+    // What a blind count says about the very same region, so the two claims
+    // can be compared one region at a time.
+    final expectedColour = region.expected == 0
+        ? CheckerColor.none
+        : region.side;
+    final blind = region.side == CheckerColor.none
+        ? occupancy.read(region.region)
+        : occupancy.readFor(region.region, region.side);
+    final blindRight =
+        blind.color == expectedColour && blind.count == region.expected;
+    board
+      ..signal(kPriorRescuedSignal, !region.disagrees && !blindRight ? 1 : 0)
+      ..signal(kPriorLostSignal, region.disagrees && blindRight ? 1 : 0);
   }
 }
 

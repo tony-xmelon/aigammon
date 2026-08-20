@@ -450,7 +450,7 @@ class PointDiscrepancy {
 
   /// A clause for the user, ready to be joined into a sentence.
   String get message {
-    final where = _describe(region);
+    final where = describeRegion(region);
     if (observed == CheckerColor.none) {
       return '$where looks empty, but the game starts with '
           '${_side(expected)} there';
@@ -851,7 +851,7 @@ class Calibrator {
         // from here, so the message names both.
         return CalibrationResult.failure(
           CalibrationProblem.regionUnreadable,
-          'I cannot make out ${_describe(id)} — something may be resting on '
+          'I cannot make out ${describeRegion(id)} — something may be resting on '
           'it, or that corner of the board may be too dark to read. Clear it, '
           'or add some light, and try again.',
           <RoiId>[id],
@@ -1160,7 +1160,7 @@ class Calibrator {
         agrees: false,
         discrepancies: discrepancies,
         message: 'I cannot see the whole board any more — '
-            '${_describe(outOfPicture)} is outside the picture. Line the '
+            '${describeRegion(outOfPicture)} is outside the picture. Line the '
             'camera up again, or re-check the corners.',
       );
     }
@@ -1274,7 +1274,7 @@ class Calibrator {
           refused: CalibrationResult.failure(
             CalibrationProblem.checkersNotInStartingPosition,
             'I can see a checker where the game starts with none — '
-            '${_describe(id)}. Take it off the board and calibrate again.',
+            '${describeRegion(id)}. Take it off the board and calibrate again.',
             <RoiId>[id],
           ),
           colors: colors,
@@ -1407,7 +1407,7 @@ class Calibrator {
 
   static CalibrationResult _notVisible(RoiId id) => CalibrationResult.failure(
         CalibrationProblem.boardNotFullyVisible,
-        'I cannot see the whole board — ${_describe(id)} is outside the '
+        'I cannot see the whole board — ${describeRegion(id)} is outside the '
         'picture. Move the phone back, or drag the corners onto the playing '
         'field.',
         <RoiId>[id],
@@ -1585,10 +1585,14 @@ class Calibrator {
   }
 }
 
-/// A region in words, for a sentence the user reads. Shared by the failure
-/// messages and by [PointDiscrepancy.message], so nothing user-facing ever
-/// says `offWhite`.
-String _describe(RoiId id) {
+/// A region in words, for a sentence the user reads.
+///
+/// Shared by the calibration failure messages, by [PointDiscrepancy.message]
+/// and by the verifier's own "camera says / game says" sentences, so nothing
+/// user-facing ever says `offWhite`. Public for that third caller: a second
+/// copy of this switch is how one screen ends up calling the hinge "the bar"
+/// and another calling it "bar".
+String describeRegion(RoiId id) {
   if (id.pointIndex >= 0) return 'the ${id.pointIndex + 1}-point';
   return switch (id) {
     RoiId.bar => 'the bar',

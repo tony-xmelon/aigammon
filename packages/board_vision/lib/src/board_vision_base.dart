@@ -1,8 +1,10 @@
 import 'package:backgammon_core/backgammon_core.dart';
 
 import 'board_geometry.dart';
+import 'board_verifier.dart';
 import 'calibration.dart';
 import 'dice_reader.dart';
+import 'drift.dart';
 import 'frame.dart';
 import 'geometry_types.dart';
 import 'occupancy.dart';
@@ -175,4 +177,47 @@ class BoardVision {
   }) =>
       PlayMatcher(calibration, beforeFrame: beforeFrame, afterFrame: frame)
           .match(before, mover, legalPlays);
+
+  /// Does the board in [frame] hold [expected]?
+  ///
+  /// The other state-primed query, and the one behind two different moments of
+  /// a session: **placement verification** — Buddy dictated a move and wants to
+  /// know whether the man went where it said — and **drift recovery**, where
+  /// the whole board is re-read against the authoritative state after something
+  /// stopped adding up.
+  ///
+  /// Every region is checked against what [expected] puts there, and the answer
+  /// is per-region: agrees, disagrees with a named kind and a confidence, or
+  /// **unobservable** on a region this board does not have. Read
+  /// [BoardDiscrepancies.agrees] first; a caller that wants to act on the
+  /// disagreements wants [recoverFromDrift] instead, which says which side of
+  /// each one to doubt.
+  ///
+  /// **This is a contradiction test, not a reading**, and the distinction is
+  /// what makes it usable on a board the camera counts badly: it is handed K
+  /// and only has to decide whether the picture says otherwise, so it agrees on
+  /// a strict superset of the regions a blind count gets right. See
+  /// [BoardVerifier] for the measurement behind that, and for the worn-hinge
+  /// case it was built around.
+  ///
+  /// **[frame] must come from the same calibration epoch** — the same corners,
+  /// the same learned colours, the same board in the same place. Nothing here
+  /// can check it; the session invalidates held frames when calibration is
+  /// invalidated, exactly as it does for [matchLegalPlay].
+  ///
+  /// This convenience builds a fresh reader on every call. A session checking
+  /// one frame against more than one candidate position should hold a
+  /// [BoardVerifier] instead.
+  BoardDiscrepancies verifyExpectedBoard(Frame frame, BoardState expected) =>
+      BoardVerifier(calibration, frame).verify(expected);
+
+  /// The same question, with what to do about each disagreement.
+  ///
+  /// What the spec's side-by-side "camera says / game says" screen is built
+  /// from: every discrepancy carries a [DriftResolution] saying which side is
+  /// likelier wrong, drawn from the pipeline's own measured error structure — a
+  /// tall stack reading short is the camera, a colour that flipped is the
+  /// board. See [DriftReport].
+  DriftReport recoverFromDrift(Frame frame, BoardState expected) =>
+      DriftReport.of(verifyExpectedBoard(frame, expected));
 }

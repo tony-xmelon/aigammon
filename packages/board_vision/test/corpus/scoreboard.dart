@@ -78,7 +78,35 @@ enum CorpusMetric {
   /// change that left every play correctly ranked and pushed four of six under
   /// the threshold would turn a hands-free turn into four taps with nothing
   /// anywhere going red.
-  legalPlayActed('legal play acted on');
+  legalPlayActed('legal play acted on'),
+
+  /// The position a play left behind verified clean against the frame of it —
+  /// which is exactly what a session does after Buddy dictates a move and the
+  /// user places the men. One attempt per pair of shots that is genuinely one
+  /// turn apart, the same pairs [legalPlay] is scored on.
+  ///
+  /// An attempt SUCCEEDS when a board that is in fact correct comes back with
+  /// no discrepancies. Anything else is the belief mirror and tap-correct
+  /// taking over, which is the spec's own fallback for this query.
+  placementVerified('placement verified'),
+
+  /// A whole board re-read against the position the sidecar says is on it —
+  /// the drift-recovery read. One attempt per shot, every shot, including the
+  /// calibration frame and the two end-game keyframes that carry no log.
+  ///
+  /// The same success condition: a correct board with nothing contradicting
+  /// it. Regions this board does not have (a folding case's bear-off wells)
+  /// are neither, by construction — see `BoardDiscrepancies.unobservable`.
+  boardResynced('full-board resync'),
+
+  /// The same reads, one region at a time rather than one board at a time.
+  ///
+  /// No target — the spec's table is about boards — but this is the number
+  /// that says whether the state-primed query is doing anything at all,
+  /// because it is directly comparable with [regionOccupancy] over the very
+  /// same regions of the very same frames. A verifier that agreed exactly
+  /// where a blind count is right would be an expensive way to round.
+  regionVerified('region verified against the game');
 
   const CorpusMetric(this.label);
 
@@ -97,10 +125,13 @@ const Map<CorpusMetric, double?> kMetricTargets = <CorpusMetric, double?>{
   CorpusMetric.diceAbsence: PerceptionTargets.expectedRefusal,
   CorpusMetric.expectedRefusal: PerceptionTargets.expectedRefusal,
   CorpusMetric.legalPlay: PerceptionTargets.legalPlayIdentification,
+  CorpusMetric.placementVerified: PerceptionTargets.placementVerification,
+  CorpusMetric.boardResynced: PerceptionTargets.fullBoardResync,
   CorpusMetric.legalPlayActed: null,
   CorpusMetric.startConfirmed: null,
   CorpusMetric.regionOccupancy: null,
   CorpusMetric.regionColour: null,
+  CorpusMetric.regionVerified: null,
 };
 
 /// How many attempts, and how many of them went right.

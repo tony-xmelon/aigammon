@@ -16,10 +16,12 @@
 library;
 
 export 'src/board_geometry.dart';
+export 'src/board_verifier.dart';
 export 'src/board_vision_base.dart';
 export 'src/calibration.dart';
 export 'src/color_model.dart';
 export 'src/dice_reader.dart';
+export 'src/drift.dart';
 export 'src/frame.dart';
 export 'src/geometry_types.dart';
 export 'src/homography.dart';
