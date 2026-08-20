@@ -38,6 +38,10 @@ class BoardVision {
   /// no wells at all and a hinge for a bar, is a different board and says so
   /// here; see [BoardProportions].
   ///
+  /// [dieSide] is how wide this session's dice are, in the same units, and it
+  /// is the same kind of fact — see [BoardCalibration.dieSide] for why it is
+  /// not a constant and where a session is meant to get it.
+  ///
   /// Failure is a named, sentence-carrying [CalibrationResult], not an
   /// exception — every reason is something the user can act on, and the
   /// calibration screen shows the sentence as it stands.
@@ -46,12 +50,14 @@ class BoardVision {
     required BoardQuad corners,
     required BoardOrientation orientation,
     BoardProportions proportions = BoardProportions.standard,
+    double dieSide = BoardCalibration.defaultDieSide,
   }) =>
       Calibrator.learnStartingPosition(
         frame: frame,
         corners: corners,
         orientation: orientation,
         proportions: proportions,
+        dieSide: dieSide,
       );
 
   /// Learns a **folding-case** board from a frame of its starting position.
@@ -74,11 +80,13 @@ class BoardVision {
     required Frame frame,
     required FoldingCorners corners,
     required BoardOrientation orientation,
+    double dieSide = BoardCalibration.defaultDieSide,
   }) =>
       Calibrator.learnFoldingStartingPosition(
         frame: frame,
         corners: corners,
         orientation: orientation,
+        dieSide: dieSide,
       );
 
   /// Checks the board in [frame] against the position every game starts from,

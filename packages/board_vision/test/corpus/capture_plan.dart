@@ -284,6 +284,22 @@ class CorpusShot {
   /// the same tests.
   final FoldingCorners? foldingCorners;
 
+  /// How wide this session's dice are, as a fraction of the board's width, or
+  /// null when nobody measured them.
+  ///
+  /// The third thing the first real footage turned out to be, after the widths
+  /// and the tenting: its dice are **0.021** of the board across where the
+  /// synthetic bed's are 0.075, and every size-derived number in the dice
+  /// reader had been written for the latter. Absent means the bed's own size,
+  /// which is what every sidecar written before this field carried by
+  /// implication — additive exactly like [proportions], and pinned so by the
+  /// same tests.
+  ///
+  /// Measured by a person off a frame with a settled roll in it, the same way
+  /// the widths are. See `BoardCalibration.dieSide` for why the product will
+  /// not ask its users to do this.
+  final double? dieSide;
+
   /// The position the board is in. Authoritative for scoring.
   final BoardState board;
 
@@ -332,6 +348,7 @@ class CorpusShot {
     required List<String> instructions,
     this.proportions,
     this.foldingCorners,
+    this.dieSide,
   }) : instructions = List<String>.unmodifiable(instructions);
 
   bool get expectsRefusal => expectRefusal != null;
@@ -380,6 +397,7 @@ class CorpusShot {
     BoardProportions? proportions,
     bool clearProportions = false,
     FoldingCorners? foldingCorners,
+    double? dieSide,
   }) =>
       CorpusShot(
         id: id,
@@ -400,6 +418,7 @@ class CorpusShot {
         proportions:
             clearProportions ? null : (proportions ?? this.proportions),
         foldingCorners: foldingCorners ?? this.foldingCorners,
+        dieSide: dieSide ?? this.dieSide,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -428,6 +447,8 @@ class CorpusShot {
         // Same rule, same reason: no key at all on a board that does not fold.
         if (foldingCorners != null)
           'foldingCorners': _foldingToJson(foldingCorners!),
+        // And again: no key at all when nobody measured the dice.
+        if (dieSide != null) 'dieSide': dieSide,
       };
 
   factory CorpusShot.fromJson(Map<String, dynamic> json) {
@@ -486,6 +507,9 @@ class CorpusShot {
       foldingCorners: json['foldingCorners'] == null
           ? null
           : _foldingFromJson(json['foldingCorners'] as Map<String, dynamic>),
+      // Absent on every sidecar written before dice had a measured size, and
+      // absent means the synthetic bed's — see [dieSide].
+      dieSide: (json['dieSide'] as num?)?.toDouble(),
     );
   }
 

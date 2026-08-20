@@ -934,6 +934,7 @@ RenderedBoard renderTopDown({
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
   List<DicePlacement>? dicePlacements,
+  double dieSide = BoardLayout.dieSide,
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
   SpineWear spine = SpineWear.none,
@@ -974,6 +975,7 @@ RenderedBoard renderTopDown({
     image,
     dicePlacements ?? _defaultPlacements(dice, diceAngle),
     palette,
+    dieSide,
   );
   _applyLightingGain(image, lightingGain);
 
@@ -1147,6 +1149,7 @@ SyntheticShot renderShot({
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
   List<DicePlacement>? dicePlacements,
+  double dieSide = BoardLayout.dieSide,
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
   SpineWear spine = SpineWear.none,
@@ -1168,6 +1171,7 @@ SyntheticShot renderShot({
     orientation: orientation,
     diceAngle: diceAngle,
     dicePlacements: dicePlacements,
+    dieSide: dieSide,
     proportions: proportions,
     starInlays: starInlays,
     spine: spine,
@@ -1346,6 +1350,7 @@ FoldingShot renderFoldingShot({
   double lightingGain = 1.0,
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   List<DicePlacement>? dicePlacements,
+  double dieSide = BoardLayout.dieSide,
   double barWidth = kFoldingBarWidth,
   bool starInlays = false,
   SpineWear spine = SpineWear.none,
@@ -1367,6 +1372,7 @@ FoldingShot renderFoldingShot({
     lightingGain: lightingGain,
     orientation: orientation,
     dicePlacements: dicePlacements,
+    dieSide: dieSide,
     proportions: proportions,
     starInlays: starInlays,
     spine: spine,
@@ -2024,9 +2030,10 @@ List<DieSpot> _drawDice(
   img.Image image,
   List<DicePlacement> placements,
   BoardPalette palette,
+  double dieSide,
 ) {
   final w = image.width, h = image.height;
-  final side = BoardLayout.dieSide * w;
+  final side = dieSide * w;
   final spots = <DieSpot>[];
   for (final placement in placements) {
     final spot = DieSpot(

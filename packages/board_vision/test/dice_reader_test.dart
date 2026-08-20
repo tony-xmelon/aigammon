@@ -88,6 +88,153 @@ void main() {
     }
   });
 
+  group('dice the size real ones turned out to be', () {
+    // **The bed drew dice at 0.075 of the board across and the first real
+    // footage's are 0.021.** Three and a half times smaller, a fiftieth of the
+    // area — and every size-derived number in the reader had been written for
+    // the bed's. The smallest-blob gate was a share of the BAND, so it threw
+    // the real dice away before anything looked at them: `readDice` returned
+    // null on all seventy real windows.
+    //
+    // Nothing here is a new algorithm. The gates are the same three; they are
+    // asked about a share of a DIE now instead of a share of the band, and
+    // `BoardCalibration.dieSide` is where the session says how big that is.
+
+    /// Comfortably inside the floor, and about what a phone at a sensible
+    /// height over a real board gives.
+    const workable = 0.030;
+
+    /// What the first real footage actually measured, near the bottom of what
+    /// the instrument can do.
+    const asShot = 0.021;
+
+    // One calibration per board per die size, not one per roll: a small die
+    // means a fine lattice, and calibrating twenty-one times over would pay
+    // for it twenty-one times for nothing.
+    final small = <String, BoardCalibration>{};
+    BoardCalibration bareBoard(
+      BoardPalette palette,
+      double dieSide, {
+      ShotDegradation degradation = ShotDegradation.none,
+    }) =>
+        small.putIfAbsent(
+          '${palette.name}/$dieSide/${degradation.blurSigma}',
+          () => _calibrate(
+            renderShot(
+              board: BoardState.initial(),
+              palette: palette,
+              dieSide: dieSide,
+              degradation: degradation,
+            ),
+            dieSide: dieSide,
+          ),
+        );
+
+    for (final dieSide in <double>[workable, asShot]) {
+      test('all 21 pairs at a die of $dieSide, on a sharp frame', () {
+        // The load-bearing one. A sharp frame at either size must read every
+        // roll exactly — the reader is not allowed to be worse at small dice,
+        // only at soft ones.
+        for (var a = 1; a <= 6; a++) {
+          for (var b = a; b <= 6; b++) {
+            final palette = BoardPalette.all[(a + b) % BoardPalette.all.length];
+            // Calibrated on a BARE board, as a session is — a board
+            // calibrated with dice on it learns them as part of itself and
+            // can never see dice again (see the group below).
+            final calibration = bareBoard(palette, dieSide);
+            final shot = renderShot(
+              board: BoardState.initial(),
+              palette: palette,
+              dice: Dice(a, b),
+              dieSide: dieSide,
+            );
+            final reading = BoardVision(calibration).readDice(shot.frame);
+            expect(reading, isNotNull,
+                reason: '$a-$b on ${palette.name} at a die of $dieSide');
+            expect(_facesOf(reading!), <int>[a, b],
+                reason: '$a-$b on ${palette.name} at a die of $dieSide');
+          }
+        }
+      });
+    }
+
+    test('a die the size the bed draws still reads exactly as it did', () {
+      // The default is the bed's own number precisely so that nothing which
+      // worked moves. This is the assertion that says so.
+      expect(BoardCalibration.defaultDieSide, BoardLayout.dieSide);
+      final shot = renderShot(board: BoardState.initial(), dice: Dice(3, 6));
+      final reading = BoardVision(calibrationFor(BoardPalette.classic))
+          .readDice(shot.frame);
+      expect(_facesOf(reading!), <int>[3, 6]);
+    });
+
+    test('what small dice cost once the frame is soft', () {
+      // Measured rather than asserted, because the honest answer is not "it
+      // works". At the corpus's own blur and grain the reader loses readings
+      // as the dice shrink, and it loses them as NULLS: over all 21 pairs,
+      // 21 found and 21 right at a 31px die, 14 and 14 at 25px, 7 and 7 at
+      // 21px. Never a wrong roll — which is the promise this file opens with.
+      //
+      // Pinned at the two ends rather than across the curve: the point is that
+      // small-and-soft costs readings and not correctness.
+      var found = 0, right = 0;
+      for (var a = 1; a <= 6; a++) {
+        for (var b = a; b <= 6; b++) {
+          final palette = BoardPalette.all[(a + b) % BoardPalette.all.length];
+          final shot = renderShot(
+            board: BoardState.initial(),
+            palette: palette,
+            dice: Dice(a, b),
+            dieSide: asShot,
+            degradation: kCorpusDegradation,
+          );
+          final reading = BoardVision(
+            bareBoard(palette, asShot, degradation: kCorpusDegradation),
+          ).readDice(shot.frame);
+          if (reading == null) continue;
+          found++;
+          if (_facesOf(reading).join() == '$a$b') right++;
+        }
+      }
+      expect(found, greaterThan(0),
+          reason: 'a die of $asShot at corpus blur reads nothing at all now');
+      expect(right, found,
+          reason: 'every reading that comes back has to be the right roll — '
+              '$right of $found were');
+    });
+
+    test('a die too small to read is refused rather than guessed at', () {
+      // Below about twenty pixels the reader stops failing closed: pips merge
+      // and split, and the face count comes back confidently wrong. Measured
+      // at an 18px die, 3 of 5 readings were the wrong roll on a sharp frame.
+      // So there is a floor, and it is a refusal.
+      //
+      // The floor is in PIXELS, not board-space, because that is what the
+      // limit is about — the sensor either resolved the pips or it did not.
+      const tiny = 0.012;
+      var found = 0;
+      for (var a = 1; a <= 6; a++) {
+        for (var b = a; b <= 6; b++) {
+          final calibration = bareBoard(BoardPalette.classic, tiny);
+          final shot = renderShot(
+            board: BoardState.initial(),
+            dice: Dice(a, b),
+            dieSide: tiny,
+          );
+          expect(
+            DiceReader(calibration, shot.frame).diePixels,
+            lessThan(DiceReader.minDiePixels),
+            reason: 'this test is about dice under the floor',
+          );
+          if (BoardVision(calibration).readDice(shot.frame) != null) found++;
+        }
+      }
+      expect(found, 0,
+          reason: '$found rolls came back from dice too small to resolve, and '
+              'measured without the floor most of them are wrong');
+    });
+  });
+
   group('anything that is not two dice is nothing', () {
     test('a bare board has no dice on it', () {
       final vision = BoardVision(calibrationFor(BoardPalette.classic));
@@ -407,11 +554,15 @@ List<int> get _lightenedStart {
 List<int> _facesOf(DiceReading reading) =>
     <int>[reading.first.face, reading.second.face]..sort();
 
-BoardCalibration _calibrate(SyntheticShot shot) {
+BoardCalibration _calibrate(
+  SyntheticShot shot, {
+  double dieSide = BoardCalibration.defaultDieSide,
+}) {
   final result = BoardVision.calibrate(
     frame: shot.frame,
     corners: shot.groundTruthQuad,
     orientation: BoardOrientation.whiteHomeNear,
+    dieSide: dieSide,
   );
   expect(result.ok, isTrue, reason: result.message);
   return result.calibration!;

@@ -268,6 +268,30 @@ class BoardCalibration {
   /// `BoardVision.calibrate`; see [BoardProportions].
   final BoardProportions proportions;
 
+  /// How far across one of this session's dice is, as a fraction of the
+  /// board's width — the same kind of fact as [proportions], and measured the
+  /// same way: off the board, by whoever set the session up.
+  ///
+  /// **It cannot be a constant, and assuming one is what made the dice reader
+  /// useless on real footage.** Every size-derived number in [DiceReader] —
+  /// how large a blob has to be to be worth considering, how finely the band
+  /// is sampled, how much of a blob's rim to shave before looking for pips —
+  /// used to be written for the synthetic bed's dice, which are **0.075** of
+  /// the board across. The first real footage's are **0.021**: three and a
+  /// half times smaller, a fiftieth of the area, and every blob the reader
+  /// found fell straight through its smallest-blob gate. It returned null on
+  /// all seventy real windows.
+  ///
+  /// The default is the bed's own number, so nothing that worked moves.
+  ///
+  /// **Where a session gets it.** The corpus reads it from the sidecar, next
+  /// to the widths. The product cannot ask a user to measure their dice, and
+  /// should not: the plan's Task 12 has calibration watch the first roll,
+  /// where two blobs that appear together in a band that was empty a second
+  /// ago are dice by construction and their size is there to be measured. That
+  /// is the intended source; this field is what it will fill in.
+  final double dieSide;
+
   const BoardCalibration({
     required this.geometry,
     required this.orientation,
@@ -275,7 +299,16 @@ class BoardCalibration {
     required this.fingerprint,
     required this.stacks,
     this.proportions = BoardProportions.standard,
+    this.dieSide = defaultDieSide,
   });
+
+  /// The synthetic bed's die, as a fraction of the board's width.
+  ///
+  /// A default rather than a constant: it is what the bed draws and what every
+  /// test written before dice had a size was measured against, so it keeps
+  /// those honest. No real board is obliged to agree with it, and the first
+  /// one measured did not.
+  static const double defaultDieSide = 0.075;
 
   /// Where everything is, for this seating and this board.
   ///
@@ -611,6 +644,7 @@ class Calibrator {
     required BoardQuad corners,
     required BoardOrientation orientation,
     BoardProportions proportions = BoardProportions.standard,
+    double dieSide = BoardCalibration.defaultDieSide,
   }) {
     final BoardGeometry geometry;
     try {
@@ -627,6 +661,7 @@ class Calibrator {
       geometry: geometry,
       orientation: orientation,
       proportions: proportions,
+      dieSide: dieSide,
       misfitHint: 'the tray and bar widths it was measured with are probably '
           "not this board's",
     );
@@ -644,6 +679,7 @@ class Calibrator {
     required Frame frame,
     required FoldingCorners corners,
     required BoardOrientation orientation,
+    double dieSide = BoardCalibration.defaultDieSide,
   }) {
     final FoldingBoardGeometry geometry;
     try {
@@ -662,6 +698,7 @@ class Calibrator {
       geometry: geometry,
       orientation: orientation,
       proportions: geometry.proportions,
+      dieSide: dieSide,
       misfitHint: 'the eight points it was measured through — four corners '
           'and the four hinge seams — are probably not quite on it',
     );
@@ -679,6 +716,7 @@ class Calibrator {
     required BoardOrientation orientation,
     required BoardProportions proportions,
     required String misfitHint,
+    double dieSide = BoardCalibration.defaultDieSide,
   }) {
     final atlas =
         RoiAtlas.forOrientation(orientation, proportions: proportions);
@@ -969,6 +1007,7 @@ class Calibrator {
       fingerprint: fingerprint,
       stacks: stacks,
       proportions: proportions,
+      dieSide: dieSide,
     );
     final readBack = confirm(frame, calibration);
     if (readBack.discrepancies.length > maxLearningMisreads) {

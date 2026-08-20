@@ -194,6 +194,7 @@ CalibrationResult _calibrateShot(Frame frame, CorpusShot shot) {
       frame: frame,
       corners: folding,
       orientation: shot.orientation,
+      dieSide: shot.dieSide ?? BoardCalibration.defaultDieSide,
     );
   }
   return BoardVision.calibrate(
@@ -201,6 +202,7 @@ CalibrationResult _calibrateShot(Frame frame, CorpusShot shot) {
     corners: shot.corners!,
     orientation: shot.orientation,
     proportions: shot.proportions ?? BoardProportions.standard,
+    dieSide: shot.dieSide ?? BoardCalibration.defaultDieSide,
   );
 }
 

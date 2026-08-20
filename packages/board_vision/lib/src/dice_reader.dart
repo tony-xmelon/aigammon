@@ -130,14 +130,50 @@ class DiceReader {
   /// same seam every other query goes through, and for the same reason.
   final ColorModel colors;
 
-  DiceReader(this.calibration, this.frame)
-      : colors = calibration.colorsIn(frame);
+  /// Cells across and down the band, for THIS session's dice.
+  ///
+  /// See [baseLatticeAcross]: the pair is scaled so that a die always spans
+  /// the same number of cells, whatever size it is.
+  final int latticeAcross;
+  final int latticeDown;
 
-  /// Cells across and down the band. Sized so a pip — about a sixth of a die
-  /// across — spans the best part of ten cells, which is what it takes to
-  /// separate the six pips of a six from each other and from the die's rim.
-  static const int latticeAcross = 600;
-  static const int latticeDown = 80;
+  DiceReader(this.calibration, this.frame)
+      : colors = calibration.colorsIn(frame),
+        latticeAcross = _scaledLattice(baseLatticeAcross, calibration.dieSide),
+        latticeDown = _scaledLattice(baseLatticeDown, calibration.dieSide);
+
+  /// Cells across and down the band, for a die of [BoardCalibration
+  /// .defaultDieSide].
+  ///
+  /// Sized so a pip — about a sixth of a die across — spans the best part of
+  /// ten cells, which is what it takes to separate the six pips of a six from
+  /// each other and from the die's rim.
+  ///
+  /// **Everything below is a share of a DIE, not of the band.** These two were
+  /// the last absolute size in the reader: they described how finely to sample
+  /// a band containing the bed's dice, and a board whose dice are a third of
+  /// that size got a third of the cells per die and fell through every gate
+  /// that follows. So the pair scales with [BoardCalibration.dieSide] and the
+  /// numbers here are what the scaling is anchored to.
+  static const int baseLatticeAcross = 600;
+  static const int baseLatticeDown = 80;
+
+  /// The band is never sampled finer than this many cells across, whatever
+  /// the dice.
+  ///
+  /// Sampling finer than the frame's own pixels cannot recover detail the
+  /// sensor did not capture, and the cost is quadratic: the cap is what stops
+  /// a mis-measured `dieSide` of a thousandth from asking for forty-five
+  /// thousand cells across and a hundred million cells of work. Dice small
+  /// enough to reach it are refused by [minDiePixels] long before it binds.
+  static const int maxLatticeAcross = 2400;
+
+  static int _scaledLattice(int base, double dieSide) {
+    final scale = BoardCalibration.defaultDieSide / dieSide;
+    final capped =
+        math.min(scale, maxLatticeAcross / baseLatticeAcross);
+    return math.max(1, (base * capped).round());
+  }
 
   /// How far in from the band's own sides to sample, as a fraction of its
   /// width. The band ends where the bear-off wells begin — or, on a board with
@@ -154,12 +190,24 @@ class DiceReader {
   /// themselves. Three leaves room on both sides.
   static const double minForeignDistance = 3.0;
 
-  /// The share of the band a blob has to cover to be worth considering, and
-  /// the share past which it is something else entirely — a merged pair, a
-  /// hand, a shadow across the middle of the board. A die covers about a
-  /// sixteenth of the band on the synthetic bed.
-  static const double minBlobShare = 0.005;
-  static const double maxBlobShare = 0.20;
+  /// How much of a DIE a blob has to cover to be worth considering, and how
+  /// much it may cover before it is something else entirely — a merged pair, a
+  /// hand, a shadow across the middle of the board.
+  ///
+  /// **Shares of a die, not of the band, and that is the whole fix.** These
+  /// were 0.005 and 0.20 of the band, which is the same thing only while the
+  /// dice are the size the bed draws. The first real footage's dice cover
+  /// about a fiftieth of the area the bed's do — 198 cells against 2520 — so
+  /// they came in under a floor of 240 cells and were thrown away before
+  /// anything looked at them. The floor was measuring the band; it should
+  /// always have been measuring the die.
+  ///
+  /// Wide on purpose in both directions: a die seen at an angle is
+  /// foreshortened, one resting against a checker merges with it, and the
+  /// gates that follow — squareness, and pips — are the ones meant to be
+  /// discriminating. These two only keep the work down.
+  static const double minDieShare = 0.10;
+  static const double maxDieShare = 4.0;
 
   /// How much the outline may scatter about its own middle and still be
   /// called round. A filled circle scores about 0.015 at this lattice and a
@@ -168,12 +216,24 @@ class DiceReader {
   /// safer than refusing a die that a checker happened to touch.
   static const double minSquareness = 0.06;
 
-  /// How many cells to shave off a blob's edge before looking for pips. The
-  /// rim of any blob is a blend of the thing and what is behind it, and on a
-  /// board whose felt is darker than its dice that blend looks exactly like a
-  /// pip. A die's pips sit a sixth of its width inside its edge, so this is
-  /// nowhere near them.
-  static const int pipErosion = 3;
+  /// How much of a blob's edge to shave before looking for pips, as a share of
+  /// the die's own width.
+  ///
+  /// The rim of any blob is a blend of the thing and what is behind it, and on
+  /// a board whose felt is darker than its dice that blend looks exactly like
+  /// a pip. A die's pips sit a sixth of its width inside its edge, so a
+  /// fifteenth is nowhere near them.
+  ///
+  /// **This one was NOT a hidden absolute size, and the audit that found the
+  /// others says so.** It was three cells flat, and three cells looks like an
+  /// absolute — but its unit is lattice cells, and the lattice now scales with
+  /// the die, so a die spans about forty-five cells whatever size it is and
+  /// three of them stay a fifteenth of it. Put back to a literal 3 and every
+  /// small-dice test still passes. It is written as a share anyway, because
+  /// that is what it means and it stays true if the lattice base is ever
+  /// changed on its own; it never rounds below one cell, since a rim is at
+  /// least one cell wide however small the die.
+  static const double pipErosionShare = 1 / 15;
 
   /// The share of a die's body one pip covers, at the extremes. A pip is
   /// about a sixth of the die across, so about a fortieth of its area.
@@ -205,12 +265,77 @@ class DiceReader {
   /// reaches one and a dim room always scores lower for the same answer.
   static const double halfContrast = 40.0;
 
+  /// How little a reading may be worth before it is not worth having.
+  ///
+  /// **Added because the first real footage produced a wrong roll and said so
+  /// in the confidence.** On the one real window whose dice both landed in the
+  /// band, the reader came back 3-4 where the pips read 3-6 to a human, at a
+  /// confidence of **0.13**. The die it got wrong is tilted far enough to show
+  /// two faces at once, so the blob spans a six and part of a neighbouring
+  /// face — a shape the bed never draws, and one no size gate can catch.
+  ///
+  /// What makes a threshold safe here is that the separation is wide and
+  /// measured on both sides. Every correct reading on the bed, over all
+  /// twenty-one pairs at five die sizes, sharp and at corpus blur alike, scores
+  /// between **0.544 and 0.641** — not one below 0.54. The synthetic corpus,
+  /// whose dice sit at angles the bed's placements do not, runs lower but
+  /// bottoms out at **0.268**, and every one of those readings is right. So
+  /// this sits a comfortable way under the lowest reading known to be correct
+  /// and a comfortable way over the one known to be wrong.
+  ///
+  /// It can only ever turn a reading into a null, which is the failure this
+  /// class is built to prefer: a shrug costs one tap on the manual dice pad,
+  /// and a wrong roll is folded into the authoritative game state for good.
+  static const double minConfidence = 0.2;
+
   /// Bins the outline is measured in. Fifteen degrees each, which puts a
   /// square's corner within half a bin of a bin's middle.
   static const int outlineBins = 24;
 
+  /// How small a die may be in the PICTURE, in pixels across, before the
+  /// reader refuses to look at all.
+  ///
+  /// **The number is where WRONG answers begin, not where reading gets hard.**
+  /// Everything else in this class fails closed: a die too small or too soft
+  /// loses its pips, the pip gate finds fewer than one blob, and the reading
+  /// comes back null. Measured over all twenty-one pairs on all three
+  /// palettes, by shrinking the bed's dice — `found` is how many came back at
+  /// all, `right` how many were the roll actually on the board:
+  ///
+  /// | die across | sharp frame | corpus blur + grain |
+  /// |---|---|---|
+  /// | 76px (the bed's own) | 21 found, 21 right | 21 found, 21 right |
+  /// | 41px | 21 found, 21 right | 21 found, 21 right |
+  /// | 31px | 21 found, 21 right | 21 found, 21 right |
+  /// | 25px | 21 found, 21 right | 14 found, 14 right |
+  /// | 21px | 21 found, 21 right | 7 found, 7 right |
+  /// | **18px** | 5 found, **3 right** | 9 found, **7 right** |
+  /// | 12px | 10 found, **5 right** | 8 found, **1 right** |
+  ///
+  /// Down to 21 pixels every reading that came back was the right roll and the
+  /// rest were nulls — the reader just reads fewer of them as the frame gets
+  /// softer, which is the designed behaviour and needs no floor. At 18 pixels
+  /// that stops being true. A pip is a sixth of a die, so three pixels there,
+  /// and three pixels of pale on pale is a grain of noise as often as it is a
+  /// pip: blobs merge and split and the face count comes back confidently
+  /// wrong. A wrong roll goes into the authoritative game state, which is the
+  /// one thing this class exists to prevent. So the floor sits at 20, between
+  /// the last size that was always right and the first that was not.
+  ///
+  /// **What this means for the first real footage.** Its dice measure 18 to 23
+  /// pixels across in a 1920-wide frame — straddling this floor. So the honest
+  /// gate answer is that dice photographed this small are not readable by this
+  /// instrument: they want a closer camera, a longer lens, or the ML hatch.
+  /// Not a lower threshold — the sizes below the floor are precisely the ones
+  /// that produce wrong rolls rather than no rolls.
+  static const double minDiePixels = 20.0;
+
   /// The dice on the board, or null when there are not exactly two of them.
   DiceReading? read() {
+    // Nothing below can be trusted at a size the sensor never resolved, and a
+    // guess here goes into the authoritative game state.
+    if (diePixels < minDiePixels) return null;
+
     final grid = _sampleBand();
     if (grid == null) return null;
 
@@ -235,15 +360,59 @@ class DiceReader {
     double signal(DieReading die) =>
         die.pipContrast / (die.pipContrast + halfContrast);
 
+    final confidence = (signal(first) *
+            signal(second) *
+            (1 - disagreement / maxSizeDisagreement))
+        .clamp(0.0, 1.0);
+    if (confidence < minConfidence) return null;
+
     return DiceReading(
       first: first,
       second: second,
-      confidence: (signal(first) *
-              signal(second) *
-              (1 - disagreement / maxSizeDisagreement))
-          .clamp(0.0, 1.0),
+      confidence: confidence,
     );
   }
+
+  /// How wide one die is across the lattice, in cells, and how tall.
+  ///
+  /// **Board space is a unit square whatever shape the board is**, so a die —
+  /// which is square in the WORLD — is not square in board space, and nothing
+  /// tells the reader the board's proportions. So it measures them: one cell
+  /// is so many pixels across and so many down at the band's middle, and the
+  /// ratio of the two is the local aspect. A die that spans `n` cells across
+  /// spans `n * (pixels per cell across) / (pixels per cell down)` cells down,
+  /// because those are the same distance on the table.
+  ///
+  /// Measured at the band's middle rather than at the blob, deliberately: the
+  /// gates this feeds are about what a die IS, and a size that moved with
+  /// where a die happened to land would make them mean something different in
+  /// each half of the board.
+  ({double across, double down, double pixels}) get _dieOnLattice {
+    final b = boundsOf(calibration.atlas.roi(RoiId.diceZone));
+    final midX = (b.minX + b.maxX) / 2, midY = (b.minY + b.maxY) / 2;
+    final cellX = (b.maxX - b.minX) / latticeAcross;
+    final cellY = (b.maxY - b.minY) / latticeDown;
+
+    double pixelsBetween(Pt a, Pt c) {
+      final p = calibration.geometry.imagePointOf(a);
+      final q = calibration.geometry.imagePointOf(c);
+      if (!p.x.isFinite || !q.x.isFinite) return 0;
+      return math.sqrt((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y));
+    }
+
+    final o = Pt(midX, midY);
+    final wide = pixelsBetween(o, Pt(midX + cellX, midY));
+    final tall = pixelsBetween(o, Pt(midX, midY + cellY));
+    final across = calibration.dieSide / cellX;
+    // A degenerate geometry gives no aspect to work with; treating the cells
+    // as square is the least wrong thing and the visibility gate below will
+    // reject such a frame anyway.
+    final down = tall <= 0 ? across : across * wide / tall;
+    return (across: across, down: down, pixels: across * wide);
+  }
+
+  /// How wide one die is in the picture, in pixels.
+  double get diePixels => _dieOnLattice.pixels;
 
   /// The band, sampled onto a regular lattice in board space.
   ///
@@ -321,8 +490,12 @@ class DiceReader {
   /// Connected runs of foreign cells, four-connected, big enough to matter.
   List<List<int>> _blobsIn(_Band band) {
     final n = latticeAcross * latticeDown;
-    final minCells = (n * minBlobShare).round();
-    final maxCells = (n * maxBlobShare).round();
+    final die = _dieOnLattice;
+    final dieCells = die.across * die.down;
+    final minCells = math.max(1, (dieCells * minDieShare).round());
+    // Never past the whole band: a share of a die is the right unit, but a
+    // blob bigger than the band it was found in is a bug rather than a hand.
+    final maxCells = math.min(n, (dieCells * maxDieShare).round());
     final seen = Uint8List(n);
     final blobs = <List<int>>[];
     final stack = <int>[];
@@ -363,7 +536,11 @@ class DiceReader {
     final outline = _outlineOf(band, cells);
     if (outline == null || outline.scatter < minSquareness) return null;
 
-    final interior = _erode(cells, pipErosion);
+    final rounds = math.max(
+      1,
+      (_dieOnLattice.across * pipErosionShare).round(),
+    );
+    final interior = _erode(cells, rounds);
     if (interior.length < cells.length * 0.1) return null;
 
     final lumas = <double>[for (final i in interior) band.luma[i]]..sort();

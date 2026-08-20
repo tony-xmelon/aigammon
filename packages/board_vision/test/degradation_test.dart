@@ -289,11 +289,23 @@ void main() {
     test('a sigma of blur and half the dice cannot be found at all', () {
       // The tightest limit anywhere in the pipeline, and the most consequential
       // measurement in this file. Calibration survives 1.8 sigma of blur; the
-      // dice reader is already ragged at 0.8 and has lost half its readings by
-      // 1.0. Its first gate looks for what the board does not account for and
-      // its second asks whether that thing is square, and a blur that leaves a
-      // checker perfectly countable has already softened a die's corners past
-      // the squareness threshold.
+      // dice reader gives out earlier. Its first gate looks for what the board
+      // does not account for and its second asks whether that thing is square,
+      // and a blur that leaves a checker perfectly countable has already
+      // softened a die's corners past the squareness threshold.
+      //
+      // **Re-measured when the reader's size gates were derived from
+      // `BoardCalibration.dieSide` rather than written for the bed's dice.**
+      // It moved the right way and by more than expected: every board reads
+      // correctly to 1.3 sigma now, against losing boards at 1.1 before. The
+      // old smallest-blob floor was a share of the BAND, so it was rejecting
+      // blurred dice for the same reason it rejected small ones — a blur
+      // spreads a die's edge outward and its foreign core inward, and what
+      // was left came in under a floor that had nothing to do with how big a
+      // die is. Every reading that comes back here is also the right roll:
+      // measured 3/3, 3/3, 3/3, 3/3 correct at 0.5 through 1.1, then 2/3 at
+      // 1.3 and 1.5, 1/3 at 1.8 and beyond, with no wrong answers at any
+      // sigma.
       //
       // Measured over a grid of viewpoints, palettes, seatings and sub-pixel
       // corner offsets (the table on [kCorpusDegradation]); three cells here,
@@ -343,8 +355,12 @@ void main() {
 
       expect(readsAt(kCorpusDegradation.blurSigma), 3,
           reason: 'the corpus runs where every board reads');
-      expect(readsAt(1.1), lessThan(3),
-          reason: 'past a sigma the reader loses boards outright');
+      expect(readsAt(1.1), 3,
+          reason: 'a sigma of blur is inside the reader now, and this is the '
+              'assertion that says so — if it drops back to two, the size '
+              'gates have gone absolute again');
+      expect(readsAt(1.3), lessThan(3),
+          reason: 'past about 1.3 the reader loses boards outright');
     });
 
     test('but the viewpoint is not the thing that limits it', () {
