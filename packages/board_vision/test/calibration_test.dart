@@ -157,13 +157,13 @@ void main() {
     // offset fixes them, which is why this is a search and not a bigger
     // number. The renders below are that failure, in the bed.
     //
-    // **Across the palette matrix, at each palette's own ceiling.** This group
+    // **Across the palette matrix, at each cell's own ceiling.** This group
     // used to run on the default render alone — classic, flat, one light —
     // and so pinned the easiest cell of the bed while every other calibration
     // group ran the full matrix. What that hid: the ceiling is not one number.
-    // It is [insetCeilingOf], it differs by a factor of three between the
-    // easiest palette and the hardest, and what limits the hard one is not the
-    // finder at all. Both halves of that live with the palettes, measured.
+    // It is [insetCeilingOf], it is a third as generous on every cell but
+    // classic in ordinary light, and none of the three things that limit it
+    // is the finder. All of that lives with the palettes, measured.
 
     for (final palette in BoardPalette.all) {
       for (final gain in <double>[0.6, 1.0, 1.4]) {
@@ -171,7 +171,7 @@ void main() {
         // own colours, the blue-red board's pale points and its white checkers
         // both clip to 255. See the group above.
         if (palette == BoardPalette.blueRed && gain == 1.4) continue;
-        final ceiling = insetCeilingOf(palette);
+        final ceiling = insetCeilingOf(palette, gain);
 
         test('${palette.name} at gain $gain: stacks left up to $ceiling in '
             'from their edges', () {
@@ -199,7 +199,7 @@ void main() {
           // them — with the finder asked where it found each one, because a
           // finder that returned the right colour from the wrong place would
           // pass everything else here.
-          final placements = handPlacedStacks(palette);
+          final placements = handPlacedStacks(palette, gain);
           final varied = renderShot(
             board: BoardState.initial(),
             palette: palette,
@@ -266,7 +266,85 @@ void main() {
 
     /// The shape a hand leaves, on the palette this group's remaining tests
     /// are written against.
-    final varied = handPlacedStacks(BoardPalette.classic);
+    final varied = handPlacedStacks(BoardPalette.classic, 1.0);
+
+    test('a stack lit up its own length is still found at its foot', () {
+      // **The regression this bed could not have caught.** A brightness bound
+      // was added beside the hold test to buy the wood board a deeper reach.
+      // It passed all 368 tests here and then refused the real folding board,
+      // naming the 19-point — the black five-stack under the window.
+      //
+      // Why the bed said nothing: a board-wide `lightingGain` moves the whole
+      // frame together and cancels in every ratio the pipeline takes, and
+      // nothing here could draw a gradient down a SINGLE stack. See
+      // [checkersUnderLamp], which now can.
+      //
+      // Why the number was wrong: it was taken from the real frame's WHITE
+      // two-stack, at 0.196 of a log unit. Brightness as a log ratio is not
+      // scale-free across checker colours — the same window over that frame's
+      // BLACK five-stack moves it 0.63, three times as far, because the
+      // values are tiny to begin with. There is no bound above 0.63 and below
+      // the 0.36 it would have to beat to be worth anything.
+      //
+      // Asked of the WALK rather than of the calibration around it, and that
+      // is measured too: on this bed the board survives what the finder does
+      // not, so a whole-board assertion would go on passing with the bad
+      // constant in place. See [checkersUnderLamp] for how far that is a
+      // limit of the bed's paint.
+      final shot = renderShot(
+        board: BoardState.initial(),
+        stackPlacement: checkersUnderLamp,
+      );
+      final calibration = _calibrate(shot);
+      final sampler = RoiSampler(
+        shot.frame,
+        calibration.geometry,
+        calibration.atlas,
+      );
+      final start = BoardState.initial();
+
+      // The four five-stacks: the tallest the starting position offers, so
+      // the lamp has the most length to work over.
+      for (final index in <int>[5, 11, 12, 18]) {
+        final axis = StackAxis.forRegion(calibration.atlas, RoiId.point(index));
+        final x = (axis.minX + axis.maxX) / 2;
+
+        // The lamp has to be in the frame, and it has to be in the part of the
+        // frame the hold test looks at — [RoiSampler.checkerHoldDepth] deep
+        // from where the walk starts. A gradient outside that window is a
+        // gradient the instrument cannot see, and a lamp drawn per checker
+        // instead of per row lands entirely outside it.
+        if (start.points[index] < 0) {
+          final near = sampler.at(x, axis.yAt(RoiSampler.checkerSearchNear))!;
+          final far = sampler.at(
+            x,
+            axis.yAt(RoiSampler.checkerSearchNear + RoiSampler.checkerHoldDepth),
+          )!;
+          expect(
+            math.log((lumaOf(far) + 8) / (lumaOf(near) + 8)),
+            greaterThan(0.30),
+            reason: 'point ${index + 1} is the black stack this test is about '
+                'and the lamp is not reaching down it — foot $near, a hold '
+                'window in $far',
+          );
+        }
+
+        // And the thing itself. The walk knows nothing about this board's
+        // colours, so all it has is coherence and hold: it must take the
+        // checker it is standing on and hold through the stack behind it,
+        // however much brighter that stack gets. A walk that judged
+        // brightness lets go partway up the shadowed foot checker and settles
+        // at 0.03 to 0.05 instead — the stack found in the wrong place, which
+        // on the real board was a refused calibration.
+        final found = sampler.findChecker(index);
+        expect(found.settled, isTrue,
+            reason: 'the walk down point ${index + 1} never settled');
+        expect(found.depth, closeTo(RoiSampler.checkerSearchNear, 1e-9),
+            reason: 'the walk settled at ${found.depth} on point '
+                '${index + 1}, past the foot of a stack that is flush against '
+                'its edge — it stepped over the checker it was standing on');
+      }
+    });
 
     test('and stacks pushed off the middle of their columns', () {
       // The other half of what a hand does. A patch taken at the column's

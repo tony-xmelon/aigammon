@@ -284,7 +284,29 @@ class StackPlacement {
   /// edge the stack belongs to.
   final double centerOffset;
 
-  const StackPlacement({this.edgeInset = 0, this.centerOffset = 0});
+  /// How much brighter the checker at the TOP of this stack is than the one at
+  /// its foot — a plain multiplier on the checkers' own colour, applied
+  /// per checker across the stack's own extent.
+  ///
+  /// **A window beside the table is what this is.** It lives on a placement
+  /// because it is the same kind of fact: something about how one particular
+  /// stack sits, which the bed already routes per point through
+  /// `pointPlacements`. Nothing else in the renderer can express it — the
+  /// board-wide `lightingGain` moves the whole frame together and so cancels
+  /// in every ratio the pipeline takes, which is the entire point of the
+  /// pipeline being built on ratios. A gradient down a single stack does not
+  /// cancel, and it is the one lighting shape the bed could not draw.
+  ///
+  /// Measured on the first real folding frame: down the black five-stack on
+  /// the 19-point, luma runs 32 at the foot to 67 at the top. See
+  /// [checkersUnderLamp] for what that is worth as a test.
+  final double lampGain;
+
+  const StackPlacement({
+    this.edgeInset = 0,
+    this.centerOffset = 0,
+    this.lampGain = 1,
+  });
 
   /// Hard against the edge, dead centre: what every render did before this
   /// type existed, and what every one still does unless told otherwise.
@@ -292,45 +314,94 @@ class StackPlacement {
 
   @override
   String toString() => 'StackPlacement(inset $edgeInset, '
-      'offset $centerOffset)';
+      'offset $centerOffset, lamp $lampGain)';
 }
 
+/// Every stack lit the way the real frame's 19-point is: a window at one end
+/// of the table, so the top of a stack is twice the brightness of its foot.
+///
+/// **This exists because a fix passed 368 tests and refused the real board.**
+/// The walk holds a block by colour with brightness taken out, which cannot
+/// tell a dark board from a dark checker of the same wood — so a brightness
+/// bound was added alongside it, tuned to the drift down the real frame's
+/// WHITE two-stack (0.196 of a log unit). The bed had no gradient down any
+/// stack, so nothing here could disagree, and the whole suite passed. The real
+/// frame refused, naming the 19-point: a log ratio of brightness is not
+/// scale-free across checker colours, and the same window over that frame's
+/// BLACK stack moves it three times as far — 0.63 rather than 0.196.
+///
+/// So the number that matters is the ratio, and it has to fall inside the
+/// window the hold test looks through — `RoiSampler.checkerHoldDepth`, which
+/// is 0.07 of the board. Across that window on the black five-stacks this puts
+/// **0.31 to 0.45** of a log unit, against the 0.30 the refused bound allowed
+/// and the real frame's 0.63. The colour is unchanged throughout, because
+/// every channel moves by the same factor.
+///
+/// **What it is measured to do, and where it stops.**
+///
+/// * It bites where the real frame did. With the refused bound put back, the
+///   blind walk down both black five-stacks settles at 0.03 to 0.05 instead of
+///   at the first step: it stops holding partway up the shadowed foot checker
+///   and starts the stack in the wrong place. That is the regression, and it
+///   is what `calibration_test`'s 'a stack lit up its own length' pins.
+/// * It does not bite at the whole-board level. Calibration and confirmation
+///   pass either way here — the bed's board survives what the finder does not,
+///   so the assertion has to be on the finder. On the real frame the same
+///   fault went all the way to a refusal, because a real stack's shadow is
+///   twice as deep as anything this bed can paint without over-exposing (2.4
+///   tips the classic board into `boardOverExposed`).
+/// * It is a classic-palette instrument. The other two palettes' dark
+///   checkers are not dark — blue-red's are red and the wood board's are a
+///   mid brown — so the same multiplier pushes them across their own boards'
+///   surfaces and they stop being separable for reasons that have nothing to
+///   do with the hold test. Near-black paint is the case, and classic is the
+///   bed's only near-black.
+const StackPlacement checkersUnderLamp = StackPlacement(lampGain: 2.1);
+
 /// How far back a hand may leave this board's stacks and still have the whole
-/// pipeline read them — **measured, per palette, and not the same number**.
+/// pipeline read them — **measured, and not one number**.
 ///
 /// It lives here, with the palettes, because that is what it belongs to: what
-/// limits it is which two colours a board happens to put next to each other,
-/// not anything about how a stack is placed. Two test files ask the question
-/// and neither may hold its own copy of the answer.
+/// limits it is which two colours a board happens to put next to each other
+/// and how hard they are lit, not anything about how a stack is placed. Two
+/// test files ask the question and neither may hold its own copy of the
+/// answer.
 ///
-/// Measured over the whole palette matrix at every gain from 0.6 to 1.4, with
-/// the stacks all at one inset — calibrated, confirmed, and every point
-/// counted back:
+/// Measured over the whole palette matrix, stacks all at one inset,
+/// calibrated and confirmed and every point counted back:
 ///
-/// * **classic 0.09** and **low-contrast wood 0.09** — this is the finder's own
-///   ceiling, `checkerSearchNear + checkerHoldDepth`, so on these two boards
-///   nothing but the walk's reach limits how a hand may leave the men. One
-///   step past it, both refuse: classic for checkers not in the starting
-///   position, wood because the dice band stops being readable.
-/// * **blue-red 0.03**, and its limit is a different thing entirely. The
-///   finder is not what gives out — at every inset up to 0.07 it settles on
-///   the right checker of the right colour, and a model learned from a TIDY
-///   blue-red board reads all 24 samples of every one of those patches
-///   correctly. What gives out is what the model LEARNS from an inset frame:
-///   a stack sitting back uncovers the base of its own triangle, and this is
-///   the palette whose pale points sit closest to its white checkers (0.28 in
-///   the model's feature space, against 0.70 for felt — see
+/// * **classic 0.09 in ordinary light** (gains 0.6 and 1.0) — this is the
+///   finder's own ceiling, `checkerSearchNear + checkerHoldDepth`, so on this
+///   board nothing but the walk's reach limits how a hand may leave the men.
+/// * **classic 0.03 at gain 1.4** — lit 40% over, its cream points climb
+///   toward its white checkers and it joins the hard cases.
+/// * **low-contrast wood 0.03 at every gain.** A board made of one wood: its
+///   dark point paint and the dark checker standing on it differ by 0.019 in
+///   colour once brightness is taken out, against a hold tolerance of 0.08,
+///   so a block that starts on the board holds straight through the checker
+///   in front of it and the board's own paint is learned as a checker colour.
+///   `RoiSampler.checkerHoldTolerance` carries why a brightness bound cannot
+///   rescue this and what the real frame said about trying.
+/// * **blue-red 0.03**, and its limit is a third thing again. The finder is
+///   not what gives out — at every inset up to 0.07 it settles on the right
+///   checker of the right colour, and a model learned from a TIDY blue-red
+///   board reads all 24 samples of every one of those patches correctly. What
+///   gives out is what the model LEARNS from an inset frame: a stack sitting
+///   back uncovers the base of its own triangle, and this is the palette
+///   whose pale points sit closest to its white checkers (0.28 in the model's
+///   feature space, against 0.70 for felt — see
 ///   `Calibrator.checkerExclusionRadius`). Enough of that paint joins the
 ///   region's background and the white five-stack on the 13-point then reads
-///   as bare. It is not monotonic in the inset — 0.04 refuses and 0.05 does
-///   not — which is what a limit looks like when it is really about how much
+///   as bare. Not monotonic in the inset — 0.04 refuses and 0.05 does not —
+///   which is what a limit looks like when it is really about how much
 ///   triangle is showing.
 ///
-/// So the ceiling is palette-dependent and the worst case is a third of the
-/// best. A board whose colours shout gets the walk's whole reach; a board that
-/// puts its points near its checkers gets what its own colours allow.
-double insetCeilingOf(BoardPalette palette) =>
-    palette == BoardPalette.blueRed ? 0.03 : 0.09;
+/// So one palette in ordinary light gets the walk's whole reach and everything
+/// else gets a third of it, for three unrelated reasons, none of which is the
+/// walk. Every one of them is a colour-model limit wearing a placement limit's
+/// clothes, and the colour model is where the money would have to be spent.
+double insetCeilingOf(BoardPalette palette, double gain) =>
+    palette == BoardPalette.classic && gain <= 1.0 ? 0.09 : 0.03;
 
 /// The eight stacks the starting position puts out, at insets a hand might
 /// leave — the SHAPE of a hand's carelessness, scaled to what [palette] can
@@ -341,7 +412,7 @@ double insetCeilingOf(BoardPalette palette) =>
 /// ones are deliberately on the short stacks — a five-stack inset that far
 /// would have to compress to stay off the midline, which is a different
 /// measurement (the pitch) getting harder rather than this one.
-Map<int, StackPlacement> handPlacedStacks(BoardPalette palette) {
+Map<int, StackPlacement> handPlacedStacks(BoardPalette palette, double gain) {
   const shape = <int, double>{
     0: 0.08,
     5: 0.04,
@@ -352,7 +423,7 @@ Map<int, StackPlacement> handPlacedStacks(BoardPalette palette) {
     18: 0.03,
     23: 0.08,
   };
-  final scale = insetCeilingOf(palette) / 0.09;
+  final scale = insetCeilingOf(palette, gain) / 0.09;
   return <int, StackPlacement>{
     for (final entry in shape.entries)
       entry.key: StackPlacement(edgeInset: entry.value * scale),
@@ -1762,6 +1833,7 @@ List<CheckerSpot> _drawCheckers(
       radius: radius,
       firstOffset: edgeOffset + seat.edgeInset * h,
       lastOffsetLimit: midlineOffset,
+      lampGain: seat.lampGain,
     ));
   }
 
@@ -1836,6 +1908,7 @@ List<CheckerSpot> _drawCheckerStack({
   required double radius,
   required double firstOffset,
   required double lastOffsetLimit,
+  double lampGain = 1,
 }) {
   final h = image.height;
   final travel = lastOffsetLimit - firstOffset;
@@ -1843,18 +1916,30 @@ List<CheckerSpot> _drawCheckerStack({
       ? (travel.sign) * math.min(2 * radius, travel.abs() / (count - 1))
       : 0.0;
 
-  final color = _color(palette.checkerColor(owner));
+  final base = palette.checkerColor(owner);
   final spots = <CheckerSpot>[];
   for (var k = 0; k < count; k++) {
     final offset = firstOffset + k * step;
     final center = Pt(centerX, fromNearEdge ? h - 1 - offset : offset);
-    img.fillCircle(
-      image,
-      x: center.x.round(),
-      y: center.y.round(),
-      radius: radius.round(),
-      color: color,
-    );
+    if (lampGain == 1) {
+      img.fillCircle(
+        image,
+        x: center.x.round(),
+        y: center.y.round(),
+        radius: radius.round(),
+        color: _color(base),
+      );
+    } else {
+      _fillLitCircle(
+        image,
+        centerX: center.x.round(),
+        centerY: center.y.round(),
+        radius: radius.round(),
+        base: base,
+        fromNearEdge: fromNearEdge,
+        lampGain: lampGain,
+      );
+    }
     spots.add(CheckerSpot(
       owner: owner,
       area: area,
@@ -1865,6 +1950,60 @@ List<CheckerSpot> _drawCheckerStack({
     ));
   }
   return spots;
+}
+
+/// How far in from the board's edge the shadow at the foot of a lit stack
+/// lifts, in board-space y — about one checker.
+///
+/// The shape matters more than the size, and it is the shape the real frame
+/// showed: the light does not ramp evenly up a stack, it is BLOCKED at the
+/// foot. The near checker sits down in the well of its own point with the rest
+/// of the stack in front of it, so it is in shadow; a checker or so further in,
+/// the stack is clear of it and everything past that is lit alike. Measured on
+/// the real folding frame's 19-point: 32 at the foot, 59 seven hundredths in,
+/// 67 beyond that — most of the climb inside the first checker, then flat.
+///
+/// That the climb happens INSIDE the first checker is the whole reason this is
+/// drawn per row rather than per disc. `RoiSampler.checkerHoldDepth` is 0.07
+/// and the bed's flat-drawn checkers are deeper than that, so a step painted
+/// between one disc and the next falls entirely outside the window the hold
+/// test looks through, and a lamp modelled that way is invisible to the
+/// instrument it is meant to test. That is not a modelling nicety — a lamp
+/// drawn per disc passes with the very brightness bound the real frame
+/// refused.
+const double kLampShadowReach = 0.10;
+
+/// One checker of a lit stack, shaded row by row.
+///
+/// Every channel moves by the same factor, so what changes down the disc is
+/// the light and not the colour — which is exactly the case the walk's hold
+/// test has to survive, since it judges colour with brightness taken out.
+void _fillLitCircle(
+  img.Image image, {
+  required int centerX,
+  required int centerY,
+  required int radius,
+  required int base,
+  required bool fromNearEdge,
+  required double lampGain,
+}) {
+  final h = image.height;
+  for (var dy = -radius; dy <= radius; dy++) {
+    final y = centerY + dy;
+    if (y < 0 || y >= h) continue;
+    final halfWidth =
+        math.sqrt(math.max(0, radius * radius - dy * dy)).round();
+    // How far this row is from the board edge the stack grows out of, in
+    // board space — the same y the sampler walks in.
+    final depth = (fromNearEdge ? h - 1 - y : y) / h;
+    final lit =
+        1 + (lampGain - 1) * math.min(1.0, depth / kLampShadowReach);
+    final color = _color(_scaled(base, lit));
+    for (var x = centerX - halfWidth; x <= centerX + halfWidth; x++) {
+      if (x < 0 || x >= image.width) continue;
+      image.setPixel(x, y, color);
+    }
+  }
 }
 
 /// Where a [Dice] lands when nothing says otherwise: both on the vertical

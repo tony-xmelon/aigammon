@@ -511,7 +511,7 @@ void main() {
 
         test('is the same on a ${palette.name} board at gain $gain whose '
             'stacks are not flush', () {
-          final insets = handPlacedStacks(palette);
+          final insets = handPlacedStacks(palette, gain);
           final flush = _calibrate(renderShot(
             board: BoardState.initial(),
             palette: palette,

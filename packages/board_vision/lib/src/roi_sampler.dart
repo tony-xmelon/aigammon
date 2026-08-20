@@ -233,50 +233,44 @@ class RoiSampler extends FrameSampler {
   /// bed's palettes has — the pale points and white checkers of the
   /// low-contrast wood board — is 0.11. This sits under all of them and well
   /// over the drift.
+  ///
+  /// ## Brightness cannot be put back, and here is the measurement
+  ///
+  /// The cost of taking brightness out is real and it is not small: two things
+  /// of the same hue are the same surface however far apart they are. On the
+  /// low-contrast wood palette the dark point paint (156,128,85) and the dark
+  /// checker standing on it (107,86,58) are **0.019** apart here, so a block
+  /// that starts on the board goes on holding straight through the checker in
+  /// front of it, the blind walk settles on board, and the board's own paint
+  /// is learned as a checker colour — which is why that palette refuses a
+  /// hand-placed stack from an inset of 0.04 up (see [checkerHoldDepth]).
+  ///
+  /// **A brightness bound alongside this was tried, and the real frame killed
+  /// it.** The idea: the wood board's board-to-checker step is 0.36 of a log
+  /// unit in [lumaOf] even though it is nothing in colour, so bound the
+  /// brightness too. At 0.30 it worked beautifully on the bed — the wood
+  /// board's ceiling went 0.03 to 0.09 at every gain, classic's at gain 1.4
+  /// did the same, all 368 tests passed and the corpus scoreboard did not
+  /// move. On the real folding frame it refused the board, naming the
+  /// 19-point.
+  ///
+  /// The reason is worth keeping, because it is a trap anyone would walk into
+  /// twice. The 0.196 quoted above is the drift down a **white** stack, and a
+  /// log ratio of brightness is not scale-free across checker colours: the
+  /// same window over a **black** stack moves it three times as far, because
+  /// the values are tiny to begin with. Measured down the real frame's black
+  /// five-stack on the 19-point, which is the one under the window: luma runs
+  /// 32 at the foot to 67 at the top, which is **0.63**. So the bound would
+  /// have to sit at or above 0.63 to keep that stack and below 0.36 to buy the
+  /// wood board anything, and there is no such number. In absolute levels it
+  /// is no better — 35 levels of real drift against a 43-level wood step, a
+  /// fifth of a stop apart with two measurements in evidence.
+  ///
+  /// So the wood board's ceiling is a colour-model limit, and the place to
+  /// spend on it is the colour model rather than the walk. `checkersUnderLamp`
+  /// in the bed now paints that gradient, so this dead end fails a test
+  /// instead of a photograph next time.
   static const double checkerHoldTolerance = 0.08;
-
-  /// How much BRIGHTER or darker the same surface may get along a column, as a
-  /// log ratio of [lumaOf] — the bound [checkerHoldTolerance] cannot supply,
-  /// because taking brightness out is exactly what it does.
-  ///
-  /// **A board made of one wood is why this exists.** With brightness gone,
-  /// two things of the same hue are the same surface however far apart they
-  /// are: on the low-contrast wood palette, the dark point paint (156,128,85)
-  /// and the dark checker standing on it (107,86,58) are 0.019 apart in
-  /// colour, against a tolerance of 0.08. So a block that started on the board
-  /// went on "holding" straight through the checker in front of it, the blind
-  /// walk settled on board, the board's own paint was learned as a checker
-  /// colour, and calibration refused the frame — from an inset of 0.04 up,
-  /// at every light level. They differ by 0.39 of a log unit in brightness,
-  /// which is the whole of the difference and all that is left to measure.
-  ///
-  /// So it has to sit above the light and below that. The light is measured on
-  /// the real frame, and it is the same measurement [checkerHoldTolerance]
-  /// quotes: down the white two-stack on the far half, foot to top, luma runs
-  /// 157 to 191, which is **0.196** of a log unit — a window on one side of a
-  /// table. This is a little over half again as much, and 0.09 under the wood
-  /// board's board-against-checker step.
-  ///
-  /// What it bought, measured over the palette matrix at uniform insets: the
-  /// low-contrast wood board's ceiling went from 0.03 to **0.09** at every
-  /// gain from 0.6 to 1.4, and the classic board's at gain 1.4 did the same.
-  /// The synthetic corpus scoreboard did not move. Set it to 0.40 and the wood
-  /// board's ceiling falls straight back to 0.03, which is the check that this
-  /// number is the one doing the work.
-  ///
-  /// The cost, stated plainly: a real stack lit with a gradient steeper than
-  /// this from foot to top will stop holding partway up itself. That ends as a
-  /// REFUSAL — the walk settles nowhere, or on something the read-back gate
-  /// throws out — rather than as a wrong reading, which is the direction this
-  /// package errs in on purpose.
-  ///
-  /// **The bed can only bound this from above.** It paints in flat colour with
-  /// no gradient down a stack, so a tolerance set far too TIGHT costs it
-  /// nothing — set this to 0.15 and the wood board's ceiling rises further
-  /// rather than falling. The floor is the real frame's 0.196 and nothing in
-  /// the committed tests measures it; the corpus gate is where a photograph
-  /// gets to argue.
-  static const double checkerHoldLumaTolerance = 0.30;
 
   /// How much a patch's own samples may scatter and still count as one
   /// surface: the mean per-channel distance from its median, in sensor levels.
@@ -609,20 +603,12 @@ class RoiSampler extends FrameSampler {
   /// Whether two block medians are the same thing seen twice — the one
   /// definition of "still the same surface" the whole walk uses.
   ///
-  /// Two tests, and they answer different questions. [_colourGap] asks whether
-  /// the COLOUR changed, with brightness taken out, so a stack lit brighter at
-  /// its top than at its foot still holds. [checkerHoldLumaTolerance] asks
-  /// whether the brightness changed by more than light ever does, because a
-  /// colour test with brightness taken out cannot tell a dark board from a
-  /// dark checker of the same hue — and on a board made of one wood, that is
-  /// exactly what it is asked to do.
-  static bool _sameSurface(Rgb a, Rgb b) {
-    if (_colourGap(a, b) > checkerHoldTolerance) return false;
-    return math
-            .log((lumaOf(a) + _darkPedestal) / (lumaOf(b) + _darkPedestal))
-            .abs() <=
-        checkerHoldLumaTolerance;
-  }
+  /// Colour only, with brightness taken out, because a stack is lit brighter
+  /// at its top than at its foot and that is the light rather than the board.
+  /// What that costs, what a brightness bound alongside it would buy, and the
+  /// real frame's answer to whether one can exist: [checkerHoldTolerance].
+  static bool _sameSurface(Rgb a, Rgb b) =>
+      _colourGap(a, b) <= checkerHoldTolerance;
 
   /// A pedestal under every channel before a ratio is taken.
   ///
