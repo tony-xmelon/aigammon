@@ -536,15 +536,38 @@ class RoiSampler extends FrameSampler {
     );
   }
 
-  /// How far the run of covered rows starting at the origin reaches.
+  /// How long the run of covered rows nearest the origin is.
+  ///
+  /// **Its length, not how far it reaches.** The two are the same thing on a
+  /// board whose stacks are flush against their edges and nothing alike on a
+  /// board where a hand has left them a little way in — and the second is what
+  /// real boards look like (see [findChecker]). Measuring from the board's
+  /// edge instead made the pitch depend on where each stack happened to be set
+  /// down: with the run required to start at the edge, every inset stack
+  /// measured *zero*, the pitch regression had nothing to fit, and occupancy
+  /// counted one checker on stacks of five.
+  ///
+  /// The run may therefore begin anywhere within [checkerSearchFar] of the
+  /// origin — as far in as a stack may sit and still be a stack on this point
+  /// — and nowhere else. That bound is what keeps a die lying in a point's
+  /// headroom from starting a run of its own: it sits three or four times
+  /// further in than this, so it goes on measuring zero, which is the
+  /// signature occupancy uses to tell it from a checker.
   static double _runReach(List<double> coverage, double rowDepth) {
-    var last = -1;
+    final maxLeadIn = rowDepth <= 0 ? 0 : (checkerSearchFar / rowDepth).floor();
+    var first = -1, last = -1;
     for (var r = 0; r < coverage.length; r++) {
       if (coverage[r] < minRowCoverage) continue;
+      if (first < 0) {
+        if (r > maxLeadIn) break;
+        first = r;
+        last = r;
+        continue;
+      }
       if (r - last > maxProfileGap + 1) break;
       last = r;
     }
-    return last < 0 ? 0.0 : (last + 0.5) * rowDepth;
+    return last < 0 ? 0.0 : (last - first + 1) * rowDepth;
   }
 }
 
@@ -709,13 +732,19 @@ class StackMeasurement {
   final double whiteMass;
   final double blackMass;
 
-  /// How far each colour's run reaches from the stack's origin, in board-space
-  /// units. Zero when that colour was not found at the origin end at all.
+  /// How long each colour's run at the origin end is, in board-space units.
+  /// Zero when that colour was not found there at all.
   ///
-  /// A *run*, not a scattering: the walk starts at the origin and stops at the
-  /// first gap wider than [maxProfileGap]. A blob floating in the middle of a
+  /// A *run*, not a scattering: the walk takes the first covered row within
+  /// [RoiSampler.checkerSearchFar] of the origin and stops at the first gap
+  /// wider than [maxProfileGap] after it. A blob floating in the middle of a
   /// region — a die in a point's headroom, a hand's shadow — is therefore not
-  /// counted as part of the stack unless it is touching it.
+  /// counted as part of the stack unless it is touching it, and does not start
+  /// a run of its own.
+  ///
+  /// The length is measured from where the run starts rather than from the
+  /// board's edge, so a stack a person left sitting a little way in measures
+  /// the same as one pushed flush — see [RoiSampler._runReach].
   final double whiteReach;
   final double blackReach;
 
