@@ -545,11 +545,35 @@ class Calibrator {
   ///
   /// Each round splits whatever still reads as a checker into at most two more
   /// surfaces, so three rounds is room for six beyond the two every region
-  /// starts with. The real board's spine needed one. The cap exists because
-  /// this is a loop over a fixed point that a pathological region might not
-  /// reach, not because any board is expected to want three: a region still
-  /// showing checkers after three rounds falls through to the read-back gate,
-  /// which refuses it, which is the right end for a board nobody can model.
+  /// starts with. A region still showing checkers after them falls through to
+  /// the read-back gate, which refuses it, which is the right end for a board
+  /// nobody can model.
+  ///
+  /// ## What is measured, and where
+  ///
+  /// **From below** — how many rounds a real worn spine costs. The first real
+  /// folding board's needed one. The bed's worn spine needs **two**: set this
+  /// to 0 or 1 and 'a spine worn the way a real one is' refuses the blue-red
+  /// case for having White on the bar, which is the very failure
+  /// [_settleEmptyRegions] exists to cure. So three is one round of margin
+  /// over the worst thing either board has shown.
+  ///
+  /// **From above, and this is the half that decides the number.** The cap is
+  /// a SAFETY limit rather than a convergence budget: every extra round is one
+  /// more chance for a region to explain away something that is genuinely
+  /// standing in it. Measured against the first real corpus frame during the
+  /// corner sweep — where the same photograph is calibrated through many
+  /// slightly different corner placements — **26** corner sets were accepted
+  /// at three rounds and **48** at eight. Nearly twice as many, and the extra
+  /// ones were not better placements: some came from the bar band, given
+  /// enough rounds, swallowing a slice of the neighbouring stack that a
+  /// mis-set corner had pushed into it. A calibration that accepts a corner
+  /// placement it should have refused is exactly what this package must not
+  /// do, so the cap stays where the real frame put it.
+  ///
+  /// That measurement is not reproducible from this repository — it is the one
+  /// number here taken against a photograph the committed tests do not have,
+  /// and the corpus gate (the plan's Task 6) is where it can be taken again.
   static const int maxSurfaceRounds = 3;
 
   /// How many regions may read back wrong from the very frame they were
