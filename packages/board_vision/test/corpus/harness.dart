@@ -54,23 +54,13 @@ import 'scoreboard.dart';
 /// two say found, right and refused. See [_scoreDice].
 const String kDiceFoundSignal = 'dice found when a roll was there';
 
-/// Whether the play the matcher ranked first cleared [PlayMatcher.minConfidence]
-/// — 1 when the session would have acted on it, 0 when it would have prompted
-/// with the candidate list instead.
-///
-/// Separate from `CorpusMetric.legalPlay`, which is about being RIGHT. A play
-/// identified correctly but under the threshold is a fallback, not a failure,
-/// and the gap between the two rates is what a real session's prompt traffic
-/// looks like. See [_scoreLegalPlay].
-const String kPlayAboveThresholdSignal = 'legal play above the threshold';
-
 /// Whether the play identified correctly was written with DIFFERENT hops from
 /// the one the sidecar records — the same position by another transit.
 ///
 /// One in six on the filmed game, and none at all on generated plays, because a
 /// generated play is drawn from the generator's own canonical list while a
-/// filmed one is what a person's hand did. See [_scoreLegalPlay] for why that
-/// still counts as right.
+/// filmed one is what a person's hand did. See [_PlayChain] for why that still
+/// counts as right.
 const String kTransitDifferedSignal = 'the transit was not the listed one';
 
 /// Scores every shot in [directory], grouped into its sessions.
@@ -216,7 +206,7 @@ void _scoreSession(
   plays.finish();
 }
 
-/// The query the whole mode turns on, over every pair of shots in [shots] that
+/// The query the whole mode turns on, over every pair of a session's shots that
 /// is genuinely **one turn apart**.
 ///
 /// ## Which pairs those are, and why the sidecars decide it
@@ -337,11 +327,18 @@ class _PlayChain {
             '(cost ${top.cost.toStringAsFixed(2)}, instability '
             '${top.instability.toStringAsFixed(2)})',
       )
-      // Watched, never judged. A play identified top-1 but under the
-      // threshold is a play the session would prompt about rather than act
-      // on, and the gap between the two rates is what a real session's
-      // fallback traffic looks like.
-      ..signal(kPlayAboveThresholdSignal, top.plausible ? 1 : 0)
+      // The same attempt, asked the other question: would the session have
+      // acted on this, or put the candidate list in front of the user? A rate
+      // of its own rather than a signal, because it is floored — see
+      // `kRealCorpusFloors`.
+      ..record(
+        CorpusMetric.legalPlayActed,
+        ok: top.plausible,
+        slices: _slicesOf(shot)..['mover'] = turn.mover.name,
+        detail: '${earlier.id}->${shot.id}: ${top.play} came back at '
+            '${top.confidence.toStringAsFixed(3)}, under the threshold, so '
+            'the session would have prompted rather than acted',
+      )
       // How often the transit the player's hand actually used is NOT the one
       // the generator lists. Zero on a corpus of generated plays and one in
       // six on the filmed game, which is the ambiguity-honesty case turning

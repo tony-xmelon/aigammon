@@ -8,9 +8,9 @@
 ///
 /// ## Adding a metric
 ///
-/// Tasks 7 and 8 bring two more questions — which legal play happened, and is
-/// the board what the game expects. Adding one is: a value in [CorpusMetric], a
-/// row in [kMetricTargets] (null while it has no target yet), and a call to
+/// Task 7 brought which legal play happened; Task 8 brings whether the board is
+/// what the game expects. Adding one is: a value in [CorpusMetric], a row in
+/// [kMetricTargets] (null while it has no target yet), and a call to
 /// [Scoreboard.record] in the harness. Nothing else moves, and a metric with no
 /// target still prints, which is how a number gets watched before it is
 /// promised.
@@ -63,10 +63,22 @@ enum CorpusMetric {
   ///
   /// Only pairs of shots that are **genuinely one turn apart** are scored, and
   /// which those are is read off the sidecars' own event logs rather than from
-  /// their order on disk — see `_scoreLegalPlay`. A corpus of independent
-  /// positions has none, and says so in its notes instead of quietly scoring
-  /// nothing.
-  legalPlay('legal-play identification');
+  /// their order on disk — see `_PlayChain`. A corpus of independent positions
+  /// has none, and says so in its notes instead of quietly scoring nothing.
+  legalPlay('legal-play identification'),
+
+  /// The same attempts again, asking a different question: did the top
+  /// candidate clear `PlayMatcher.minConfidence`, so that a session would have
+  /// **acted** on it rather than putting the candidate list in front of the
+  /// user?
+  ///
+  /// No target of its own — the spec promises identification, and a prompt is
+  /// a fallback rather than a failure. It is scored because being right and
+  /// being acted on are two different things and one rate cannot say both: a
+  /// change that left every play correctly ranked and pushed four of six under
+  /// the threshold would turn a hands-free turn into four taps with nothing
+  /// anywhere going red.
+  legalPlayActed('legal play acted on');
 
   const CorpusMetric(this.label);
 
@@ -85,6 +97,7 @@ const Map<CorpusMetric, double?> kMetricTargets = <CorpusMetric, double?>{
   CorpusMetric.diceAbsence: PerceptionTargets.expectedRefusal,
   CorpusMetric.expectedRefusal: PerceptionTargets.expectedRefusal,
   CorpusMetric.legalPlay: PerceptionTargets.legalPlayIdentification,
+  CorpusMetric.legalPlayActed: null,
   CorpusMetric.startConfirmed: null,
   CorpusMetric.regionOccupancy: null,
   CorpusMetric.regionColour: null,

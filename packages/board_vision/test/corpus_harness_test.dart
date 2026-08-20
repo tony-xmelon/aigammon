@@ -346,6 +346,8 @@ void main() {
       // 010->013 and 018->020 — and which six is derived from the sidecars'
       // own event logs rather than from a list typed here.
       expect(board.totalFor(CorpusMetric.legalPlay).attempts, 6);
+      // The same six, asked whether the session would have acted or prompted.
+      expect(board.totalFor(CorpusMetric.legalPlayActed).attempts, 6);
       final note = board.notes.firstWhere((n) => n.contains('one turn apart'));
       for (final pair in <String>['013->018', '020->066', '066->070']) {
         expect(note, contains(pair));
@@ -524,7 +526,7 @@ void main() {
       expect(board.totalFor(CorpusMetric.legalPlay).attempts, 2);
       expect(board.totalFor(CorpusMetric.legalPlay).rate, 1.0);
       expect(board.targetViolations(), isEmpty, reason: board.report());
-      expect(board.signalOf(kPlayAboveThresholdSignal).sum, 2);
+      expect(board.totalFor(CorpusMetric.legalPlayActed).rate, 1.0);
     });
 
     test('and a photograph showing a different play fails the play-ID target',
@@ -595,14 +597,25 @@ void main() {
 /// * **legal-play identification 6/6.** The query the whole mode turns on, over
 ///   the six windows of the filmed game that are genuinely one turn apart, with
 ///   the actual legal-move list `backgammon_core` would have offered at each
-///   moment (7 to 18 candidates, 11.7 on average). All six also clear
-///   `PlayMatcher.minConfidence`, so a session would have acted on all six
-///   rather than prompting. **Six is a small denominator** and a floor of 1.0
-///   over it is a ratchet, not a claim that the pipeline is perfect: what it
-///   promises is that no later change may lose one of these six quietly. The
-///   number is exactly what the delta design predicts — the counts this corpus
-///   reads are biased and the bias cancels, which is why 0.784 per-region
-///   counting supports 1.000 play identification.
+///   moment (7 to 18 candidates, 11.7 on average). **Six is a small
+///   denominator** and a floor of 1.0 over it is a ratchet, not a claim that
+///   the pipeline is perfect: what it promises is that no later change may lose
+///   one of these six quietly. The number is exactly what the delta design
+///   predicts — the counts this corpus reads are biased and the bias cancels,
+///   which is why 0.784 per-region counting supports 1.000 play identification.
+/// * **legal play acted on 6/6.** All six also clear
+///   `PlayMatcher.minConfidence`, so a session would have acted on every one
+///   rather than putting the candidate list in front of the user. **This needs
+///   its own floor and it is not decoration.** Being right and being acted on
+///   are different things, and the matcher's confidence constants can move
+///   without disturbing the ranking at all: the cost falloff is monotone in
+///   the cost, and the stability one is uniform across candidates by
+///   construction, so neither can reorder anything. Measured —
+///   `PlayMatcher.noiseTolerance` 2.0 to 0.8 leaves identification at 6/6 and
+///   the whole synthetic play-matcher suite green, and pushes **four of these
+///   six** under the threshold: a hands-free turn becoming four taps, with
+///   nothing anywhere going red. The margin here is real but thin (0.542 at
+///   the worst of the six), which is the other reason to ratchet it.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
   CorpusMetric.startConfirmed: 1.0,
@@ -611,6 +624,7 @@ const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.regionOccupancy: 189 / 241,
   CorpusMetric.regionColour: 230 / 241,
   CorpusMetric.legalPlay: 6 / 6,
+  CorpusMetric.legalPlayActed: 6 / 6,
 };
 
 /// The floors, what was measured against them, and how far each still sits
