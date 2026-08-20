@@ -255,13 +255,17 @@ PrepareReport prepareCorpus({
     // every sidecar from the live plan and would wipe anything typed in.
     //
     // A folding case needs no widths: its eight points derive them, and
-    // writing both would be two answers to one question.
+    // writing both would be two answers to one question. Said with
+    // `clearProportions` rather than by passing null, which every `copyWith`
+    // reads as "leave it alone" — so a session that had been measured AND then
+    // tapped as a folding case would have kept both.
     writeSidecar(
       destination,
       shot.copyWith(
         corners: tapped,
         foldingCorners: folded,
         proportions: folded == null ? proportions[shot.session] : null,
+        clearProportions: folded != null,
       ),
     );
     written.add(shot.id);

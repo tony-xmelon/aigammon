@@ -368,10 +368,17 @@ class CorpusShot {
   /// The sidecar's file name.
   String get sidecarName => '$id.expected.json';
 
+  /// The same shot with some fields replaced.
+  ///
+  /// Null means "leave this one alone", as it does in every `copyWith` — so
+  /// [clearProportions] is how a caller says the other thing. A folding case
+  /// has no widths to record (its eight points derive them), and passing null
+  /// for [proportions] would quietly keep whatever the shot already carried.
   CorpusShot copyWith({
     BoardQuad? corners,
     SyntheticRecipe? synthetic,
     BoardProportions? proportions,
+    bool clearProportions = false,
     FoldingCorners? foldingCorners,
   }) =>
       CorpusShot(
@@ -390,7 +397,8 @@ class CorpusShot {
         refusalReason: refusalReason,
         title: title,
         instructions: instructions,
-        proportions: proportions ?? this.proportions,
+        proportions:
+            clearProportions ? null : (proportions ?? this.proportions),
         foldingCorners: foldingCorners ?? this.foldingCorners,
       );
 

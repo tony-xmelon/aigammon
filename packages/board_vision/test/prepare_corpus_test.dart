@@ -290,6 +290,52 @@ void main() {
       expect(sidecarOf('002').proportions, measured);
     });
 
+    test('a board that folds carries its eight points and no widths', () {
+      // Two answers to one question is the failure being prevented: the eight
+      // points already say how wide the hinge is, so a sidecar carrying
+      // measured widths as well would leave the harness to pick. Worth a test
+      // of its own because the obvious way to write it does not work — passing
+      // null to a `copyWith` means "leave it alone", not "clear it", so a
+      // session measured before it was tapped as a folding case would have
+      // kept both and nothing would have said so.
+      const measured = BoardProportions(trayWidth: 0.08, barWidth: 0.08);
+      final tapped = foldingCornersOf(
+        kFoldingTent,
+        barWidth: kFoldingBarWidth,
+        aspect: kTopDownHeight / kTopDownWidth,
+        principal: const Pt(kFrameWidth / 2, kFrameHeight / 2),
+      );
+      prepareCorpus(
+        source: source,
+        destination: destination,
+        foldingCorners: <String, FoldingCorners>{'001': tapped},
+        proportions: const <String, BoardProportions>{'A-daylight': measured},
+      );
+
+      CorpusShot sidecarOf(String id) => CorpusShot.fromJson(
+            jsonDecode(File('${destination.path}/$id.expected.json')
+                .readAsStringSync()) as Map<String, dynamic>,
+          );
+      expect(sidecarOf('001').foldingCorners, tapped);
+      expect(sidecarOf('001').proportions, isNull,
+          reason: 'the eight points derive the widths, so the widths must not '
+              'be written beside them');
+      // The half of it the tool cannot demonstrate on its own, because the
+      // plan never puts widths on a shot: clearing has to be asked for, and
+      // asking with a null does nothing at all.
+      final measuredShot =
+          flatten(buildCapturePlan()).first.copyWith(proportions: measured);
+      expect(measuredShot.copyWith(proportions: null).proportions, measured,
+          reason: 'null is "leave it alone" in every copyWith, this one '
+              'included — which is exactly the trap');
+      expect(measuredShot.copyWith(clearProportions: true).proportions, isNull);
+      // The other shot of the same session was not tapped as a folding case,
+      // so it keeps the session's measurement — which is the discriminator
+      // that says this is about the shot's own eight points and not about the
+      // measurement being dropped everywhere.
+      expect(sidecarOf('002').proportions, measured);
+    });
+
     test('a session nobody measured says so by saying nothing', () {
       prepareCorpus(source: source, destination: destination);
       final sidecar = CorpusShot.fromJson(
