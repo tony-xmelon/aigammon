@@ -310,7 +310,92 @@ lower the confidence — the verifier must read the field, not the number.
 - Create: `packages/board_vision/lib/src/drift.dart` (`DriftReport` = discrepancy set + suggested resolutions, consumed by the app's side-by-side resolve UI)
 - Test: `packages/board_vision/test/board_verifier_test.dart`
 
-- [ ] Steps: failing tests (correct board verifies clean at both halves; one misplaced checker names exactly the two wrong ROIs; 5-stack vs 4-stack distinguished with the prior) → implement → harness gains placement-verify + resync scoring → green → commit `feat(vision): expected-board verification and drift reporting`.
+- [x] Steps: failing tests (correct board verifies clean at both halves; one misplaced checker names exactly the two wrong ROIs; 5-stack vs 4-stack distinguished with the prior) → implement → harness gains placement-verify + resync scoring → green → commit `feat(vision): expected-board verification and drift reporting`.
+
+**As implemented (Task 8): verification is a contradiction test, and that is
+where the prior's value comes from.** A blind count is a length over a pitch and
+must choose between K and K±1 by **rounding**, so its answer flips at half a
+checker and everything finer is discarded. Handed K, the query is only whether
+the picture says otherwise — a wider question with a wider window, and the width
+is the whole mechanism. `BoardVerifier.stackTolerance` is **0.75**, pinned
+between two bounds and by a mutation from each side: *above 0.5*, the boundary a
+blind count's rounding sits on, so verification agrees on a strict superset of
+the regions a blind count gets right; *below 1.0*, because catching a man put on
+the 7 instead of the 8 is the query's entire job. Set it to 0.5 and 'a stack a
+blind count gets WRONG still verifies' goes red; set it to 1.0 and the 5-vs-4
+test does. Measured cost of the window: on a bed calibrated under a lamp
+gradient and read with the stacks left a hand's width in, a four-stack measures
+4.37, so a man missing from a five-stack *there* is 0.63 out and inside it. At
+the corpus's own grade the same residuals run under 0.05.
+
+**As measured (Task 8): the prior is worth nineteen regions on real photographs
+and costs none.** Per region, on the same ten frames and the same sidecars,
+verification scores **0.858** against a blind count's **0.784** — nineteen
+regions rescued, zero lost, both recorded as harness signals so the claim is a
+number rather than an argument. On the synthetic corpus, **0.987** against
+0.963, eighteen rescued and none lost. The `regionVerified` row is scored beside
+`regionOccupancy` for exactly this comparison.
+
+**The 066 bar is the acceptance case and it agrees.** Blind occupancy reads the
+worn hinge as empty — run 0.025 where a checker on that board is 0.087 deep, so
+`StackMetrics.holdsAnything` refuses it, *correctly*, because asked blind it
+cannot tell that run from the rim-and-shadow nine bare points of the same session
+produce (0.021 to 0.042). Asked whether one Black man is standing there, the same
+run divides into **1.28** checkers through the calibration's own fitted line and
+the region agrees. Asked of 070's bare bar — run exactly zero — it disagrees.
+**Calling a region bare takes both instruments and it has to**: the run (too
+short to be a checker) *and* the fitted line (agreeing it is under one), because
+this board's line does not behave at zero — its origin is −0.0857, so a run of
+nothing reads 0.99 checkers and the line alone would call every bare region
+occupied. Drop either half and one of the two 066 tests goes red.
+
+**The two whole-board rates MISS the spec, and the reason is arithmetic rather
+than perception.** Placement verification **0/6** and full-board resync **0/10**
+on the real corpus; resync **22/30** on the synthetic one (placement is unaskable
+there — no two shots are one turn apart). Both are floored at what they measured
+and the gap is printed on every run, exactly as the dice are. These are the only
+two targets in the spec's table whose denominator is a **whole board** rather
+than one answer: at 0.987 per region, a clean twenty-seven-region board is 0.73,
+and reaching ≥0.90 per board would need per-region accuracy of **0.9962**. Every
+one of the synthetic corpus's eight failing shots fails on a region a blind count
+also gets wrong — a three-stack lost under a lamp, a phantom stack, a man lost on
+the bar — so the verifier is not what is missing. On the real corpus it is the
+far-half undercount arriving where it **cannot be differenced away**: the 12- and
+19-points' Black five-stacks read as two and three in every single window, which
+is precisely the bias Task 7's matcher subtracts from itself to score 6/6. Two
+things for the gate: whether ≥0.95/≥0.90 *per whole board* is the right shape of
+promise at all, and that the query a session actually needs after dictating a
+move is **narrower** than the API's whole-board sweep — the regions that moved
+are known, and `BoardDiscrepancies.regions` already carries them one at a time.
+
+**Other things the task turned up, each measured.** (a) **"A whole stack does not
+vanish into a misread" is false**, and the bed proved it: `checkersUnderLamp` on
+the classic palette — the only near-black checker the bed has — loses **four
+whole Black stacks at once**, runs of 0.02–0.03 where a checker is 0.09 deep. So
+an absence routes to `askTheUser` at every stack height rather than to the user's
+hands, and the lamp bed is a test that asserts the verifier does *not* verify
+clean. (b) **A colour contradiction must be weighed by the reading of the colour
+that IS there.** `readFor` on a colour a region does not hold returns an *empty*
+reading whose confidence collapses as the other colour fills the region, so
+taking the weight from that side makes the clearest colour flips the least
+confident findings on the board and inverts the resolve screen's whole ordering.
+Caught by mutation, pinned by 'a colour that flipped outranks a tall stack that
+read short'. (c) Every confidence here is one product — what this **kind** of
+evidence is worth on this pipeline (colour 0.954, presence 0.9, absence 0.8,
+count 0.9/0.6/0.3 by stack height) times what the **reading** was worth — the
+same discounting `PlayMatcher.minEvidence` exists for, and floored at the same
+0.25 for the same reason. (d) A trayless board's bear-off wells are reported
+`unobservable`: not a contradiction and **not an agreement**, consuming
+`PlayMatch.unobservable`'s philosophy exactly. Report them as agreements and two
+tests go red. (e) The real session's eighteen single-checker expectations have
+exactly **one** with no run of its own colour, and that one has the opponent's
+man standing on it — so it is a colour contradiction before it is ever an
+absence. A blind count loses far more lone men than that; the run underneath
+them is still there to be measured, which is the 066 mechanism at large. (f) The
+harness's new rows are shown to be able to fail: the `playedSomethingElse`
+fixture now reddens **three** targets at once (play-ID, placement, resync — three
+instruments agreeing about one planted lie), while `wrongRoll` leaves both board
+queries at 1.0, since dice lie in a band no game is played on.
 
 ### Task 9: Continuous readability and calibration re-validation
 
