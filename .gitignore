@@ -1,0 +1,10 @@
+# Raw capture footage for the board_vision corpus (see
+# packages/board_vision/corpus/FILMING.md). The videos are the SOURCE the
+# corpus is extracted from and are far too large to commit — only the
+# prepared, downsampled frames under packages/board_vision/test/corpus/
+# belong in git.
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.m4v
