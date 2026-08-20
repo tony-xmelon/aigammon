@@ -57,10 +57,12 @@ const String kDiceFoundSignal = 'dice found when a roll was there';
 /// Whether the play identified correctly was written with DIFFERENT hops from
 /// the one the sidecar records — the same position by another transit.
 ///
-/// One in six on the filmed game, and none at all on generated plays, because a
-/// generated play is drawn from the generator's own canonical list while a
-/// filmed one is what a person's hand did. See [_PlayChain] for why that still
-/// counts as right.
+/// Zero everywhere today, and worth keeping for what it would mean if it were
+/// not: a generated play is drawn from the generator's own canonical list, and
+/// the filmed ledger has recorded canonical transits since the 2026-08-21
+/// re-audit, because a photograph cannot say which way a single man ran and
+/// claiming to know would be inventing evidence. It read one in six until then.
+/// See [_PlayChain] for why a different transit still counts as right.
 const String kTransitDifferedSignal = 'the transit was not the listed one';
 
 /// Whether ONE region agreed with the game and a blind count of the same region
@@ -318,17 +320,21 @@ class _PlayChain {
     );
     final top = matches.first;
     // **Right means the right POSITION, not the right hops**, and the real
-    // corpus is what settled that.
+    // corpus is what raised it.
     //
-    // Turn 3 of the filmed game is `W 5-2: 13/8 8/6`, which is what the
-    // transcript recorded because it is what the player's hand did. That exact
-    // hop multiset is not in `state.legalMoves` at all: the generator dedupes
-    // by RESULTING POSITION and lists `13/11 11/6` as the representative of
-    // that position, the two being the same play by a different transit. So
-    // comparing hops would score the matcher against an answer it was never
-    // offered, and would call a correct identification a miss.
+    // A hand that runs one man 13/8 on a 5-2 has played a hop multiset that is
+    // not in `state.legalMoves` at all: the generator dedupes by RESULTING
+    // POSITION and lists `13/11 11/6` as the representative of that position,
+    // the two being the same play by a different transit. Comparing hops would
+    // score the matcher against an answer it was never offered, and would call
+    // a correct identification a miss. The filmed transcript was read as doing
+    // exactly that at turn 3 until the 2026-08-21 re-audit found the turn was a
+    // 3-2 rather than a 5-2 — so the case now lives in
+    // `play_matcher_test.dart`'s fixtures rather than in this corpus, and
+    // `kTransitDifferedSignal` counts zero here. The rule does not depend on
+    // the example.
     //
-    // It is also what the game itself means. `GameState.play` runs any
+    // It is what the game itself means. `GameState.play` runs any
     // decomposition through `canonicalPlay` before folding it, so `13/8 8/6`
     // and `13/11 11/6` enter the authoritative state as the same move. And it
     // is the only thing two settled frames can possibly say: an intermediate
@@ -622,10 +628,13 @@ void _scoreOccupancy(
       score(region, count, count == 0 ? CheckerColor.none : colour, 'tray');
     }
   } else if (expected.whiteOff + expected.blackOff > 0) {
+    final gone = expected.whiteOff + expected.blackOff;
     board.notes.add(
-      '${shot.id}: ${expected.whiteOff + expected.blackOff} checkers borne '
-      'off a board with no bear-off wells. They leave the board altogether on '
-      'a folding case, so nothing in the picture can be scored for them.',
+      '${shot.id}: $gone checker${gone == 1 ? '' : 's'} off a board with no '
+      'bear-off wells. A checker that leaves a folding case leaves it '
+      'altogether — borne off, or in the real corpus\'s turn-7 window simply '
+      'put down beside the board — so nothing in the picture can be scored '
+      'for it.',
     );
   }
 }

@@ -427,20 +427,33 @@ void main() {
               'having — re-measure the floors deliberately.');
     });
 
-    test('the six windows that ARE one turn apart carry the play-ID score, '
-        'and the three that are not are named', () {
+    test('the five windows that ARE one turn apart carry the play-ID score, '
+        'and the four that are not are named', () {
       // The corpus's ten windows are not ten consecutive turns. The ledger
-      // covers turns 1-8 and turn 6's window never came (hands still in
-      // shot), so 013->018 spans two plays; the two end-game keyframes carry a
-      // board and no log at all, so nothing can be paired with them. Six pairs
-      // are genuinely one turn apart — 001->003, 003->005, 005->008, 008->010,
-      // 010->013 and 018->020 — and which six is derived from the sidecars'
-      // own event logs rather than from a list typed here.
-      expect(board.totalFor(CorpusMetric.legalPlay).attempts, 6);
-      // The same six, asked whether the session would have acted or prompted.
-      expect(board.totalFor(CorpusMetric.legalPlayActed).attempts, 6);
+      // reaches turn 5 and turn 6's window never came (hands still in shot),
+      // so 013->018 spans two plays; four shots carry a board and no log at
+      // all, so nothing can be paired with them. Five pairs are genuinely one
+      // turn apart — 001->003, 003->005, 005->008, 008->010 and 010->013 — and
+      // which five is derived from the sidecars' own event logs rather than
+      // from a list typed here.
+      //
+      // **018->020 used to be the sixth**, and the 2026-08-21 re-audit retired
+      // it rather than failing it: a checker physically left the board during
+      // turn 7, so those two frames carry hand-read boards with no log, and
+      // there is no certified roll behind them either (a 3 lies visible at 020
+      // with its partner hidden). The denominator changed; nothing was scored
+      // differently. It retires through the same derivation as the others,
+      // which is why nothing here had to be crossed out by hand.
+      expect(board.totalFor(CorpusMetric.legalPlay).attempts, 5);
+      // The same five, asked whether the session would have acted or prompted.
+      expect(board.totalFor(CorpusMetric.legalPlayActed).attempts, 5);
       final note = board.notes.firstWhere((n) => n.contains('one turn apart'));
-      for (final pair in <String>['013->018', '020->066', '066->070']) {
+      for (final pair in <String>[
+        '013->018',
+        '018->020',
+        '020->066',
+        '066->070',
+      ]) {
         expect(note, contains(pair));
       }
       // Both movers are represented: a play is identified from the change on
@@ -450,18 +463,31 @@ void main() {
           containsAll(<String>['white', 'black']));
     });
 
-    test('the play the transcript recorded is not always the play the '
-        'generator lists, and that is not a miss', () {
-      // Turn 3 is `W 5-2: 13/8 8/6` in the transcript because that is what the
-      // player's hand did. `MoveGenerator.legalMoves` dedupes by resulting
-      // position and lists `13/11 11/6` for that position instead — the same
-      // play by another transit, and one of only two things two settled frames
-      // can never tell apart. This is the plan's ambiguity-honesty case
-      // occurring in the wild rather than in a fixture, and it is the reason
-      // the harness scores positions and not hop multisets.
-      expect(board.signalOf(kTransitDifferedSignal).sum, 1,
-          reason: 'exactly one of the six filmed plays was written with hops '
-              'the generator does not list');
+    test('the transit signal is zero now, and it is worth saying why', () {
+      // **This row used to be the plan's ambiguity-honesty case in the wild,
+      // and the correction took it away.** Turn 3 was transcribed as
+      // `W 5-2: 13/8 8/6`, a hop multiset `MoveGenerator.legalMoves` does not
+      // list at all (it dedupes by resulting position and offers `13/11 11/6`
+      // for that one), so the signal read 1 of 6 and was quoted as the reason
+      // the harness scores positions rather than hop multisets.
+      //
+      // The 2026-08-21 zoom re-audit found that turn 3 was **one man, 13/8 on
+      // a 3-2** — the second hop was a machine phantom on the session's worst
+      // cell. A one-man 13/8 can go via the 10 or via the 11, no photograph
+      // can say which, and `canonicalPlay` folds both to `13/11 11/8`, so that
+      // is what the ledger now records. There is nothing left in this corpus
+      // that was written with a transit the generator does not list.
+      //
+      // **The harness's reason for scoring positions is unchanged** — it is
+      // what `GameState.play` means and the only thing two settled frames can
+      // say — but it is now supported by `play_matcher_test.dart`'s fixtures
+      // rather than by this corpus, and pretending otherwise would be quoting
+      // evidence that has been withdrawn. Pinned at zero so that a transcript
+      // edit which reintroduces one has to say so.
+      expect(board.signalOf(kTransitDifferedSignal).n, 5);
+      expect(board.signalOf(kTransitDifferedSignal).sum, 0,
+          reason: 'every filmed play is now written with hops the generator '
+              'itself lists');
     });
 
     test('the bar shot reports what it read on the worn hinge', () {
@@ -487,13 +513,13 @@ void main() {
         'both shapes', () {
       // The denominators, pinned, because the whole-board rates are zero and a
       // zero over an empty tally is indistinguishable from a zero over ten. Ten
-      // shots resynced — the calibration frame and both end-game keyframes
-      // included — and the six pairs that are one turn apart verified as
+      // shots resynced — the calibration frame and all four board-only shots
+      // included — and the five pairs that are one turn apart verified as
       // placements, each scored twice: once on the regions the play touched and
       // once over the whole board.
       expect(board.totalFor(CorpusMetric.boardResynced).attempts, 10);
-      expect(board.totalFor(CorpusMetric.placementVerified).attempts, 6);
-      expect(board.totalFor(CorpusMetric.placementVerifiedBoard).attempts, 6);
+      expect(board.totalFor(CorpusMetric.placementVerified).attempts, 5);
+      expect(board.totalFor(CorpusMetric.placementVerifiedBoard).attempts, 5);
       // Twenty-six regions a shot: twenty-four points and both ends of the
       // bar. This board is a folding case, so it has no bear-off wells to ask
       // about — those two come back `unobservable` and are not scored.
@@ -503,57 +529,80 @@ void main() {
     test('the reshaped placement query is the narrower one, and it is what '
         'moved', () {
       // **The user\'s decision, as the two numbers it is a decision between.**
-      // The same six attempts, the same six frames, the same verifier call: the
-      // only difference is which regions the answer is read off. Over the whole
-      // board every one of the six fails, because every one of these frames
-      // contradicts its sidecar SOMEWHERE. Over the regions the play actually
-      // touched, three come back clean.
+      // The same five attempts, the same five frames, the same verifier call:
+      // the only difference is which regions the answer is read off. Over the
+      // whole board every one of the five fails, because every one of these
+      // frames contradicts its sidecar SOMEWHERE. Over the regions the play
+      // actually touched, one comes back clean.
       //
-      // **Two of those three are the reshape and the third is the gap fix**,
-      // measured a commit apart: the reshape alone scored 2/6, and deriving the
-      // profile's bridgeable gap from a checker's own body took the 12-point —
-      // which read two men for six in every window of the session — off this
-      // list twice, at the cost of the 1-point below.
+      // **This row fell from 3/6 to 1/5 when the transcript was corrected on
+      // 2026-08-21, and none of the movement is perception.** Three separate
+      // things happened at once and the report says which is which:
+      //
+      // * 018->020 **retired**. It was one of the three that passed, and it is
+      //   no longer a pair at all — a checker left the board during turn 7, so
+      //   both shots carry hand-read boards with no log. A denominator change,
+      //   not a failure;
+      // * 005->008 still fails, on a **different region**. The 6-point's "four
+      //   men for five" was the ledger being wrong, and with the ledger right
+      //   the same frame contradicts the corrected 8-point instead — three men
+      //   claimed, two measured;
+      // * 010->013 **turned from pass to fail** for the same reason, on the
+      //   same 8-point. Truth moved a man onto it and the reader does not see
+      //   the third.
+      //
+      // What moved a photograph's worth of evidence, in other words, is truth,
+      // and one genuine undercount was hiding behind a transcription error. It
+      // is a worse number and a more honest one.
       //
       // Pinned rather than bounded, because "it helps" is not a finding and
-      // "it is worth three turns in six, and here are the three it is not" is.
+      // "it is worth one turn in five, and here are the four it is not" is.
       expect(board.totalFor(CorpusMetric.placementVerifiedBoard).successes, 0,
           reason: board.report());
-      expect(board.totalFor(CorpusMetric.placementVerified).successes, 3,
+      expect(board.totalFor(CorpusMetric.placementVerified).successes, 1,
           reason: board.report());
-      // And the three that still fail are three different mechanisms, named so
-      // that a change moving this number says which case it moved:
+      // And the four that fail are three different mechanisms, named so that a
+      // change moving this number says which case it moved:
       //
       // * the **23-point** reads three men for two — an OVER-count, and the one
       //   the far-half story does not cover. Its run starts at row zero on
       //   every shot of the session, where the board's own rim and the shadow
       //   in its seam classify as Black, and half a pitch of that is enough;
-      // * the **6-point** reads four men for five, and the photograph agrees
-      //   with the camera rather than with the ledger — see `kRealCorpusFloors`;
+      // * the **8-point** reads two men for three on both of the turns that
+      //   touch it — a run of 0.117 that this board's own fitted line divides
+      //   into 2.19 checkers, so the count is short before any rounding is
+      //   asked. The same undercount the 13-point's three men show in every
+      //   window of the session, on a near-half stack this time;
       // * the **1-point** loses a lone Black man, at a run of 0.0125 where this
       //   board's fitted line puts a checker at 0.083 — the 066 mechanism at
       //   the edge of what it can do.
       final missed = board.missesOf(CorpusMetric.placementVerified);
-      expect(missed, hasLength(3));
+      expect(missed, hasLength(4));
       expect(missed[0], contains('the 23-point'));
-      expect(missed[1], contains('the 6-point'));
+      expect(missed[1], contains('the 8-point'));
       expect(missed[2], contains('the 1-point'));
+      expect(missed[3], contains('the 8-point'));
     });
 
     test('the state-primed read beats the blind one on real photographs too',
         () {
       // The claim the verifier exists to make, on the only frames that can
-      // settle it — **twenty-two** regions a blind count reports wrongly and
+      // settle it — **twenty-one** regions a blind count reports wrongly and
       // verification agrees with, none the other way.
       //
-      // Over the 240 point-reads both rows score, that is 210 against 189:
-      // **0.875 against 0.787**. Not the rows' totals, which are 230/260 and
-      // 189/241 — the verifier asks both ends of the bar on every shot and
-      // nineteen of those extra reads are bare-bar agreements, so comparing
-      // the totals would hand it about a point it did not earn.
+      // Over the 240 point-reads both rows score, that is 212 against 192:
+      // **0.883 against 0.800**. Not the rows' totals, which are 231/260 and
+      // 192/242 — the verifier asks both ends of the bar on every shot and
+      // most of those extra reads are bare-bar agreements, so comparing the
+      // totals would hand it about a point it did not earn.
       //
-      // **And fifteen regions is still not enough for a clean board**, which is
-      // the finding rather than a caveat — see `kRealCorpusFloors`.
+      // Both sides rose by the 2026-08-21 correction and the margin barely
+      // moved (21 rescued against 22), which is the right shape for a truth
+      // fix: the two instruments were being scored against the same wrong
+      // cells, so correcting them helps both.
+      //
+      // **And twenty-one regions is still not enough for a clean board**,
+      // which is the finding rather than a caveat — see `kRealCorpusFloors`.
       final verified =
           board.sliceOf(CorpusMetric.regionVerified, 'region')['point']!;
       final blind =
@@ -561,10 +610,10 @@ void main() {
       expect(verified.attempts, blind.attempts,
           reason: 'the like-for-like comparison stopped being like for like');
       expect(verified.attempts, 240);
-      expect(verified.successes, 210, reason: '$verified');
-      expect(blind.successes, 189, reason: '$blind');
+      expect(verified.successes, 212, reason: '$verified');
+      expect(blind.successes, 192, reason: '$blind');
 
-      expect(board.signalOf(kPriorRescuedSignal).sum, 22,
+      expect(board.signalOf(kPriorRescuedSignal).sum, 21,
           reason: 'the prior rescued a different number of regions than it did '
               'on the day this landed — re-measure deliberately');
       expect(board.signalOf(kPriorLostSignal).sum, 0,
@@ -817,6 +866,18 @@ void main() {
 /// these as a ratchet against regression, never as a measurement of the
 /// pipeline's accuracy to three decimal places.
 ///
+/// **Re-measured on 2026-08-21, against a corrected transcript.** Two turns of
+/// the filmed ledger were wrong and the corpus is what found it: the placement
+/// query kept reporting the 6-point four men for five, which had been written
+/// down as "the photograph and the ledger disagree" and was in fact the ledger.
+/// A zoom re-audit corrected turn 3 (a one-man `13/8` on a 3-2, not `13/8 8/6`
+/// on a 5-2) and turn 8 (`12/17 17/20*`, not `12/17 10/12`), and found a White
+/// checker that physically left the board during turn 7 — the first sloppy play
+/// this corpus has caught, and exactly the drift the verifier exists for. Every
+/// number below was re-measured in that commit; see `capture_plan.dart`'s
+/// `_filmedTurns` for the evidence and the plan doc for the before/after table.
+/// Nothing here was hand-tuned to fit, and one of them went **down**.
+///
 /// The two that miss the spec today, and why they are recorded rather than
 /// asserted:
 ///
@@ -824,88 +885,112 @@ void main() {
 ///   at all rather than reading a wrong one. This board's dice are 0.021 of it
 ///   across against the synthetic bed's 0.075, and the band-location and tilt
 ///   work that would let a die that small be found is queued, not done.
-/// * **region occupancy 0.784.** Counts on this board run short, worst on tall
-///   stacks, exactly as the plan doc's far-half note predicts. The design never
-///   trusts a blind count anyway; it is Task 7's play matching that the spec
-///   sets a threshold for, and this number is what that was built against.
+/// * **region occupancy 0.793** (192/242, from 189/241). Counts on this board
+///   run short, worst on tall stacks, exactly as the plan doc's far-half note
+///   predicts. The design never trusts a blind count anyway; it is Task 7's
+///   play matching that the spec sets a threshold for, and this number is what
+///   that was built against.
 ///
 /// And the one that arrived with Task 7 and **passes**:
 ///
-/// * **legal-play identification 6/6.** The query the whole mode turns on, over
-///   the six windows of the filmed game that are genuinely one turn apart, with
-///   the actual legal-move list `backgammon_core` would have offered at each
-///   moment (7 to 18 candidates, 11.7 on average). **Six is a small
+/// * **legal-play identification 5/5** (was 6/6 over six pairs). The query the
+///   whole mode turns on, over the windows of the filmed game that are
+///   genuinely one turn apart, with the actual legal-move list
+///   `backgammon_core` would have offered at each moment (7 to 21 candidates,
+///   14.0 on average). **The denominator lost a pair on 2026-08-21 and not a
+///   pass**: 018→020 was one of the six and is now two hand-read boards with
+///   no log between them, so nothing is asked of it. **Five is a small
 ///   denominator** and a floor of 1.0 over it is a ratchet, not a claim that
 ///   the pipeline is perfect: what it promises is that no later change may lose
-///   one of these six quietly. The number is exactly what the delta design
+///   one of these five quietly. The number is exactly what the delta design
 ///   predicts — the counts this corpus reads are biased and the bias cancels,
-///   which is why 0.784 per-region counting supports 1.000 play identification.
-/// * **legal play acted on 6/6.** All six also clear
+///   which is why 0.793 per-region counting supports 1.000 play identification.
+/// * **legal play acted on 5/5.** All five also clear
 ///   `PlayMatcher.minConfidence`, so a session would have acted on every one
 ///   rather than putting the candidate list in front of the user. **This needs
 ///   its own floor and it is not decoration.** Being right and being acted on
 ///   are different things, and the matcher's confidence constants can move
 ///   without disturbing the ranking at all: the cost falloff is monotone in
 ///   the cost, and the stability one is uniform across candidates by
-///   construction, so neither can reorder anything. Measured —
-///   `PlayMatcher.noiseTolerance` 2.0 to 0.8 leaves identification at 6/6 and
-///   the whole synthetic play-matcher suite green, and pushes **four of these
-///   six** under the threshold: a hands-free turn becoming four taps, with
-///   nothing anywhere going red. The margin here is real but thin (0.542 at
-///   the worst of the six), which is the other reason to ratchet it.
+///   construction, so neither can reorder anything. Measured when there were
+///   six pairs and not re-run since, because it is a claim about the constants
+///   rather than about the corpus — `PlayMatcher.noiseTolerance` 2.0 to 0.8
+///   left identification at 6/6 and the whole synthetic play-matcher suite
+///   green, and pushed **four of those six** under the threshold: a hands-free
+///   turn becoming four taps, with nothing anywhere going red. The margin here
+///   is real but thin (0.593 at the worst of the five, 0.542 over the old six),
+///   which is the other reason to ratchet it.
 /// And the two that arrived with Task 8, **reshaped by the user at the gate
 /// follow-up (2026-08-21) and still missing**:
 ///
-/// * **placement verification 3/6, resync per region 0.885.** The reshape is
+/// * **placement verification 1/5, resync per region 0.888.** The reshape is
 ///   the denominator and only the denominator — the two thresholds are still
 ///   0.95 and 0.90. Placement is now the regions the play touched, one attempt
 ///   per dictated turn; resync is per region, with the whole-board rate kept as
-///   a watched row (**0/6 and 0/10**, both still recorded below).
+///   a watched row (**0/5 and 0/10**, both still recorded below).
 ///
 ///   Per region the prior is doing real work: over the 240 point-reads both
-///   rows score, verification is **210/240 = 0.875** against a blind count's
-///   **189/240 = 0.787**, twenty-two regions rescued and none lost. (Not the
-///   rows' totals — 230/260 against 189/241 — since the verifier asks both ends
-///   of the bar on every shot and nineteen of those extra reads are bare-bar
+///   rows score, verification is **212/240 = 0.883** against a blind count's
+///   **192/240 = 0.800**, twenty-one regions rescued and none lost. (Not the
+///   rows' totals — 231/260 against 192/242 — since the verifier asks both ends
+///   of the bar on every shot and most of those extra reads are bare-bar
 ///   agreements. See [priorReport].)
 ///
-///   **Both numbers were measured rather than assumed, a commit apart.** The
-///   reshape alone took placement from 0/6 boards to **2/6** turns; deriving
-///   the profile's bridgeable gap from a checker's own body (see
-///   `RoiSampler.maxProfileGapDepth`) took it to **3/6** and the per-region
-///   resync from 0.858 to 0.885, by recovering the 12-point — which read two
-///   men for six in every window of the session.
+///   **Every number here was measured rather than assumed, three commits
+///   apart.** The reshape alone took placement from 0/6 boards to **2/6**
+///   turns; deriving the profile's bridgeable gap from a checker's own body
+///   (see `RoiSampler.maxProfileGapDepth`) took it to **3/6** and the
+///   per-region resync from 0.858 to 0.885, by recovering the 12-point — which
+///   read two men for six in every window of the session. The transcript
+///   correction then took placement to **1/5**, and that fall is the one
+///   number in this file worth reading twice.
 ///
-///   The three turns still missing are three different mechanisms and only one
-///   of them is a counting problem: the **23-point** reads three men for two
-///   because its run starts on the board's own rim, the **1-point** loses a
-///   lone man at a run of 0.0125, and the **6-point** reads four for five
-///   because the photograph and the ledger disagree — the same column measures
-///   80 rows for five men on 001, 61 rows on 008 and 42 on 018, while the
-///   ledger says five throughout. Nothing this package can do scores that last
-///   one; it is a corpus finding, and it caps this session at 5/6.
+///   **The floor went DOWN, and nothing about perception got worse.** Three
+///   things happened at once. 018→020 **retired** — it was one of the three
+///   that passed and it is no longer a pair at all. 005→008 still fails but on
+///   a **different region**: the 6-point's "four men for five" was the ledger,
+///   and with the ledger right the same frame contradicts the corrected
+///   8-point instead. And 010→013 **turned from pass to fail** on that same
+///   8-point, because truth moved a man onto it that the reader does not see.
+///   So a genuine undercount had been hiding behind a transcription error, and
+///   correcting the error is what exposed it. A floor that had been quietly
+///   flattered is now a floor over what this pipeline actually does.
 ///
-/// * **`region colour alone` fell to 228/241 in the same commit, and the floor
-///   moved down with it.** Two empty far-half points now read a phantom Black
-///   man: the fitted pitch moved 4% when the 12-point stopped collapsing, and
-///   `holdsAnything`'s floor is half a pitch, so a 0.0417 run of rim-and-shadow
-///   landed exactly on it. Recorded rather than smoothed over. It is the
-///   direction `ColorModel.classify` breaks ties in on purpose — a checker that
-///   appears contradicts the game and gets asked about; one that vanishes does
-///   not — and it bought seven verified regions and a placement turn.
+///   The four turns missing are three different mechanisms, and now all three
+///   are counting problems this package could in principle fix: the
+///   **23-point** reads three men for two because its run starts on the
+///   board's own rim, the **1-point** loses a lone man at a run of 0.0125, and
+///   the **8-point** reads two men for three on both turns that touch it — a
+///   run of 0.117 that this board's own fitted line divides into 2.19
+///   checkers. **The "photograph is not the ledger" cap is gone**: it was the
+///   ledger, the ledger is fixed, and 5/5 placements is once again arithmetically
+///   available on this session.
+///
+/// * **`region colour alone` reads 228/242 and the floor moved down again, by
+///   a denominator rather than a loss.** The successes did not change; 020
+///   gained a twenty-fifth region to be asked about — White's man on the bar,
+///   which the reader does not see on the hinge — so the rate fell from 0.946
+///   to 0.942 on one extra attempt. It had fallen to 228/241 a commit earlier
+///   for a different reason worth keeping: two empty far-half points read a
+///   phantom Black man once the fitted pitch moved 4% when the 12-point
+///   stopped collapsing, since `holdsAnything`'s floor is half a pitch and a
+///   0.0417 run of rim-and-shadow landed exactly on it. That is the direction
+///   `ColorModel.classify` breaks ties in on purpose — a checker that appears
+///   contradicts the game and gets asked about; one that vanishes does not —
+///   and it bought seven verified regions and a placement turn.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
   CorpusMetric.startConfirmed: 1.0,
   CorpusMetric.dicePair: 0.0,
   CorpusMetric.diceAbsence: 1.0,
-  CorpusMetric.regionOccupancy: 189 / 241,
-  CorpusMetric.regionColour: 228 / 241,
-  CorpusMetric.legalPlay: 6 / 6,
-  CorpusMetric.legalPlayActed: 6 / 6,
-  CorpusMetric.placementVerified: 3 / 6,
+  CorpusMetric.regionOccupancy: 192 / 242,
+  CorpusMetric.regionColour: 228 / 242,
+  CorpusMetric.legalPlay: 5 / 5,
+  CorpusMetric.legalPlayActed: 5 / 5,
+  CorpusMetric.placementVerified: 1 / 5,
   CorpusMetric.placementVerifiedBoard: 0.0,
   CorpusMetric.boardResynced: 0.0,
-  CorpusMetric.regionVerified: 230 / 260,
+  CorpusMetric.regionVerified: 231 / 260,
 };
 
 /// What the SYNTHETIC corpus scored on the whole-board queries when Task 8

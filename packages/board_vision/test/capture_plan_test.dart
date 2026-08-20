@@ -554,8 +554,11 @@ void main() {
       // out of `buildRealSession` — and this pins that the boards written into
       // the sidecars are that replay's own output.
       final withLogs = filmed.where((s) => s.events != null).toList();
-      expect(withLogs.length, 7,
-          reason: 'seven positions came off the turn ledger');
+      expect(withLogs.length, 5,
+          reason: 'five positions came off the turn ledger — turns 7 and 8 '
+              'left it in the 2026-08-21 re-audit, because a checker '
+              'physically left the board during turn 7 and no legal event '
+              'chain reaches what those two frames show');
       for (final shot in withLogs) {
         expect(shot.replayedBoard, shot.board, reason: shot.id);
         expect(shot.events!.first, isA<OpeningRollEvent>(), reason: shot.id);
@@ -589,17 +592,20 @@ void main() {
       }
     });
 
-    test('the two keyframes carry a board and no log at all', () {
-      // The footage ran on past the ledger, and the last stretch was not
-      // transcribable move by move — hands in shot, a hit nobody could pin to
-      // a turn. What survived is two positions read off zoomed frames. The
+    test('the four board-only shots carry a board and no log at all', () {
+      // Two of them are the end of the footage, which ran on past the ledger
+      // and was not transcribable move by move — hands in shot, a hit nobody
+      // could pin to a turn. The other two are turns 7 and 8: a White checker
+      // left the board during turn 7 and ended up at the near rim, so those
+      // frames show a position no sequence of legal events produces. What
+      // survived in all four cases is a board read off zoomed frames. The
       // schema takes that as it stands: `events` is nullable, a null one emits
       // as null and reads back as null, and the harness scores occupancy off
       // `board` without ever asking how the board got there.
       final keyframes =
           filmed.where((s) => s.events == null && s.kind != ShotKind.calibration)
               .toList();
-      expect(keyframes.map((s) => s.id), <String>['066', '070']);
+      expect(keyframes.map((s) => s.id), <String>['018', '020', '066', '070']);
       for (final shot in keyframes) {
         expect(shot.replayedBoard, isNull, reason: shot.id);
         expect(shot.toJson()['events'], isNull, reason: shot.id);
@@ -613,36 +619,56 @@ void main() {
       }
     });
 
-    test('the hit in turn 6 is carried as a hit, derived from the board', () {
-      // Turn 6 is Black's 1/7*, and the replay already proves it happened —
-      // White ends up on the bar. But a `CheckerMove` carries a hit FLAG as
-      // well, `CheckerMove.==` compares it, and Task 7's play matching will
-      // compare moves against an enumerated set of legal ones. A log that
-      // reaches the right board with every flag false is therefore a trap laid
-      // for the one corpus in the repository that has a real hit in it.
+    test('the committed logs carry no hit, and the ledger still derives one',
+        () {
+      // A `CheckerMove` carries a hit FLAG as well as two points,
+      // `CheckerMove.==` compares it, and Task 7's play matching compares
+      // moves against an enumerated set of legal ones — so a log that reaches
+      // the right board with every flag false is a trap laid for exactly the
+      // corpus that has a real hit in it.
       //
-      // Derived during the replay from the board as it stands before each hop.
-      // Not hand-annotated: a flag typed in beside the ledger is a second
-      // opinion about something the position already determines.
-      int hitsIn(String id) =>
-          _hopFlags(<CorpusShot>[filmed.firstWhere((s) => s.id == id)]).$1;
+      // **The committed logs no longer contain one, and that is a consequence
+      // of the 2026-08-21 re-audit rather than a flag going missing.** The
+      // filmed game's first hit is turn 6's `1/7*`, and the last window the
+      // ledger reaches is now turn 5 — turns 7 and 8 carry boards read off the
+      // frames, because a checker left the board during turn 7. Pinned as a
+      // count so that a flag appearing here means something changed.
+      expect(_hopFlags(filmed), (0, 30),
+          reason: 'thirty hops across the five cumulative logs, none of them a '
+              'hit');
 
-      expect(hitsIn('013'), 0, reason: 'nothing is hit through turn 5');
-      expect(hitsIn('018'), 1, reason: "turn 6 hits White's blot on the 7");
-      expect(hitsIn('020'), 1, reason: 'and the log stays cumulative');
-      expect(_hopFlags(filmed).$2, 60, reason: 'sixty hops in the ledger');
-
-      // The right hop, not merely the right count.
-      final sixth = <MoveEvent>[
-        for (final event in filmed.firstWhere((s) => s.id == '018').events!)
+      // The derivation itself is what the trap is about, so it stays tested —
+      // on a ledger written here, since the filmed one is private and no
+      // longer reaches a hit. Not hand-annotated in either case: the flag is
+      // read off the point each hop lands on, from the board as it stands
+      // before that hop.
+      final replayed = replayFilmedLedger(const <FilmedTurn>[
+        (
+          player: Player.white,
+          die1: 4,
+          die2: 2,
+          hops: <(int, int)>[(13, 9), (24, 22)],
+          notation: 'W 4-2: 13/9 24/22 (two blots left out)',
+        ),
+        (
+          player: Player.black,
+          die1: 6,
+          die2: 3,
+          hops: <(int, int)>[(19, 22), (17, 23)],
+          notation: 'B 6-3: 19/22* 17/23',
+        ),
+      ]);
+      final hit = <MoveEvent>[
+        for (final event in replayed.last.log)
           if (event is MoveEvent) event,
-      ][5];
-      expect(sixth.player, Player.black);
-      expect(sixth.move.checkerMoves.first.isHit, isTrue);
-      expect(sixth.move.checkerMoves.first.to, 6,
-          reason: "White's blot stood on the 7-point, which is index 6");
-      expect(sixth.move.checkerMoves.last.isHit, isFalse,
+      ].last;
+      expect(hit.player, Player.black);
+      expect(hit.move.checkerMoves.first.isHit, isTrue);
+      expect(hit.move.checkerMoves.first.to, 21,
+          reason: "White's blot stood on the 22-point, which is index 21");
+      expect(hit.move.checkerMoves.last.isHit, isFalse,
           reason: 'the second hop of that turn lands on an empty point');
+      expect(replayed.last.board.whiteBar, 1);
     });
 
     test('a ledger that stops being legal throws, naming the turn', () {

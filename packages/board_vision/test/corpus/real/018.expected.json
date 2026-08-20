@@ -13,9 +13,9 @@
       0,
       3,
       0,
-      5,
+      3,
       0,
-      1,
+      2,
       0,
       -1,
       0,
@@ -35,164 +35,10 @@
     ],
     "whiteBar": 0,
     "blackBar": 0,
-    "whiteOff": 0,
+    "whiteOff": 1,
     "blackOff": 0
   },
-  "events": [
-    {
-      "type": "openingRoll",
-      "whiteDie": 4,
-      "blackDie": 2
-    },
-    {
-      "type": "move",
-      "player": "white",
-      "move": [
-        [
-          7,
-          3,
-          false
-        ],
-        [
-          5,
-          3,
-          false
-        ]
-      ]
-    },
-    {
-      "type": "roll",
-      "player": "black",
-      "die1": 6,
-      "die2": 4
-    },
-    {
-      "type": "move",
-      "player": "black",
-      "move": [
-        [
-          16,
-          22,
-          false
-        ],
-        [
-          18,
-          22,
-          false
-        ]
-      ]
-    },
-    {
-      "type": "roll",
-      "player": "white",
-      "die1": 5,
-      "die2": 2
-    },
-    {
-      "type": "move",
-      "player": "white",
-      "move": [
-        [
-          12,
-          7,
-          false
-        ],
-        [
-          7,
-          5,
-          false
-        ]
-      ]
-    },
-    {
-      "type": "roll",
-      "player": "black",
-      "die1": 6,
-      "die2": 5
-    },
-    {
-      "type": "move",
-      "player": "black",
-      "move": [
-        [
-          0,
-          6,
-          false
-        ],
-        [
-          6,
-          11,
-          false
-        ]
-      ]
-    },
-    {
-      "type": "roll",
-      "player": "white",
-      "die1": 5,
-      "die2": 1
-    },
-    {
-      "type": "move",
-      "player": "white",
-      "move": [
-        [
-          12,
-          7,
-          false
-        ],
-        [
-          7,
-          6,
-          false
-        ]
-      ]
-    },
-    {
-      "type": "roll",
-      "player": "black",
-      "die1": 6,
-      "die2": 3
-    },
-    {
-      "type": "move",
-      "player": "black",
-      "move": [
-        [
-          0,
-          6,
-          true
-        ],
-        [
-          6,
-          9,
-          false
-        ]
-      ]
-    },
-    {
-      "type": "roll",
-      "player": "white",
-      "die1": 5,
-      "die2": 4
-    },
-    {
-      "type": "move",
-      "player": "white",
-      "move": [
-        [
-          24,
-          19,
-          false
-        ],
-        [
-          7,
-          3,
-          false
-        ]
-      ]
-    }
-  ],
+  "events": null,
   "dice": null,
   "capture": {
     "board": "folding-case walnut",
@@ -202,10 +48,10 @@
   "synthetic": null,
   "expectRefusal": null,
   "refusalReason": null,
-  "title": "Turn 7 played — W 5-4: bar/20 8/4",
+  "title": "Turn 7 played — and a White checker left the board",
   "instructions": [
     "Cut VID20260820105037 at t=162.5s and take the whole frame.",
-    "The board as the ledger leaves it after turn 7.",
+    "The play itself is the ledger's (bar/20 8/4, read off the left-leaf zoom where White threw this once), but the 6-point holds three men here and four before, and the missing one is visible lying at the near rim about where the 9- and 10-points meet — off the playing field altogether. Carried as one man off; see [_filmedKeyframes].",
     "Dice in view but not settled enough for a person to call, so the sidecar claims none."
   ]
 }

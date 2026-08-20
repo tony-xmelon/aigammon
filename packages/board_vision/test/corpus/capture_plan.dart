@@ -756,19 +756,22 @@ const double kRealDieSide = 0.021;
 ///
 /// * the **calibration** frame is the starting position, which needs no
 ///   evidence at all;
-/// * seven **positions** come from [_filmedTurns], the move ledger transcribed
+/// * five **positions** come from [_filmedTurns], the move ledger transcribed
 ///   off the footage, replayed here through `backgammon_core`. The board in
 ///   the sidecar is the replay's output and nothing else, so a transcription
 ///   error that produces an illegal play throws out of this function rather
 ///   than becoming a corpus that scores perception against a board no game can
 ///   reach;
-/// * two **keyframes** from the end of the video carry a board and no log. The
-///   last stretch was not transcribable move by move — hands in shot, a hit
-///   nobody could pin to a turn — so those two were read off zoomed frames by
-///   a person instead. They are the weakest ground truth in the corpus and the
-///   most interesting positions in it, which is the trade that was made
-///   knowingly; the `checkerCount` check in `capture_plan_test.dart` is the
-///   only arithmetic that can be held over them.
+/// * four **keyframes** carry a board and no log. Two come from the end of the
+///   video, which was not transcribable move by move — hands in shot, a hit
+///   nobody could pin to a turn. The other two are turns 7 and 8, which were
+///   replayed positions until the 2026-08-21 re-audit found a checker that had
+///   physically left the board: no legal event chain reaches what those
+///   photographs show. All four were read off zoomed frames by a person. They
+///   are the weakest ground truth in the corpus and the most interesting
+///   positions in it, which is the trade that was made knowingly; the
+///   `checkerCount` check in `capture_plan_test.dart` is the only arithmetic
+///   that can be held over them.
 ///
 /// The middle of the game (turns 9 to 15) is **not** in the corpus. Its
 /// windows have hands at rest in them and a hit sequence nobody could
@@ -993,6 +996,28 @@ Move _moveOf(BoardState before, FilmedTurn turn) {
 /// two stable windows, filtered by what the rules allowed, then adjudicated on
 /// a zoom of the leaf it happened on. What makes it safe to commit is that it
 /// is replayed rather than believed: see [buildRealSession].
+///
+/// ## Corrected 2026-08-21, and how the error was found
+///
+/// Two turns were transcribed wrongly and the corpus itself is what caught it.
+/// Task 8's placement query reported the 6-point reading four men for five in
+/// every window from 008 on, which was written down as "the photograph and the
+/// ledger disagree" — a limit on the corpus rather than a bug. It was the
+/// ledger. A zoom re-audit of the raw frames settled both turns against the
+/// photographs:
+///
+/// * **turn 3 was `W 3-2: 13/8`, one man**, not `W 5-2: 13/8 8/6`. The 8-point
+///   holds three at 008 and the 6-point four — unchanged from turn 1 — and the
+///   dice lying in 006/007 show a clear 3 with 5-3, 4-3 and 4-1 all refuted on
+///   the partner. The phantom second hop was a machine delta on the session's
+///   worst cell, which is exactly the cell the sidecar then scored against.
+/// * **turn 8 was `B 5-3: 12/17 17/20*`**, not `B 5-2: 12/17 10/12`. Black
+///   stands on the 20 at 020 and White's freshly entered man is on the hinge.
+///
+/// The audit also found a thing no ledger can hold: during turn 7's physical
+/// handling **a White checker left the 6-point and ended up off the board**, at
+/// the near rim, in no region at all. So 018 and 020 are no longer reachable by
+/// replay and carry boards of their own — see [_filmedKeyframes].
 const List<FilmedTurn> _filmedTurns = <FilmedTurn>[
   (
     player: Player.white,
@@ -1010,10 +1035,16 @@ const List<FilmedTurn> _filmedTurns = <FilmedTurn>[
   ),
   (
     player: Player.white,
-    die1: 5,
+    die1: 3,
     die2: 2,
-    hops: <(int, int)>[(13, 8), (8, 6)],
-    notation: 'W 5-2: 13/8 8/6',
+    // One man, and the intermediate point is the generator's own: a 3-2 run
+    // from the 13 to the 8 can go via the 10 or via the 11, the photographs
+    // cannot tell which, and `GameState.canonicalPlay` answers `13/11 11/8`
+    // for both. Writing the transit the engine would have folded this play to
+    // is the honest encoding of "one man, two pips then three" — anything else
+    // would be claiming to know which way a hand went.
+    hops: <(int, int)>[(13, 11), (11, 8)],
+    notation: 'W 3-2: 13/8 (one man, via the 11)',
   ),
   (
     player: Player.black,
@@ -1046,9 +1077,9 @@ const List<FilmedTurn> _filmedTurns = <FilmedTurn>[
   (
     player: Player.black,
     die1: 5,
-    die2: 2,
-    hops: <(int, int)>[(12, 17), (10, 12)],
-    notation: 'B 5-2: 12/17 10/12',
+    die2: 3,
+    hops: <(int, int)>[(12, 17), (17, 20)],
+    notation: "B 5-3: 12/17 17/20* (hits White's man on the 20)",
   ),
 ];
 
@@ -1061,11 +1092,16 @@ typedef _FilmedCut = ({
   String diceNote,
 });
 
-/// The seven windows the turn ledger covers.
+/// The five windows the turn ledger covers.
 ///
 /// Not one per turn: a window is only usable when the hands are out of it and
 /// the checkers have settled, and turn 6's did not come. The log is cumulative
 /// either way, so the gap costs a shot rather than a position.
+///
+/// It stops at turn 5. The windows for turns 7 and 8 used to be here, and the
+/// 2026-08-21 re-audit moved them to [_filmedKeyframes]: a checker physically
+/// left the board during turn 7, so no legal sequence of events reaches what
+/// those two photographs show. See [_filmedTurns].
 final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
   (
     id: '003',
@@ -1105,21 +1141,6 @@ final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
         'yet played — which is what a Buddy session sees at exactly this '
         'moment.',
   ),
-  (
-    id: '018',
-    seconds: '162.5',
-    afterTurn: 7,
-    dice: null,
-    diceNote: 'Dice in view but not settled enough for a person to call, so '
-        'the sidecar claims none.',
-  ),
-  (
-    id: '020',
-    seconds: '185.0',
-    afterTurn: 8,
-    dice: null,
-    diceNote: 'No dice on the felt.',
-  ),
 ];
 
 /// A window from the end of the video, with a position and no story.
@@ -1132,15 +1153,77 @@ typedef _FilmedKeyframe = ({
   String diceNote,
 });
 
-/// The two end-game keyframes.
+/// The four windows that carry a board and no story.
 ///
 /// Read cell by cell off zoomed frames, cross-checked against fifteen checkers
 /// a side and against the machine's own deltas either side of them. They are
-/// here because they hold the two things the ledger's opening never does — a
-/// checker on the bar, and a board with men borne off it — and because a
-/// corpus of nothing but opening positions would teach the pipeline that
-/// stacks are always where a game starts.
+/// here because they hold the things the ledger's opening never does — a
+/// checker on the bar, a board with men off it, and a board somebody played
+/// sloppily on — and because a corpus of nothing but opening positions would
+/// teach the pipeline that stacks are always where a game starts.
+///
+/// **Two of them used to be replayed positions**, and what moved them here is
+/// the most interesting thing in the corpus. During turn 7 a White checker left
+/// the 6-point and did not arrive anywhere: it ends up lying at the board's
+/// near rim, inside no region the atlas has, and the 6-point holds three men
+/// from 018 onwards where the ledger says four. No sequence of legal events
+/// produces that, and inventing one to keep the log cumulative would be
+/// exactly the "sidecar that guessed" the excluded middle game was dropped to
+/// avoid. So these two say what the photograph shows and nothing about how it
+/// got there.
+///
+/// A checker that has left the felt is written `off`, which is the one place
+/// this session's board type has for a man that is neither on a point nor on
+/// the bar. It is pragmatic rather than true — the game has not borne anything
+/// off — and it is harmless for exactly the reason it is honest: this board is
+/// a folding case with no wells, so the verifier reports the trays
+/// `unobservable` and scores nothing there. The stray sits outside every
+/// region, and `off` is how the sidecar says so.
 final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
+  (
+    id: '018',
+    seconds: '162.5',
+    board: BoardState(
+      points: const <int>[
+        0, 0, 0, 3, 0, 3, //   1-6   the 6-point holds THREE, not four
+        0, 2, 0, -1, 0, -6, // 7-12
+        3, 0, 0, 0, -2, 0, //  13-18
+        -4, 1, 0, 0, -2, 2, // 19-24, White's entered man on the 20
+      ],
+      whiteOff: 1,
+    ),
+    title: 'Turn 7 played — and a White checker left the board',
+    evidence: 'The play itself is the ledger\'s (bar/20 8/4, read off the '
+        'left-leaf zoom where White threw this once), but the 6-point holds '
+        'three men here and four before, and the missing one is visible lying '
+        'at the near rim about where the 9- and 10-points meet — off the '
+        'playing field altogether. Carried as one man off; see '
+        '[_filmedKeyframes].',
+    diceNote: 'Dice in view but not settled enough for a person to call, so '
+        'the sidecar claims none.',
+  ),
+  (
+    id: '020',
+    seconds: '185.0',
+    board: BoardState(
+      points: const <int>[
+        0, 0, 0, 3, 0, 3, //   1-6
+        0, 2, 0, -1, 0, -5, // 7-12
+        3, 0, 0, 0, -2, 0, //  13-18
+        -4, -1, 0, 0, -2, 2, // 19-24, Black has hit the man on the 20
+      ],
+      whiteBar: 1,
+      whiteOff: 1,
+    ),
+    title: 'Turn 8 played — the hit man on the hinge, and the stray still out',
+    evidence: 'Black played 12/17 17/20*, so the White man that entered last '
+        'turn is on the hinge ridge and Black stands on the 20 — both read off '
+        'zooms of the far-right quarter. The turn-7 stray is still off the '
+        'board, so this position is the ledger\'s minus that man as well.',
+    diceNote: 'A 3 is lying on the felt and its partner is hidden behind the '
+        'man on the bar, so the sidecar claims no roll rather than half of '
+        'one.',
+  ),
   (
     id: '066',
     seconds: '680.0',
