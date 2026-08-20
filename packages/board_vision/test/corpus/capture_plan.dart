@@ -255,6 +255,21 @@ class CorpusShot {
   /// Which seat the board is being read from.
   final BoardOrientation orientation;
 
+  /// How wide this board's trays and bar are, or **null for a board of the
+  /// usual shape** — which is every shot the plan generates, so the field is
+  /// absent from every sidecar written before it existed and none of them has
+  /// to be regenerated.
+  ///
+  /// The real corpus is shot on a folding-case board: no bear-off wells, a
+  /// hinge for a bar. Its columns are wider than an ordinary board's and its
+  /// outermost points sit most of a column away from where the standard atlas
+  /// looks, so the session that reads it has to be told. Measured by a person
+  /// off the calibration frame — see [BoardProportions] for why there is no
+  /// auto-detection — and carried per shot because the sidecar is the only
+  /// thing the harness reads; the harness takes a session's from the shot it
+  /// calibrates through, since one session is one board.
+  final BoardProportions? proportions;
+
   /// The position the board is in. Authoritative for scoring.
   final BoardState board;
 
@@ -301,6 +316,7 @@ class CorpusShot {
     required this.refusalReason,
     required this.title,
     required List<String> instructions,
+    this.proportions,
   }) : instructions = List<String>.unmodifiable(instructions);
 
   bool get expectsRefusal => expectRefusal != null;
@@ -340,6 +356,7 @@ class CorpusShot {
   CorpusShot copyWith({
     BoardQuad? corners,
     SyntheticRecipe? synthetic,
+    BoardProportions? proportions,
   }) =>
       CorpusShot(
         id: id,
@@ -357,6 +374,7 @@ class CorpusShot {
         refusalReason: refusalReason,
         title: title,
         instructions: instructions,
+        proportions: proportions ?? this.proportions,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -378,6 +396,7 @@ class CorpusShot {
         'refusalReason': refusalReason,
         'title': title,
         'instructions': instructions,
+        'proportions': proportions?.toJson(),
       };
 
   factory CorpusShot.fromJson(Map<String, dynamic> json) {
@@ -424,6 +443,13 @@ class CorpusShot {
         for (final line in json['instructions'] as List<dynamic>)
           line as String,
       ],
+      // Absent on every sidecar written before folding-case boards turned up,
+      // and absent means "the usual shape" — which is what makes this field
+      // additive and a corpus already shot still readable.
+      proportions: json['proportions'] == null
+          ? null
+          : BoardProportions.fromJson(
+              json['proportions'] as Map<String, dynamic>),
     );
   }
 

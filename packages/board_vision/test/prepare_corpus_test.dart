@@ -201,6 +201,62 @@ void main() {
       expect(() => readCorners(file), throwsFormatException);
     });
 
+    test('measured board widths land in the sidecar, by session', () {
+      // The other thing a person measures off a calibration frame, and the
+      // reason it goes through the tool rather than being hand-edited into a
+      // sidecar: this tool rewrites every sidecar from the live plan on each
+      // run, so anything typed into one directly would be wiped the next time
+      // somebody re-prepared the corpus.
+      const measured = BoardProportions(trayWidth: 0, barWidth: 0.031);
+      prepareCorpus(
+        source: source,
+        destination: destination,
+        proportions: const <String, BoardProportions>{'A-daylight': measured},
+      );
+
+      CorpusShot sidecarOf(String id) => CorpusShot.fromJson(
+            jsonDecode(File('${destination.path}/$id.expected.json')
+                .readAsStringSync()) as Map<String, dynamic>,
+          );
+      // 001 and 002 are both the A-daylight session, so both carry it: the
+      // shape is a property of the board, and a session is one board.
+      expect(sidecarOf('001').proportions, measured);
+      expect(sidecarOf('001').session, 'A-daylight');
+      expect(sidecarOf('002').proportions, measured);
+    });
+
+    test('a session nobody measured says so by saying nothing', () {
+      prepareCorpus(source: source, destination: destination);
+      final sidecar = CorpusShot.fromJson(
+        jsonDecode(File('${destination.path}/001.expected.json')
+            .readAsStringSync()) as Map<String, dynamic>,
+      );
+      expect(sidecar.proportions, isNull,
+          reason: 'absent means a board of the usual shape, which is what the '
+              'harness then reads it as');
+    });
+
+    test('proportions.json round-trips through the reader', () {
+      final file = File('${source.path}/proportions.json')
+        ..writeAsStringSync(jsonEncode(<String, dynamic>{
+          'A-daylight': <String, dynamic>{'trayWidth': 0, 'barWidth': 0.031},
+          'A-lamp': null,
+        }));
+      final read = readProportions(file);
+      expect(read.keys, <String>['A-daylight'],
+          reason: 'a null entry is "not measured yet", not a board');
+      expect(read['A-daylight']!.trayWidth, 0);
+      expect(read['A-daylight']!.hasTrays, isFalse);
+    });
+
+    test('measurements that do not describe a board are refused', () {
+      final file = File('${source.path}/proportions.json')
+        ..writeAsStringSync(jsonEncode(<String, dynamic>{
+          'A-daylight': <String, dynamic>{'trayWidth': 0.45, 'barWidth': 0.2},
+        }));
+      expect(() => readProportions(file), throwsFormatException);
+    });
+
     test('the template names every shot that still needs tapping', () {
       final template = cornersTemplate(<String>['001', '006', '011']);
       expect(jsonDecode(template), <String, dynamic>{

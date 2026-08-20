@@ -5,6 +5,7 @@
 ///                                   [--out test/corpus/real]
 ///                                   [--kit corpus]
 ///                                   [--corners <file>]
+///                                   [--proportions <file>]
 /// ```
 ///
 /// For each shot in the capture plan it finds `NNN.<ext>` in `--in`, shrinks it
@@ -32,6 +33,20 @@
 /// **prepared** JPEG (not the original: this tool has resized it) in any viewer
 /// that shows pixel coordinates, put them in `corners.json` clockwise from the
 /// top left as the picture shows them, and run the tool again.
+///
+/// ## The other measurement: what shape the board is
+///
+/// The ROI atlas used to assume one set of tray, bar and column widths. The
+/// first real board is a folding case with **no bear-off wells at all** and a
+/// hinge for a bar, which puts its outermost points most of a column away from
+/// where those widths look. So a session may carry its own — measured off the
+/// prepared calibration frame, in `proportions.json` beside `corners.json`,
+/// keyed by session name; see [readProportions]. A session that says nothing
+/// is read as a board of the usual shape.
+///
+/// It goes through this tool rather than into a sidecar by hand because every
+/// run rewrites every sidecar from the live plan, and a number typed straight
+/// into a sidecar would be wiped the next time somebody re-prepared the corpus.
 ///
 /// ## Encoding
 ///
@@ -67,14 +82,25 @@ Future<void> main(List<String> args) async {
 
   final out = Directory(_option(args, '--out') ?? 'test/corpus/real');
   final cornersPath = _option(args, '--corners') ?? '${source.path}/corners.json';
+  final shapePath =
+      _option(args, '--proportions') ?? '${source.path}/proportions.json';
+  final measured = readProportions(File(shapePath));
   final report = prepareCorpus(
     source: source,
     destination: out,
     corners: readCorners(File(cornersPath)),
+    proportions: measured,
   );
 
   stdout
     ..writeln(report.summary)
+    ..writeln(measured.isEmpty
+        ? '  Every session is being read as a board of the usual shape. If '
+            'yours is a folding case — no bear-off wells, a hinge for a bar — '
+            'measure its widths and put them in $shapePath; see '
+            'readProportions.'
+        : '  ${measured.length} sessions carry measured board widths: '
+            '${measured.entries.map((e) => '${e.key} ${e.value}').join(', ')}')
     ..writeln(kChromaCaveat);
   if (report.needCorners.isNotEmpty) {
     final template = File('${source.path}/corners.template.json');
@@ -150,6 +176,8 @@ PrepareReport prepareCorpus({
   required Directory source,
   required Directory destination,
   Map<String, BoardQuad> corners = const <String, BoardQuad>{},
+  Map<String, BoardProportions> proportions =
+      const <String, BoardProportions>{},
   int maxDimension = kMaxCorpusDimension,
   int quality = kCorpusJpegQuality,
 }) {
@@ -191,7 +219,16 @@ PrepareReport prepareCorpus({
     final tapped = corners[shot.id];
     if (shot.needsCorners && tapped == null) needCorners.add(shot.id);
 
-    writeSidecar(destination, shot.copyWith(corners: tapped));
+    // Measured per session, because a session is one board — and written by
+    // this tool rather than into a sidecar by hand, since every run rewrites
+    // every sidecar from the live plan and would wipe anything typed in.
+    writeSidecar(
+      destination,
+      shot.copyWith(
+        corners: tapped,
+        proportions: proportions[shot.session],
+      ),
+    );
     written.add(shot.id);
   }
 
@@ -228,6 +265,31 @@ Map<String, BoardQuad> readCorners(File file) {
           (p[1] as num).toDouble(),
         ),
     ]);
+  }
+  return out;
+}
+
+/// How wide each session's board is, keyed by **session name**.
+///
+/// The second thing a person measures off a calibration frame, and the only
+/// other input the pipeline cannot work out for itself. An entry is
+/// `{"trayWidth": 0.0, "barWidth": 0.03}` as a fraction of the playing field's
+/// width — read off the PREPARED jpeg the same way the corners are — and an
+/// entry that is null or missing means "a board of the usual shape", which is
+/// what the harness then reads that session as.
+///
+/// Keyed by session rather than by shot because a session is one board: the
+/// widths do not change between two photographs taken seconds apart, and
+/// asking for them thirty-three times would invite thirty-three answers.
+Map<String, BoardProportions> readProportions(File file) {
+  if (!file.existsSync()) return const <String, BoardProportions>{};
+  final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+  final out = <String, BoardProportions>{};
+  for (final entry in json.entries) {
+    final value = entry.value;
+    if (value == null) continue;
+    out[entry.key] =
+        BoardProportions.fromJson(value as Map<String, dynamic>);
   }
   return out;
 }

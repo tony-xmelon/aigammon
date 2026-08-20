@@ -235,6 +235,56 @@ void main() {
     });
   });
 
+  group('the board\'s own shape, which a session may have to say', () {
+    // The real corpus is shot on a folding-case board — no bear-off wells, a
+    // hinge for a bar — so a sidecar has to be able to say what shape its
+    // board is. The field is purely additive, and these are the tests that
+    // keep it that way: every sidecar already committed was written before it
+    // existed, and none of them has to be regenerated.
+
+    test('a shot on an ordinary board carries no proportions at all', () {
+      for (final shot in shots) {
+        expect(shot.proportions, isNull, reason: shot.id);
+        expect(shot.toJson()['proportions'], isNull, reason: shot.id);
+      }
+      expect(kSidecarSchema, 1,
+          reason: 'adding a field does not bump the schema — readers tolerate '
+              'a key they have never seen, and bumping would invalidate a '
+              'corpus that took a person an afternoon to shoot');
+    });
+
+    test('a sidecar written before the field existed still loads', () {
+      final json = shots.first.toJson()..remove('proportions');
+      expect(CorpusShot.fromJson(json).proportions, isNull,
+          reason: 'absent means the board is the usual shape');
+    });
+
+    test('a session on a folding-case board carries its measurements', () {
+      const measured = BoardProportions(trayWidth: 0, barWidth: 0.031);
+      final shot = shots.first.copyWith(proportions: measured);
+      final decoded = CorpusShot.fromJson(
+        jsonDecode(jsonEncode(shot.toJson())) as Map<String, dynamic>,
+      );
+      expect(decoded.proportions, measured);
+      expect(jsonEncode(decoded.toJson()), jsonEncode(shot.toJson()));
+    });
+
+    test('numbers that do not describe a board are refused by the reader', () {
+      // A sidecar is data from outside the program and these are measured by
+      // hand, so the reader checks them rather than letting a homography full
+      // of infinities be the error message.
+      for (final bad in <Map<String, dynamic>>[
+        <String, dynamic>{'trayWidth': -0.01, 'barWidth': 0.08},
+        <String, dynamic>{'trayWidth': 0.08, 'barWidth': 0.0},
+        <String, dynamic>{'trayWidth': 0.45, 'barWidth': 0.2},
+      ]) {
+        final json = shots.first.toJson()..['proportions'] = bad;
+        expect(() => CorpusShot.fromJson(json), throwsFormatException,
+            reason: '$bad');
+      }
+    });
+  });
+
   group('the committed capture kit is the plan\'s', () {
     // The kit in `corpus/` is what a person actually shoots from, and it is
     // generated and committed like the synthetic corpus — so it goes stale the

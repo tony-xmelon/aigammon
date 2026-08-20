@@ -103,10 +103,18 @@ void _scoreSession(
     return;
   }
 
+  // One board per session, so one set of proportions per session, taken from
+  // the shot the session calibrates through. Absent means the usual shape;
+  // present means somebody measured a folding case off this very frame, and
+  // reading its shots through the standard widths would score every region a
+  // column out of true.
+  final proportions =
+      calibrationShot.proportions ?? BoardProportions.standard;
   final result = BoardVision.calibrate(
     frame: calibrationFrame,
     corners: calibrationShot.corners!,
     orientation: calibrationShot.orientation,
+    proportions: proportions,
   );
   board.record(
     CorpusMetric.calibration,
@@ -192,6 +200,7 @@ void _scoreRefusal(
         frame: frame,
         corners: shot.corners!,
         orientation: shot.orientation,
+        proportions: shot.proportions ?? BoardProportions.standard,
       );
       board.record(
         CorpusMetric.expectedRefusal,
@@ -303,11 +312,24 @@ void _scoreOccupancy(
     if (count == 0) continue;
     score(region, count, colour, 'bar');
   }
-  for (final (region, count, colour) in <(RoiId, int, CheckerColor)>[
-    (RoiId.offWhite, expected.whiteOff, CheckerColor.white),
-    (RoiId.offBlack, expected.blackOff, CheckerColor.black),
-  ]) {
-    score(region, count, count == 0 ? CheckerColor.none : colour, 'tray');
+  // The trays, on a board that has any. A folding case has no wells at all —
+  // borne-off checkers leave it altogether — so there is nothing in the
+  // picture to score, and asking would be scoring a region that does not
+  // exist. Said out loud when the position actually has checkers off, because
+  // a denominator that quietly shrank is how a corpus stops testing something.
+  if (vision.calibration.atlas.hasTrays) {
+    for (final (region, count, colour) in <(RoiId, int, CheckerColor)>[
+      (RoiId.offWhite, expected.whiteOff, CheckerColor.white),
+      (RoiId.offBlack, expected.blackOff, CheckerColor.black),
+    ]) {
+      score(region, count, count == 0 ? CheckerColor.none : colour, 'tray');
+    }
+  } else if (expected.whiteOff + expected.blackOff > 0) {
+    board.notes.add(
+      '${shot.id}: ${expected.whiteOff + expected.blackOff} checkers borne '
+      'off a board with no bear-off wells. They leave the board altogether on '
+      'a folding case, so nothing in the picture can be scored for them.',
+    );
   }
 }
 

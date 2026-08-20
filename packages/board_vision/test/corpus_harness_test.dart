@@ -286,6 +286,44 @@ void main() {
       expect(board.notes, isNotEmpty);
     });
 
+    test('a session on a board of a different shape is read through its own '
+        'measurements', () {
+      // The real corpus is shot on a folding-case board — no bear-off wells, a
+      // hinge for a bar — and its sidecars carry the widths a person measured
+      // off the calibration frame. The harness has to read every shot in the
+      // session through them.
+      final board = _scoreFixture(_Fixture.foldingCase);
+      expect(board.targetViolations(), isEmpty, reason: board.report());
+      expect(board.totalFor(CorpusMetric.calibration).rate, 1.0);
+      expect(board.totalFor(CorpusMetric.dicePair).rate, 1.0);
+      expect(board.skipped, isEmpty, reason: board.report());
+
+      // Twenty-four points and the bar were scored, and no tray was: there is
+      // no well on this board for a checker to be in, and inventing an
+      // "empty tray" reading would be scoring a region that does not exist.
+      expect(board.sliceOf(CorpusMetric.regionOccupancy, 'region').keys,
+          isNot(contains('tray')));
+      expect(board.sliceOf(CorpusMetric.regionOccupancy, 'region').keys,
+          contains('point'));
+      // Checkers borne off such a board leave it altogether, so the sidecar
+      // can say so and perception cannot check it. Said out loud rather than
+      // quietly shrinking the denominator.
+      expect(board.notes.join(' '), contains('borne off'));
+    });
+
+    test('and the same corpus without them does not calibrate at all', () {
+      // The discriminator. If the harness ignored the field, this would score
+      // exactly as well as the one above — and the corpus would be scoring a
+      // pipeline reading every region a column out of true.
+      final board = _scoreFixture(_Fixture.foldingCaseUnmeasured);
+      expect(board.totalFor(CorpusMetric.calibration).rate, 0.0);
+      expect(
+        board.targetViolations(),
+        contains(contains(CorpusMetric.calibration.label)),
+        reason: board.report(),
+      );
+    });
+
     test('a shot whose photograph never arrived is skipped by name', () {
       final directory = _writeFixture(_Fixture.correct);
       addTearDown(() => directory.deleteSync(recursive: true));
@@ -296,6 +334,124 @@ void main() {
       expect(board.totalFor(CorpusMetric.dicePair).attempts, 0);
     });
   });
+}
+
+/// A three-shot corpus on a folding-case board: no bear-off wells, a hinge for
+/// a bar. The shape the real Task 6 corpus is shot on.
+///
+/// With [measured] the sidecars carry the widths a person read off the
+/// calibration frame, as `prepare_corpus` writes them; without it they carry
+/// nothing and the harness has only the standard widths to go on — which puts
+/// every column most of one out of true. The two are the same photographs, so
+/// the difference between the scoreboards is entirely the field.
+///
+/// The position shot has two checkers borne off, which on this board means off
+/// the felt: there is nowhere to put them, and the picture simply shows
+/// thirteen White checkers. That is the case the harness has to say something
+/// about rather than score.
+Directory _writeFoldingCaseFixture({required bool measured}) {
+  final directory = Directory.systemTemp.createTempSync('corpus_folding');
+  const conditions = CaptureConditions(
+    board: 'folding case',
+    lighting: 'daylight',
+    angle: 'straight on',
+  );
+  const degradation = ShotDegradation(noise: 2, blurSigma: 0.8, seed: 11);
+  final quad = jitterQuad(kCameraQuad, 0.8, 11);
+
+  // Two of White's five off the 6-point and off the board altogether.
+  final onFelt = BoardState(
+    points: <int>[
+      for (final (i, c) in BoardState.initial().points.indexed)
+        i == 5 ? c - 2 : c,
+    ],
+  );
+
+  CorpusShot shotOf({
+    required String id,
+    required ShotKind kind,
+    required String? calibrateFrom,
+    required BoardState board,
+    Dice? dice,
+    BoardQuad? corners,
+  }) =>
+      CorpusShot(
+        id: id,
+        session: 'folding',
+        kind: kind,
+        calibrateFrom: calibrateFrom,
+        corners: corners,
+        orientation: BoardOrientation.whiteHomeNear,
+        board: board,
+        events: null,
+        dice: dice,
+        capture: conditions,
+        synthetic: null,
+        expectRefusal: null,
+        refusalReason: null,
+        title: 'folding $id',
+        instructions: const <String>['fixture'],
+        proportions: measured ? _foldingCase : null,
+      );
+
+  void write(CorpusShot shot, Frame frame) {
+    File('${directory.path}/${shot.id}.jpg')
+        .writeAsBytesSync(encodeCorpusJpeg(imageOfFrame(frame)));
+    writeSidecar(directory, shot);
+  }
+
+  final calibration = renderShot(
+    board: BoardState.initial(),
+    proportions: _foldingCase,
+    quad: quad,
+    degradation: degradation,
+  );
+  write(
+    shotOf(
+      id: 'g01',
+      kind: ShotKind.calibration,
+      calibrateFrom: null,
+      board: BoardState.initial(),
+      corners: calibration.groundTruthQuad,
+    ),
+    calibration.frame,
+  );
+
+  write(
+    shotOf(
+      id: 'g02',
+      kind: ShotKind.dice,
+      calibrateFrom: 'g01',
+      board: BoardState.initial(),
+      dice: Dice(6, 3),
+    ),
+    renderShot(
+      board: BoardState.initial(),
+      dice: Dice(6, 3),
+      proportions: _foldingCase,
+      quad: quad,
+      degradation: degradation,
+    ).frame,
+  );
+
+  write(
+    shotOf(
+      id: 'g03',
+      kind: ShotKind.position,
+      calibrateFrom: 'g01',
+      // The sidecar says two are off; the picture cannot show that, and the
+      // rendered board is the thirteen checkers still on the felt.
+      board: BoardState(points: onFelt.points, whiteOff: 2),
+    ),
+    renderShot(
+      board: onFelt,
+      proportions: _foldingCase,
+      quad: quad,
+      degradation: degradation,
+    ).frame,
+  );
+
+  return directory;
 }
 
 /// Redraws [shot] from nothing but its own sidecar, and encodes it the way the
@@ -335,7 +491,21 @@ enum _Fixture {
   /// pipeline that answers it is caught being over-confident rather than
   /// wrong.
   readableWhenItShouldNotBe,
+
+  /// A folding-case board — no bear-off wells, a hinge for a bar — with the
+  /// widths a person measured written into its sidecars, as the real corpus
+  /// carries them.
+  foldingCase,
+
+  /// The same board and the same photographs, with the measurements left out.
+  /// Every region is then read a column out of true, and the session must not
+  /// calibrate.
+  foldingCaseUnmeasured,
 }
+
+/// The folding-case board's shape: no wells, and a hinge for a bar.
+const BoardProportions _foldingCase =
+    BoardProportions(trayWidth: 0, barWidth: 0.03);
 
 Scoreboard _scoreFixture(_Fixture fixture) {
   final directory = _writeFixture(fixture);
@@ -351,6 +521,10 @@ Scoreboard _scoreFixture(_Fixture fixture) {
 /// viewpoint and the plainest board, and any failure it reports is a failure of
 /// the harness rather than of the pipeline.
 Directory _writeFixture(_Fixture fixture) {
+  if (fixture == _Fixture.foldingCase ||
+      fixture == _Fixture.foldingCaseUnmeasured) {
+    return _writeFoldingCaseFixture(measured: fixture == _Fixture.foldingCase);
+  }
   final directory = Directory.systemTemp.createTempSync('corpus_fixture');
   const conditions = CaptureConditions(
     board: 'fixture board',
