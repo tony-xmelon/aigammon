@@ -1,0 +1,211 @@
+{
+  "schema": 1,
+  "id": "018",
+  "session": "living-room-daylight",
+  "kind": "position",
+  "calibrateFrom": "001",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      0,
+      0,
+      0,
+      3,
+      0,
+      5,
+      0,
+      1,
+      0,
+      -1,
+      0,
+      -6,
+      3,
+      0,
+      0,
+      0,
+      -2,
+      0,
+      -4,
+      1,
+      0,
+      0,
+      -2,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": [
+    {
+      "type": "openingRoll",
+      "whiteDie": 4,
+      "blackDie": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          3,
+          false
+        ],
+        [
+          5,
+          3,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          16,
+          22,
+          false
+        ],
+        [
+          18,
+          22,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 5,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          12,
+          7,
+          false
+        ],
+        [
+          7,
+          5,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          0,
+          6,
+          false
+        ],
+        [
+          6,
+          11,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 5,
+      "die2": 1
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          12,
+          7,
+          false
+        ],
+        [
+          7,
+          6,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          0,
+          6,
+          false
+        ],
+        [
+          6,
+          9,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 5,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          19,
+          false
+        ],
+        [
+          7,
+          3,
+          false
+        ]
+      ]
+    }
+  ],
+  "dice": null,
+  "capture": {
+    "board": "folding-case walnut",
+    "lighting": "daylight-backlit",
+    "angle": "propped at the end of the table and low — the far edge of the board measures barely half the near one"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Turn 7 played — W 5-4: bar/20 8/4",
+  "instructions": [
+    "Cut VID20260820105037 at t=162.5s and take the whole frame.",
+    "The board as the ledger leaves it after turn 7.",
+    "Dice in view but not settled enough for a person to call, so the sidecar claims none."
+  ]
+}

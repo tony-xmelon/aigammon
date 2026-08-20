@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "id": "003",
+  "session": "living-room-daylight",
+  "kind": "position",
+  "calibrateFrom": "001",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      2,
+      0,
+      4,
+      0,
+      2,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -3,
+      0,
+      -5,
+      0,
+      0,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": [
+    {
+      "type": "openingRoll",
+      "whiteDie": 4,
+      "blackDie": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          3,
+          false
+        ],
+        [
+          5,
+          3,
+          false
+        ]
+      ]
+    }
+  ],
+  "dice": {
+    "die1": 4,
+    "die2": 2
+  },
+  "capture": {
+    "board": "folding-case walnut",
+    "lighting": "daylight-backlit",
+    "angle": "propped at the end of the table and low — the far edge of the board measures barely half the near one"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Turn 1 played — W 4-2: 8/4 6/4",
+  "instructions": [
+    "Cut VID20260820105037 at t=33.5s and take the whole frame.",
+    "The board as the ledger leaves it after turn 1.",
+    "The opening roll is still lying where it fell — a settled pair a person read off a zoom."
+  ]
+}

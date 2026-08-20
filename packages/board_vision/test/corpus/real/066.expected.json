@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "id": "066",
+  "session": "living-room-daylight",
+  "kind": "position",
+  "calibrateFrom": "001",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      0,
+      -1,
+      0,
+      3,
+      2,
+      2,
+      1,
+      3,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      -2,
+      -1,
+      -3,
+      -2,
+      -2,
+      -1,
+      -2,
+      1
+    ],
+    "whiteBar": 0,
+    "blackBar": 1,
+    "whiteOff": 2,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": null,
+  "capture": {
+    "board": "folding-case walnut",
+    "lighting": "daylight-backlit",
+    "angle": "propped at the end of the table and low — the far edge of the board measures barely half the near one"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "End game — a Black checker on the bar",
+  "instructions": [
+    "Cut VID20260820105037 at t=680.0s and take the whole frame.",
+    "Read cell by cell off five zooms (bar, both far quarters, both near quarters); the Black checker sits ON the worn hinge ridge, which is the object-versus-surface case this corpus exists to ask about.",
+    "A 3 is visible on the hinge and its partner is not, so the sidecar claims no roll rather than half of one."
+  ]
+}

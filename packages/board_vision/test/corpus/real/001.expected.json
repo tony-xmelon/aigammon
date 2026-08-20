@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "id": "001",
+  "session": "living-room-daylight",
+  "kind": "calibration",
+  "calibrateFrom": null,
+  "corners": {
+    "topLeft": [
+      292.5333333333333,
+      273.8666666666667
+    ],
+    "topRight": [
+      842.1999999999999,
+      273.46666666666664
+    ],
+    "bottomRight": [
+      1097.3333333333333,
+      640.6666666666666
+    ],
+    "bottomLeft": [
+      80.0,
+      646.6666666666666
+    ]
+  },
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      3,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -3,
+      0,
+      -5,
+      0,
+      0,
+      0,
+      0,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": null,
+  "capture": {
+    "board": "folding-case walnut",
+    "lighting": "daylight-backlit",
+    "angle": "propped at the end of the table and low — the far edge of the board measures barely half the near one"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Calibration — the starting position",
+  "instructions": [
+    "Cut VID20260820105037 at t=10.5s and take the whole frame.",
+    "Act 1 of FILMING.md: the board set for the start of a game, home boards to the right, held still.",
+    "Nothing on the felt but the checkers. No dice anywhere in view — a die present at calibration is learned as part of the board and is then invisible for the rest of the session."
+  ],
+  "foldingCorners": {
+    "topLeft": [
+      292.5333333333333,
+      273.8666666666667
+    ],
+    "topRight": [
+      842.1999999999999,
+      273.46666666666664
+    ],
+    "bottomRight": [
+      1097.3333333333333,
+      640.6666666666666
+    ],
+    "bottomLeft": [
+      80.0,
+      646.6666666666666
+    ],
+    "hingeFarLeft": [
+      568.0,
+      273.3333333333333
+    ],
+    "hingeFarRight": [
+      604.6666666666666,
+      273.3333333333333
+    ],
+    "hingeNearLeft": [
+      555.3333333333333,
+      632.0
+    ],
+    "hingeNearRight": [
+      618.6666666666666,
+      632.0
+    ]
+  },
+  "dieSide": 0.021
+}

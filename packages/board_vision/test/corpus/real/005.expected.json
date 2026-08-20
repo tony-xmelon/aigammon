@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "id": "005",
+  "session": "living-room-daylight",
+  "kind": "position",
+  "calibrateFrom": "001",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      -2,
+      0,
+      0,
+      2,
+      0,
+      4,
+      0,
+      2,
+      0,
+      0,
+      0,
+      -5,
+      5,
+      0,
+      0,
+      0,
+      -2,
+      0,
+      -4,
+      0,
+      0,
+      0,
+      -2,
+      2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 0,
+    "blackOff": 0
+  },
+  "events": [
+    {
+      "type": "openingRoll",
+      "whiteDie": 4,
+      "blackDie": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          3,
+          false
+        ],
+        [
+          5,
+          3,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          16,
+          22,
+          false
+        ],
+        [
+          18,
+          22,
+          false
+        ]
+      ]
+    }
+  ],
+  "dice": {
+    "die1": 6,
+    "die2": 4
+  },
+  "capture": {
+    "board": "folding-case walnut",
+    "lighting": "daylight-backlit",
+    "angle": "propped at the end of the table and low — the far edge of the board measures barely half the near one"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "Turn 2 played — B 6-4: 17/23 19/23 (Black's own 8/2 6/2)",
+  "instructions": [
+    "Cut VID20260820105037 at t=49.5s and take the whole frame.",
+    "The board as the ledger leaves it after turn 2.",
+    "Black's roll still on the left leaf, read off a zoom."
+  ]
+}

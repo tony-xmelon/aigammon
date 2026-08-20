@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "id": "070",
+  "session": "living-room-daylight",
+  "kind": "position",
+  "calibrateFrom": "001",
+  "corners": null,
+  "orientation": "whiteHomeNear",
+  "board": {
+    "points": [
+      0,
+      -2,
+      0,
+      3,
+      2,
+      2,
+      2,
+      2,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      -1,
+      -2,
+      -2,
+      -2,
+      -2,
+      1,
+      -2,
+      -2
+    ],
+    "whiteBar": 0,
+    "blackBar": 0,
+    "whiteOff": 2,
+    "blackOff": 0
+  },
+  "events": null,
+  "dice": null,
+  "capture": {
+    "board": "folding-case walnut",
+    "lighting": "daylight-backlit",
+    "angle": "propped at the end of the table and low — the far edge of the board measures barely half the near one"
+  },
+  "synthetic": null,
+  "expectRefusal": null,
+  "refusalReason": null,
+  "title": "End game — the last frame, a White straggler trapped",
+  "instructions": [
+    "Cut VID20260820105037 at t=729.0s and take the whole frame.",
+    "Read cell by cell off five zooms and cross-checked against the machine's deltas either side; the video ends here with the game unfinished.",
+    "Two dice are lying on the felt mid-sequence and neither can be attributed to a turn, so the sidecar claims no roll."
+  ]
+}
