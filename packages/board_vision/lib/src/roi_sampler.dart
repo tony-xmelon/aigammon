@@ -120,10 +120,27 @@ class RoiSampler extends FrameSampler {
   ///
   /// [checkerSearchNear] leaves the warp's sliver of room at the board's own
   /// edge. [checkerSearchFar] is how far a stack may sit back from that edge
-  /// and still be read as sitting on the point at all — see
-  /// [checkerHoldDepth], which is what sets the ceiling on it.
+  /// and still be looked for, and it is **derived plus one measured step**.
+  ///
+  /// The derivation is [checkerHoldDepth]'s: a blind walk starting at
+  /// [checkerSearchNear] steps over a gap of at most `hold`, so
+  /// `near + hold` is the deepest a stack can sit and still be found by a walk
+  /// that knows nothing about this board's colours. The extra
+  /// [checkerSearchStep] is slack for grain, and it is worth a number: on the
+  /// corpus's steep viewpoint the classic board — whose black checkers are the
+  /// palette nearest the sensor floor — calibrates through four levels of
+  /// grain with the extra step and only three without it. A walk that knows
+  /// the colours already can settle on a checker at any depth it looks at, so
+  /// this is also that walk's ceiling.
+  ///
+  /// It used to be written as `0.10`, with the doc claiming it followed from
+  /// the derivation it was in fact a step past. That step was where a stack
+  /// could be found by one walk and missed by another — see
+  /// [checkerReachLeadIn], which is now derived from THIS so the two cannot
+  /// drift apart again.
   static const double checkerSearchNear = 0.02;
-  static const double checkerSearchFar = 0.10;
+  static const double checkerSearchFar =
+      checkerSearchNear + checkerHoldDepth + checkerSearchStep;
   static const double checkerSearchStep = 0.01;
 
   /// How far either side of the column's centre the walk also looks, as a
@@ -565,6 +582,37 @@ class RoiSampler extends FrameSampler {
   /// two a shadow produces.
   static const double minRowCoverage = 0.35;
 
+  /// How far in from a region's origin a run of covered rows may START and
+  /// still count as the stack standing on that region — see [_runReach].
+  ///
+  /// **Derived from the finder's own reach, and it has to be.** The two walks
+  /// measure the same stack differently: [findAlong] settles on a BLOCK, whose
+  /// near end is where the checker begins, while this one counts covered ROWS,
+  /// and the first covered row lies deeper than the block's near end — a round
+  /// checker tapers to nothing at its leading edge, so the rows there fall
+  /// under [minRowCoverage] and are not counted. A block is
+  /// [checkerPatchDepth] deep and that is exactly how much deeper than its own
+  /// near end its samples reach, so `far + patchDepth` is the bound that makes
+  /// the two agree: **anything the finder can settle on, this can start a run
+  /// on.**
+  ///
+  /// It used to be [checkerSearchFar] flat, and the one step of difference was
+  /// silent. Measured on the bed, reading inset frames through a calibration
+  /// taken on a tidy board: at an inset of 0.09 nothing was miscounted; at
+  /// 0.095 seven of the twenty-four points came back holding ONE checker where
+  /// two, three and five stood — `reach` zero, count floored at one by
+  /// `OccupancyReader._resolve` — and `confirm` agreed the board was set up
+  /// for the start of a game, because the finder it uses had found every one
+  /// of those stacks. A wrong count that nothing contradicts is the worst
+  /// reading this pipeline can produce, and it lived in a band a hand's
+  /// placement lands in.
+  ///
+  /// The die this bound exists to exclude is untouched by the widening: a die
+  /// in a point's headroom sits against the midline, three and a half times
+  /// further in than this.
+  static const double checkerReachLeadIn =
+      checkerSearchFar + checkerPatchDepth;
+
   /// The widest gap, in rows, a stack may have inside it and still be one run.
   ///
   /// Tangent discs pinch to nothing where they touch, so a synthetic stack is
@@ -636,14 +684,15 @@ class RoiSampler extends FrameSampler {
   /// measured *zero*, the pitch regression had nothing to fit, and occupancy
   /// counted one checker on stacks of five.
   ///
-  /// The run may therefore begin anywhere within [checkerSearchFar] of the
+  /// The run may therefore begin anywhere within [checkerReachLeadIn] of the
   /// origin — as far in as a stack may sit and still be a stack on this point
   /// — and nowhere else. That bound is what keeps a die lying in a point's
   /// headroom from starting a run of its own: it sits three or four times
   /// further in than this, so it goes on measuring zero, which is the
   /// signature occupancy uses to tell it from a checker.
   static double _runReach(List<double> coverage, double rowDepth) {
-    final maxLeadIn = rowDepth <= 0 ? 0 : (checkerSearchFar / rowDepth).floor();
+    final maxLeadIn =
+        rowDepth <= 0 ? 0 : (checkerReachLeadIn / rowDepth).floor();
     var first = -1, last = -1;
     for (var r = 0; r < coverage.length; r++) {
       if (coverage[r] < minRowCoverage) continue;
@@ -825,7 +874,7 @@ class StackMeasurement {
   /// Zero when that colour was not found there at all.
   ///
   /// A *run*, not a scattering: the walk takes the first covered row within
-  /// [RoiSampler.checkerSearchFar] of the origin and stops at the first gap
+  /// [RoiSampler.checkerReachLeadIn] of the origin and stops at the first gap
   /// wider than [maxProfileGap] after it. A blob floating in the middle of a
   /// region — a die in a point's headroom, a hand's shadow — is therefore not
   /// counted as part of the stack unless it is touching it, and does not start

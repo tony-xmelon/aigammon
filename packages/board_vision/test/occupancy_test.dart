@@ -125,6 +125,109 @@ void main() {
     });
   });
 
+  group('how far back a stack may sit and still be counted', () {
+    // Two ceilings used to disagree by a single step, and the gap between them
+    // was the worst kind of gap this pipeline can have: a SILENT one.
+    //
+    // The walk that finds a checker reaches [RoiSampler.checkerSearchFar]; the
+    // walk that measures how far a stack runs would only start a run within
+    // that same number of the board's edge — but it measures COVERED ROWS,
+    // and the first covered row of a stack lies deeper than the block the
+    // finder settled on, because a round checker tapers to nothing at its
+    // leading edge and a block is [RoiSampler.checkerPatchDepth] deep. So for
+    // one step's width of inset the finder saw a stack the reach walk could
+    // not start on. Measured on the bed: at an inset of 0.095 seven of the
+    // twenty-four points read ONE checker where five stood, `reach` came back
+    // zero, and `confirmStartingPosition` agreed with the board — nothing
+    // anywhere said a word.
+    //
+    // The fix is a derivation rather than a number: the reach walk's lead-in
+    // is the finder's ceiling PLUS a block's own depth, which is exactly how
+    // much deeper than a block's near end its samples go. Anything the finder
+    // can settle on, the reach walk can start on.
+    const start = <int>[
+      -2, 0, 0, 0, 0, 5, 0, 3, 0, 0, 0, -5, //
+      5, 0, 0, 0, -3, 0, -5, 0, 0, 0, 0, 2,
+    ];
+
+    /// Every inset from flush to well past the ceiling, in half-steps of the
+    /// walk — the band that hid is narrower than a whole step.
+    const insets = <double>[
+      0.02, 0.04, 0.06, 0.08, 0.085, 0.09, 0.095, 0.10, 0.105, 0.11, 0.12,
+    ];
+
+    test('a miscount never happens while confirmation is happy', () {
+      // The invariant, stated the way a user would state it: if nothing on
+      // screen is telling me to fix my board, then what the app believes my
+      // board holds is right. Whichever inset the ceiling ends up at, the
+      // reading beyond it has to be loud.
+      final vision = BoardVision(_calibrate(
+        renderShot(board: BoardState.initial()),
+      ));
+
+      for (final inset in insets) {
+        final shot = renderShot(
+          board: BoardState.initial(),
+          stackPlacement: StackPlacement(edgeInset: inset),
+        );
+        if (!vision.confirmStartingPosition(shot.frame).agrees) continue;
+        final reader = vision.occupancyIn(shot.frame);
+        for (var i = 0; i < 24; i++) {
+          expect(reader.read(RoiId.point(i)).count, start[i].abs(),
+              reason: 'point ${i + 1} holds ${start[i].abs()} sitting $inset '
+                  'in from its edge, and confirmation raised no objection');
+        }
+      }
+    });
+
+    test('a stack the finder can reach is a stack the count can measure', () {
+      // The same property from the other side, and the one that says what the
+      // ceiling IS rather than only that it is honest. The finder's own reach
+      // is the yardstick: where it settles on a checker, the reach walk has to
+      // find that checker's run too, so the count comes back exact rather than
+      // floored at one.
+      final calibration = _calibrate(renderShot(board: BoardState.initial()));
+      final vision = BoardVision(calibration);
+      var reached = 0.0;
+
+      for (final inset in insets) {
+        final shot = renderShot(
+          board: BoardState.initial(),
+          stackPlacement: StackPlacement(edgeInset: inset),
+        );
+        final sampler = RoiSampler(
+          shot.frame,
+          calibration.geometry,
+          calibration.atlas,
+        );
+        final colors = calibration.colorsIn(shot.frame);
+        final reader = vision.occupancyIn(shot.frame);
+        for (var i = 0; i < 24; i++) {
+          if (start[i] == 0) continue;
+          final found = sampler.findChecker(i, colors: colors);
+          final onChecker = colors.classifyIn(
+                RoiId.point(i),
+                medianRgb(found.scan.samples),
+              ) !=
+              CheckerColor.none;
+          if (!onChecker) continue;
+          reached = inset;
+          final reading = reader.read(RoiId.point(i));
+          expect(reading.reach, greaterThan(0.0),
+              reason: 'the finder settled on a checker at depth '
+                  '${found.depth} on point ${i + 1}, sitting $inset in from '
+                  'its edge, and the reach walk measured nothing');
+          expect(reading.count, start[i].abs(),
+              reason: 'point ${i + 1} holds ${start[i].abs()} sitting $inset '
+                  'in from its edge, read $reading');
+        }
+      }
+      // And the ceiling is worth having: a hand leaves a stack this far in.
+      expect(reached, greaterThanOrEqualTo(0.09),
+          reason: 'the finder stopped reaching stacks at $reached');
+    });
+  });
+
   group('reading the board, region by region', () {
     test('an untouched starting position counts itself back', () {
       final shot = renderShot(board: BoardState.initial());
