@@ -293,13 +293,51 @@ class RoiSampler extends FrameSampler {
   /// at the first coherent block that reads as a checker of either colour,
   /// however shallow the stack behind it. Nothing reads as a checker on an
   /// empty column, and the walk falls through to the blind answer.
-  CheckerFind findChecker(int index, {ColorModel? colors}) {
-    final b = boundsOf(atlas.roi(RoiId.point(index)));
-    // Which board edge this point stacks from: its region runs from that edge
-    // to the midline, so whichever end is not the midline is the edge.
-    final fromTop = b.maxY <= RoiAtlas.midline + 1e-9;
-    final centreX = (b.minX + b.maxX) / 2;
-    final width = b.maxX - b.minX;
+  CheckerFind findChecker(int index, {ColorModel? colors}) => findAlong(
+        StackAxis.forRegion(atlas, RoiId.point(index)),
+        colors: colors,
+      );
+
+  /// The same walk, down whichever region [axis] belongs to.
+  ///
+  /// A point's column is the common case and [findChecker] is its name, but
+  /// nothing about the walk is specific to points: it wants a line to walk, an
+  /// end to start from and a width to sample across, which is exactly what a
+  /// [StackAxis] is. Calibration uses this form on the bar and the bear-off
+  /// trays — the regions the starting position says are empty — to ask whether
+  /// something is STANDING in one of them, as opposed to the region's own
+  /// surface merely looking like a checker.
+  ///
+  /// ## Two ways to know what a checker looks like
+  ///
+  /// [colors] is one: a finished model, which judges a block against the two
+  /// checker clouds AND the region's own learned surface. That is what a
+  /// mid-game reading wants.
+  ///
+  /// [isChecker] is the other, and it is there because the first is not always
+  /// available *or trustworthy*. A region whose surface model has already
+  /// swallowed the very checker being looked for will veto its own answer —
+  /// which is exactly the state a bear-off tray with three men in it is in
+  /// after calibration has modelled it with two surfaces. Passing the eight
+  /// medians the starting position labelled asks a question that model cannot
+  /// spoil: is this block the colour of one of this board's own checkers?
+  ///
+  /// Either way the block still has to be a block: one colour across its face
+  /// ([checkerPatchMaxSpread]) with a body behind it ([checkerMinBody]). That
+  /// is what a worn stripe down a hinge is not, because a patch laid across
+  /// the strip catches the crack and the flanks along with the crown.
+  CheckerFind findAlong(
+    StackAxis axis, {
+    ColorModel? colors,
+    bool Function(Rgb median)? isChecker,
+  }) {
+    final looksLikeChecker = isChecker ??
+        (colors == null
+            ? null
+            : (Rgb median) =>
+                colors.classifyIn(axis.region, median) != CheckerColor.none);
+    final centreX = (axis.minX + axis.maxX) / 2;
+    final width = axis.maxX - axis.minX;
 
     const offsets = <double>[0.0, -checkerSearchOffset, checkerSearchOffset];
     final steps =
@@ -314,9 +352,9 @@ class RoiSampler extends FrameSampler {
         <_Block>[
           for (var s = 0; s <= steps + holdSteps; s++)
             _blockAt(
+              axis,
               centreX + offset * width,
               width,
-              fromTop,
               checkerSearchNear + s * checkerSearchStep,
             ),
         ],
@@ -325,7 +363,7 @@ class RoiSampler extends FrameSampler {
     // With the colours in hand, a checker of either colour is what the walk
     // is looking for, and it may be standing alone — but it is still a disc
     // with a body, not a line: see [checkerMinBody].
-    if (colors != null) {
+    if (looksLikeChecker != null) {
       final bodySteps = (checkerMinBody / checkerSearchStep).ceil();
       final seen = _firstBlock(
         profile,
@@ -333,8 +371,7 @@ class RoiSampler extends FrameSampler {
         steps,
         holdSteps,
         (o, s) =>
-            colors.classifyIn(RoiId.point(index), profile[o][s].median) !=
-                CheckerColor.none &&
+            looksLikeChecker(profile[o][s].median) &&
             _holdOf(profile[o], s, bodySteps) >= bodySteps,
       );
       if (seen != null) return seen;
@@ -422,11 +459,11 @@ class RoiSampler extends FrameSampler {
   }
 
   /// One candidate patch: a lattice [checkerPatchDepth] deep whose near end is
-  /// at [depth], centred on [centreX].
+  /// at [depth] along [axis], centred on [centreX].
   _Block _blockAt(
+    StackAxis axis,
     double centreX,
     double columnWidth,
-    bool fromTop,
     double depth,
   ) {
     final halfWidth = columnWidth * checkerPatchHalfWidth;
@@ -434,7 +471,7 @@ class RoiSampler extends FrameSampler {
     var attempted = 0;
     for (var iy = 0; iy < checkerPatchDeep; iy++) {
       final d = depth + (iy + 0.5) / checkerPatchDeep * checkerPatchDepth;
-      final y = fromTop ? d : 1 - d;
+      final y = axis.yAt(d);
       for (var ix = 0; ix < checkerPatchAcross; ix++) {
         final x = centreX +
             ((ix + 0.5) / checkerPatchAcross - 0.5) * 2 * halfWidth;

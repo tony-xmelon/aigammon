@@ -482,6 +482,54 @@ void main() {
       expect(result.message.toLowerCase(), contains('light'));
     });
 
+    test('a checker left in a bear-off tray', () {
+      // The other half of the known-empty principle, and the half that has to
+      // bite. The starting position labels the bar and both trays EMPTY, and
+      // calibration leans on that label twice: it absorbs whatever surface a
+      // region shows there, and — because it does — it has to be sure nothing
+      // is STANDING there first.
+      //
+      // Left to the read-back gate alone this went through silently. A tray
+      // with checkers in it shows two surfaces, its felt and the checkers, and
+      // two surfaces is exactly what the region model has room for: the men
+      // were learned as part of the tray, the read-back agreed, and the
+      // session began with three checkers already borne off.
+      for (final off in <int>[1, 3]) {
+        final points = List<int>.of(BoardState.initial().points);
+        points[11] += off; // that many of Black's five off the 12-point...
+        final shot = renderShot(
+          board: BoardState(points: points, blackOff: off), // ...into its tray.
+        );
+        final result = BoardVision.calibrate(
+          frame: shot.frame,
+          corners: shot.groundTruthQuad,
+          orientation: BoardOrientation.whiteHomeNear,
+        );
+        expect(result.ok, isFalse, reason: '$off in the tray was accepted');
+        expect(result.problem, CalibrationProblem.checkersNotInStartingPosition);
+        expect(result.offending, contains(RoiId.offBlack));
+        // Said the way a person would say it, and pointing at the fix.
+        expect(result.message, contains('tray'));
+        expect(result.message, isNot(contains('offBlack')));
+        expect(result.message, endsWith('.'));
+      }
+    });
+
+    test('a checker left on the bar', () {
+      final points = List<int>.of(BoardState.initial().points);
+      points[5] -= 1; // one White off the 6-point and onto the bar.
+      final shot = renderShot(board: BoardState(points: points, whiteBar: 1));
+      final result = BoardVision.calibrate(
+        frame: shot.frame,
+        corners: shot.groundTruthQuad,
+        orientation: BoardOrientation.whiteHomeNear,
+      );
+      expect(result.ok, isFalse);
+      expect(result.problem, CalibrationProblem.checkersNotInStartingPosition);
+      expect(result.offending, contains(RoiId.bar));
+      expect(result.message, contains('the bar'));
+    });
+
     test('two sets of checkers that look alike', () {
       final shot = renderShot(
         board: BoardState.initial(),

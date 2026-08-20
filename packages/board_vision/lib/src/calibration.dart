@@ -540,6 +540,18 @@ class Calibrator {
   /// reads a stray sample or two.
   static const double minRegionCoverage = 0.02;
 
+  /// How many rounds of extra surfaces a known-empty region may be given
+  /// before the calibrator stops looking — see [_settleEmptyRegions].
+  ///
+  /// Each round splits whatever still reads as a checker into at most two more
+  /// surfaces, so three rounds is room for six beyond the two every region
+  /// starts with. The real board's spine needed one. The cap exists because
+  /// this is a loop over a fixed point that a pathological region might not
+  /// reach, not because any board is expected to want three: a region still
+  /// showing checkers after three rounds falls through to the read-back gate,
+  /// which refuses it, which is the right end for a board nobody can model.
+  static const int maxSurfaceRounds = 3;
+
   /// How many regions may read back wrong from the very frame they were
   /// learned on before the calibration is refused.
   ///
@@ -874,6 +886,25 @@ class Calibrator {
       }
     }
 
+    // --- the regions the starting position says are empty
+    //
+    // See [_settleEmptyRegions]. This is the last thing learned because it is
+    // the only thing that needs the checker colours in order to be learned at
+    // all.
+    final settled = _settleEmptyRegions(
+      sampler: sampler,
+      atlas: atlas,
+      colors: colors,
+      interiors: interiors,
+      // The eight medians the starting position labelled — this board's own
+      // checkers, in plain sensor levels.
+      checkers: <Rgb>[
+        for (final index in occupied.keys) medianRgb(patches[index]!),
+      ],
+    );
+    if (settled.refused != null) return settled.refused!;
+    final model = settled.colors;
+
     // Last, calibration reads the board back out of the frame it just learned
     // from. Everything above says the model is self-consistent; this says it
     // works. The two come apart in exactly one measured way — a board lit hard
@@ -895,7 +926,7 @@ class Calibrator {
           sampler
               .measureStack(
                 StackAxis.forRegion(atlas, RoiId.point(entry.key)),
-                colors,
+                model,
               )
               .reachOf(entry.value),
         ),
@@ -905,7 +936,7 @@ class Calibrator {
     final calibration = BoardCalibration(
       geometry: geometry,
       orientation: orientation,
-      colors: colors,
+      colors: model,
       fingerprint: fingerprint,
       stacks: stacks,
       proportions: proportions,
@@ -1001,10 +1032,7 @@ class Calibrator {
     // does not run: there is no felt to leave a checker on, and the reason
     // this check exists — a stray checker being folded into the authoritative
     // state — cannot happen where there is nowhere for one to sit.
-    for (final id in <RoiId>[
-      RoiId.bar,
-      if (atlas.hasTrays) ...<RoiId>[RoiId.offWhite, RoiId.offBlack],
-    ]) {
+    for (final id in emptyAtStart(atlas)) {
       final scan = sampler.interior(id);
       if (scan.visibleFraction < RoiSampler.minVisibleFraction) {
         outOfPicture ??= id;
@@ -1065,6 +1093,216 @@ class Calibrator {
       message: 'The board is not set up for the start of a game: $named'
           '${rest > 0 ? ' (and $rest more)' : ''}.',
     );
+  }
+
+  /// The regions the starting position guarantees hold nothing at all.
+  ///
+  /// The bar always, and the two bear-off trays on a board that has any — a
+  /// folding case has no wells, and borne-off checkers leave such a board
+  /// altogether, so there is nowhere for a checker to be left. See
+  /// [RoiAtlas.hasTrays].
+  ///
+  /// One definition, used twice and for opposite purposes: [_settleEmptyRegions]
+  /// leans on the guarantee at calibration, and [confirm] checks it on every
+  /// frame afterwards.
+  static List<RoiId> emptyAtStart(RoiAtlas atlas) => <RoiId>[
+        RoiId.bar,
+        if (atlas.hasTrays) ...<RoiId>[RoiId.offWhite, RoiId.offBlack],
+      ];
+
+  /// Settles the regions the starting position labels empty, and refuses the
+  /// frame when one of them is not.
+  ///
+  /// ## The principle
+  ///
+  /// This is the same free labelling the rest of calibration runs on, applied
+  /// to the three regions nobody thinks of as labelled. Thirty checkers sit
+  /// where the rules put them; the bar and the trays are therefore **empty**,
+  /// by construction, in every frame calibration is ever handed. So a sample
+  /// there that comes back looking like a checker is not a checker. It is a
+  /// surface this board has and the model has not been given room for — and
+  /// the honest thing to do with it is to give it room.
+  ///
+  /// The first real folding board is why this exists. Its hinge is a worn
+  /// ridge: a near-black crack down the middle, a pale rubbed crown either
+  /// side of it, plain wood on the flanks. Three surfaces, and a region gets
+  /// two — the crack is the furthest thing from the wood so it takes the
+  /// second mode, and the crown is left with nowhere to sit. 168 of the bar's
+  /// 400 samples classified as checkers, 115 of them White, and a board set up
+  /// perfectly was refused for having a checker on the bar.
+  ///
+  /// ## The risk, and what actually separates the two cases
+  ///
+  /// Absorbing carelessly would be worse than the refusal it cures: make the
+  /// pale crown part of the bar and a cream checker standing on that crown
+  /// mid-game goes silently missing. And a checker genuinely left in a tray
+  /// while the user calibrates has to STAY a refusal — that one they can fix,
+  /// and if it is folded into the board instead the session begins with three
+  /// men already borne off.
+  ///
+  /// Colour cannot tell those apart; on the real board the crown sits 1.40
+  /// spreads from the White cloud, which is where a checker sits. What tells
+  /// them apart is that a checker is an OBJECT: a disc with one colour across
+  /// its face and a body behind it. So each region is walked with the same
+  /// instrument every point is walked with — [RoiSampler.findAlong], which
+  /// takes the first coherent block that holds — and only a region where
+  /// nothing stands is absorbed. Measured on the real frame: every block down
+  /// its worn spine scatters 20 to 43 levels against a coherence floor of 18,
+  /// because a block laid across the strip catches the crack and the flanks
+  /// along with the crown. Nothing there is an object, and nothing there is
+  /// mistaken for one.
+  ///
+  /// This also closes a hole that predates the worn spine and was silent: a
+  /// tray with checkers in it shows exactly two surfaces, its felt and the
+  /// men, which is exactly what the region model has room for. Both were
+  /// learned, the read-back agreed, and the calibration was handed over.
+  static ({CalibrationResult? refused, ColorModel colors}) _settleEmptyRegions({
+    required RoiSampler sampler,
+    required RoiAtlas atlas,
+    required ColorModel colors,
+    required Map<RoiId, List<Rgb>> interiors,
+    required List<Rgb> checkers,
+  }) {
+    final backgrounds = <RoiId, RoiBackground>{
+      for (final id in atlas.regions) id: colors.backgroundOf(id),
+    };
+    var changed = false;
+
+    for (final id in emptyAtStart(atlas)) {
+      if (_standingIn(sampler, atlas, id, checkers)) {
+        return (
+          refused: CalibrationResult.failure(
+            CalibrationProblem.checkersNotInStartingPosition,
+            'I can see a checker where the game starts with none — '
+            '${_describe(id)}. Take it off the board and calibrate again.',
+            <RoiId>[id],
+          ),
+          colors: colors,
+        );
+      }
+
+      var background = backgrounds[id]!;
+      final samples = interiors[id]!;
+      final features = <List<double>>[
+        for (final sample in samples)
+          ColorModel.feature(sample, background.color),
+      ];
+      for (var round = 0; round < maxSurfaceRounds; round++) {
+        final strays = <List<double>>[
+          for (var i = 0; i < samples.length; i++)
+            if (colors.classify(samples[i], background) != CheckerColor.none)
+              features[i],
+        ];
+        // Under what a checker would cover, nothing downstream would call this
+        // region occupied anyway — so there is nothing to absorb and no reason
+        // to disturb a model that is working.
+        if (strays.length <= minRegionCoverage * samples.length) break;
+        final extra = _surfaces(strays);
+        if (extra.modes.isEmpty) break;
+        final modes = <List<double>>[...background.modes, ...extra.modes];
+        background = RoiBackground(
+          color: background.color,
+          modes: modes,
+          // Re-measured, and this is the half of the fix that keeps a real
+          // checker visible. A region's spread is the scatter of its samples
+          // about the surfaces it was given, so a region modelled with one
+          // surface too few carries the MISSING surface's whole distance in
+          // its spread — the bed's worn spine came out at (0.15, 0.22, 0.36)
+          // against a floor of 0.15. A spread that wide reaches out past the
+          // crown to where a cream checker standing on it sits, and swallows
+          // it. Split the surfaces properly and each sample is near one of
+          // them, so the same measurement over the same samples collapses back
+          // to the floor and the checker is outside it again.
+          spread: _spreadAbout(features, modes),
+          sampleCount: background.sampleCount,
+          fullyMeasured: background.fullyMeasured,
+        );
+        changed = true;
+      }
+      backgrounds[id] = background;
+    }
+
+    if (!changed) return (refused: null, colors: colors);
+    return (
+      refused: null,
+      colors: ColorModel(
+        white: colors.white,
+        black: colors.black,
+        backgrounds: backgrounds,
+        // Deliberately NOT the absorbed vocabulary. What a hinge's spine looks
+        // like is the hinge's business; lending it to the eight points that
+        // were under checkers would make their own checkers vanish.
+        boardModes: colors.boardModes,
+        boardSpread: colors.boardSpread,
+      ),
+    );
+  }
+
+  /// Whether one of this board's own checkers is STANDING in [id].
+  ///
+  /// Judged against [checkers] — the eight medians the starting position
+  /// labelled a moment ago — rather than through the region's learned surface,
+  /// because that surface is precisely what cannot be trusted here: a tray
+  /// with men in it shows two surfaces, its felt and the men, and two is
+  /// exactly what the region model has room for. Asked through it, the tray
+  /// answers that its checkers are part of the tray.
+  ///
+  /// The bar is asked twice because it is the one region with two ends: its
+  /// two colours stack away from each other from the midline, so a checker on
+  /// it sits at the origin of one axis or the other. A tray has one.
+  static bool _standingIn(
+    RoiSampler sampler,
+    RoiAtlas atlas,
+    RoiId id,
+    List<Rgb> checkers,
+  ) {
+    bool isChecker(Rgb median) => _looksLikeChecker(median, checkers);
+    final axes = id == RoiId.bar
+        ? <StackAxis>[
+            StackAxis.forRegion(atlas, id, color: CheckerColor.white),
+            StackAxis.forRegion(atlas, id, color: CheckerColor.black),
+          ]
+        : <StackAxis>[StackAxis.forRegion(atlas, id)];
+    for (final axis in axes) {
+      final found = sampler.findAlong(axis, isChecker: isChecker);
+      // Settling is the whole test. The walk only settles on a block that is
+      // one colour across its face and holds that colour for a checker's body,
+      // and it only accepts one whose colour is a checker's — so a stripe worn
+      // down a hinge, which is neither, comes back unsettled. Measured on the
+      // real board: every block down its spine scatters 20 to 43 sensor levels
+      // against a coherence floor of 18, because a block laid across the strip
+      // catches the crack and the flanks along with the crown.
+      if (!found.settled) continue;
+      if (isChecker(medianRgb(found.scan.samples))) return true;
+    }
+    return false;
+  }
+
+  /// Per-channel scatter of [features] about whichever of [modes] each is
+  /// nearest, floored like every other spread in the model.
+  static List<double> _spreadAbout(
+    List<List<double>> features,
+    List<List<double>> modes,
+  ) {
+    if (modes.isEmpty) return List<double>.filled(3, ColorModel.minSpread);
+    final deviations = <List<double>>[];
+    for (final f in features) {
+      var nearest = modes.first;
+      var best = double.infinity;
+      for (final mode in modes) {
+        final d = _euclid(f, mode);
+        if (d < best) {
+          best = d;
+          nearest = mode;
+        }
+      }
+      deviations.add(<double>[
+        f[0] - nearest[0],
+        f[1] - nearest[1],
+        f[2] - nearest[2],
+      ]);
+    }
+    return _trimmedSpread(deviations, const <double>[0, 0, 0]);
   }
 
   static CalibrationResult _notVisible(RoiId id) => CalibrationResult.failure(

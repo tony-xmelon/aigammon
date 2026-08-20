@@ -215,6 +215,100 @@ void main() {
     });
   });
 
+  group('a spine worn the way a real one is', () {
+    // The one thing the first real folding frame refused on, once its corners
+    // were right: 24 of 24 columns read back correctly and the BAR came back
+    // holding a checker that was not there. Its hinge is a ridge worn by
+    // decades of use — a near-black crack down the middle where the leaves
+    // meet, a pale rubbed crown either side of it, untouched wood on the
+    // flanks — and 168 of the band's 400 calibration samples classified as
+    // checkers, 115 of them White. See [SpineWear].
+    //
+    // The fix is the principle the whole calibration design already rests on,
+    // pushed one step further: the starting position labels the bar EMPTY, so
+    // a checker-coloured sample there is not a checker. It is a surface nobody
+    // has modelled yet, and it belongs in the bar's background.
+
+    test('needs more surfaces than a clean one — which is what makes the rest '
+        'of this group mean anything', () {
+      // The guard. If the worn bed happened to be readable with the two
+      // surfaces every region gets, the tests below would pass on a pipeline
+      // that had learned nothing, and the refusal they replace would never
+      // have been reproduced at all.
+      final clean = _calibrate(renderFoldingShot(board: BoardState.initial()));
+      final worn = _calibrate(renderFoldingShot(
+        board: BoardState.initial(),
+        spine: SpineWear.worn,
+      ));
+      expect(clean.colors.backgroundOf(RoiId.bar).modes, hasLength(1),
+          reason: 'a spine straight out of the shop is one piece of wood, and '
+              'one surface is all the bar should need for it');
+      expect(worn.colors.backgroundOf(RoiId.bar).modes.length, greaterThan(2),
+          reason: 'a worn spine has more surfaces than the two a region is '
+              'given, and the bar has to have LEARNED the extra ones rather '
+              'than reporting them as checkers');
+    });
+
+    test('calibrates, and confirms as the starting position', () {
+      for (final palette in BoardPalette.all) {
+        final shot = renderFoldingShot(
+          board: BoardState.initial(),
+          palette: palette,
+          spine: SpineWear.worn,
+        );
+        final result = BoardVision.calibrateFolding(
+          frame: shot.frame,
+          corners: shot.groundTruthCorners,
+          orientation: BoardOrientation.whiteHomeNear,
+        );
+        expect(result.ok, isTrue,
+            reason: '${palette.name}: ${result.message}');
+        final confirmed = BoardVision(result.calibration!)
+            .confirmStartingPosition(shot.frame);
+        expect(confirmed.agrees, isTrue,
+            reason: '${palette.name}: ${confirmed.message}');
+      }
+    });
+
+    test('and a checker standing ON the worn spine still reads as one, either '
+        'colour', () {
+      // The risk the fix has to be engineered against, said out loud: absorb
+      // the pale crown into the bar's background carelessly and a cream
+      // checker sitting on that crown mid-game becomes invisible — which is
+      // worse than the refusal it cured, because it is silent. Both colours,
+      // and the pale one especially: it is the one whose colour the wear is
+      // closest to.
+      final start = renderFoldingShot(
+        board: BoardState.initial(),
+        spine: SpineWear.worn,
+      );
+      final vision = BoardVision(_calibrate(start));
+
+      for (final (colour, state) in <(CheckerColor, BoardState)>[
+        (CheckerColor.white, _oneOnTheBar(white: true)),
+        (CheckerColor.black, _oneOnTheBar(white: false)),
+      ]) {
+        final hit = renderFoldingShot(board: state, spine: SpineWear.worn);
+        final reading =
+            vision.occupancyIn(hit.frame).readFor(RoiId.bar, colour);
+        expect(reading.color, colour, reason: '${colour.name}: $reading');
+        expect(reading.count, 1, reason: '${colour.name}: $reading');
+
+        // And the start-position check has to see it too, since that is the
+        // screen a user would be looking at.
+        final confirmed = vision.confirmStartingPosition(hit.frame);
+        expect(confirmed.agrees, isFalse, reason: colour.name);
+        expect(
+          confirmed.discrepancies
+              .firstWhere((d) => d.region == RoiId.bar)
+              .observed,
+          colour,
+          reason: '${colour.name}: ${confirmed.message}',
+        );
+      }
+    });
+  });
+
   group('a folding board lying flat', () {
     test('calibrates through the folding path too — it is just two coplanar '
         'leaves', () {
@@ -408,6 +502,18 @@ double _singlePlanePitchSkew(FoldingView view) {
   // six cancels out of the ratio, which is why it is not written.
   final left = leftEnd, right = 1 - rightStart;
   return (left - right).abs() / (left > right ? left : right);
+}
+
+/// The starting position with one checker lifted onto the hinge, which is
+/// where a hit checker physically goes on a board with no bar well.
+BoardState _oneOnTheBar({required bool white}) {
+  final points = List<int>.of(BoardState.initial().points);
+  if (white) {
+    points[5] -= 1; // one White off the 6-point...
+    return BoardState(points: points, whiteBar: 1);
+  }
+  points[0] += 1; // ...or one Black off the 1-point.
+  return BoardState(points: points, blackBar: 1);
 }
 
 BoardCalibration _calibrate(FoldingShot shot) {
