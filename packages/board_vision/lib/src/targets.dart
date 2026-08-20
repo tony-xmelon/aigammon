@@ -46,7 +46,11 @@
 ///
 /// The reshape is not the fix and was never sold as one: measured on the day it
 /// landed, it moved placement verification on the real corpus from 0/6 to
-/// **2/6** — the perception work behind it is where the rest has to come from.
+/// **2/6**, and the perception work behind it — deriving the profile's
+/// bridgeable gap from a checker's own body rather than from a count of rows —
+/// took it to **3/6** in the commit after. Neither number is 0.95, and the
+/// three turns still missing are three different mechanisms rather than one:
+/// see the plan's Task 8 notes.
 library;
 
 /// The spec's accuracy table, as thresholds the corpus harness asserts.

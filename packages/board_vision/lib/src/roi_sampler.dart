@@ -693,14 +693,55 @@ class RoiSampler extends FrameSampler {
   static const double checkerReachLeadIn =
       checkerSearchFar + checkerPatchDepth;
 
-  /// The widest gap, in rows, a stack may have inside it and still be one run.
+  /// The widest gap a stack may have inside it and still be one run, in
+  /// **board-space units** — the depth of the shallowest thing this package is
+  /// willing to call a checker, [checkerMinBody].
   ///
-  /// Tangent discs pinch to nothing where they touch, so a synthetic stack is
-  /// a chain of runs rather than one; a photograph of real checkers shows a
-  /// rim there instead, which is darker again. Six rows is under a third of a
-  /// checker — enough to bridge either, and far too little to swallow a die
-  /// sitting in a point's headroom.
-  static const int maxProfileGap = 6;
+  /// ## Why a checker's own depth, and not a number of rows
+  ///
+  /// This was six rows flat, with the reasoning that six rows is "under a third
+  /// of a checker". It is not, except by accident: a row is a hundred and
+  /// twentieth of the REGION, and a region's depth has nothing to do with a
+  /// checker's. Six rows of a point's profile is 0.025 of the board, which on
+  /// the real corpus's folding case is 0.29 of a checker and on another board
+  /// would be something else entirely.
+  ///
+  /// The question the bound actually has to answer is physical: **could a
+  /// checker be hiding in this gap?** If it could, bridging the gap invents a
+  /// man; if it could not, refusing to bridge loses the rest of a stack that is
+  /// standing right there. [checkerMinBody] is this package's own measured
+  /// answer to how shallow a real checker can look — the depth a block has to
+  /// hold before the finder will call it one at all — so a gap shorter than
+  /// that cannot be a missing checker, whatever the board's proportions are.
+  ///
+  /// ## What it costs and what it buys, measured
+  ///
+  /// Measured on the real corpus's ten frames, over every stack the sidecars
+  /// label: a profile's interior gaps run **1–2 rows (195 of them), 3–6 rows
+  /// (46), 7–8 rows (18)**, and then a thin tail of nine rows and over which is
+  /// where stacks actually END. The old six-row bound sat in the middle of that
+  /// distribution and cut eighteen genuine stacks in half. On a point's profile
+  /// this bound is 8 rows — 0.033 against a checker's 0.087 — so it takes the
+  /// 7s and the 8s and stops before the 9s.
+  ///
+  /// What it does NOT weaken: a die lying in a point's headroom sits against
+  /// the midline, three or four times [checkerReachLeadIn] deep, and still
+  /// cannot start a run of its own. What it does weaken honestly: a stack with
+  /// a whole checker missing out of its middle now reads as one stack. That is
+  /// a board nobody sets up, and the alternative — measured — is the real
+  /// board's 12-point reading two men for six in every window of the session.
+  static const double maxProfileGapDepth = checkerMinBody;
+
+  /// The same bound, in rows of a profile whose rows are [rowDepth] deep.
+  ///
+  /// `ceil() - 1` and not `round()`, because the gap has to be **strictly**
+  /// shorter than a checker's minimum body: a gap of exactly that depth is one
+  /// a checker could be standing in. The nudge is for the case where the two
+  /// divide exactly, which in binary floating point they may do either side of
+  /// the whole number.
+  static int maxProfileGapIn(double rowDepth) => rowDepth <= 0
+      ? 0
+      : math.max(0, (maxProfileGapDepth / rowDepth * (1 - 1e-9)).ceil() - 1);
 
   /// Walks [axis] from its origin and reports what stands on it.
   ///
@@ -782,7 +823,8 @@ class RoiSampler extends FrameSampler {
   ///     #.........#############################################…
   ///
   /// — a single covered row hard against the board's edge, a nine-row gap,
-  /// and then all five checkers. The gap is wider than [maxProfileGap], so the
+  /// and then all five checkers. The gap is wider than [maxProfileGapDepth],
+  /// so the
   /// run ended after that one row and a five-stack measured 0.004: one row out
   /// of a hundred and twenty. Its twins measured 0.45.
   ///
@@ -798,6 +840,7 @@ class RoiSampler extends FrameSampler {
   static double _runReach(List<double> coverage, double rowDepth) {
     final maxLeadIn =
         rowDepth <= 0 ? 0 : (checkerReachLeadIn / rowDepth).floor();
+    final maxProfileGap = maxProfileGapIn(rowDepth);
     var longest = 0;
     var first = -1, last = -1;
 
@@ -995,7 +1038,8 @@ class StackMeasurement {
   ///
   /// A *run*, not a scattering: the walk takes the first covered row within
   /// [RoiSampler.checkerReachLeadIn] of the origin and stops at the first gap
-  /// wider than [maxProfileGap] after it. A blob floating in the middle of a
+  /// wider than [RoiSampler.maxProfileGapDepth] after it. A blob floating in
+  /// the middle of a
   /// region — a die in a point's headroom, a hand's shadow — is therefore not
   /// counted as part of the stack unless it is touching it, and does not start
   /// a run of its own.

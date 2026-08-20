@@ -215,6 +215,16 @@ class BoardLayout {
   /// neighbouring stacks keep a visible gap.
   static const double checkerRadiusFraction = 0.46;
 
+  /// The moulded well in a checker's face, as a fraction of its radius —
+  /// painted only when a [StackPlacement] asks for one through `faceGain`.
+  ///
+  /// Two thirds, which is both what the real board's checkers show and what it
+  /// takes to matter: the ring left around a well this size thins to about a
+  /// third of the column across the middle of the disc, which is just under
+  /// [RoiSampler.minRowCoverage]. Narrower and no row ever breaks; wider and
+  /// the checker stops being one.
+  static const double checkerFaceFraction = 0.70;
+
   /// Gap between a checker's edge and the board edge it stacks from, in
   /// fractions of the board height.
   static const double stackEdgeMargin = 1.0 / 300.0;
@@ -302,10 +312,47 @@ class StackPlacement {
   /// [checkersUnderLamp] for what that is worth as a test.
   final double lampGain;
 
+  /// How different the **moulded face** of each checker in this stack is from
+  /// its rim — a plain multiplier on the checker's own colour, painted as an
+  /// inner disc of [BoardLayout.checkerFaceFraction] of the radius.
+  ///
+  /// **A real checker is a disc with a moulded well in it.**
+  /// `ShotDegradation`'s own doc lists that among the things the bed does not
+  /// draw and the photographs are for; this is the part of it that turned out
+  /// to matter. A flat drawn disc covers its rows generously and tapers to
+  /// nothing only where two discs touch — one or two rows — which is why the
+  /// bed has never needed a gap policy worth arguing about. A disc with a well
+  /// covers only its RING, and the ring is thinnest across the middle of the
+  /// checker, so the coverage the sampler measures dips **once per checker, in
+  /// the middle of it**, and a stack's profile arrives in pieces.
+  ///
+  /// One everywhere is the default, so every render that does not ask for a
+  /// moulded face draws exactly the bytes it drew before.
+  ///
+  /// ## The size is measured, in two ways that agree
+  ///
+  /// The well is [BoardLayout.checkerFaceFraction] of the radius, which leaves
+  /// a ring around it. Across a row through the middle of the disc that ring is
+  /// at its thinnest — about a third of the column — so the coverage there
+  /// lands at **0.32**, just under [RoiSampler.minRowCoverage], and climbs back
+  /// over it a little way either side. Two numbers come out of that geometry
+  /// and both match the real frame:
+  ///
+  /// * **how deep the dip is.** Real profiles dip to 0.2–0.3 coverage in the
+  ///   middle of a checker rather than to nothing, which is what a ring around
+  ///   a well looks like and is not what any gap between discs looks like;
+  /// * **how wide it is.** Across the real corpus's ten frames the interior
+  ///   gaps of labelled stacks run 1–2 rows (195 of them), 3–6 rows (46), then
+  ///   **7–8 rows (18)**, with a thin tail of 9 and over where stacks actually
+  ///   end. A well of this size dips for about 0.7 of a checker's radius, which
+  ///   on a point's 120-row profile is **seven rows**.
+  final double faceGain;
+
   const StackPlacement({
     this.edgeInset = 0,
     this.centerOffset = 0,
     this.lampGain = 1,
+    this.faceGain = 1,
   });
 
   /// Hard against the edge, dead centre: what every render did before this
@@ -314,7 +361,7 @@ class StackPlacement {
 
   @override
   String toString() => 'StackPlacement(inset $edgeInset, '
-      'offset $centerOffset, lamp $lampGain)';
+      'offset $centerOffset, lamp $lampGain, face $faceGain)';
 }
 
 /// Every stack lit the way the real frame's 19-point is: a window at one end
@@ -1840,6 +1887,7 @@ List<CheckerSpot> _drawCheckers(
       firstOffset: edgeOffset + seat.edgeInset * h,
       lastOffsetLimit: midlineOffset,
       lampGain: seat.lampGain,
+      faceGain: seat.faceGain,
     ));
   }
 
@@ -1915,6 +1963,7 @@ List<CheckerSpot> _drawCheckerStack({
   required double firstOffset,
   required double lastOffsetLimit,
   double lampGain = 1,
+  double faceGain = 1,
 }) {
   final h = image.height;
   final travel = lastOffsetLimit - firstOffset;
@@ -1927,24 +1976,34 @@ List<CheckerSpot> _drawCheckerStack({
   for (var k = 0; k < count; k++) {
     final offset = firstOffset + k * step;
     final center = Pt(centerX, fromNearEdge ? h - 1 - offset : offset);
-    if (lampGain == 1) {
-      img.fillCircle(
-        image,
-        x: center.x.round(),
-        y: center.y.round(),
-        radius: radius.round(),
-        color: _color(base),
-      );
-    } else {
-      _fillLitCircle(
-        image,
-        centerX: center.x.round(),
-        centerY: center.y.round(),
-        radius: radius.round(),
-        base: base,
-        fromNearEdge: fromNearEdge,
-        lampGain: lampGain,
-      );
+    // The rim first, then the well inside it. Drawn as two discs rather than
+    // as a ring so that a checker with no well is the same call — down to the
+    // rasteriser — that it always was.
+    for (final (r, gain) in <(double, double)>[
+      (radius, 1.0),
+      if (faceGain != 1)
+        (radius * BoardLayout.checkerFaceFraction, faceGain),
+    ]) {
+      final paint = gain == 1 ? base : _scaled(base, gain);
+      if (lampGain == 1) {
+        img.fillCircle(
+          image,
+          x: center.x.round(),
+          y: center.y.round(),
+          radius: r.round(),
+          color: _color(paint),
+        );
+      } else {
+        _fillLitCircle(
+          image,
+          centerX: center.x.round(),
+          centerY: center.y.round(),
+          radius: r.round(),
+          base: paint,
+          fromNearEdge: fromNearEdge,
+          lampGain: lampGain,
+        );
+      }
     }
     spots.add(CheckerSpot(
       owner: owner,
@@ -1984,6 +2043,7 @@ const double kLampShadowReach = 0.10;
 /// Every channel moves by the same factor, so what changes down the disc is
 /// the light and not the colour — which is exactly the case the walk's hold
 /// test has to survive, since it judges colour with brightness taken out.
+///
 void _fillLitCircle(
   img.Image image, {
   required int centerX,

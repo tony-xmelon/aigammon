@@ -425,6 +425,87 @@ far-half tall-stack cases below. The synthetic corpus, whose per-region rate is
 0.986, now meets every spec target it can ask. **The reshape is bookkeeping and
 was recorded as bookkeeping**; the perception work is what the rest depends on.
 
+**As measured (the far-half tall-stack undercount, 2026-08-21): the gap a stack
+may have inside it is a CHECKER'S, not a region's.** The chronic misses were
+instrumented before anything was changed — every stack the sidecars label, on
+all ten real frames, dumped as truth against measured run, implied count, and
+the raw row-coverage profile behind them. Four mechanisms came out, and they are
+not one problem:
+
+| what | where | what the profile shows |
+|---|---|---|
+| **run fragmentation** | the 12-point's Black 5/6-stack, every window | the stack is all there — its covered rows span 0.34–0.46 — but the run stops at a gap partway up and measures 0.07–0.10, so it counts **2** |
+| **backlight truncation** | the 19-point's Black five-stack | the top of the stack is not classified at all; the covered rows simply end at 0.225 where five men reach 0.35 |
+| **rim contamination** | the 23-point, every window | the run starts at row **zero** on the far half, where the board's own rim and the shadow in its seam classify as Black; half a pitch of that turns two men into **3** |
+| **the photograph is not the ledger** | the 6-point, from 008 on | the White stack measures 61 rows in 008 and 42 in 018, on the same column through the same calibration that measured 80 rows for five men in 001. The crops confirm it: four discs in 008, three in 018, against a ledger that says five |
+
+**The "one pitch per half?" open question is answered, and the answer is no.**
+Fitting reach against labelled height separately per half, over all 109 labelled
+stacks of the session, gives **0.0676 near against 0.0640 far** — a five percent
+difference — while the residual scatter about either line is **0.5 checkers**.
+A per-half pitch would buy nothing measurable and would spend a calibration
+degree of freedom to do it.
+
+**The dominant fixable mechanism is fragmentation, and the bound was wrong for a
+nameable reason.** `maxProfileGap` was six ROWS, and a row is a hundred and
+twentieth of the *region*, which has nothing to do with a checker: on this board
+six rows is 0.29 of a checker, on another board it is something else. The
+question the bound has to answer is physical — *could a checker be hiding in this
+gap?* — so it is now [`checkerMinBody`], this package's own measured answer to
+how shallow a real checker can look, converted to rows per profile. On a point
+that is **8 rows**. Measured over every labelled stack of the session, the
+interior gaps run **1–2 rows (195), 3–6 (46), 7–8 (18)**, then a thin tail of 9
+and over where stacks actually end: the old bound sat inside that distribution
+and cut eighteen genuine stacks in half.
+
+**Red-first, on a bed that models the mechanism.** `StackPlacement.faceGain`
+paints the moulded well a real checker has and a drawn one does not — the thing
+`ShotDegradation`'s own doc lists as what the photographs are for. A row through
+a welled disc only crosses the ring around it, so coverage dips **once per
+checker, in the middle of it**, which is both the shape (0.2–0.3, not zero) and
+the size (seven rows) the real profiles show. On that bed a five-stack reads
+**four**; with the bound derived it reads five and the board verifies clean.
+Mutation-verified in both directions: put the flat six back and the bed's
+five-stack drops to four (reach 0.375 = 4.39 checkers) and the derivation test
+goes red.
+
+**What it moved, honestly, on the real corpus:**
+
+| row | reshape only | with the fix |
+|---|---|---|
+| placement verified (touched) | 2/6 | **3/6** |
+| resync, per region | 223/260 = 0.858 | **230/260 = 0.885** |
+| the like-for-like point slice | 203/240 = 0.846 | **210/240 = 0.875** |
+| rescued from a blind count / lost to it | 15 / 0 | **22 / 0** |
+| region colour and count (blind) | 189/241 | 189/241 |
+| region colour alone | 230/241 = 0.954 | **228/241 = 0.946** |
+| placement (whole board), full-board resync | 0/6, 0/10 | 0/6, 0/10 |
+
+**And what it cost, which is two regions and is named.** The 12-point's five men
+now measure at calibration where they used to collapse, so the fitted pitch is
+regressed over **seven** of the eight labelled stacks instead of six and comes
+out 0.0831 against 0.0868 — four percent, well inside the ±5% scatter the three
+surviving five-stacks show among themselves. `holdsAnything`'s floor is half a
+pitch, so it moves with it, and on the 23-point of shots 001 and 003 a run of
+0.0417 — the rim again — lands **exactly** on the new floor and reads as a
+phantom Black man. That is the error running in the direction
+`ColorModel.classify` deliberately breaks ties in: a checker that appears
+contradicts the expected state and gets asked about, where one that vanishes
+does not. The synthetic corpus pays one region of the same kind (a lone White
+man under a lamp reading as two, 712/720 against 713). Both floors were
+re-measured deliberately, in this commit, rather than left to be discovered.
+
+**What is left is not a reach-measurement problem, and the numbers say so.** The
+23-point's over-count is the board's own rim inside the region the corners
+define — the plan already measured that corner luck alone spans 13/24 to 23/24
+exact counts, and this is that error wearing a stack's clothes. The 19-point's
+truncation is the colour model losing the top of a backlit near-black stack,
+which the brightness-bound dead end above already priced. And the 6-point is not
+a perception failure at all: **the photograph and the ledger disagree**, so no
+estimator can score it. Together those are the ceiling on this corpus — 5/6
+placements at best, and the honest way past it is more photographs rather than
+more thresholds.
+
 **Other things the task turned up, each measured.** (a) **"A whole stack does not
 vanish into a misread" is false**, and the bed proved it: `checkersUnderLamp` on
 the classic palette — the only near-black checker the bed has — loses **four

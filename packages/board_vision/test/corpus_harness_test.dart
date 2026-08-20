@@ -239,8 +239,8 @@ void main() {
       expect(verified.attempts, blind.attempts,
           reason: 'the like-for-like comparison stopped being like for like');
       expect(verified.attempts, 720);
-      expect(verified.successes, 713, reason: '$verified');
-      expect(blind.successes, 695, reason: '$blind');
+      expect(verified.successes, 712, reason: '$verified');
+      expect(blind.successes, 694, reason: '$blind');
 
       // The same claim with no denominator at all: computed one (region, side)
       // at a time, so every mark is the two instruments answering about the
@@ -506,35 +506,48 @@ void main() {
       // The same six attempts, the same six frames, the same verifier call: the
       // only difference is which regions the answer is read off. Over the whole
       // board every one of the six fails, because every one of these frames
-      // contradicts its sidecar SOMEWHERE — the 12-point reads two men for five
-      // or six in every window of the session. Over the regions the play
-      // actually touched, two come back clean.
+      // contradicts its sidecar SOMEWHERE. Over the regions the play actually
+      // touched, three come back clean.
       //
-      // Pinned at 2/6 rather than bounded, because "the reshape helps" is not a
-      // finding and "the reshape is worth two turns in six, and the other four
-      // are the far-half undercount" is.
+      // **Two of those three are the reshape and the third is the gap fix**,
+      // measured a commit apart: the reshape alone scored 2/6, and deriving the
+      // profile's bridgeable gap from a checker's own body took the 12-point —
+      // which read two men for six in every window of the session — off this
+      // list twice, at the cost of the 1-point below.
+      //
+      // Pinned rather than bounded, because "it helps" is not a finding and
+      // "it is worth three turns in six, and here are the three it is not" is.
       expect(board.totalFor(CorpusMetric.placementVerifiedBoard).successes, 0,
           reason: board.report());
-      expect(board.totalFor(CorpusMetric.placementVerified).successes, 2,
+      expect(board.totalFor(CorpusMetric.placementVerified).successes, 3,
           reason: board.report());
-      // And the four that still fail are the three known stacks. Named, so
-      // that a change moving this number says which case it moved.
+      // And the three that still fail are three different mechanisms, named so
+      // that a change moving this number says which case it moved:
+      //
+      // * the **23-point** reads three men for two — an OVER-count, and the one
+      //   the far-half story does not cover. Its run starts at row zero on
+      //   every shot of the session, where the board's own rim and the shadow
+      //   in its seam classify as Black, and half a pitch of that is enough;
+      // * the **6-point** reads four men for five, and the photograph agrees
+      //   with the camera rather than with the ledger — see `kRealCorpusFloors`;
+      // * the **1-point** loses a lone Black man, at a run of 0.0125 where this
+      //   board's fitted line puts a checker at 0.083 — the 066 mechanism at
+      //   the edge of what it can do.
       final missed = board.missesOf(CorpusMetric.placementVerified);
-      expect(missed, hasLength(4));
+      expect(missed, hasLength(3));
       expect(missed[0], contains('the 23-point'));
       expect(missed[1], contains('the 6-point'));
-      expect(missed[2], contains('the 12-point'));
-      expect(missed[3], contains('the 12-point'));
+      expect(missed[2], contains('the 1-point'));
     });
 
     test('the state-primed read beats the blind one on real photographs too',
         () {
       // The claim the verifier exists to make, on the only frames that can
-      // settle it — **fifteen** regions a blind count reports wrongly and
+      // settle it — **twenty-two** regions a blind count reports wrongly and
       // verification agrees with, none the other way.
       //
-      // Over the 240 point-reads both rows score, that is 203 against 189:
-      // **0.846 against 0.787**. Not the rows' totals, which are 223/260 and
+      // Over the 240 point-reads both rows score, that is 210 against 189:
+      // **0.875 against 0.787**. Not the rows' totals, which are 230/260 and
       // 189/241 — the verifier asks both ends of the bar on every shot and
       // nineteen of those extra reads are bare-bar agreements, so comparing
       // the totals would hand it about a point it did not earn.
@@ -548,10 +561,10 @@ void main() {
       expect(verified.attempts, blind.attempts,
           reason: 'the like-for-like comparison stopped being like for like');
       expect(verified.attempts, 240);
-      expect(verified.successes, 203, reason: '$verified');
+      expect(verified.successes, 210, reason: '$verified');
       expect(blind.successes, 189, reason: '$blind');
 
-      expect(board.signalOf(kPriorRescuedSignal).sum, 15,
+      expect(board.signalOf(kPriorRescuedSignal).sum, 22,
           reason: 'the prior rescued a different number of regions than it did '
               'on the day this landed — re-measure deliberately');
       expect(board.signalOf(kPriorLostSignal).sum, 0,
@@ -843,43 +856,56 @@ void main() {
 /// And the two that arrived with Task 8, **reshaped by the user at the gate
 /// follow-up (2026-08-21) and still missing**:
 ///
-/// * **placement verification 2/6, resync per region 0.858.** The reshape is
+/// * **placement verification 3/6, resync per region 0.885.** The reshape is
 ///   the denominator and only the denominator — the two thresholds are still
 ///   0.95 and 0.90. Placement is now the regions the play touched, one attempt
 ///   per dictated turn; resync is per region, with the whole-board rate kept as
 ///   a watched row (**0/6 and 0/10**, both still recorded below).
 ///
 ///   Per region the prior is doing real work: over the 240 point-reads both
-///   rows score, verification is **203/240 = 0.846** against a blind count's
-///   **189/240 = 0.787**, fifteen regions rescued and none lost. (Not the rows'
-///   totals — 223/260 against 189/241 — since the verifier asks both ends of
-///   the bar on every shot and nineteen of those extra reads are bare-bar
+///   rows score, verification is **210/240 = 0.875** against a blind count's
+///   **189/240 = 0.787**, twenty-two regions rescued and none lost. (Not the
+///   rows' totals — 230/260 against 189/241 — since the verifier asks both ends
+///   of the bar on every shot and nineteen of those extra reads are bare-bar
 ///   agreements. See [priorReport].)
 ///
-///   **The reshape was measured, not assumed, and it buys 2/6.** The four turns
-///   it does not buy fail on three regions and for three different reasons: the
-///   23-point reads three men for two on 003→005, the 6-point four for five on
-///   005→008, and the 12-point two for six on both 008→010 and 018→020. Those
-///   are the far-half tall-stack cases the whole design was built around,
-///   arriving where they cannot be differenced away — Task 7's matcher
-///   subtracts that bias from itself and scores 6/6, while a single frame
-///   compared against a position pays it in full, on every region, every time.
-///   The perception work behind that number is where the rest has to come from;
-///   the arithmetic of the old shape is recorded in the synthetic corpus's own
-///   target test.
+///   **Both numbers were measured rather than assumed, a commit apart.** The
+///   reshape alone took placement from 0/6 boards to **2/6** turns; deriving
+///   the profile's bridgeable gap from a checker's own body (see
+///   `RoiSampler.maxProfileGapDepth`) took it to **3/6** and the per-region
+///   resync from 0.858 to 0.885, by recovering the 12-point — which read two
+///   men for six in every window of the session.
+///
+///   The three turns still missing are three different mechanisms and only one
+///   of them is a counting problem: the **23-point** reads three men for two
+///   because its run starts on the board's own rim, the **1-point** loses a
+///   lone man at a run of 0.0125, and the **6-point** reads four for five
+///   because the photograph and the ledger disagree — the same column measures
+///   80 rows for five men on 001, 61 rows on 008 and 42 on 018, while the
+///   ledger says five throughout. Nothing this package can do scores that last
+///   one; it is a corpus finding, and it caps this session at 5/6.
+///
+/// * **`region colour alone` fell to 228/241 in the same commit, and the floor
+///   moved down with it.** Two empty far-half points now read a phantom Black
+///   man: the fitted pitch moved 4% when the 12-point stopped collapsing, and
+///   `holdsAnything`'s floor is half a pitch, so a 0.0417 run of rim-and-shadow
+///   landed exactly on it. Recorded rather than smoothed over. It is the
+///   direction `ColorModel.classify` breaks ties in on purpose — a checker that
+///   appears contradicts the game and gets asked about; one that vanishes does
+///   not — and it bought seven verified regions and a placement turn.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
   CorpusMetric.startConfirmed: 1.0,
   CorpusMetric.dicePair: 0.0,
   CorpusMetric.diceAbsence: 1.0,
   CorpusMetric.regionOccupancy: 189 / 241,
-  CorpusMetric.regionColour: 230 / 241,
+  CorpusMetric.regionColour: 228 / 241,
   CorpusMetric.legalPlay: 6 / 6,
   CorpusMetric.legalPlayActed: 6 / 6,
-  CorpusMetric.placementVerified: 2 / 6,
+  CorpusMetric.placementVerified: 3 / 6,
   CorpusMetric.placementVerifiedBoard: 0.0,
   CorpusMetric.boardResynced: 0.0,
-  CorpusMetric.regionVerified: 223 / 260,
+  CorpusMetric.regionVerified: 230 / 260,
 };
 
 /// What the SYNTHETIC corpus scored on the whole-board queries when Task 8
@@ -887,15 +913,22 @@ const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
 ///
 /// The real corpus has been ratcheted since Task 6 and the synthetic one has
 /// not needed it, because everything it is asked it passes against
-/// `targets.dart` itself. Full-board resync is the first thing it does not, so
-/// it gets the same treatment for the same reason: a number that is recorded
-/// rather than asserted is a number nobody notices moving. See the test above
-/// for why twenty-eight regions at 0.9869 apiece cannot make a clean board much
-/// more often than this: 0.691 if their misses were independent, 0.733
-/// measured, against a target of 0.900.
+/// `targets.dart` itself — including, since the gate follow-up reshaped it,
+/// resync per region at 0.986 against 0.90. Full-board resync is the row that
+/// does not, and now that nothing is promised about it, it gets the same
+/// treatment for the same reason: a number that is recorded rather than
+/// asserted is a number nobody notices moving. See the test above for why
+/// twenty-eight regions at 0.986 apiece cannot make a clean board much more
+/// often than this: 0.691 if their misses were independent, 0.733 measured.
+///
+/// **`regionVerified` moved down by one when the gap bound was derived**, from
+/// 829/840 to 828/840, and the floor moved with it deliberately: a lone White
+/// man under a lamp on shot 008 now measures 1.75 checkers where a bridged gap
+/// joined his run to the shadow beside it. The same trade the real corpus
+/// makes, at a twentieth of the size — see `kRealCorpusFloors`.
 const Map<CorpusMetric, double> kSyntheticFloors = <CorpusMetric, double>{
   CorpusMetric.boardResynced: 22 / 30,
-  CorpusMetric.regionVerified: 829 / 840,
+  CorpusMetric.regionVerified: 828 / 840,
 };
 
 /// What knowing the expected position is worth, printed under both corpora.

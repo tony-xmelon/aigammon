@@ -125,6 +125,150 @@ void main() {
     });
   });
 
+  group('a stack whose checkers have moulded faces', () {
+    // **The far-half tall-stack undercount, modelled.** On the real corpus the
+    // 12-point's Black stack reads two men where five or six stand, in every
+    // window of the session, and it is not a colour failure or a placement
+    // failure: the stack is measured, and measured in PIECES. A real checker is
+    // a disc with a moulded well, the well catches the light from one side of
+    // the table, and where the sampler's row crosses that well only the ring
+    // around it reads as the checker's colour — so the coverage dips once per
+    // checker, in the middle of it, and the run of covered rows ends there
+    // unless the walk is willing to step over the dip.
+    //
+    // Measured on the real frames, over every stack the sidecars label: the
+    // interior gaps run 1–2 rows (195 of them), 3–6 rows (46), **7–8 rows
+    // (18)**, then a thin tail of nine and over where stacks actually end. A
+    // bound of six rows — which is what this was, as a flat number of rows of a
+    // region rather than as anything about a checker — sits inside that
+    // distribution and cuts eighteen real stacks in half.
+    //
+    // `StackPlacement.faceGain` is what lets the bed say this. The well is on
+    // the stacks the light falls across, which is how the real frame's are:
+    // routed per point, the same way `lampGain` is.
+    const moulded = StackPlacement(faceGain: 0.74);
+    const litStacks = <int>[8, 9, 11, 18, 21];
+    final faces = <int, StackPlacement>{
+      for (final i in litStacks) i: moulded,
+    };
+    const palette = BoardPalette.lowContrastWood;
+    const mouldedGrade =
+        ShotDegradation(noise: 2, blurSigma: 0.5, seed: 4242);
+
+    /// The bed: calibrated from a starting position whose 12- and 19-point
+    /// stacks are the ones under the light, then read on a position whose tall
+    /// stacks are.
+    (BoardVision, BoardState, Frame) mouldedBed() {
+      final start = renderShot(
+        board: BoardState.initial(),
+        palette: palette,
+        pointPlacements: faces,
+        quad: kCorpusSteepQuad,
+        degradation: mouldedGrade,
+      );
+      final vision = BoardVision(_calibrate(start));
+      final board = _boardOf(const <int, int>{8: 5, 21: -5, 9: -4, 5: 3});
+      final shot = renderShot(
+        board: board,
+        palette: palette,
+        pointPlacements: faces,
+        quad: kCorpusSteepQuad,
+        degradation: mouldedGrade,
+      );
+      return (vision, board, shot.frame);
+    }
+
+    test('the dips are really there, and they are a checker\'s worth apart',
+        () {
+      // The mechanism, before anything is claimed about surviving it: the
+      // stack under the light is genuinely broken into pieces, and the pieces
+      // are one checker apart. A bed that had quietly stopped producing the
+      // gaps would make every test below pass for no reason.
+      final (vision, board, frame) = mouldedBed();
+      final colors = vision.calibration.colorsIn(frame);
+      final sampler = RoiSampler(
+          frame, vision.calibration.geometry, vision.calibration.atlas);
+      final axis = StackAxis.forRegion(vision.calibration.atlas, RoiId.point(8));
+      final background = colors.backgroundOf(RoiId.point(8));
+      final insetX = (axis.maxX - axis.minX) * RoiSampler.stackInsetX;
+      final covered = <int>[];
+      for (var row = 0; row < RoiSampler.stackRows; row++) {
+        final y = axis.yAt((row + 0.5) / RoiSampler.stackRows * axis.reach);
+        var hit = 0, taken = 0;
+        for (var c = 0; c < RoiSampler.stackColumns; c++) {
+          final sample = sampler.at(
+            axis.minX + insetX +
+                (c + 0.5) / RoiSampler.stackColumns *
+                    (axis.maxX - axis.minX - 2 * insetX),
+            y,
+          );
+          if (sample == null) continue;
+          taken++;
+          if (colors.classify(sample, background) == CheckerColor.white) hit++;
+        }
+        if (taken > 0 && hit / taken >= RoiSampler.minRowCoverage) {
+          covered.add(row);
+        }
+      }
+      final gaps = <int>[
+        for (var i = 1; i < covered.length; i++)
+          if (covered[i] - covered[i - 1] > 1) covered[i] - covered[i - 1] - 1,
+      ];
+      // Five dips in a five-stack — one per checker — every one of them at or
+      // past the six rows this used to bridge, and every one far short of the
+      // twenty-one a checker of this board occupies. That is the band the real
+      // frames put eighteen of their gaps in, and it is the band the bound
+      // moved across.
+      expect(gaps.where((g) => g >= 6), hasLength(5), reason: '$gaps');
+      expect(gaps.every((g) => g < 12), isTrue, reason: '$gaps');
+      expect(board.points[8], 5);
+    });
+
+    test('a five-stack broken into five pieces is still a five-stack', () {
+      final (vision, board, frame) = mouldedBed();
+      final reader = vision.occupancyIn(frame);
+      for (final index in const <int>[8, 21, 9, 5]) {
+        final reading = reader.read(RoiId.point(index));
+        final signed = reading.color == CheckerColor.white
+            ? reading.count
+            : -reading.count;
+        expect(signed, board.points[index],
+            reason: 'the ${index + 1}-point read $reading, reach '
+                '${reading.reach.toStringAsFixed(4)} = '
+                '${vision.calibration.stacks.heightOf(reading.reach)
+                    .toStringAsFixed(2)} checkers');
+      }
+    });
+
+    test('and the board it is on verifies against the game', () {
+      final (vision, board, frame) = mouldedBed();
+      final result = vision.verifyExpectedBoard(frame, board);
+      expect(result.agrees, isTrue, reason: result.message);
+    });
+
+    test('the gap that may be bridged is a checker\'s, not a region\'s', () {
+      // The bound is DERIVED, and this is the derivation asserted rather than
+      // described: a gap short enough that no checker could be standing in it
+      // may be stepped over, and one long enough may not. `checkerMinBody` is
+      // this package's own measured answer to how shallow a real checker can
+      // look, so it is the only honest place to take the bound from — a flat
+      // number of rows is a fraction of the REGION, which has nothing to do
+      // with a checker on any particular board.
+      for (final rowDepth in const <double>[0.5 / 120, 0.4 / 120, 0.6 / 120]) {
+        final rows = RoiSampler.maxProfileGapIn(rowDepth);
+        expect(rows * rowDepth, lessThan(RoiSampler.maxProfileGapDepth),
+            reason: 'a bridged gap must be too short to hide a checker');
+        expect((rows + 1) * rowDepth,
+            greaterThanOrEqualTo(RoiSampler.maxProfileGapDepth),
+            reason: 'and it must be the longest such gap, or the bound is '
+                'throwing away stacks it could have kept');
+      }
+      // On a point's own profile, which is what every number above was
+      // measured on.
+      expect(RoiSampler.maxProfileGapIn(0.5 / RoiSampler.stackRows), 8);
+    });
+  });
+
   group('how far back a stack may sit and still be counted', () {
     // Two ceilings used to disagree by a single step, and the gap between them
     // was the worst kind of gap this pipeline can have: a SILENT one.
