@@ -2408,8 +2408,6 @@ List<(double, double)> _pipOffsets(int value) {
   }
 }
 
-/// Scales the whole board toward black (or toward clipping) to stand in for
-/// a dim room or a bright lamp.
 /// How much light there is, and what colour it is, in one pass over the paint.
 ///
 /// The two are separate knobs and one loop: with [cast] neutral every channel

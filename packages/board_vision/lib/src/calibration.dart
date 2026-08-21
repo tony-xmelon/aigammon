@@ -420,14 +420,29 @@ class CalibrationFingerprint {
   ///
   /// ## What it costs, said plainly
   ///
-  /// Sensitivity, at the small end. A board slid five or ten pixels under a
-  /// 1280-pixel frame puts two of four patches out and no longer fires; twenty
-  /// pixels puts **two to four** out depending on which way it went, and fires
-  /// in six of the seven directions measured (+x, -x, +y, -y, and three
-  /// diagonals — only a slide straight along +x stays at two and stays quiet).
-  /// The words here said "all four" until a reviewer counted, and the count is
-  /// direction-dependent because the four corners of a board in perspective do
-  /// not move by the same amount.
+  /// Sensitivity, at the small end — and it depends on which way the board
+  /// went, because the four corners of a board in perspective do not move by
+  /// the same amount. Measured on the bed's classic palette, sliding the whole
+  /// quad by 5, 10, 15 and 20 pixels under a 1280-pixel frame in the eight
+  /// directions the axes and the diagonals give:
+  ///
+  /// | slide | patches out | fires in |
+  /// |---|---|---|
+  /// | 5 px | 0–3 of 4 | 3 of 8 directions |
+  /// | 10 px | 1–3 | 4 of 8 |
+  /// | 15 px | 2–4 | 5 of 8 |
+  /// | 20 px | **3–4** | **8 of 8** |
+  ///
+  /// Twenty pixels is where it stops mattering which way the board went: every
+  /// direction puts three or four patches out and every direction fires.
+  /// Straight along +x is the slowest of the eight — two of four out and
+  /// silent at 5, 10 and 15 px, three of four (0.120, 0.453, 0.125, 0.185) and
+  /// firing at 20 — and the words here have twice been written from that one
+  /// direction as though it were all of them, first as "no longer fires at 20"
+  /// and then as "fires in six of the seven directions, only +x stays quiet".
+  /// Both were wrong about the same cell of the same table.
+  /// `readability_test.dart` now pins that cell from both sides, since a claim
+  /// wrong twice is a claim to make falsifiable rather than to restate.
   ///
   /// Twenty pixels is about a fifth of a point's width, and the tent
   /// measurements say a fifth of a column is roughly where reading starts to

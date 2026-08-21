@@ -217,29 +217,48 @@ class Readability {
 ///    the second. It is asked after occlusion because the cast is a board-WIDE
 ///    statistic and anything large enough to change the board's average colour
 ///    moves it: measured on the blue-red palette, a skin-coloured arm across
-///    the far edge takes the cast to 0.129 and 0.137 against a bound of 0.12,
+///    the far edge takes the cast to 0.128 and 0.138 against a bound of 0.12,
 ///    with nothing changed but what is lying on the felt. Asked before
 ///    occlusion, that frame would send a user with an arm over their board to
 ///    re-drag its corners.
 ///
 /// ## What the ordering actually costs, measured rather than reasoned
 ///
-/// The cost was stated the wrong way round until a reviewer asked for the
-/// frames. It is **not** that a large occluder reads as `calibrationStale`:
-/// swept over 28 occluder sizes on all three palettes — bands from a third of
-/// the board's width to the whole of it, and from a sixth of its height to
-/// half — `calibrationStale` never came back once. What actually happens is
-/// three things, and each is the ordering working rather than failing:
+/// Swept over 28 occluder sizes on all three palettes — bands lying along the
+/// middle of the board, seven widths from a third of it to the whole of it
+/// (0.333, 0.45, 0.6, 0.7, 0.8, 0.9, 1.0) by four heights from a sixth of it
+/// to a half (0.167, 0.2, 0.333, 0.5) — **18 of the 84 come back
+/// `calibrationStale`, and every one of them is on the blue-red palette.**
+/// All eighteen arrive through check 7 rather than check 5: `geometryMatches`
+/// is true on every one of them and `castMatches` is false, which is a
+/// skin-coloured object on a blue board moving the board's average colour far
+/// enough to look like a lamp that changed. They are the wide bands, and the
+/// taller the band the narrower it needs to be — 0.7 across and wider at a
+/// sixth of the height, 0.6 and wider at a fifth, 0.45 and wider at a third,
+/// and at half the height everything from a third of the board up, until the
+/// widest four tip over into `tooBright` instead. One of the eighteen is
+/// pinned in `readability_test.dart` as the deliberate cost of leaving the
+/// dice band out of the occlusion walk. The other two palettes never reach
+/// check 7 at all: the classic board is green on 26 of its 28 and `tooBright`
+/// on the two widest half-height bands, and the low-contrast wood board is
+/// green on all 28.
+///
+/// **This paragraph said `calibrationStale` "never came back once" until the
+/// cast check was added underneath it and nobody re-ran the sweep.** That
+/// sentence was true of the check as it stood and false of the same commit
+/// that shipped its replacement. What happens on the sixty-six cells that are
+/// not stale is three things, and each is the ordering working rather than
+/// failing:
 ///
 /// * **a near-total cover reads `blur`.** A flat fill has no edges in it, so
 ///   the sharpness ratio collapses long before the geometry is reached: an
-///   ellipse 0.9 of the board across leaves 0.030, 0.022 and 0.091 of the
+///   ellipse 0.9 of the board across leaves 0.029, 0.021 and 0.087 of the
 ///   calibration frame's contrast on the three palettes, against a bound of
 ///   0.23, and check 4 speaks first on all three.
 /// * **a large pale one reads `tooBright`.** Not from clipping — a skin-toned
 ///   fill clips nothing — but because it lifts the board's own mean luma past
 ///   `CalibrationFingerprint.maxExposureRatio`: a band over half the board
-///   measures 1.380 and 1.504 of the calibration light on the classic and
+///   measures 1.381 and 1.507 of the calibration light on the classic and
 ///   blue-red palettes against a bound of 1.3, the patches go with it, and the
 ///   geometry check's light fallback names the light rather than the geometry.
 /// * **and a hand over one or two corners falls through to the occlusion
@@ -252,6 +271,59 @@ class Readability {
 ///
 /// Every one of the three is pinned in `readability_test.dart`, including the
 /// green, so that none of them can quietly become another.
+///
+/// ## Past a strong enough cast the routing bit inverts, and it is recorded
+/// rather than fixed
+///
+/// Check 7 catches a lamp swapped for a warmer one — but only over a band of
+/// strengths, and above that band the LIGHT checks win instead. Measured on
+/// the bed at a fortieth of a full 2700 K shift at a time, as the fraction of
+/// that shift the camera's white balance failed to take out:
+///
+/// | palette | routes to recalibration | and above that | why |
+/// |---|---|---|---|
+/// | classic | 0.175–0.250 | `tooBright` from 0.275 | the warm cast pushes pale points and white checkers past 255, clipping goes 0.030 to 0.094, and check 3 speaks before the geometry is reached |
+/// | blue-red | 0.100–0.425 | `tooDark` from 0.450, `tooBright` from 0.650 | the cast moves the patches too, `geometryMatches` gives out, and its light fallback names the luma ratio — about 0.95, so "dark" — until the cast itself clips and check 3 takes over |
+/// | low-contrast wood | 0.175–0.425 | `tooBright` from 0.450 | the same fallback, with a luma ratio of 1.03 |
+///
+/// The last two rows are the same mechanism as the second bullet above:
+/// [CalibrationFingerprint.exposureMatches] consults the cast, so a frame
+/// whose colour has moved fails it whatever its brightness is — and the
+/// fallback then names `tooDark` or `tooBright` on the luma ratio alone. So
+/// the canonical case, a lamp swapped outright with no white balance at all,
+/// reads red, `tooBright` and [Readability.requiresRecalibration] **false** on
+/// all three palettes, with `confirmStartingPosition` misreading eight regions
+/// on each of them — and between four and sixteen anywhere in the inverted
+/// band. The user is told to dim a light that is not too bright.
+///
+/// **And dimming does not walk them out of it**, which is the part worth
+/// saying plainly: measured on all three palettes under a full tungsten cast,
+/// turning the light down goes `tooBright`, `tooBright`, then `tooDark` and
+/// stays there all the way to a third of the calibration light. The cast has
+/// moved the luma-normalized patches, so `geometryMatches` is false at every
+/// level and the fallback speaks every time. What the user gets is a red light
+/// with the wrong sentence under it until they recalibrate by hand.
+///
+/// **It is left alone because the obvious fix measured worse.** That fix is to
+/// ask [CalibrationFingerprint.castMatches] inside the too-dark and too-bright
+/// branches and name `calibrationStale` when the colour is out as well — but
+/// clipping moves the measured cast on its own, with no change of colour
+/// whatever. Brightened under a NEUTRAL lamp the wood board's red ratio drifts
+/// 0.009 at 1.3 of its calibration light, 0.020 at 1.4, 0.054 at 1.6 and
+/// **0.162 at 2.0**, past [CalibrationFingerprint.maxCastDrift]'s 0.12,
+/// because the red channel saturates first and a ratio taken over saturated
+/// pixels is not the light's. That fix would send a user with a blazing lamp
+/// and a perfectly good calibration to re-drag four corners, which is the one
+/// thing this module must not do. A real fix has to tell "the cast moved
+/// because the colours moved" from "the cast moved because the sensor clipped"
+/// — nothing measured here does that yet.
+///
+/// So the failure is safe rather than harmless: red, answers suppressed, no
+/// phantom state written, and a sentence that sends the user the wrong way.
+/// Both ends are pinned in `readability_test.dart` — the last strength that
+/// still routes to recalibration, the first that does not, and a full lamp
+/// swap reading `tooBright` — so the regime cannot change without somebody
+/// rewriting this.
 ///
 /// ## Numbers, provisionally
 ///
@@ -297,24 +369,34 @@ class ReadabilityMonitor {
   /// physical
   ///
   /// The paragraph above was the whole of this doc until a reviewer measured
-  /// the shipped behaviour and found the light going red at **0.45** — two and
-  /// a half times earlier, through a path nothing here described. Both numbers
-  /// are real, and which one a session meets depends on what dimmed:
+  /// the shipped behaviour and found the light going red at **about a half** —
+  /// nearly three times earlier, through a path nothing here described. Both
+  /// numbers are real, and which one a session meets depends on what dimmed:
   ///
   /// | what happened | classic | blue-red | wood | named by |
   /// |---|---|---|---|---|
-  /// | the whole room dims, board and surround together | 0.180 → 0.162 | 0.254 → 0.159 | 0.171 → 0.160 | this bound |
-  /// | only the light on the board drops | 0.482 → 0.460 | 0.550 → 0.503 | 0.400 → 0.351 | the geometry check's light fallback |
+  /// | the whole room dims, board and surround together | 0.17 → 0.16 | 0.19 → 0.16 | 0.17 → 0.16 | this bound |
+  /// | only the light on the board drops | 0.48 → 0.47 | 0.51 → 0.50 | 0.39 → 0.38 | the geometry check's light fallback |
   ///
-  /// Last green, then first red, on each palette. Read the top row's **first
-  /// red** column and the three palettes agree to within three thousandths —
-  /// 0.162, 0.159, 0.160 — which is this bound doing exactly the job its first
-  /// paragraph describes. The last-green column is looser because a room this
-  /// dark also starts to trip the occlusion walk, which cannot recognize
-  /// samples with nothing left in them: between green and red those palettes
-  /// pass through an amber `occluded` step, which is a wait rather than a
-  /// verdict. Both rows are bracketed in `readability_test.dart` so this table
-  /// cannot drift from behaviour again.
+  /// Last green, then first red — in **commanded gain**, what the bed is asked
+  /// for, swept a hundredth at a time, which is the quantity
+  /// `readability_test.dart`'s brackets are written in. The exposure the
+  /// fingerprint goes on to measure is within three thousandths of the
+  /// commanded figure everywhere in the table, so the two can be read as one
+  /// number; where the difference matters it is said.
+  ///
+  /// The top row's **first red** is the same commanded gain on all three
+  /// palettes, and the exposures measured there — 0.162, 0.159 and 0.160
+  /// against this bound's 0.17 — agree to within three thousandths, which is
+  /// this bound doing exactly the job its first paragraph describes. The
+  /// last-green column is looser on the blue-red board because a room that
+  /// dark starts to trip the occlusion walk, which cannot recognize samples
+  /// with nothing left in them: at 0.22, 0.21, 0.18 and 0.17 that palette
+  /// steps through an amber `occluded` verdict — a wait rather than a verdict,
+  /// and not even monotone, since 0.20 and 0.19 are green between them. The
+  /// other two palettes go straight from green to red. All six cells are
+  /// bracketed in `readability_test.dart` so this table cannot drift from
+  /// behaviour again.
   ///
   /// **The second row is the corner patches, and it is a real signal rather
   /// than an artefact.** `CalibrationFingerprint.cornerOutside` reaches each
@@ -330,10 +412,23 @@ class ReadabilityMonitor {
   /// playing field drift **0.009–0.014** at that same 0.45 and **0.034–0.058**
   /// at 0.17 — the board itself has not moved at all.
   ///
+  /// **The obvious alternative — comparing those four cells and nothing else —
+  /// was named and rejected, on two measurements.** It costs the check exactly
+  /// the slides the outside ring is there to see: on the low-contrast wood
+  /// palette a board slid fifteen pixels under a 1280-pixel frame fires in six
+  /// of the eight directions on the whole patch and in two of them on the four
+  /// inner cells, so four of the six go unnoticed — and two of them are still
+  /// unnoticed at twenty pixels, which is the displacement `geometryMatches`
+  /// is set to catch. It would also invalidate every figure
+  /// `CalibrationFingerprint.maxPatchDrift` is derived from, all of which are
+  /// whole-patch with the outside cells in, so the bound would have to be
+  /// re-measured from nothing in order to buy a less sensitive check.
+  ///
   /// So the check is telling the truth in both rows: *the board's brightness
   /// relative to the room it sits in has changed*, which is a different scene
   /// from the calibrated one even though the board is where it was. **The cost
-  /// is admitted rather than argued away**: between 0.45 and 0.17 a session
+  /// is admitted rather than argued away**: between the second row's boundary
+  /// and this bound a session
   /// whose board alone went dark is told "it is too dark" while the pipeline
   /// would still have read every point correctly (measured: zero discrepancies
   /// at 0.45, 0.40, 0.35 and 0.30 on all three palettes). What it buys is that
@@ -607,8 +702,22 @@ class ReadabilityMonitor {
   /// reader's own premise.** That band is modelled as felt and the bar's wood
   /// and nothing else, deliberately — `DiceReader` finds dice precisely by
   /// looking for what the band's surfaces do not account for. A die lying in
-  /// it is therefore unrecognizable BY CONSTRUCTION, and counting it here
-  /// would call every roll a hand over the board.
+  /// it is therefore unrecognizable BY CONSTRUCTION, so whatever this walk
+  /// counted there would be a count of dice rather than of hands.
+  ///
+  /// **The justification used to be that counting it "would call every roll a
+  /// hand over the board", and that overstates the case fourfold.** Measured
+  /// on the bed, a settled roll leaves 0.000, 0.000 and 0.125 of the band's
+  /// lattice unrecognizable on the three palettes, against [minCoveredShare]'s
+  /// 0.5 — nowhere near. What actually settles it is the other end: counting
+  /// the band would not buy back the blindness it is blamed for. The one
+  /// occluder this walk cannot see — the ellipse 0.60 of the board wide lying
+  /// along the band, below — covers 0.000, **0.500** and 0.000 of that same
+  /// lattice, and the rule is `strange > minCoveredShare * seen`, strictly
+  /// greater. Exactly half is not more than half, so on the one palette where
+  /// the thing lying there is strange at all the band would stay blind to the
+  /// very frame that motivates counting it, while the walk had started reading
+  /// the dice reader's signal as though it were an occlusion.
   ///
   /// **What that costs is a blind stripe across the middle of the board, and
   /// it is pinned rather than only explained.** An ellipse 0.60 of the board
