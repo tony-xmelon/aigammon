@@ -32,7 +32,10 @@ void main() {
       expect(h.controller.state.dice, Dice(6, 3));
       expect(h.controller.state.turn, Player.white);
       expect(h.controller.state.phase, GamePhase.moving);
-      expect(h.speech, contains(contains('6-3')));
+      expect(h.speaker.lines.first,
+          BuddyLine('You rolled 6-3.', speech: 'You rolled 6 3.'),
+          reason: 'both channels, byte for byte: the hyphen is the score '
+              "sheet's and a TTS engine reads it as a subtraction");
     });
 
     test('re-rolls a double instead of starting a game with one', () async {
@@ -78,6 +81,12 @@ void main() {
 
       expect(h.policy.buddyMoves, hasLength(1));
       expect(h.policy.buddyMoves.single.$1, Dice(6, 3));
+      final dictated =
+          h.speaker.lines.firstWhere((l) => l.text.contains(' — play '));
+      expect(dictated.text, startsWith('I rolled 6-3 — play '));
+      expect(dictated.speech, startsWith('I rolled 6 3. Play '),
+          reason: 'the dictation renders the dice for both channels too, and '
+              'the sentence around them is not the same sentence');
       expect(h.session.phase, BuddyPhase.verifyingPlacement,
           reason: 'the man is dictated, not placed — the board must catch up');
 
@@ -112,6 +121,56 @@ void main() {
       expect(h.vision.playQueries.single.beforeFrame, same(opening),
           reason: 'the frame the dice were read on is the position before the '
               'hand moved, and both frames must be one calibration epoch');
+    });
+  });
+
+  group('the belief mirror', () {
+    test('is raised only once a wrong placement is a repetition', () async {
+      expect(kPlacementAttemptsBeforeMirror, 3,
+          reason: 'this test spells the escalation out frame by frame, so if '
+              'the constant moves the frames below must move with it');
+
+      final h = Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)])
+        ..willVerify([boardDisagrees]);
+
+      h.start();
+      await h.stableFrame(); // the opening roll
+      await h.stableFrame(); // the user's play, folded
+      await h.stableFrame(); // buddy's dice, and the move it dictates
+      expect(h.session.phase, BuddyPhase.verifyingPlacement);
+
+      await h.stableFrame(); // the man goes to the wrong point
+      expect(h.session.needsBeliefMirror, isFalse,
+          reason: 'one failed check is a hand that has not finished');
+      await h.stableFrame(); // and again
+      expect(h.session.needsBeliefMirror, isFalse,
+          reason: 'two is still not a repetition — the spec escalates on one');
+      expect(h.session.phase, BuddyPhase.verifyingPlacement,
+          reason: 'and all the while the corrective loop keeps asking');
+
+      final verifiesBefore = h.vision.verifyCalls;
+      await h.stableFrame(); // the third
+      expect(h.session.needsBeliefMirror, isTrue,
+          reason: "the spec's \"repetition escalates to the on-screen belief "
+              'mirror with the discrepancy highlighted"');
+      expect(h.vision.verifyCalls, greaterThan(verifiesBefore),
+          reason: 'the mirror is an escalation, not a surrender: the query is '
+              'still running and the board can still put itself right');
+      expect(h.policy.placements.where((p) => !p.$1), hasLength(1),
+          reason: 'and the correction is SAID once, not once per frame — the '
+              'screen is what repeats, not the voice');
+      expect(h.controller.game.events.whereType<MoveEvent>(), hasLength(2),
+          reason: 'nothing about the authoritative state moved through any of '
+              'it: the dictated play was applied once, at the start');
+
+      h.vision.willVerify([boardAgrees]);
+      await h.stableFrame();
+      expect(h.session.needsBeliefMirror, isFalse,
+          reason: 'the board caught up, so the mirror comes down with it');
+      expect(h.session.phase, BuddyPhase.awaitingDice);
     });
   });
 
@@ -315,9 +374,173 @@ void main() {
       await h.settle();
 
       expect(h.policy.cubeActions.last, (Player.white, BuddyCubeAction.dropped));
+      expect(h.policy.cubeActions, hasLength(2),
+          reason: 'one offer and one answer: a cube verb that happened is '
+              'announced exactly once');
+      expect(h.speech.where((l) => l == 'You drop.'), hasLength(1));
       expect(h.controller.state.phase, GamePhase.gameOver);
       expect(h.policy.gameEnds.single.winner, Player.black);
       expect(h.controller.match.blackScore, 1);
+    });
+
+    test('the user doubles, buddy takes, and the cube changes hands', () async {
+      final h = Harness(matchLength: 3);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(Player.white));
+
+      h.session.offerDouble();
+      await h.settle();
+
+      expect(h.controller.state.cube.value, 2);
+      expect(h.controller.state.cube.owner, h.buddySide,
+          reason: 'the taker owns the cube afterwards');
+      expect(h.policy.cubeActions, <(Player, BuddyCubeAction)>[
+        (Player.white, BuddyCubeAction.offered),
+        (Player.black, BuddyCubeAction.taken),
+      ]);
+      expect(h.speech, containsAllInOrder(<String>['You double.', 'I take.']));
+    });
+
+    // The two below are about a verb that did NOT happen. In this mode the
+    // transcript is the user's record of the match and the physical cube is
+    // their ritual, so a spoken line instructs a real-world action: "You
+    // double." over a cube the game left where it was tells the user to turn
+    // a doubling cube the game will disagree with for the rest of the match.
+    // Announce after the controller has taken the verb, never before.
+    test('a refused double says nothing and moves no cube', () async {
+      final h = Harness(matchLength: 3);
+      h.vision.willReadDice([diceShowing(6, 3)]);
+
+      h.start();
+      await h.stableFrame(); // the opening: white is mid-turn, not pre-roll
+      expect(h.session.phase, BuddyPhase.awaitingPlay);
+      final linesBefore = h.speech.length;
+
+      expect(h.session.offerDouble, throwsStateError,
+          reason: 'the controller stays the authority on when the cube moves');
+      expect(h.policy.cubeActions, isEmpty);
+      expect(h.speech, hasLength(linesBefore));
+      expect(h.controller.state.cube.value, 1);
+      expect(h.controller.state.phase, GamePhase.moving);
+    });
+
+    test('a refused answer says nothing and answers nothing', () async {
+      final h = Harness(matchLength: 3);
+      h.vision.willReadDice([diceShowing(6, 3)]);
+
+      h.start();
+      await h.stableFrame();
+      final linesBefore = h.speech.length;
+
+      expect(() => h.session.answerDouble(CubeAction.drop), throwsStateError,
+          reason: 'nothing was offered, so there is nothing to answer');
+      expect(h.policy.cubeActions, isEmpty);
+      expect(h.speech, hasLength(linesBefore));
+      expect(h.controller.state.phase, GamePhase.moving,
+          reason: 'and the game is exactly where it was');
+    });
+  });
+
+  group('the doubling predicate', () {
+    // `BuddySession` holds the fifth copy of the controller's private
+    // `_doublingLegal` — the house pattern, and the controller stays the
+    // authority. But a drifted copy here fails SILENT: Buddy would simply stop
+    // doubling, with nothing thrown and nothing logged. So the copy is pinned
+    // against the authority on the states that separate them — whether Buddy
+    // consulted the engine, versus whether the controller takes the verb, on
+    // one and the same state.
+
+    test('agrees with the controller on a centred cube', () async {
+      final h = Harness(matchLength: 3);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(h.buddySide));
+
+      expect(h.engine.cubeConsiderations, 1,
+          reason: "Buddy's copy says the cube is live, so the engine was asked");
+      expect(controllerTakesDouble(h.controller), isTrue,
+          reason: 'and the authority agrees');
+    });
+
+    test('agrees with the controller in the Crawford game', () async {
+      final h = Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(h.buddySide));
+
+      expect(h.controller.state.isCrawfordGame, isTrue,
+          reason: 'a 1-point match plays its only game as the Crawford game');
+      expect(h.engine.cubeConsiderations, 0);
+      expect(controllerTakesDouble(h.controller), isFalse);
+    });
+
+    test('agrees with the controller once buddy owns the cube', () async {
+      final h = Harness(matchLength: 5);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(Player.white));
+      final consultedBefore = h.engine.cubeConsiderations;
+      h.session.offerDouble();
+      await h.settle();
+      expect(h.controller.state.cube.owner, h.buddySide,
+          reason: 'buddy took, so the redouble is now buddy\'s to make');
+
+      await h.pumpUntil(() => h.preRollFor(h.buddySide));
+
+      expect(h.engine.cubeConsiderations, greaterThan(consultedBefore),
+          reason: 'an owned cube is live for its owner — the half of the '
+              'owner clause a drifted copy would drop SILENTLY, since Buddy '
+              'that has simply stopped redoubling throws nothing');
+      expect(controllerTakesDouble(h.controller), isTrue);
+    });
+
+    test('agrees with the controller once the user owns the cube', () async {
+      final h = Harness(matchLength: 3, buddyDoubles: true);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.session.phase == BuddyPhase.awaitingCubeAnswer);
+      h.session.answerDouble(CubeAction.take);
+      await h.settle();
+      expect(h.controller.state.cube.owner, h.session.userSide,
+          reason: 'the taker owns the cube, so it is the user\'s now');
+      final consultedBefore = h.engine.cubeConsiderations;
+
+      await h.pumpUntil(() => h.preRollFor(h.buddySide));
+
+      expect(h.engine.cubeConsiderations, consultedBefore,
+          reason: 'the cube is not Buddy\'s to turn, so it is not asked about');
+      expect(controllerTakesDouble(h.controller), isFalse);
+    });
+
+    test('agrees with the controller in a cubeless match', () async {
+      final h = Harness(matchLength: 3, cubeless: true);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(h.buddySide));
+
+      expect(h.engine.cubeConsiderations, 0,
+          reason: 'the one clause of the copy that reads a session field '
+              'rather than the game state');
+      expect(controllerTakesDouble(h.controller), isFalse);
     });
   });
 
@@ -435,7 +658,122 @@ void main() {
       expect(h.policy.diceReads.last.$3, isNull,
           reason: 'a typed roll carries no camera confidence');
     });
+
+    // A roll request outlives a calibration outage: nothing cancels it, and
+    // `_requestRoll` re-reads where the game has got to AFTER the await, so
+    // whatever answers it lands on the right side of the right game. Both
+    // halves are pinned here because the behaviour is load-bearing and was
+    // never obviously deliberate — `BuddyDiceRoller.cancel` is disposal only.
+    test('a roll asked for before an outage is answered after it, once',
+        () async {
+      final h = Harness();
+      h.vision.willReadDice([diceShowing(6, 3)]);
+
+      h.start(); // the opening throw is asked for, and nothing has answered
+      h.vision.willSee([staleCalibrationReading]);
+      await h.stableFrame();
+      expect(h.session.phase, BuddyPhase.calibrating);
+      expect(h.session.controller, isNull);
+
+      final fresh = FakeVision()..willReadDice([diceShowing(5, 2)]);
+      h.session.useCalibration(fresh);
+      await h.settle();
+      expect(h.session.phase, BuddyPhase.awaitingDice);
+
+      await h.stableFrame();
+      expect(h.controller.state.dice, Dice(5, 2));
+      expect(h.policy.diceReads, hasLength(1),
+          reason: 'one throw was asked for and one was answered: the outage '
+              'neither abandoned the open request nor opened a second');
+    });
+
+    test('the pad still answers while the light is out', () async {
+      final h = Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willSee([staleCalibrationReading]);
+
+      h.start();
+      await h.stableFrame();
+      expect(h.session.phase, BuddyPhase.calibrating);
+
+      h.session.enterDiceManually(Dice(5, 2));
+      await h.settle();
+
+      expect(h.controller.state.dice, Dice(5, 2),
+          reason: 'the pad answers the USER, not the camera: an outage '
+              'suspends what perception may claim, never what the user may do');
+      expect(h.session.phase, BuddyPhase.calibrating);
+      expect(h.session.needsRecalibration, isTrue,
+          reason: 'and the session is still waiting for a calibration');
+    });
   });
+
+  group('the play fallback', () {
+    test('a typed play folds as the user\'s own', () async {
+      final h = Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesNothing])
+        ..willVerify([boardAgrees]);
+
+      h.start();
+      await h.stableFrame(); // the opening roll
+      expect(h.session.phase, BuddyPhase.awaitingPlay);
+      final chosen = h.controller.state.legalMoves[3];
+
+      await h.stableFrame(); // the picture cannot say what the hand did
+      expect(h.controller.game.events.whereType<MoveEvent>(), isEmpty);
+
+      h.session.enterPlayManually(chosen);
+      await h.settle();
+
+      final played = h.controller.game.events.whereType<MoveEvent>();
+      expect(played, hasLength(1),
+          reason: 'exactly one play, and no second one folded behind it');
+      expect(played.single.move.sameAs(chosen), isTrue,
+          reason: "the spec's tap-to-enter fallback: a play perception could "
+              "not identify is still the user's play");
+      expect(h.policy.observedPlays.single.$2.sameAs(chosen), isTrue,
+          reason: 'and it is acknowledged exactly as a seen one is');
+      expect(h.session.phase, BuddyPhase.awaitingDice,
+          reason: 'the turn moves on, so the next roll may be asked for');
+    });
+
+    test('refuses a play when none is being waited for', () async {
+      final h = Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      expect(() => h.session.enterPlayManually(Move.none), throwsStateError,
+          reason: 'there is not even a game yet');
+
+      await h.stableFrame(); // the opening roll
+      await h.stableFrame(); // the play, folded by the camera
+      expect(h.session.phase, BuddyPhase.awaitingDice);
+
+      expect(() => h.session.enterPlayManually(Move.none), throwsStateError,
+          reason: 'and a turn that is over cannot be played again');
+      expect(h.controller.game.events.whereType<MoveEvent>(), hasLength(1));
+    });
+  });
+}
+
+/// Whether the controller — the authority — takes a double right now.
+///
+/// Attempting the verb is the only honest way to ask, since
+/// `GameController._doublingLegal` is private, which is exactly why
+/// `BuddySession` carries a copy of it. **Succeeding moves the cube**, so this
+/// belongs at the end of whatever it is asked about.
+bool controllerTakesDouble(GameController c) {
+  try {
+    c.offerDouble();
+    return true;
+  } on StateError {
+    return false;
+  }
 }
 
 /// One session, its fakes, and a frame pump.
@@ -444,17 +782,20 @@ class Harness {
     this.matchLength = 1,
     this.buddySide = Player.black,
     this.buddyDoubles = false,
+    this.cubeless = false,
     MatchPersistence persistence = const NoopPersistence(),
   }) {
     speaker = BuddySpeaker();
     policy = RecordingPolicy(
         OpponentPolicy(speaker: speaker, buddySide: buddySide));
+    engine = ScriptedEngine(doubles: buddyDoubles);
     session = BuddySession(
-      engine: ScriptedEngine(doubles: buddyDoubles),
+      engine: engine,
       buddySide: buddySide,
       policy: policy,
       frames: frames.stream,
       matchLength: matchLength,
+      cubeless: cubeless,
       persistence: persistence,
     );
     addTearDown(() async {
@@ -467,17 +808,49 @@ class Harness {
   final int matchLength;
   final Player buddySide;
   final bool buddyDoubles;
+  final bool cubeless;
   final FakeVision vision = FakeVision();
   final StreamController<ObservedFrame> frames =
       StreamController<ObservedFrame>.broadcast();
   late final BuddySpeaker speaker;
   late final RecordingPolicy policy;
+  late final ScriptedEngine engine;
   late final BuddySession session;
 
   GameController get controller => session.controller!;
   List<String> get speech => speaker.lines.map((l) => l.text).toList();
 
   void start() => session.useCalibration(vision);
+
+  /// Whether the controller is parked on [side]'s pre-roll gate — the one
+  /// moment in a turn at which the cube is a legal verb, and therefore the
+  /// only state on which Buddy's doubling predicate and the controller's own
+  /// can be compared.
+  ///
+  /// The session's own phase is part of the question, and deliberately: the
+  /// controller races ahead of the board, so `awaitingHumanTurn` alone is also
+  /// true while a dictated move is still being placed.
+  bool preRollFor(Player side) =>
+      session.controller != null &&
+      session.phase == BuddyPhase.awaitingDice &&
+      controller.awaitingHumanTurn &&
+      controller.state.turn == side &&
+      controller.state.phase == GamePhase.awaitingRoll;
+
+  /// Pushes settled frames until [ready] holds.
+  ///
+  /// The session answers whatever the current phase is asking on every frame,
+  /// so "play on until the game reaches X" is a pump rather than a script —
+  /// the same property the whole-game test leans on, named so that a test
+  /// about one moment need not count the frames that lead to it.
+  Future<void> pumpUntil(bool Function() ready, {int limit = 60}) async {
+    for (var i = 0; i < limit && !ready(); i++) {
+      await stableFrame();
+    }
+    if (!ready()) {
+      fail('the session never reached the state this test is about');
+    }
+  }
 
   /// Pushes one settled frame and lets everything it set off finish.
   Future<void> stableFrame([Frame? frame]) async {
@@ -509,6 +882,13 @@ class ScriptedEngine implements PlayerAgent {
   final bool takes;
   bool _doubled = false;
 
+  /// How many times Buddy has been asked whether to double.
+  ///
+  /// The session only asks when its own `_doublingLegal` says the cube is a
+  /// legal verb, so this counter IS that private predicate, observed from
+  /// outside — see the "the doubling predicate" group.
+  int cubeConsiderations = 0;
+
   @override
   bool get wantsDoublePrompts => true;
 
@@ -518,6 +898,7 @@ class ScriptedEngine implements PlayerAgent {
 
   @override
   Future<bool> considerDouble(GameState state, MatchContext ctx) async {
+    cubeConsiderations++;
     if (!doubles || _doubled) return false;
     _doubled = true;
     return true;

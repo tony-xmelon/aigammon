@@ -65,11 +65,23 @@ class BuddyDiceRoller implements DiceRoller {
     pending.complete(dice);
   }
 
-  /// Abandons an open request — the calibration died under it, or the session
-  /// is going away. The awaiting future is never completed, exactly as
-  /// `LocalHumanAgent` abandons a pending decision: the session owns
-  /// cancellation and a completed-with-garbage roll would be worse than a
-  /// dropped one.
+  /// Abandons an open request, because the session is going away.
+  ///
+  /// The awaiting future is never completed, exactly as `LocalHumanAgent`
+  /// abandons a pending decision: the session owns cancellation, and a
+  /// completed-with-garbage roll would be worse than a dropped one.
+  ///
+  /// **`BuddySession.dispose` is the only caller, and a readability outage is
+  /// deliberately not one.** A roll request survives an outage on purpose: the
+  /// manual pad stays one tap away while the light is out — it answers the
+  /// USER, not the camera — and `BuddySession._requestRoll` re-reads where the
+  /// game has got to *after* its await, so a throw answered late still lands
+  /// on the right side of the right game. Cancelling on an outage would be
+  /// worse than useless besides: nothing would ever complete the abandoned
+  /// future, so the session's in-flight flag would never clear and it would
+  /// never ask for another roll for the rest of the match. Both halves are
+  /// pinned in the "dice fallback" group of
+  /// `app/test/buddy/buddy_session_test.dart`.
   void cancel() {
     _pending = null;
     _armed = null;

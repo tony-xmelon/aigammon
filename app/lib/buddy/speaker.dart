@@ -62,6 +62,20 @@ enum BuddyPhrasing {
   /// from 24 to 22."
   friendly;
 
+  /// Renders [dice] for both channels: "6-3" written, "6 3" spoken.
+  ///
+  /// **Static, because a pair of dice has one reading.** The hyphen is the
+  /// score sheet's and a TTS engine says "six minus three" for it, which is
+  /// the same split [describePlay] exists for — but unlike a play there is
+  /// nothing here for terse and friendly to disagree about, and inventing a
+  /// disagreement would change what Buddy says for no reason. Callers embed
+  /// the two renderings in their own sentence, so this returns the pair
+  /// rather than a finished line.
+  static BuddyLine describeDice(Dice dice) => BuddyLine(
+        '${dice.die1}-${dice.die2}',
+        speech: '${dice.die1} ${dice.die2}',
+      );
+
   /// Renders [move] for both channels.
   ///
   /// **Points are named in the app's single White-based 1-24 frame**, the one

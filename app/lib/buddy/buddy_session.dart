@@ -265,22 +265,30 @@ class BuddySession extends ChangeNotifier {
 
   /// The user's on-screen Double, under the digital game's own gating (the
   /// controller throws if it is not legal, and stays the authority on that).
+  ///
+  /// **Announced only once the controller has taken it**, and that ordering is
+  /// the rule for every cube verb in this file. A spoken line here is not a
+  /// log entry: the transcript is the user's record of the match and the cube
+  /// on the table is theirs to turn, so "You double." over a refused verb
+  /// instructs a real-world action the game will disagree with for the rest of
+  /// the match.
   void offerDouble() {
     final c = _controller;
     if (c == null) throw StateError('there is no game to double in');
-    policy.onCubeAction(userSide, BuddyCubeAction.offered);
     c.offerDouble();
+    policy.onCubeAction(userSide, BuddyCubeAction.offered);
   }
 
-  /// The user's answer to Buddy's spoken double.
+  /// The user's answer to Buddy's spoken double. Announced after the answer is
+  /// accepted, for the reason [offerDouble] gives.
   void answerDouble(CubeAction action) {
+    _humanAgent.submitCubeResponse(action);
     policy.onCubeAction(
       userSide,
       action == CubeAction.take
           ? BuddyCubeAction.taken
           : BuddyCubeAction.dropped,
     );
-    _humanAgent.submitCubeResponse(action);
     _advance();
     notifyListeners();
   }
@@ -597,6 +605,16 @@ class BuddySession extends ChangeNotifier {
   /// The controller's own `_doublingLegal`, restated because it is private
   /// there. The controller stays the authority: `offerDouble` throws if the
   /// two ever disagree, which is the failure mode worth having.
+  ///
+  /// **Only in one direction, though**, and that is why this copy is pinned
+  /// rather than merely documented. A copy that drifts PERMISSIVE meets that
+  /// throw. A copy that drifts restrictive meets nothing: Buddy stops
+  /// offering the cube, no exception is raised, no line is logged, and the
+  /// mode goes on playing a strictly worse match. The "doubling predicate"
+  /// group in `test/buddy/buddy_session_test.dart` compares this against the
+  /// controller's actual acceptance on the states that separate them — a
+  /// centred cube, one Buddy owns, one the user owns, Crawford, cubeless — so
+  /// that drift in either direction is loud.
   bool _doublingLegal(GameController c) {
     final s = c.state;
     return !cubeless &&
@@ -610,8 +628,11 @@ class BuddySession extends ChangeNotifier {
         await _buddyAgent.considerDouble(c.state, c.contextFor(buddySide));
     if (_disposed || !identical(_controller, c)) return;
     if (wants && c.awaitingHumanTurn && _doublingLegal(c)) {
-      policy.onCubeAction(buddySide, BuddyCubeAction.offered);
+      // After the verb, as in [offerDouble] — the guard above makes a throw
+      // here unreachable, and one ordering for all three cube verbs is what
+      // keeps it that way.
       c.offerDouble();
+      policy.onCubeAction(buddySide, BuddyCubeAction.offered);
       return;
     }
     _advance();

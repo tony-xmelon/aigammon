@@ -143,9 +143,12 @@ class Readability {
   ///    `BoardVision` fake `app/test/buddy/fake_vision.dart` is built on, and
   ///    the only way to drive the spec's pause / recalibrate routing without a
   ///    camera and a corpus frame per case; and
-  ///  * a session that has been told the calibration is gone (by the user
-  ///    asking to recalibrate, say) holds a red with
-  ///    [requiresRecalibration] set before any frame has said so.
+  ///  * Task 12's user-requested recalibration may want one: a session told
+  ///    the calibration is gone before any frame has said so would have a red
+  ///    with [requiresRecalibration] to hold. **That caller does not exist
+  ///    yet** — `BuddySession` has no such verb and constructs no
+  ///    [Readability] at all — so this is an anticipated use, not a current
+  ///    one, and the fake above is the whole of today's traffic.
   ///
   /// [message] is shown to the user as it stands, exactly as the monitor's own
   /// sentences are, so a caller writing one owes the user a sentence rather

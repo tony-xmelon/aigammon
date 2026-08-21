@@ -92,8 +92,8 @@ class OpponentPolicy implements BuddyPolicy {
   @override
   void onDiceRead(Player roller, Dice dice, double? confidence) {
     final who = roller == buddySide ? 'I rolled' : 'You rolled';
-    speaker.say(BuddyLine('$who ${dice.die1}-${dice.die2}.',
-        speech: '$who ${dice.die1} ${dice.die2}.'));
+    final d = BuddyPhrasing.describeDice(dice);
+    speaker.say(BuddyLine('$who ${d.text}.', speech: '$who ${d.speech}.'));
   }
 
   @override
@@ -120,17 +120,17 @@ class OpponentPolicy implements BuddyPolicy {
   @override
   void onBuddyMoveChosen(Dice dice, Move play) {
     final described = speaker.phrasing.describePlay(play);
+    final d = BuddyPhrasing.describeDice(dice);
     if (play.checkerMoves.isEmpty) {
       speaker.say(BuddyLine(
-        'I rolled ${dice.die1}-${dice.die2} — no play, so it is back to you.',
-        speech: 'I rolled ${dice.die1} ${dice.die2}. No play, so it is back '
-            'to you.',
+        'I rolled ${d.text} — no play, so it is back to you.',
+        speech: 'I rolled ${d.speech}. No play, so it is back to you.',
       ));
       return;
     }
     speaker.say(BuddyLine(
-      'I rolled ${dice.die1}-${dice.die2} — play ${described.text}',
-      speech: 'I rolled ${dice.die1} ${dice.die2}. Play ${described.speech}',
+      'I rolled ${d.text} — play ${described.text}',
+      speech: 'I rolled ${d.speech}. Play ${described.speech}',
     ));
   }
 

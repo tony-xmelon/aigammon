@@ -151,6 +151,27 @@ void main() {
     });
   });
 
+  group('a pair of dice', () {
+    test('is the score sheet hyphen written and two numbers spoken', () {
+      final line = BuddyPhrasing.describeDice(Dice(6, 3));
+      expect(line.text, '6-3');
+      expect(line.speech, '6 3',
+          reason: 'an engine reads the hyphen as a subtraction');
+    });
+
+    test('reads the same in either phrasing', () {
+      // Unlike a play, a roll has nothing for terse and friendly to disagree
+      // about — the helper is static so that a future edit has to decide to
+      // make them disagree rather than drift into it.
+      for (final dice in [Dice(6, 3), Dice(4, 4), Dice(1, 2)]) {
+        expect(BuddyPhrasing.describeDice(dice).text,
+            '${dice.die1}-${dice.die2}');
+        expect(BuddyPhrasing.describeDice(dice).speech,
+            '${dice.die1} ${dice.die2}');
+      }
+    });
+  });
+
   group('friendly phrasing', () {
     test('spells the plain play in words', () {
       final line = BuddyPhrasing.friendly.describePlay(
