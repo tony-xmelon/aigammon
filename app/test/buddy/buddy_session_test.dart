@@ -8,6 +8,7 @@ import 'package:aigammon_app/data/match_repository.dart';
 import 'package:aigammon_app/data/persistence_hooks.dart';
 import 'package:aigammon_app/game/game_controller.dart';
 import 'package:aigammon_app/game/player_agent.dart';
+import 'package:aigammon_app/screens/buddy/buddy_game_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:board_vision/board_vision.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -727,6 +728,129 @@ void main() {
       expect(h.engine.cubeConsiderations, 0,
           reason: 'the one clause of the copy that reads a session field '
               'rather than the game state');
+      expect(controllerTakesDouble(h.controller), isFalse);
+    });
+  });
+
+  group("the screen's copy of the doubling predicate", () {
+    // `buddyDoubleAvailable` is the SIXTH copy of the controller's private
+    // `_doublingLegal` — the Buddy game screen's Double button, which cannot
+    // ask the authority whether it would accept a verb without performing it.
+    // It gets the same treatment as the session's copy above, in the same
+    // place and against the same authority, because the two are the same rule
+    // read at two different moments and a reader comparing them should not
+    // have to go looking.
+    //
+    // The separating states are the SAME five, moved to the user's side of the
+    // table: the button is the user's, so every one of them is asked at the
+    // USER's pre-roll gate rather than at Buddy's.
+
+    /// Whether the screen would light its Double button on [h] right now.
+    bool screenOffersDouble(Harness h) => buddyDoubleAvailable(
+          controller: h.session.controller,
+          awaitingRoll: h.session.awaitingRoll,
+          cubeless: h.session.cubeless,
+          userSide: h.session.userSide,
+        );
+
+    test('agrees with the controller on a centred cube', () async {
+      final h = Harness(matchLength: 3);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(h.session.userSide));
+
+      expect(screenOffersDouble(h), isTrue);
+      expect(controllerTakesDouble(h.controller), isTrue,
+          reason: 'and the authority agrees');
+    });
+
+    test('agrees with the controller in the Crawford game', () async {
+      final h = Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(h.session.userSide));
+
+      expect(h.controller.state.isCrawfordGame, isTrue);
+      expect(screenOffersDouble(h), isFalse);
+      expect(controllerTakesDouble(h.controller), isFalse);
+    });
+
+    test('agrees with the controller once the user owns the cube', () async {
+      final h = Harness(matchLength: 3, buddyDoubles: true);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.session.phase == BuddyPhase.awaitingCubeAnswer);
+      h.session.answerDouble(CubeAction.take);
+      await h.settle();
+      await h.pumpUntil(() => h.preRollFor(h.session.userSide));
+
+      expect(h.controller.state.cube.owner, h.session.userSide,
+          reason: 'the taker owns the cube, so the redouble is the user\'s');
+      expect(screenOffersDouble(h), isTrue,
+          reason: 'an owned cube is live for its owner — the half of the '
+              'owner clause a drifted copy drops SILENTLY, since a button that '
+              'has merely stopped lighting up throws nothing');
+      expect(controllerTakesDouble(h.controller), isTrue);
+    });
+
+    test('agrees with the controller once buddy owns the cube', () async {
+      final h = Harness(matchLength: 5);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(h.session.userSide));
+      h.session.offerDouble();
+      await h.settle();
+      expect(h.controller.state.cube.owner, h.buddySide,
+          reason: 'buddy took, so the cube is not the user\'s to turn again');
+      await h.pumpUntil(() => h.preRollFor(h.session.userSide));
+
+      expect(screenOffersDouble(h), isFalse);
+      expect(controllerTakesDouble(h.controller), isFalse);
+    });
+
+    test('agrees with the controller in a cubeless match', () async {
+      final h = Harness(matchLength: 3, cubeless: true);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.preRollFor(h.session.userSide));
+
+      expect(screenOffersDouble(h), isFalse,
+          reason: 'the one clause that reads a session field rather than the '
+              'game state');
+      expect(controllerTakesDouble(h.controller), isFalse);
+    });
+
+    test('agrees with the controller away from the gate', () async {
+      // The clause the outage fix rewrote. It used to be the session's PHASE,
+      // which a dark frame overrides; it is now the open THROW, which a dark
+      // frame does not. Both readings say "no" here, and only one of them says
+      // "no" for a reason the controller shares.
+      final h = Harness(matchLength: 3);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(() => h.session.phase == BuddyPhase.awaitingPlay);
+
+      expect(screenOffersDouble(h), isFalse,
+          reason: 'the dice are on the table and the play is being made — '
+              'doubling is over for this turn');
       expect(controllerTakesDouble(h.controller), isFalse);
     });
   });

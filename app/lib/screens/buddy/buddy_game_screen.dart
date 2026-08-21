@@ -75,8 +75,11 @@ void openBuddyGame(
 /// copy that drifts RESTRICTIVE meets nothing at all — the button simply goes
 /// quiet and the user plays a worse match — so this one is pinned against the
 /// controller's actual acceptance on the five states that separate them, in
-/// the "the screen's doubling gate" group of
-/// `test/screens/buddy/buddy_game_screen_test.dart`.
+/// the "the screen's copy of the doubling predicate" group of
+/// `test/buddy/buddy_session_test.dart` — beside the session's own copy and
+/// against the same authority, because the two are one rule read at two
+/// different moments and a reader comparing them should not have to go
+/// looking.
 ///
 /// A top-level function rather than a method for exactly that reason: the pin
 /// has to be able to put a real [GameController] into each of those five
