@@ -765,6 +765,97 @@ class BoardPalette {
   String toString() => 'BoardPalette($name)';
 }
 
+/// The COLOUR of the light on the board, as against how much of it there is.
+///
+/// **The one lighting change the bed could not draw, and the pipeline's whole
+/// premise turns on the difference.** `lightingGain` is a single scalar over
+/// all three channels — a dimmer switch — and a scalar is exactly what
+/// `ColorModel`'s per-channel log ratio was built to divide back out: turn it
+/// down and every feature in the model is unmoved, which is why a board at six
+/// tenths of its calibration light still reads. A lamp *changed* rather than
+/// dimmed does not do that. Its three channels move by three different
+/// factors, the factors do not cancel in a ratio taken against a reference
+/// measured under the old lamp, and what the model reads back is a board whose
+/// colours have quietly stopped being the ones it learned.
+///
+/// So this is the same kind of addition [StackPlacement.faceGain] and
+/// [BoardOccluder] were: a physically-motivated shape the photographs have and
+/// the drawings did not. It is what `ReadabilityMonitor`'s colour-validity
+/// check is measured against, and without it that check could not be tested at
+/// all.
+///
+/// ## What the numbers are, and where they come from
+///
+/// [tungsten] is Planck's law, evaluated twice. A blackbody's spectral radiance
+/// is `B(λ,T) ∝ λ^-5 / (exp(hc/λkT) - 1)`, and the ratio of two temperatures at
+/// one wavelength drops the `λ^-5` entirely. Taken at the three channels'
+/// nominal centres — 610, 550 and 465 nm — for a 2700 K household lamp against
+/// the 6500 K daylight a camera is balanced for:
+///
+/// | λ | B(2700)/B(6500) | over green |
+/// |---|---|---|
+/// | 610 nm | 5.894e-3 | 1.7306 |
+/// | 550 nm | 3.406e-3 | 1 |
+/// | 465 nm | 1.221e-3 | 0.3585 |
+///
+/// Those are then divided by their own BT.601 luma (1.1453), so that the cast
+/// **holds the brightness of a neutral grey** and moves only its colour. That
+/// is not a tidying-up: it is what a camera does. Auto-exposure meters the
+/// scene and pulls the overall level back where it was, so what actually
+/// reaches the pipeline from a lamp swapped mid-session is a frame of the same
+/// brightness in a different colour — and keeping the two knobs independent is
+/// what lets a test say which of them a verdict came from.
+///
+/// ## Why a strength rather than a temperature
+///
+/// A camera's white balance is not all-or-nothing. It adapts, and how far it
+/// gets before a frame is grabbed is what decides how much cast survives into
+/// the picture — so the honest parameter is *how much of the lamp change the
+/// white balance failed to take out*, which is [tungsten]'s argument. It
+/// interpolates in log space, because gains multiply: strength a half is the
+/// square root of the full lamp, not half way along a line between the two.
+class LightCast {
+  /// Per-channel multipliers on the board's own paint, applied with the
+  /// [lightingGain] and before the sensor.
+  final double red;
+  final double green;
+  final double blue;
+
+  const LightCast({this.red = 1, this.green = 1, this.blue = 1});
+
+  /// The light the board was calibrated under: whatever the palette says, at
+  /// the colour the palette says it. Every render that does not ask for a cast
+  /// draws exactly the bytes it drew before.
+  static const LightCast neutral = LightCast();
+
+  /// A 2700 K lamp against a camera balanced for 6500 K daylight, at
+  /// [strength] of full — see the class doc for where the three gains come
+  /// from and why they are normalized to hold a grey's brightness.
+  ///
+  /// Zero is exactly [neutral], so a sweep can start at the calibration light
+  /// and produce byte-identical frames there.
+  factory LightCast.tungsten(double strength) {
+    if (strength == 0) return neutral;
+    const full = <double>[1.73063, 1.0, 0.35851];
+    final gains = <double>[
+      for (final g in full) math.exp(strength * math.log(g)),
+    ];
+    final luma = 0.299 * gains[0] + 0.587 * gains[1] + 0.114 * gains[2];
+    return LightCast(
+      red: gains[0] / luma,
+      green: gains[1] / luma,
+      blue: gains[2] / luma,
+    );
+  }
+
+  /// Whether this cast leaves every channel exactly as it found it.
+  bool get isNeutral => red == 1 && green == 1 && blue == 1;
+
+  @override
+  String toString() => 'LightCast(${red.toStringAsFixed(3)}, '
+      '${green.toStringAsFixed(3)}, ${blue.toStringAsFixed(3)})';
+}
+
 /// Everything a camera adds to a scene that a flat render does not.
 ///
 /// ## Why a perfect render is a bad test bed
@@ -1084,6 +1175,7 @@ RenderedBoard renderTopDown({
   Dice? dice,
   BoardPalette palette = BoardPalette.classic,
   double lightingGain = 1.0,
+  LightCast cast = LightCast.neutral,
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
   List<DicePlacement>? dicePlacements,
@@ -1135,7 +1227,7 @@ RenderedBoard renderTopDown({
   // between the camera and everything else, so it covers the men and the dice
   // as well as the felt — and the room lights it along with the rest.
   _drawOccluder(image, occluder);
-  _applyLightingGain(image, lightingGain);
+  _applyLight(image, lightingGain, cast);
 
   if (orientation == BoardOrientation.whiteHomeFar) {
     // The same physical board from the other side of the table.
@@ -1304,6 +1396,7 @@ SyntheticShot renderShot({
   Dice? dice,
   BoardPalette palette = BoardPalette.classic,
   double lightingGain = 1.0,
+  LightCast cast = LightCast.neutral,
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   double diceAngle = 0.0,
   List<DicePlacement>? dicePlacements,
@@ -1327,6 +1420,7 @@ SyntheticShot renderShot({
     dice: dice,
     palette: palette,
     lightingGain: lightingGain,
+    cast: cast,
     orientation: orientation,
     diceAngle: diceAngle,
     dicePlacements: dicePlacements,
@@ -1508,6 +1602,7 @@ FoldingShot renderFoldingShot({
   Dice? dice,
   BoardPalette palette = BoardPalette.classic,
   double lightingGain = 1.0,
+  LightCast cast = LightCast.neutral,
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   List<DicePlacement>? dicePlacements,
   double dieSide = BoardLayout.dieSide,
@@ -1531,6 +1626,7 @@ FoldingShot renderFoldingShot({
     dice: dice,
     palette: palette,
     lightingGain: lightingGain,
+    cast: cast,
     orientation: orientation,
     dicePlacements: dicePlacements,
     dieSide: dieSide,
@@ -2314,17 +2410,23 @@ List<(double, double)> _pipOffsets(int value) {
 
 /// Scales the whole board toward black (or toward clipping) to stand in for
 /// a dim room or a bright lamp.
-void _applyLightingGain(img.Image image, double gain) {
-  if (gain == 1.0) return;
+/// How much light there is, and what colour it is, in one pass over the paint.
+///
+/// The two are separate knobs and one loop: with [cast] neutral every channel
+/// is multiplied by exactly `1.0` after the gain, so a render that does not ask
+/// for a cast produces the identical bytes it always did — which the corpus
+/// re-render guard checks rather than takes on trust.
+void _applyLight(img.Image image, double gain, LightCast cast) {
+  if (gain == 1.0 && cast.isNeutral) return;
   for (var y = 0; y < image.height; y++) {
     for (var x = 0; x < image.width; x++) {
       final p = image.getPixel(x, y);
       image.setPixelRgb(
         x,
         y,
-        (p.r * gain).round().clamp(0, 255),
-        (p.g * gain).round().clamp(0, 255),
-        (p.b * gain).round().clamp(0, 255),
+        (p.r * gain * cast.red).round().clamp(0, 255),
+        (p.g * gain * cast.green).round().clamp(0, 255),
+        (p.b * gain * cast.blue).round().clamp(0, 255),
       );
     }
   }
