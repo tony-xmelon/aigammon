@@ -348,19 +348,27 @@ DieReading _die(int face, double x, double y) => DieReading(
       squareness: 0.9,
     );
 
-/// A [BoardCalibration] with a REAL geometry and colours nobody reads.
+/// A [BoardCalibration] with a REAL geometry, a stack fit the caller can
+/// choose, and colours nobody reads.
 ///
 /// The split matters. Everything the calibration screen does with a finished
-/// calibration is geometric — it draws the twenty-four columns and the thirty
-/// men of the starting position over the preview — and geometry is pure
-/// arithmetic that needs no photograph, so it is built for real here from
-/// [corners]. The colour model and the stack pitch cannot be had without a
-/// picture of a board, and nothing in a widget test asks them anything, so they
-/// are the smallest values their constructors accept.
+/// calibration is geometric — it draws the twenty-four columns over the preview
+/// and the thirty men of the starting position through [stacks] — and geometry
+/// is pure arithmetic that needs no photograph, so it is built for real here
+/// from [corners]. The colour model cannot be had without a picture of a board,
+/// and nothing in a widget test asks it anything, so it is the smallest value
+/// its constructor accepts.
+///
+/// [stacks] is a parameter because the belief overlay draws THROUGH it: a
+/// painter that quietly used a nominal pitch instead would look right on every
+/// board whose checkers happen to sit a nominal distance apart, and wrong on
+/// the one it was calibrated from.
 BoardCalibration fakeCalibration({
   BoardQuad? corners,
   BoardOrientation orientation = BoardOrientation.whiteHomeNear,
   BoardProportions proportions = BoardProportions.standard,
+  StackMetrics stacks =
+      const StackMetrics(pitch: 0.08, origin: 0, wellConditioned: true),
 }) =>
     BoardCalibration(
       geometry: PlanarBoardGeometry.fromQuad(
@@ -393,7 +401,7 @@ BoardCalibration fakeCalibration({
         blueRatio: 1,
         clippedFraction: 0,
       ),
-      stacks: const StackMetrics(pitch: 0.08, origin: 0, wellConditioned: true),
+      stacks: stacks,
       proportions: proportions,
     );
 

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:board_vision/board_vision.dart';
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -1154,9 +1155,25 @@ class BoardOutlinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(BoardOutlinePainter old) =>
-      old.handles.all != handles.all ||
-      old.columns.length != columns.length ||
-      old.edge != edge;
+      old.edge != edge ||
+      old.column != column ||
+      !listEquals(old.handles.all, handles.all) ||
+      !_sameRings(old.columns, columns);
+
+  /// Deliberately deep, and both halves of it earn their keep.
+  ///
+  /// [columns] is re-derived on every build from the handles AND the
+  /// orientation, and the seat step changes the orientation without moving a
+  /// handle — so comparing the handles alone, or the ring COUNT (always 25 or
+  /// always 0), would hold the old lines under a new seating. A hundred point
+  /// comparisons is nothing next to drawing them.
+  static bool _sameRings(List<List<Offset>> a, List<List<Offset>> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!listEquals(a[i], b[i])) return false;
+    }
+    return true;
+  }
 }
 
 /// The position Buddy believes it is looking at, drawn where it believes it is.
@@ -1205,6 +1222,23 @@ class BeliefPainter extends CustomPainter {
           p.y / frame.height * size.height);
     }
 
+    // The stack fit this board was calibrated with, which is the same
+    // arithmetic occupancy counts backwards with: a stack of `k` reaches
+    // `origin + k * pitch` from its own edge, so the k-th man's middle is half
+    // a pitch inside that. Drawing through a nominal pitch instead would put
+    // the men where a nominal board's men would be — right on any board that
+    // happens to agree with it, and wrong on the one board this overlay is ever
+    // laid over.
+    //
+    // Not clamped at the midline, deliberately: a stack drawn spilling into the
+    // far half is a pitch that cannot be right, and this is the step where a
+    // person is being asked to spot exactly that.
+    final stacks = calibration.stacks;
+    final fitted = stacks.pitch >= StackMetrics.minPitch &&
+        stacks.pitch <= StackMetrics.maxPitch;
+    final pitch = fitted ? stacks.pitch : _kNominalPitch;
+    final origin = fitted ? stacks.origin : 0.0;
+
     for (var i = 0; i < 24; i++) {
       final men = start.points[i];
       if (men == 0) continue;
@@ -1215,16 +1249,14 @@ class BeliefPainter extends CustomPainter {
       final midX = (left + right) / 2;
       // Stacks grow inward from the board's own outer edge.
       final near = quad.topLeft.y >= RoiAtlas.midline;
-      final pitch = RoiAtlas.midline / 5.5;
       final count = men.abs();
       // One checker's radius on screen, from what a column measures there.
       final span = (at(Pt(right, near ? 1 : 0)) - at(Pt(left, near ? 1 : 0)))
           .distance;
       final radius = math.max(2.0, span / 2 * 0.82);
       for (var k = 0; k < count; k++) {
-        final y = near
-            ? 1 - (k + 0.5) * pitch
-            : (k + 0.5) * pitch;
+        final depth = origin + (k + 0.5) * pitch;
+        final y = near ? 1 - depth : depth;
         final centre = at(Pt(midX, y));
         canvas.drawCircle(centre, radius, men > 0 ? white : black);
         canvas.drawCircle(centre, radius, rim);
@@ -1243,8 +1275,24 @@ class BeliefPainter extends CustomPainter {
   bool shouldRepaint(BeliefPainter old) =>
       !identical(old.calibration, calibration) ||
       old.frame != frame ||
-      old.offending.length != offending.length;
+      old.wrong != wrong ||
+      // Contents, not size. `confirmStartingPosition` re-runs on every settled
+      // frame, and a board that moved one checker turns one flagged region into
+      // a DIFFERENT one — same count, new sentence, and under a length
+      // comparison the old red rings stay on the old points while the caption
+      // names new ones.
+      !setEquals(old.offending, offending);
 }
+
+/// The stack pitch to draw with when a calibration's own is not a usable one.
+///
+/// Half the board over five and a half checkers, which is what a nominal board
+/// looks like. **Unreachable through `BoardVision.calibrate`**: the calibrator
+/// refuses a calibration whose stack fit is not well conditioned, and a
+/// well-conditioned fit is by construction one whose pitch came back inside
+/// [StackMetrics.minPitch]..[StackMetrics.maxPitch]. It is here because
+/// [BoardLearner] is a seam and [BeliefPainter] is a painter anyone can build.
+const double _kNominalPitch = RoiAtlas.midline / 5.5;
 
 // -----------------------------------------------------------------------------
 // The plugin edge. Nothing below here runs in `flutter test`.

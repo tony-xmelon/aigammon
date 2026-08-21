@@ -343,6 +343,71 @@ void main() {
     });
   });
 
+  group('BeliefPainter', () {
+    test('stacks the men at the pitch the calibration measured, from the '
+        'origin it measured', () {
+      // The overlay exists to be disagreed with: a person looks at thirty
+      // drawn men and says whether they are where the real ones are. Drawn
+      // through a nominal pitch it would look right on any board whose
+      // checkers happen to sit a nominal distance apart, and wrong on the one
+      // it was calibrated from — which is the only board it is ever over.
+      const stacks =
+          StackMetrics(pitch: 0.06, origin: 0.03, wellConditioned: true);
+
+      // Every distinct depth a checker was drawn at, measured back out of the
+      // picture. The starting position has stacks of 2, 3 and 5, so across the
+      // whole board the drawn depths are exactly the first five.
+      final depths = _stackDepths(stacks);
+
+      expect(depths, hasLength(5));
+      for (final (k, depth) in depths.indexed) {
+        expect(depth, closeTo(stacks.origin + (k + 0.5) * stacks.pitch, 1e-6),
+            reason: 'checker $k sits at origin + (k + 0.5) * pitch, which is '
+                'the same arithmetic occupancy counts backwards with');
+      }
+    });
+
+    test('and a different fit moves them', () {
+      // Causation, not coincidence: the same painter over the same geometry,
+      // with only the calibration's own stack fit changed.
+      final wide = _stackDepths(
+          const StackMetrics(pitch: 0.09, origin: 0, wellConditioned: true));
+      final tight = _stackDepths(
+          const StackMetrics(pitch: 0.03, origin: 0, wellConditioned: true));
+
+      expect(wide.last, closeTo(4.5 * 0.09, 1e-6));
+      expect(tight.last, closeTo(4.5 * 0.03, 1e-6));
+    });
+
+    test('repaints when the same NUMBER of regions is a different set of them',
+        () {
+      // point5 → point7 is one flagged region either way, and a length-only
+      // comparison keeps the old red rings under a fresh sentence: the picture
+      // says one point is wrong and names another.
+      // One calibration for both painters, so what is being compared is the
+      // flagged set and nothing else.
+      final calibration = fakeCalibration();
+      BeliefPainter painterFor(Set<RoiId> offending) => BeliefPainter(
+            calibration: calibration,
+            frame: _beliefBox,
+            offending: offending,
+            wrong: const Color(0xFFFF0000),
+          );
+
+      expect(
+        painterFor(<RoiId>{RoiId.point7})
+            .shouldRepaint(painterFor(<RoiId>{RoiId.point5})),
+        isTrue,
+      );
+      expect(
+        painterFor(<RoiId>{RoiId.point5})
+            .shouldRepaint(painterFor(<RoiId>{RoiId.point5})),
+        isFalse,
+        reason: 'the same set is the same picture',
+      );
+    });
+  });
+
   group('BoardHandles', () {
     test('scales into the frame it is calibrated against', () {
       const handles = BoardHandles(outer: <Offset>[
@@ -390,6 +455,31 @@ BoardOutlinePainter _outline(WidgetTester t) =>
         as BoardOutlinePainter;
 
 Frame _frame() => blankFrame(width: 64, height: 48);
+
+/// Every distinct depth [BeliefPainter] drew a checker at, in BOARD space,
+/// sorted and measured back out of the picture it painted.
+///
+/// The fake calibration's geometry is the unit square scaled to [_beliefBox],
+/// so a pixel `y` is `depth` on the far half and `1 - depth` on the near one.
+List<double> _stackDepths(StackMetrics stacks) {
+  final canvas = TestRecordingCanvas();
+  BeliefPainter(
+    calibration: fakeCalibration(stacks: stacks),
+    frame: _beliefBox,
+    offending: const <RoiId>{},
+    wrong: const Color(0xFFFF0000),
+  ).paint(canvas, _beliefBox);
+  final depths = <double>{};
+  for (final call in canvas.invocations) {
+    if (call.invocation.memberName != #drawCircle) continue;
+    final centre = call.invocation.positionalArguments.first as Offset;
+    final y = centre.dy / _beliefBox.height;
+    depths.add(double.parse((y > 0.5 ? 1 - y : y).toStringAsFixed(9)));
+  }
+  return depths.toList()..sort();
+}
+
+const Size _beliefBox = Size(640, 480);
 
 class _Harness {
   _Harness({
