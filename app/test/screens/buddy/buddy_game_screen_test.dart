@@ -462,6 +462,48 @@ void main() {
     });
   });
 
+  group('the screen holds together at a large text size', () {
+    // The digital game screen ships this regression for its header, and this
+    // one needs it more: two of the six bands are SENTENCES in flexible slots,
+    // and a sentence is exactly what grows when a user asks for bigger text.
+    // Both were measured overflowing at TextScaler 2.0 on a 420x900 phone.
+
+    // A test per scale rather than a loop inside one, because each harness
+    // opens its own database and three live at once is a drift warning about
+    // a race this test is not about.
+    for (final scale in <double>[1.0, 1.3, 2.0]) {
+      testWidgets('the mirror placeholder fits at text scale $scale',
+          (t) async {
+        final h = _Harness();
+        await h.pump(t, textScale: scale);
+
+        // Before the opening throw there is no game, so the mirror slot holds
+        // the longest-lived placeholder on the screen.
+        expect(find.textContaining('waiting for the throw'), findsOneWidget);
+        expect(t.takeException(), isNull);
+      });
+
+      testWidgets('so does a camera that will not open, at text scale $scale',
+          (t) async {
+        // The longer of the two: the permission refusal, plus the paragraph
+        // telling the user the match is still playable by hand.
+        final h = _Harness(
+          camera: FakeBuddyCamera(
+            opening: const CameraUnavailable(
+              'AIGammon does not have permission to use the camera. Allow '
+              'camera access in your device settings and try again.',
+            ),
+          ),
+        );
+        await h.pump(t, textScale: scale);
+
+        expect(find.textContaining('dice pad'), findsOneWidget,
+            reason: 'the fallback paragraph is shown, not clipped away');
+        expect(t.takeException(), isNull);
+      });
+    }
+  });
+
   group('the cube', () {
     testWidgets('Buddy doubles by voice, and the answer is two buttons',
         (t) async {
@@ -536,7 +578,11 @@ String _transcript(WidgetTester t) => _lines(t).join(' | ');
 // --- the harness -------------------------------------------------------------
 
 class _Harness {
-  _Harness({this.matchLength = 1, this.buddyDoubles = false});
+  _Harness({
+    this.matchLength = 1,
+    this.buddyDoubles = false,
+    FakeBuddyCamera? camera,
+  }) : camera = camera ?? FakeBuddyCamera();
 
   final int matchLength;
 
@@ -545,7 +591,7 @@ class _Harness {
   final bool buddyDoubles;
 
   final FakeVision vision = FakeVision(calibration: fakeCalibration());
-  final FakeBuddyCamera camera = FakeBuddyCamera();
+  final FakeBuddyCamera camera;
   late final FakeBoardLearner learner = FakeBoardLearner(vision);
   final BoardHandles handles = BoardHandles.seed(folding: false);
   late final AppDatabase db;
@@ -559,7 +605,7 @@ class _Harness {
         phrasing: BuddyPhrasing.terse,
       );
 
-  Future<void> pump(WidgetTester t) async {
+  Future<void> pump(WidgetTester t, {double textScale = 1.0}) async {
     await t.binding.setSurfaceSize(const Size(420, 900));
     addTearDown(() => t.binding.setSurfaceSize(null));
     db = newTestDatabase();
@@ -576,12 +622,15 @@ class _Harness {
         buddyTtsProvider.overrideWithValue(const SilentBuddyTts()),
       ],
       child: MaterialApp(
-        home: BuddyGameScreen(
-          setup: setup,
-          outcome: CalibrationOutcome(
-            vision: vision,
-            handles: handles,
-            seat: BuddySeat.near,
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(textScale)),
+          child: BuddyGameScreen(
+            setup: setup,
+            outcome: CalibrationOutcome(
+              vision: vision,
+              handles: handles,
+              seat: BuddySeat.near,
+            ),
           ),
         ),
       ),

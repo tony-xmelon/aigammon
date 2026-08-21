@@ -867,6 +867,16 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
 }
 
 /// A slot with nothing in it yet, saying what it is waiting for.
+///
+/// **It fits, whatever text size the user has asked for.** These two sentences
+/// are the longest on the screen and they live in the two slots that flex, so
+/// they are what a doubled text scale runs out of room in first — measured at
+/// TextScaler 1.3 on a 420x900 phone, where the camera-refusal paragraph
+/// overflowed by 36 pixels. The digital game screen's own answer, applied
+/// here: the paragraph wraps at the width it has, and a [FittedBox] shrinks
+/// the wrapped block if the height it has is not enough. Shrunk-to-fit rather
+/// than ellipsized, because every one of these sentences is telling a user
+/// what to do next and half of that is no use to anybody.
 class _Placeholder extends StatelessWidget {
   const _Placeholder({required this.icon, required this.message});
 
@@ -879,17 +889,32 @@ class _Placeholder extends StatelessWidget {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(icon, size: 32, color: theme.colorScheme.onSurfaceVariant),
-            const SizedBox(height: 12),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall,
-            ),
-          ],
+        child: LayoutBuilder(
+          builder: (context, constraints) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(icon, size: 32, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(height: 12),
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  // The wrap has to happen at the width the slot actually has,
+                  // BEFORE the box measures the block: an unconstrained Text
+                  // inside a FittedBox lays itself out on one endless line and
+                  // is then scaled to nothing.
+                  child: ConstrainedBox(
+                    constraints:
+                        BoxConstraints(maxWidth: constraints.maxWidth),
+                    child: Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
