@@ -1,7 +1,4 @@
-import 'dart:async';
-
 import 'package:aigammon_app/buddy/buddy_session.dart';
-import 'package:aigammon_app/buddy/camera_frame_source.dart';
 import 'package:aigammon_app/buddy/speaker.dart';
 import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
@@ -14,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../buddy/fake_calibration_seams.dart';
 import '../../buddy/fake_vision.dart';
 
 const AppSettings _settings = AppSettings(
@@ -164,58 +162,3 @@ class _Harness {
   }
 }
 
-class FakeBuddyCamera implements BuddyCamera {
-  final StreamController<ObservedFrame> _frames =
-      StreamController<ObservedFrame>.broadcast();
-  bool closed = false;
-
-  @override
-  Stream<ObservedFrame> get frames => _frames.stream;
-
-  @override
-  Future<CameraOpening> open() async => const CameraReady();
-
-  @override
-  Widget preview(BuildContext context) =>
-      const ColoredBox(color: Color(0xFF202020));
-
-  @override
-  Future<void> close() async {
-    if (closed) return;
-    closed = true;
-    await _frames.close();
-  }
-
-  void push(Frame frame) {
-    if (closed) return;
-    _frames.add(ObservedFrame(
-      frame: frame,
-      motion: MotionHint.still,
-      isStable: true,
-      sceneChange: 0,
-      at: Duration.zero,
-    ));
-  }
-}
-
-class FakeBoardLearner implements BoardLearner {
-  FakeBoardLearner(this._vision);
-
-  final FakeVision _vision;
-  final List<({BoardHandles handles, BoardOrientation orientation})> calls =
-      <({BoardHandles handles, BoardOrientation orientation})>[];
-
-  @override
-  CalibrationResult learn({
-    required Frame frame,
-    required BoardHandles handles,
-    required BoardOrientation orientation,
-    required double dieSide,
-  }) {
-    calls.add((handles: handles, orientation: orientation));
-    return CalibrationResult.success(_vision.calibration);
-  }
-
-  @override
-  BoardVision visionFor(BoardCalibration calibration) => _vision;
-}
