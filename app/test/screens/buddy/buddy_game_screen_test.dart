@@ -1,6 +1,9 @@
 import 'package:aigammon_app/buddy/buddy_session.dart';
 import 'package:aigammon_app/buddy/speaker.dart';
+import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
+import 'package:aigammon_app/data/match_repository.dart';
+import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
 import 'package:aigammon_app/screens/buddy/buddy_game_screen.dart';
@@ -286,6 +289,37 @@ void main() {
           reason: 'and the way back to a working camera is still one tap away');
     });
 
+    testWidgets('and on every other throw the two faces are just two faces',
+        (t) async {
+      // The other half of the labelling. Only the OPENING throw has two dice
+      // belonging to two different people; on every roll after it both faces
+      // are the same player's and their order is nothing at all, so a pad
+      // still naming colours would be inviting the user to answer a question
+      // nobody asked.
+      final h = _Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)])
+        ..willVerify([boardAgrees]);
+      await h.pump(t);
+      for (var i = 0; i < 4; i++) {
+        await h.frame(t); // opening, play, Buddy's move, placement verified
+      }
+      expect(_prompt(t).toLowerCase(), contains('throw your dice'));
+
+      await t.tap(find.byKey(const Key('buddy-dice-button')));
+      await t.pumpAndSettle();
+      expect(find.text('One die'), findsOneWidget);
+      expect(find.text('The other'), findsOneWidget);
+      expect(find.text("White's die"), findsNothing);
+      expect(find.textContaining('either order'), findsOneWidget,
+          reason: 'and the caption says so, rather than leaving the user to '
+              'infer it from two labels that stopped mentioning colours');
+
+      await h.pickRoll(t, 5, 2);
+      expect(_transcript(t), contains('You rolled 5-2.'));
+    });
+
     testWidgets('an ambiguous play is resolved by picking a candidate',
         (t) async {
       final h = _Harness();
@@ -462,6 +496,71 @@ void main() {
     });
   });
 
+  group('what the screen writes down', () {
+    testWidgets('a Buddy match is in History from the moment it starts',
+        (t) async {
+      // The screen's own three lines, and the reason they are the screen's:
+      // without them the one mode played on a real board would be the one mode
+      // that left no record. The session's persistence hook is tested against
+      // a repository elsewhere; what is untested without this is whether the
+      // SCREEN opens a row at all, and with what in it.
+      final h = _Harness(matchLength: 3);
+      await h.pump(t);
+
+      // Through `runAsync`, because the row is written by real sqlite I/O and
+      // a `testWidgets` clock does not let real I/O complete on its own. The
+      // rest of this file never notices — nothing else in it asks the database
+      // a question.
+      final rows = (await t.runAsync(
+        () => MatchRepository(h.db).watchMatches().first,
+      ))!;
+      expect(rows, hasLength(1));
+      expect(rows.single.mode, 'buddy',
+          reason: 'History tells the modes apart by this, and a Buddy match '
+              'that filed itself as a digital one is a lie about how it was '
+              'played');
+      expect(rows.single.matchLength, 3);
+      expect(rows.single.blackType, 'ai:expert',
+          reason: 'Buddy plays Black in this harness, at the difficulty setup '
+              'chose');
+      expect(rows.single.whiteType, 'human');
+    });
+  });
+
+  group('the camera two screens share', () {
+    testWidgets('survives the handover from calibration into the match',
+        (t) async {
+      // The direction the recalibration test does not cover. There, the game
+      // screen pushes the corner flow and takes it back; here the corner flow
+      // hands over to a game screen that opens BEFORE the popped route
+      // disposes. Both are a close arriving under a screen that is still
+      // looking through the camera, and before the hold was counted whichever
+      // one disposed second turned it off.
+      final h = _HandoverHarness();
+      await h.pump(t);
+
+      await t.ensureVisible(find.text('Calibrate the board'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Calibrate the board'));
+      await t.pumpAndSettle();
+      await h.calibrate(t);
+
+      expect(find.byType(BuddyGameScreen), findsOneWidget,
+          reason: 'the calibration handed over to a match');
+      expect(h.camera.closed, isFalse,
+          reason: 'the route that popped gave up ITS hold, not the camera');
+
+      // The proof that it is alive rather than merely un-flagged: a frame
+      // pushed now still reaches the session behind the new screen.
+      h.camera.push(blankFrame(width: 64, height: 48));
+      for (var i = 0; i < 24; i++) {
+        await t.pump();
+      }
+      expect(h.vision.readabilityCalls, greaterThan(0),
+          reason: 'frames are still arriving on the far side of the handover');
+    });
+  });
+
   group('the screen holds together at a large text size', () {
     // The digital game screen ships this regression for its header, and this
     // one needs it more: two of the six bands are SENTENCES in flexible slots,
@@ -517,6 +616,10 @@ void main() {
 
       expect(_transcript(t), contains('I double — take or drop?'));
       expect(_prompt(t).toLowerCase(), contains('take or drop'));
+      expect(find.widgetWithText(OutlinedButton, 'Drop'), findsOneWidget,
+          reason: 'both of the two words Buddy just said out loud are on the '
+              'screen — a spoken question with only one of its answers under '
+              'it is a question the user has to guess the rest of');
 
       await t.tap(find.widgetWithText(FilledButton, 'Take'));
       await h.settle(t);
@@ -687,6 +790,71 @@ class _Harness {
     await settle(t);
   }
 }
+
+/// The setup screen, the calibration flow and the game screen, in the order
+/// production puts them in.
+///
+/// Separate from [_Harness] because the point is the ROUTES: the game screen
+/// arrives by being launched from a calibration that is popping, which is the
+/// moment the shared camera changes hands.
+class _HandoverHarness {
+  final FakeVision vision = FakeVision(calibration: fakeCalibration());
+  final FakeBuddyCamera camera = FakeBuddyCamera();
+  late final FakeBoardLearner learner = FakeBoardLearner(vision);
+  late final AppDatabase db;
+
+  Future<void> pump(WidgetTester t) async {
+    await t.binding.setSurfaceSize(const Size(420, 900));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    db = newTestDatabase();
+    addTearDown(db.close);
+    addTearDown(camera.close);
+
+    final container = ProviderContainer(overrides: <Override>[
+      databaseProvider.overrideWithValue(db),
+      settingsProvider.overrideWith((ref) => Stream.value(_kSettings)),
+      engineFacadeProvider.overrideWithValue(const _FlatFacade()),
+      buddyCameraProvider.overrideWithValue(camera),
+      boardLearnerProvider.overrideWithValue(learner),
+      buddyTtsProvider.overrideWithValue(const SilentBuddyTts()),
+    ]);
+    addTearDown(container.dispose);
+    await container.read(settingsProvider.future);
+
+    await t.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      // The REAL launcher, because the handover is what this is about.
+      child: const MaterialApp(
+        home: BuddySetupScreen(launch: openBuddyGame),
+      ),
+    ));
+    await t.pumpAndSettle();
+  }
+
+  /// Drives the calibration screen the setup screen just pushed.
+  Future<void> calibrate(WidgetTester t) async {
+    camera.push(blankFrame(width: 64, height: 48));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Next')); // checklist -> corners
+    await t.pumpAndSettle();
+    await t.tap(find.text('Next')); // corners -> seat
+    await t.pumpAndSettle();
+    await t.tap(find.text('Capture'));
+    await t.pumpAndSettle();
+    camera.push(blankFrame(width: 64, height: 48));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Looks right'));
+    await t.pumpAndSettle();
+  }
+}
+
+const AppSettings _kSettings = AppSettings(
+  themeMode: ThemeMode.system,
+  animationSpeed: AnimationSpeed.normal,
+  defaultMatchLength: 1,
+  defaultDifficulty: Difficulty.expert,
+  tutorOverride: null,
+);
 
 /// The flat facade with the one answer that turns the cube on.
 ///
