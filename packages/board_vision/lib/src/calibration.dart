@@ -20,7 +20,8 @@ import 'roi_sampler.dart';
 /// recalibration, while a room that dimmed is a readability problem that
 /// clears on its own.
 ///
-/// Small and plain by design: a few dozen bytes of appearance and five
+/// Small and plain by design: a few hundred bytes of appearance — four corner
+/// patches, and four more on the hinge seams of a board that folds — and six
 /// numbers, no frame kept alive, nothing that would stop this being written to
 /// a log or a preference store.
 class CalibrationFingerprint {
@@ -37,14 +38,18 @@ class CalibrationFingerprint {
   /// How far a corner patch reaches inside the playing field.
   static const double cornerInside = 0.09;
 
-  /// The average difference the corner patches may drift, relative to the
-  /// frame's own mean brightness, before the geometry is called stale.
+  /// How far ONE patch may drift, relative to its frame's own mean
+  /// brightness, before that patch is called moved. See [geometryMatches] for
+  /// how many patches have to move before the board has.
   ///
-  /// Measured against the synthetic bed rather than guessed: a board that slid
-  /// twenty pixels under a thousand-pixel-wide frame drifts 0.26, a board that
-  /// did not move at all under sensor noise drifts 0.01, and a room dimmed to
-  /// six tenths of its light — with nothing moved — drifts 0.07. Twenty pixels
-  /// is about a fifth of a point's width, which is worth catching.
+  /// Measured against the synthetic bed rather than guessed. Per patch, on the
+  /// classic palette: a frame of the same scene with its grain re-drawn 0.007,
+  /// the same board with two men played 0.018, a hand over a quadrant 0.028, a
+  /// lens at four sigma of blur 0.071, a room dimmed to six tenths 0.074 — and
+  /// a board slid five pixels under a 1280-pixel frame 0.163. Five pixels is
+  /// about a twentieth of a point's width, so this catches a board that moved
+  /// long before anything it reads goes wrong, and nothing that leaves the
+  /// board where it is comes near it.
   static const double maxPatchDrift = 0.12;
 
   /// How far overall brightness may move, as a ratio either way.
@@ -67,6 +72,51 @@ class CalibrationFingerprint {
   /// three channels, row-major within a corner. Each cell is an average of a
   /// small block, so noise in one pixel cannot move it.
   final List<int> cornerPatches;
+
+  /// Four more of exactly the same shape, on the seams where a folding case's
+  /// hinge strip meets its far and near edges — and empty on a board that does
+  /// not fold, which has no such seams.
+  ///
+  /// **The corners cannot see a tent relax, and a folding case's tent relaxes.**
+  /// A case standing open on a table is tented; over a session the spine
+  /// settles flatter — a leaf nudged, the table knocked, the case simply
+  /// giving. All four outer corners stay exactly where they are, because they
+  /// are lying on the table. Everything between them moves, the hinge strip's
+  /// own plane worst of all, and [FoldingBoardGeometry] exists precisely
+  /// because that strip needs a plane of its own. So the one geometry failure
+  /// this fingerprint was blind to is the one the folding path was built for.
+  ///
+  /// Measured on the bed, relaxing the ridge from 0.050 of the board's width
+  /// to 0.040: the four corner patches drift 0.056, 0.090, 0.138 and 0.156
+  /// against a bound of 0.12 — two of four, which is what [geometryMatches]
+  /// allows the game itself to spoil — while these four drift 0.350, 0.398,
+  /// 0.537 and 0.608. All four, every time, and by three to five times the
+  /// bound. Relaxed to 0.035 the board misreads one of its twenty-four points;
+  /// relaxed to nothing, nine of them. This sees it before any of that.
+  ///
+  /// Cheap, because the eight points are already in the calibration: the seams
+  /// are `(leftLeafEnd, 0)`, `(rightLeafStart, 0)` and the two below them, in
+  /// board space, so nothing has to be found in the picture to sample them.
+  final List<int> seamPatches;
+
+  /// How much fine detail the board showed, as the mean magnitude of a
+  /// block-differenced laplacian of luma over the board's own interior.
+  ///
+  /// The readability check's sharpness signal, and it is a RATIO against this
+  /// number rather than an absolute: how much edge a board has is a fact about
+  /// that board — the three synthetic palettes measure 8.6, 10.8 and 3.8, and
+  /// the first real one 19.1 — so only the change is meaningful. See
+  /// `Readability`.
+  ///
+  /// **Block-differenced, and that is the whole of why it works.** A plain
+  /// per-pixel laplacian on a frame with sensor grain measures the grain: on
+  /// the bed's corpus degradation it reads 0.71 of calibration at two sigma of
+  /// blur and 0.65 at eight, which is very nearly no signal at all.
+  /// Differencing [sharpnessBlock]-wide means at a [sharpnessReach]-pixel arm
+  /// averages the grain away and leaves the board's own edges, and the same
+  /// sweep then runs 0.84 at one sigma, 0.53 at two, 0.26 at four and 0.12 at
+  /// eight, on all three palettes to within a hundredth.
+  final double sharpness;
 
   /// Mean BT.601 luma over the board's interior. The board only: the room
   /// around it is not what the session is exposed for.
@@ -99,12 +149,33 @@ class CalibrationFingerprint {
 
   CalibrationFingerprint({
     required List<int> cornerPatches,
+    List<int> seamPatches = const <int>[],
     required this.meanLuma,
     required this.lumaSpread,
     required this.redRatio,
     required this.blueRatio,
     required this.clippedFraction,
-  }) : cornerPatches = List<int>.unmodifiable(cornerPatches);
+    this.sharpness = 0,
+  })  : cornerPatches = List<int>.unmodifiable(cornerPatches),
+        seamPatches = List<int>.unmodifiable(seamPatches);
+
+  /// This fingerprint with the hinge seams thrown away — the four-corner
+  /// fingerprint this class was before the seams were added.
+  ///
+  /// It exists so that the blindness [seamPatches] closes can be *pinned*
+  /// rather than only fixed: `readability_test.dart` asserts that a relaxed
+  /// tent fails [geometryMatches] and that the same frame passes it through
+  /// this. A fix nobody can watch stop working is a fix that quietly stops
+  /// working.
+  CalibrationFingerprint get cornersOnly => CalibrationFingerprint(
+        cornerPatches: cornerPatches,
+        meanLuma: meanLuma,
+        lumaSpread: lumaSpread,
+        redRatio: redRatio,
+        blueRatio: blueRatio,
+        clippedFraction: clippedFraction,
+        sharpness: sharpness,
+      );
 
   /// Takes a fingerprint of [frame] through the calibration's [geometry].
   ///
@@ -131,6 +202,34 @@ class CalibrationFingerprint {
           final cx = corner.x + sx * (-cornerOutside + (col + 0.5) * cell);
           final mean = sampler.blockMean(cx, cy, cell / 2, cell / 2);
           patches..add(mean.$1)..add(mean.$2)..add(mean.$3);
+        }
+      }
+    }
+
+    // The same patch, on the four hinge seams, for a board that has any. In x
+    // it is CENTRED on the seam rather than reaching inward from it: a seam is
+    // a line down the middle of the picture with board on both sides, so what
+    // says where it is, is the strip against its two leaves — while a corner
+    // has board on one side and the room on the other, and reaching outward is
+    // what puts the board's own outline in the patch.
+    final seams = <int>[];
+    if (geometry is FoldingBoardGeometry) {
+      final span = cornerOutside + cornerInside;
+      final cell = span / cornerCells;
+      for (final seam in <Pt>[
+        Pt(geometry.leftLeafEnd, 0),
+        Pt(geometry.rightLeafStart, 0),
+        Pt(geometry.rightLeafStart, 1),
+        Pt(geometry.leftLeafEnd, 1),
+      ]) {
+        final sy = seam.y == 0 ? 1.0 : -1.0;
+        for (var row = 0; row < cornerCells; row++) {
+          final cy = seam.y + sy * (-cornerOutside + (row + 0.5) * cell);
+          for (var col = 0; col < cornerCells; col++) {
+            final cx = seam.x - span / 2 + (col + 0.5) * cell;
+            final mean = sampler.blockMean(cx, cy, cell / 2, cell / 2);
+            seams..add(mean.$1)..add(mean.$2)..add(mean.$3);
+          }
         }
       }
     }
@@ -162,12 +261,69 @@ class CalibrationFingerprint {
 
     return CalibrationFingerprint(
       cornerPatches: patches,
+      seamPatches: seams,
       meanLuma: meanLuma,
       lumaSpread: math.sqrt(variance),
       redRatio: sumR / green,
       blueRatio: sumB / green,
       clippedFraction: n == 0 ? 0.0 : clipped / n,
+      sharpness: _sharpnessOf(frame, geometry),
     );
+  }
+
+  /// Cells per side of the block each sharpness sample is averaged over, and
+  /// how far apart the blocks that are differenced sit, in picture pixels.
+  ///
+  /// A three-cell block and a three-pixel arm: small enough that a board's own
+  /// triangle edges still fall between two blocks, wide enough that a
+  /// gaussian blur of a couple of sigma has visibly flattened the difference.
+  static const int sharpnessBlock = 3;
+  static const int sharpnessReach = 3;
+
+  /// Lattice per side for [sharpness], coarser than [_lattice] because a mean
+  /// over a hundred and forty-four places is already steady and each place
+  /// costs twenty-five reads rather than one.
+  static const int sharpnessLattice = 12;
+
+  static double _sharpnessOf(Frame frame, BoardGeometry geometry) {
+    const half = sharpnessBlock ~/ 2;
+    final margin = sharpnessReach + half;
+    double block(int px, int py) {
+      var sum = 0.0;
+      for (var dy = -half; dy <= half; dy++) {
+        for (var dx = -half; dx <= half; dx++) {
+          sum += lumaOf(frame.pixelAt(px + dx, py + dy));
+        }
+      }
+      return sum / (sharpnessBlock * sharpnessBlock);
+    }
+
+    var sum = 0.0, n = 0.0;
+    for (var iy = 0; iy < sharpnessLattice; iy++) {
+      final y = _inset +
+          (iy + 0.5) / sharpnessLattice * (1 - 2 * _inset);
+      for (var ix = 0; ix < sharpnessLattice; ix++) {
+        final x = _inset +
+            (ix + 0.5) / sharpnessLattice * (1 - 2 * _inset);
+        final p = geometry.imagePointOf(Pt(x, y));
+        if (!p.x.isFinite || !p.y.isFinite) continue;
+        final px = p.x.round(), py = p.y.round();
+        if (px < margin ||
+            py < margin ||
+            px >= frame.width - margin ||
+            py >= frame.height - margin) {
+          continue;
+        }
+        sum += (4 * block(px, py) -
+                block(px - sharpnessReach, py) -
+                block(px + sharpnessReach, py) -
+                block(px, py - sharpnessReach) -
+                block(px, py + sharpnessReach))
+            .abs();
+        n++;
+      }
+    }
+    return n == 0 ? 0.0 : sum / n;
   }
 
   /// Mean BT.601 luma over the board's interior in [frame], measured over the
@@ -202,19 +358,75 @@ class CalibrationFingerprint {
 
   /// Whether the board is still where calibration left it.
   ///
-  /// Both patch sets are divided by their own frame's mean luma first, so a
-  /// room that merely dimmed still matches: this asks about geometry, and
-  /// [exposureMatches] asks about light.
+  /// Every patch is compared on its own and the drifted ones are COUNTED, and
+  /// the board is called moved when **more than half** of them have drifted
+  /// past [maxPatchDrift]. Both sides are divided by their own frame's mean
+  /// luma first, so a room that merely dimmed still matches: this asks about
+  /// geometry, and [exposureMatches] asks about light.
+  ///
+  /// ## Why a count, and not the average this used to be
+  ///
+  /// Until Task 9 this was one root-mean-square over every cell of every
+  /// corner, which is an average — and an average cannot tell one patch that
+  /// went completely wrong from every patch going slightly wrong. Those are
+  /// different events, and only the second is a board that moved.
+  ///
+  /// **What spoils one patch at a time is the game itself**, which is the part
+  /// that was not obvious and is measured on both corpora. A corner patch
+  /// reaches [cornerInside] onto the playing surface, and the four corners of
+  /// a backgammon board are four of its busiest places: the 1-, 12-, 13- and
+  /// 24-points are all occupied at the start and all change hands during a
+  /// game, and on a cased board the bear-off wells sit under two of the
+  /// patches as well. Measured over the synthetic corpus's thirty frames, men
+  /// arriving at and leaving those places drift a corner patch by up to 0.152
+  /// against a bound of 0.12 — a false "the board moved" every few turns, on a
+  /// board that has not moved at all.
+  ///
+  /// **The real corpus says the same thing at ten frames.** One filmed game,
+  /// one camera on one table: the averaging rule called six of the ten a board
+  /// that had moved. Per patch, four of those six (010, 013, 018, 020) have
+  /// exactly two patches out of eight past the bound and the other six between
+  /// 0.019 and 0.094. Those four are frames the pipeline reads correctly and
+  /// identifies every play from. The remaining two (066, 070) have seven and
+  /// eight patches out, at 0.14 to 0.47, and those two really are a later
+  /// scene.
+  ///
+  /// Half is where that lands: play spoils one patch or two, and nothing
+  /// measured on either corpus spoils more than two without the board having
+  /// moved.
+  ///
+  /// ## What it costs, said plainly
+  ///
+  /// Sensitivity, at the small end. A board slid five or ten pixels under a
+  /// 1280-pixel frame puts two of four patches out and no longer fires; twenty
+  /// pixels puts all four out and does. Twenty pixels is about a fifth of a
+  /// point's width, and the tent measurements say a fifth of a column is
+  /// roughly where reading starts to suffer — three of twenty-four points
+  /// misread — so the check now fires at about the displacement that matters
+  /// rather than at the smallest one detectable. What it will not do any more
+  /// is notice a hair, and a hair moves no column.
   bool geometryMatches(CalibrationFingerprint other) {
     if (other.cornerPatches.length != cornerPatches.length) return false;
+    if (other.seamPatches.length != seamPatches.length) return false;
     final mine = math.max(meanLuma, 1.0);
     final theirs = math.max(other.meanLuma, 1.0);
-    var sum = 0.0;
-    for (var i = 0; i < cornerPatches.length; i++) {
-      final d = cornerPatches[i] / mine - other.cornerPatches[i] / theirs;
-      sum += d * d;
+    var patches = 0, drifted = 0;
+    for (final (ours, theirsPatches) in <(List<int>, List<int>)>[
+      (cornerPatches, other.cornerPatches),
+      (seamPatches, other.seamPatches),
+    ]) {
+      const cells = cornerCells * cornerCells * 3;
+      for (var start = 0; start < ours.length; start += cells) {
+        patches++;
+        var sum = 0.0;
+        for (var i = start; i < start + cells; i++) {
+          final d = ours[i] / mine - theirsPatches[i] / theirs;
+          sum += d * d;
+        }
+        if (math.sqrt(sum / cells) > maxPatchDrift) drifted++;
+      }
     }
-    return math.sqrt(sum / cornerPatches.length) <= maxPatchDrift;
+    return drifted * 2 <= patches;
   }
 
   /// Whether the light is still what the colours were learned under.

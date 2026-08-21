@@ -9,6 +9,7 @@ import 'frame.dart';
 import 'geometry_types.dart';
 import 'occupancy.dart';
 import 'play_matcher.dart';
+import 'readability.dart';
 import 'roi_atlas.dart';
 
 /// The perception core, as the app sees it.
@@ -210,6 +211,31 @@ class BoardVision {
   /// [BoardVerifier] instead.
   BoardDiscrepancies verifyExpectedBoard(Frame frame, BoardState expected) =>
       BoardVerifier(calibration, frame).verify(expected);
+
+  /// Can this frame be read at all, and if not, why not?
+  ///
+  /// **The one query that is not asked about a position**, and the one the
+  /// session runs on EVERY stable frame whether or not anything is pending.
+  /// The spec makes calibration a session-long contract rather than a one-time
+  /// gate: a board nudged, a lamp switched off, a phone slid, a hand left over
+  /// the felt are all caught the moment they happen instead of the next time
+  /// Buddy needs an answer.
+  ///
+  /// [motion] is what the phone's gyro says, injected because this package
+  /// never touches a sensor — see [MotionHint].
+  ///
+  /// The answer carries a level, a named cause, and
+  /// [Readability.requiresRecalibration], which is what the session routes on:
+  /// true when the calibration itself is dead and the guided corner/confirm
+  /// loop has to run again, false for everything that clears on its own. Read
+  /// [ReadabilityMonitor] before changing any of it — the order of the checks
+  /// is measured, not stylistic.
+  ///
+  /// Nothing here speaks, schedules or touches the game state. A readability
+  /// outage suspends answers and nothing else; the authoritative position is
+  /// untouched and play resumes exactly where it paused.
+  Readability assessReadability(Frame frame, MotionHint motion) =>
+      ReadabilityMonitor(calibration).assess(frame, motion);
 
   /// The same question, with what to do about each disagreement.
   ///

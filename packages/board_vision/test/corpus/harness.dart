@@ -191,6 +191,9 @@ void _scoreSession(
   // across the session so the note can say how many and which — see
   // [_scoreDice].
   final uncertifiedDice = <String>[];
+  // And the frames the readability check would not have answered on, with the
+  // cause it named — see [_scoreReadability].
+  final unreadable = <String>[];
   _scoreOccupancy(board, vision, calibrationFrame, calibrationShot);
   _scoreResync(board, vision, calibrationFrame, calibrationShot);
   _scoreDice(board, vision, calibrationFrame, calibrationShot, uncertifiedDice);
@@ -215,6 +218,8 @@ void _scoreSession(
       plays.breakChain();
       continue;
     }
+
+    _scoreReadability(board, vision, frame, shot, unreadable);
 
     if (!isCalibration) {
       // The two readability signals the Task 4 reviewers asked to see side by
@@ -243,6 +248,25 @@ void _scoreSession(
   }
 
   plays.finish();
+
+  // Said whether or not anything went amber, because the *absence* of a red
+  // frame in a corpus shot under one steady light is not evidence that the
+  // check can produce one. Acts 3 and 4 of the filming plan — the light change
+  // and the sabotage — are what would be, and they are not shot.
+  board.notes.add(
+    unreadable.isEmpty
+        ? '$name: every frame read green. This corpus can only show that the '
+            'readability check stays quiet on good frames — the conditions it '
+            'exists to catch are covered on the synthetic bed '
+            '(readability_test.dart), and on film they wait for acts 3 and 4 '
+            'of the capture plan, the light change and the sabotage, which '
+            'are not shot yet.'
+        : '$name: ${unreadable.length} frame'
+            '${unreadable.length == 1 ? '' : 's'} would not have been answered '
+            'on (${unreadable.join(', ')}). Every condition the check exists '
+            'to catch is covered on the synthetic bed; on film they wait for '
+            'acts 3 and 4 of the capture plan, which are not shot yet.',
+  );
 
   if (uncertifiedDice.isNotEmpty) {
     final n = uncertifiedDice.length;
@@ -544,17 +568,53 @@ void _scoreRefusal(
       // the position at all — the question is only whether the pipeline
       // notices that its own calibration has stopped being true, which is the
       // session-long contract the spec makes of calibration.
-      final now =
-          CalibrationFingerprint.fromFrame(frame, calibration.geometry);
+      //
+      // Asked of the readability check rather than of the fingerprint it is
+      // built on, because the bit that MATTERS to a session is the routing:
+      // noticing that the patches moved is worth nothing if the answer does
+      // not come back as "re-drag the corners".
+      final now = BoardVision(calibration)
+          .assessReadability(frame, MotionHint.still);
       board.record(
         CorpusMetric.expectedRefusal,
-        ok: !calibration.fingerprint.geometryMatches(now),
+        ok: now.requiresRecalibration,
         slices: slices,
-        detail: '${shot.id}: the board moved and the fingerprint still '
-            'matched, so the session would have gone on reading regions in '
-            'the wrong place',
+        detail: '${shot.id}: the board moved and readability came back '
+            '$now, so the session would have gone on reading regions in the '
+            'wrong place',
       );
   }
+}
+
+/// Whether the readability check would have answered on this frame at all.
+///
+/// **The one query a session asks of every stable frame**, pending question or
+/// not, so this is asked of every shot the corpus does not deliberately spoil —
+/// including the calibration hold, where a red would mean the session had
+/// declined the very frame it learned the board from.
+///
+/// [MotionHint.still] for every frame here, and it is a property of both
+/// corpora rather than an assumption: the synthetic bed's shots have no phone
+/// in them, and the real corpus's ten windows were chosen off the film for
+/// being settled with hands clear. A corpus of moving frames would have to
+/// carry the gyro in its sidecars.
+void _scoreReadability(
+  Scoreboard board,
+  BoardVision vision,
+  Frame frame,
+  CorpusShot shot,
+  List<String> unreadable,
+) {
+  final readability = vision.assessReadability(frame, MotionHint.still);
+  final green = readability.level == ReadabilityLevel.green;
+  if (!green) unreadable.add('${shot.id} ${readability.cause!.name}');
+  board.record(
+    CorpusMetric.frameReadable,
+    ok: green,
+    slices: _slicesOf(shot)
+      ..['readability'] = readability.cause?.name ?? 'green',
+    detail: '${shot.id}: $readability — ${readability.message}',
+  );
 }
 
 /// Every region of the board, against what the sidecar says is on it.

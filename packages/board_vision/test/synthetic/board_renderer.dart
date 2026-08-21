@@ -483,6 +483,106 @@ Map<int, StackPlacement> handPlacedStacks(BoardPalette palette, double gain) {
   };
 }
 
+/// Something lying on the board that is not the board — a hand reaching in, a
+/// sleeve, a phone put down on the felt.
+///
+/// **The bed had no way to draw the one thing that happens most.** Every other
+/// knob here degrades the *picture* of the board — grain, blur, a wandered quad,
+/// less light. None of them can express a chunk of the board simply not being
+/// visible, which is what a hand does several times a turn and what the
+/// readability stack has to name as [ReadabilityCause.occluded] rather than as
+/// a board that moved. So this is the same kind of addition
+/// [StackPlacement.faceGain] was: a physically-motivated shape the photographs
+/// have and the drawings did not.
+///
+/// ## What it draws, and why in the top-down render
+///
+/// A filled ellipse in **board space** — the same unit square the atlas
+/// describes — painted into the top-down image before the lighting gain, so it
+/// is lit by the same room the board is. That puts the thing flat ON the board
+/// rather than hovering above it, which is a real simplification: a hovering
+/// hand would project to a slightly different outline through the tent of a
+/// folding case. It is the right simplification because what the readability
+/// check measures is *a patch of the board that is not the board*, and that is
+/// the same patch either way.
+///
+/// ## The colour is a hand's, not a board's — and it is written down here
+///
+/// A palette is a board; a hand is not, and deriving one from the other would
+/// be inventing physics. So [kSkin] sits with the palettes, in the one file
+/// this package keeps colour constants in, and says what it is: a warm mid-tone
+/// that returns much more red than blue, which is what skin does under room
+/// light and what none of the three boards' felts do.
+///
+/// **It is not separable on every board, and that is the honest result rather
+/// than a gap to paper over.** On `BoardPalette.lowContrastWood` — the palette
+/// built to be hard, whose every surface is in the wood family — a hand sits
+/// 1.8 spreads from the felt, well inside what the model calls "the board".
+/// A hand on a board the colour of a hand cannot be found by colour, and the
+/// readability check says so out loud rather than pretending otherwise. On the
+/// other two it is 9.3 and 14.8 spreads out, far past
+/// `ColorModel.maxClassDistance`.
+class BoardOccluder {
+  /// Centre of the ellipse, in board space as the top-down render draws it.
+  final Pt center;
+
+  /// Half-width and half-height, in board-space units.
+  final double radiusX;
+  final double radiusY;
+
+  /// What the thing is, in sensor levels — see [kSkin].
+  final int color;
+
+  const BoardOccluder({
+    required this.center,
+    required this.radiusX,
+    required this.radiusY,
+    this.color = kSkin,
+  });
+
+  /// Nothing on the board, which is what every render draws unless told
+  /// otherwise — so every picture drawn before this type existed still draws
+  /// exactly the same bytes.
+  static const BoardOccluder none =
+      BoardOccluder(center: Pt(0, 0), radiusX: 0, radiusY: 0);
+
+  /// A hand reaching in over the near-right quadrant to move a checker.
+  ///
+  /// **The size is what a hand is**, not what a detector wants. A palm and
+  /// fingers span roughly a fifth of a 50 cm board's width and reach a third of
+  /// the way up it from the near edge, which is this ellipse: about a
+  /// twentieth of the playing field, over parts of three of the near half's
+  /// point columns and the felt between them.
+  ///
+  /// It leaves all four outer corners and both hinge seams untouched, and that
+  /// is the point of where it sits rather than an accident of it: a hand is not
+  /// a board that moved, and the check has to be able to tell them apart. A
+  /// hand ON a corner is the case colour cannot separate from a slide, and the
+  /// readability module documents it as such.
+  static const BoardOccluder hand = BoardOccluder(
+    center: Pt(0.68, 0.78),
+    radiusX: 0.10,
+    radiusY: 0.17,
+  );
+
+  bool get isNothing => radiusX <= 0 || radiusY <= 0;
+
+  @override
+  String toString() => isNothing
+      ? 'BoardOccluder(none)'
+      : 'BoardOccluder(${radiusX}x$radiusY at $center)';
+}
+
+/// A hand, in the same sensor levels the palettes are written in.
+///
+/// Mid-toned and warm — `(200, 148, 120)`, a red channel two thirds again its
+/// blue — which is the one thing every human hand under room light has in
+/// common and the reason a hand is not mistakable for felt on most boards. It
+/// lives beside the palettes because this file is where every colour constant
+/// in the package lives, and because a hand is a fact about hands rather than
+/// something a board could tell you.
+const int kSkin = 0xC89478;
+
 /// How worn a folding case's spine is — the raised hinge strip that such a
 /// board uses for a bar.
 ///
@@ -991,6 +1091,7 @@ RenderedBoard renderTopDown({
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
   SpineWear spine = SpineWear.none,
+  BoardOccluder occluder = BoardOccluder.none,
   StackPlacement stackPlacement = StackPlacement.flush,
   Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int width = kTopDownWidth,
@@ -1030,6 +1131,10 @@ RenderedBoard renderTopDown({
     palette,
     dieSide,
   );
+  // Last of the paint and before the light: whatever is lying on the board is
+  // between the camera and everything else, so it covers the men and the dice
+  // as well as the felt — and the room lights it along with the rest.
+  _drawOccluder(image, occluder);
   _applyLightingGain(image, lightingGain);
 
   if (orientation == BoardOrientation.whiteHomeFar) {
@@ -1206,6 +1311,7 @@ SyntheticShot renderShot({
   BoardProportions proportions = BoardProportions.standard,
   bool starInlays = false,
   SpineWear spine = SpineWear.none,
+  BoardOccluder occluder = BoardOccluder.none,
   StackPlacement stackPlacement = StackPlacement.flush,
   Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int topDownWidth = kTopDownWidth,
@@ -1228,6 +1334,7 @@ SyntheticShot renderShot({
     proportions: proportions,
     starInlays: starInlays,
     spine: spine,
+    occluder: occluder,
     stackPlacement: stackPlacement,
     pointPlacements: pointPlacements,
     width: topDownWidth,
@@ -1407,6 +1514,7 @@ FoldingShot renderFoldingShot({
   double barWidth = kFoldingBarWidth,
   bool starInlays = false,
   SpineWear spine = SpineWear.none,
+  BoardOccluder occluder = BoardOccluder.none,
   StackPlacement stackPlacement = StackPlacement.flush,
   Map<int, StackPlacement> pointPlacements = const <int, StackPlacement>{},
   int topDownWidth = kTopDownWidth,
@@ -1429,6 +1537,7 @@ FoldingShot renderFoldingShot({
     proportions: proportions,
     starInlays: starInlays,
     spine: spine,
+    occluder: occluder,
     stackPlacement: stackPlacement,
     pointPlacements: pointPlacements,
     width: topDownWidth,
@@ -1790,6 +1899,32 @@ void _drawSpineWear(
         y2: h - 1,
         color: _color(colour),
       );
+    }
+  }
+}
+
+/// The ellipse [occluder] describes, filled flat over whatever is under it.
+///
+/// Flat rather than shaded on purpose: a hand has a shape and a shadow, and
+/// neither is what the readability check keys on. What it keys on is that the
+/// patch is not one of the board's own surfaces, and a flat fill is the
+/// smallest thing that says so — everything else would be detail the bed cannot
+/// claim to have measured.
+void _drawOccluder(img.Image image, BoardOccluder occluder) {
+  if (occluder.isNothing) return;
+  final w = image.width, h = image.height;
+  final paint = _color(occluder.color);
+  final cx = occluder.center.x * w, cy = occluder.center.y * h;
+  final rx = occluder.radiusX * w, ry = occluder.radiusY * h;
+  final x0 = math.max(0, (cx - rx).floor());
+  final x1 = math.min(w - 1, (cx + rx).ceil());
+  final y0 = math.max(0, (cy - ry).floor());
+  final y1 = math.min(h - 1, (cy + ry).ceil());
+  for (var y = y0; y <= y1; y++) {
+    final dy = (y - cy) / ry;
+    for (var x = x0; x <= x1; x++) {
+      final dx = (x - cx) / rx;
+      if (dx * dx + dy * dy <= 1) image.setPixel(x, y, paint);
     }
   }
 }

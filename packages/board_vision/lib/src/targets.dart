@@ -17,6 +17,17 @@
 /// would put a number the spec fixed in the same list as a number the next
 /// measurement moves, and the next person could not tell which was which.
 ///
+/// **Readability has no number here, and that is not an omission.** The spec
+/// asks for an indicator — a three-state light that names its cause — rather
+/// than a rate, because being right about whether a frame is readable is not
+/// something a user can be promised: green on an unreadable frame shows up as
+/// a wrong answer to one of the five queries below, and red on a readable one
+/// costs a frame's delay and nothing else. So `ReadabilityMonitor` carries its
+/// own measured bounds, and the corpus counts a `frame readable` row that
+/// nothing is promised about — see `CorpusMetric.frameReadable`, which is
+/// pinned from both sides rather than floored, because the interesting way for
+/// a readability check to break is to answer *yes* too often.
+///
 /// ## When these change
 ///
 /// Once, deliberately, with the user, at the plan's Task 6 gate — the point at

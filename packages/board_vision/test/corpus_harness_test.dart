@@ -149,6 +149,22 @@ void main() {
           reason: board.skipped.map((s) => s.toString()).join('; '));
     });
 
+    test('thirty frames of ordinary play read green, every one', () {
+      // The other half of the readability row, and the half this corpus is
+      // actually good for: thirty drawn frames in conditions the light is
+      // supposed to pass, with men arriving at and leaving the four corner
+      // points all the way through. That traffic is what the check has to
+      // ignore — a corner patch reaches onto the playing surface, and the
+      // corners of a backgammon board are four of its busiest places. See
+      // `CalibrationFingerprint.geometryMatches`, which counted cells until
+      // this row said it could not.
+      final tally = board.totalFor(CorpusMetric.frameReadable);
+      expect(tally.attempts, 30,
+          reason: 'thirty-three shots less the three the corpus spoils on '
+              'purpose');
+      expect(tally.successes, 30, reason: board.report());
+    });
+
     test('the questions the corpus can ask were all asked', () {
       expect(board.totalFor(CorpusMetric.dicePair).attempts, 12);
       expect(board.totalFor(CorpusMetric.expectedRefusal).attempts, 3);
@@ -404,6 +420,36 @@ void main() {
         }
       }
       expect(violations, isEmpty, reason: board.report());
+    });
+
+    test('the readability row is pinned in both directions', () {
+      // **A floor is the wrong instrument on its own for this row**, and it is
+      // the only row here that says so. Every other one is a rate that a
+      // regression would push DOWN, so a ratchet under it catches the thing
+      // worth catching. This one is a check that answers "can I read this?",
+      // and the way for it to break is to answer YES more often — a bound
+      // widened, a patch stopped being sampled, a cause quietly unreachable —
+      // which takes the row to 10/10 and passes a floor without a murmur.
+      //
+      // So the count is exact and the two that miss are named, with the cause
+      // they miss for. Ten frames of one filmed session under one steady
+      // light: eight read green, and the two end-game keyframes come back as a
+      // board that has moved. See `kRealCorpusFloors` for the evidence behind
+      // that reading and for what this corpus cannot settle.
+      final tally = board.totalFor(CorpusMetric.frameReadable);
+      expect(tally.attempts, 10, reason: 'one per shot, calibration included — '
+          'a session runs this check on every stable frame');
+      expect(tally.successes, 8, reason: board.report());
+
+      final byCause = board.sliceOf(CorpusMetric.frameReadable, 'readability');
+      expect(byCause.keys.toSet(), <String>{'green', 'calibrationStale'},
+          reason: 'a new cause appearing on this corpus is a finding, not a '
+              'detail: ${board.report()}');
+      expect(byCause['calibrationStale']!.attempts, 2);
+      for (final id in <String>['066', '070']) {
+        expect(board.missesOf(CorpusMetric.frameReadable).join('; '),
+            contains(id));
+      }
     });
 
     test('the two dice rows ask about disjoint frames, and five belong to '
@@ -977,6 +1023,31 @@ void main() {
 ///   and is now three), so it moves nothing. One gained, two lost, and every
 ///   one of the three is this board's far half over-reading a stack.
 ///
+/// And the one that arrived with Task 9, which is a floor with a **matching
+/// test above it** rather than a one-sided ratchet:
+///
+/// * **frame readable 8/10, the two misses both `calibrationStale` on the
+///   end-game keyframes.** Eight of the ten windows read green and would have
+///   been answered on; 066 and 070 come back red and route to recalibration.
+///
+///   **That is very probably the right answer rather than a false alarm.**
+///   Those two are the end-game keyframes, minutes further into the film than
+///   the other eight, and they are the only two where the drift is everywhere:
+///   seven and eight of their eight patches are past the bound, at 0.14 to
+///   0.47, and their hinge seams have moved as well (0.09 to 0.41 against
+///   0.017 to 0.086 on every other frame). Nothing in the session moves like
+///   that except the board or the phone. What can be said against it is that
+///   this corpus has no ground truth for where the board was — the sidecars
+///   record the position, not the pose — so "the board moved" is the reading
+///   of the evidence and not a labelled fact. It is recorded here so that the
+///   day acts 3 and 4 are filmed there is something to check it against.
+///
+///   Unlike every other row here, this one is pinned from **both** sides —
+///   see 'the readability row is pinned in both directions'. A floor alone
+///   would be the wrong instrument: a change that made the check go blind
+///   would take this row to 10/10 and sail through a ratchet that only looks
+///   downward.
+///
 /// And the one that arrived with Task 7 and **passes**:
 ///
 /// * **legal-play identification 6/6.** The query the whole mode turns on, over
@@ -1076,6 +1147,7 @@ void main() {
 ///   this kind of error survived three audits — see CORRECTION IV.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
+  CorpusMetric.frameReadable: 8 / 10,
   CorpusMetric.startConfirmed: 1.0,
   CorpusMetric.dicePair: 0.0,
   CorpusMetric.diceAbsence: 1.0,
@@ -1110,6 +1182,14 @@ const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
 const Map<CorpusMetric, double> kSyntheticFloors = <CorpusMetric, double>{
   CorpusMetric.boardResynced: 22 / 30,
   CorpusMetric.regionVerified: 828 / 840,
+  // Every frame the corpus does not deliberately spoil reads green, which is
+  // the answer this corpus is meant to give: it is drawn in conditions the
+  // readability light is supposed to pass. It is worth flooring because the
+  // interesting way for it to move is DOWN — thirty frames of ordinary play,
+  // with men arriving at and leaving the four corner points, is exactly the
+  // traffic that made `geometryMatches` count patches instead of averaging
+  // cells. See `CorpusMetric.frameReadable`.
+  CorpusMetric.frameReadable: 1.0,
 };
 
 /// What knowing the expected position is worth, printed under both corpora.

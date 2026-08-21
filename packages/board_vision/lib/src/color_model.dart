@@ -304,17 +304,7 @@ class ColorModel {
 
   /// What [sample] is, judged against the region it was taken from.
   CheckerColor classify(Rgb sample, RoiBackground background) {
-    final f = feature(sample, background.color, exposure: exposure);
-    final toWhite = white.distanceTo(f);
-    final toBlack = black.distanceTo(f);
-    var toBoard = background.distanceTo(f);
-    if (!background.fullyMeasured) {
-      toBoard = math.min(
-        toBoard,
-        _distanceToModes(f, boardModes, boardSpread),
-      );
-    }
-
+    final (:toWhite, :toBlack, :toBoard) = _distances(sample, background);
     final nearestChecker = math.min(toWhite, toBlack);
     if (math.min(nearestChecker, toBoard) > maxClassDistance) {
       return CheckerColor.none;
@@ -323,6 +313,45 @@ class ColorModel {
       return CheckerColor.none;
     }
     return toWhite <= toBlack ? CheckerColor.white : CheckerColor.black;
+  }
+
+  /// How far [sample] is from the NEAREST of the three things this model
+  /// knows — in the same spreads [classify] measures in.
+  ///
+  /// [classify] collapses two very different answers into
+  /// [CheckerColor.none]: "that is the board" and "that is nothing I have ever
+  /// been shown". The first is the commonest answer on a board and the second
+  /// is a hand, a sleeve, or a mug — and telling them apart is exactly what the
+  /// readability check's occlusion test needs, which is why the number
+  /// [classify] already computes is exposed rather than recomputed differently
+  /// somewhere else.
+  ///
+  /// Past [maxClassDistance] is where [classify] gives up, and that bound was
+  /// measured with this case in mind: genuine checker samples sit under 1 in
+  /// every synthetic condition tested and about 3.3 in the worst, so the room
+  /// above it is room for things the board does not contain.
+  double strangenessOf(Rgb sample, RoiBackground background) {
+    final (:toWhite, :toBlack, :toBoard) = _distances(sample, background);
+    return math.min(math.min(toWhite, toBlack), toBoard);
+  }
+
+  ({double toWhite, double toBlack, double toBoard}) _distances(
+    Rgb sample,
+    RoiBackground background,
+  ) {
+    final f = feature(sample, background.color, exposure: exposure);
+    var toBoard = background.distanceTo(f);
+    if (!background.fullyMeasured) {
+      toBoard = math.min(
+        toBoard,
+        _distanceToModes(f, boardModes, boardSpread),
+      );
+    }
+    return (
+      toWhite: white.distanceTo(f),
+      toBlack: black.distanceTo(f),
+      toBoard: toBoard,
+    );
   }
 
   /// [classify], with the background looked up for you.

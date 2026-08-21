@@ -54,6 +54,18 @@ enum CorpusMetric {
   /// answer; see `PerceptionTargets.expectedRefusal`.
   expectedRefusal('unreadable shot refused'),
 
+  /// The readability check called the frame green — the question a session
+  /// asks of EVERY stable frame, whether or not anything is pending.
+  ///
+  /// One attempt per shot the corpus does not deliberately spoil. It has no
+  /// target, and cannot: the spec sets accuracy targets for the five queries
+  /// and describes the readability light as a light, so what this row is worth
+  /// is entirely in its denominator. Both corpora are shot in conditions the
+  /// light is supposed to pass, so a green here is the null result and every
+  /// red is something to go and look at — which is why the causes are printed
+  /// rather than only counted.
+  frameReadable('frame readable'),
+
   /// One region's colour and count, against the position the sidecar says is
   /// on the board. Informational: mid-game counts are never trusted in
   /// isolation by design — they feed Task 7's diff-matching against an
@@ -151,6 +163,9 @@ const Map<CorpusMetric, double?> kMetricTargets = <CorpusMetric, double?>{
   CorpusMetric.regionVerified: PerceptionTargets.fullBoardResyncPerRegion,
   CorpusMetric.legalPlayActed: null,
   CorpusMetric.startConfirmed: null,
+  // The readability light is a light, not an accuracy claim — see
+  // `CorpusMetric.frameReadable`.
+  CorpusMetric.frameReadable: null,
   CorpusMetric.regionOccupancy: null,
   CorpusMetric.regionColour: null,
   // The two whole-board rows the gate follow-up demoted. Counted and printed,
