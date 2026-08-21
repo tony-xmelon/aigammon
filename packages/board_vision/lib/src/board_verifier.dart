@@ -220,6 +220,24 @@ typedef TouchedRegion = ({RoiId region, CheckerColor? side});
 /// A hop that **hits** touches one more region than it names: the man it hit is
 /// now on the other player's end of the bar, and that end is where a placement
 /// goes wrong when a hand knocks a checker somewhere instead of onto the bar.
+///
+/// ## A dance touches the mover's end of the bar, and that is not nothing
+///
+/// A turn with no hops in it — `Move.none`, the dance the session announces
+/// when the rules offer no play — used to come back as the empty set, which
+/// made [BoardDiscrepancies.agreesOn] **vacuously true**: a query nobody could
+/// fail, counted as a placement that succeeded. That is the one shape of
+/// dishonesty this whole query was reshaped to avoid, so a dance has a claim of
+/// its own now, and it is the smallest true one: **the mover's own end of the
+/// bar is exactly as the game says it is.**
+///
+/// It is honest either way round. A dance almost always means men stuck on the
+/// bar, and "they are still there" is precisely what the session is asserting
+/// while it passes the turn — a hand that swept one off, or slid one in
+/// unannounced, is the placement error. And when the mover has nothing on the
+/// bar (every destination blocked, which is rarer and stranger), the claim
+/// becomes "his side of the bar is still empty", which is equally true and
+/// equally checkable. Never an empty set, so never vacuous.
 List<TouchedRegion> regionsTouchedBy(Move play, Player mover) {
   final mine = CheckerColor.ofPlayer(mover);
   final theirs = mine == CheckerColor.white
@@ -228,6 +246,10 @@ List<TouchedRegion> regionsTouchedBy(Move play, Player mover) {
   final out = <TouchedRegion>[];
   void add(TouchedRegion region) {
     if (!out.contains(region)) out.add(region);
+  }
+
+  if (play.checkerMoves.isEmpty) {
+    return <TouchedRegion>[(region: RoiId.bar, side: mine)];
   }
 
   for (final hop in play.checkerMoves) {

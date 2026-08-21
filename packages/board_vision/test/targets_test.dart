@@ -23,7 +23,12 @@ void main() {
               'where they are written down');
     });
 
-    /// The `≥NN%` in the row whose first column contains [row].
+    /// The `≥NN%` in the first table row containing [row], anywhere in it.
+    ///
+    /// Anywhere rather than in the first column, because the whole line is what
+    /// the caller gets from [rowFor] as well and one matching rule for both is
+    /// worth more than a narrower one for each. The phrases below are row
+    /// labels, so nothing else in the table says them.
     double targetIn(String row) {
       final line = spec.readAsLinesSync().firstWhere(
             (l) => l.startsWith('|') && l.contains(row),
@@ -59,7 +64,9 @@ void main() {
           targetIn('Full-board resync'));
     });
 
-    /// The whole first column of the row whose first column contains [row].
+    /// The whole first table row containing [row] — every column of it, which
+    /// is the point: what the test below reads is the denominator, and that
+    /// lives in the columns after the label.
     String rowFor(String row) => spec.readAsLinesSync().firstWhere(
           (l) => l.startsWith('|') && l.contains(row),
           orElse: () => '',

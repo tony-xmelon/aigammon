@@ -44,13 +44,21 @@
 /// * [fullBoardResyncPerRegion] is scored **per region**, and the whole-board
 ///   rate stays in the report as a watched row that nothing is promised about.
 ///
-/// The reshape is not the fix and was never sold as one: measured on the day it
+/// The reshape is not the fix and was never sold as one. Measured on the day it
 /// landed, it moved placement verification on the real corpus from 0/6 to
 /// **2/6**, and the perception work behind it — deriving the profile's
 /// bridgeable gap from a checker's own body rather than from a count of rows —
-/// took it to **3/6** in the commit after. Neither number is 0.95, and the
-/// three turns still missing are three different mechanisms rather than one:
-/// see the plan's Task 8 notes.
+/// took it to **3/6** in the commit after.
+///
+/// **It reads 1/6 today, and every step of that fall was a truth fix rather
+/// than a regression** — two corrections to the filmed ledger, on 2026-08-21
+/// and again on 2026-08-22, the second by pixel measurement. What they exposed
+/// is one mechanism: this corpus's folding case has a rim that stands proud of
+/// the felt, so the man at the near end of a near-half point is three quarters
+/// hidden and the reader returns *nothing* there rather than a short count.
+/// Four of the five turns that miss are exactly that, and while the ledger had
+/// those men on cells the camera sees well, none of it was visible. See the
+/// plan's Task 8 notes and `kRealCorpusFloors`.
 library;
 
 /// The spec's accuracy table, as thresholds the corpus harness asserts.

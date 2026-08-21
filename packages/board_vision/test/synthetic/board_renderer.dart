@@ -218,11 +218,17 @@ class BoardLayout {
   /// The moulded well in a checker's face, as a fraction of its radius —
   /// painted only when a [StackPlacement] asks for one through `faceGain`.
   ///
-  /// Two thirds, which is both what the real board's checkers show and what it
-  /// takes to matter: the ring left around a well this size thins to about a
-  /// third of the column across the middle of the disc, which is just under
-  /// [RoiSampler.minRowCoverage]. Narrower and no row ever breaks; wider and
-  /// the checker stops being one.
+  /// Seven tenths, which is roughly what the real board's checkers show and
+  /// what it takes to matter: the ring left around a well this size thins to
+  /// about a third of the column across the middle of the disc, which is just
+  /// under [RoiSampler.minRowCoverage]. Narrower and no row ever breaks; wider
+  /// and the checker stops being one.
+  ///
+  /// The words said "two thirds" against this 0.70 until a reviewer noticed.
+  /// **The number is the one that stayed**: every committed synthetic JPEG was
+  /// drawn at 0.70, the re-render guard in `corpus_harness_test.dart` compares
+  /// bytes, and moving a rendering constant to match a rounded description
+  /// would regenerate thirty-three photographs to fix a sentence.
   static const double checkerFaceFraction = 0.70;
 
   /// Gap between a checker's edge and the board edge it stacks from, in
@@ -2043,7 +2049,6 @@ const double kLampShadowReach = 0.10;
 /// Every channel moves by the same factor, so what changes down the disc is
 /// the light and not the colour — which is exactly the case the walk's hold
 /// test has to survive, since it judges colour with brightness taken out.
-///
 void _fillLitCircle(
   img.Image image, {
   required int centerX,

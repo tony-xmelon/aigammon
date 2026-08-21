@@ -188,6 +188,47 @@ void main() {
       );
     });
 
+    test('a dance claims the mover\'s end of the bar, not nothing at all', () {
+      // The vacuity the reviewer found. `Move.none` has no hops, so the touched
+      // set was empty and `agreesOn` came back true over a query nobody could
+      // fail — a placement scored as verified on the strength of having asked
+      // about no region whatsoever. A dance now claims the one thing it can:
+      // the mover's own end of the bar is where the game says it is.
+      expect(
+        regionsTouchedBy(Move.none, Player.white),
+        <TouchedRegion>[(region: RoiId.bar, side: CheckerColor.white)],
+      );
+      expect(
+        regionsTouchedBy(Move.none, Player.black),
+        <TouchedRegion>[(region: RoiId.bar, side: CheckerColor.black)],
+      );
+
+      // And the claim is one a frame can refute, which is what makes it a
+      // claim. The picture holds the starting position — nobody on the bar —
+      // and the game is told White has a man there and could not come in.
+      final bed = _bedOf(_beds.first);
+      final stuck = BoardState(
+        points: <int>[
+          for (final (i, c) in BoardState.initial().points.indexed)
+            i == 5 ? c - 1 : c,
+        ],
+        whiteBar: 1,
+      );
+      final result = bed.verify(BoardState.initial(), stuck);
+      expect(result.agreesOn(regionsTouchedBy(Move.none, Player.white)),
+          isFalse,
+          reason: result.message);
+      expect(
+        result.discrepanciesOn(regionsTouchedBy(Move.none, Player.white))
+            .single.region,
+        RoiId.bar,
+      );
+      // Black's dance over the same frame is about Black's end of the bar,
+      // which really is empty, so it agrees. The two ends are separate claims.
+      expect(result.agreesOn(regionsTouchedBy(Move.none, Player.black)), isTrue,
+          reason: result.message);
+    });
+
     test('a region this board does not have cannot fail a placement', () {
       // A folding case has no bear-off wells, so a play that bore a man off
       // touches a region nothing in the picture can speak about. Consuming

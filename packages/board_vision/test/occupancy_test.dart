@@ -240,10 +240,36 @@ void main() {
       }
     });
 
-    test('and the board it is on verifies against the game', () {
+    test('and the board it is on verifies against the game — while a board '
+        'one man out does not', () {
+      // **The first half of this used to stand alone, and a reviewer showed it
+      // proved almost nothing.** The state-primed verifier is handed the
+      // expected count and only has to find no contradiction, so its window is
+      // wider than a blind count's rounding — wide enough that agreement here
+      // survived even the flat-face mutation this whole group exists to catch.
+      // A test that passes whether or not the thing under it works is a test
+      // that has stopped being one.
+      //
+      // So the claim it can honestly make is the pair: the verifier agrees with
+      // the truth on a bed of moulded, broken-profile stacks, **and still
+      // refuses a board that is one man out on exactly such a stack.** The
+      // second half is what makes the first mean anything — it says the
+      // agreement is a reading rather than a tolerance wide enough to swallow
+      // anything.
       final (vision, board, frame) = mouldedBed();
       final result = vision.verifyExpectedBoard(frame, board);
       expect(result.agrees, isTrue, reason: result.message);
+
+      // The 9-point holds White's moulded five-stack; the game is told six.
+      final lie = BoardState(points: <int>[
+        for (final (i, c) in board.points.indexed) i == 8 ? c + 1 : c,
+      ]);
+      final refused = vision.verifyExpectedBoard(frame, lie);
+      expect(refused.agrees, isFalse,
+          reason: 'a six-stack claimed over a five-stack the sampler has to '
+              'walk in pieces: ${refused.message}');
+      expect(refused.discrepancies.map((d) => d.region),
+          contains(RoiId.point(8)), reason: refused.message);
     });
 
     test('the gap that may be bridged is a checker\'s, not a region\'s', () {
