@@ -130,6 +130,33 @@ class Readability {
     required this.message,
   });
 
+  /// A verdict a caller **states** rather than measures.
+  ///
+  /// [ReadabilityMonitor] remains the only thing that decides what a FRAME is
+  /// worth, and nothing about that changes: this constructor reads no pixels
+  /// and consults no calibration, so it cannot be used to launder a guess into
+  /// a measurement. It exists because the session above this package has to
+  /// hold verdicts it did not derive from a frame, and there was previously no
+  /// way to make one at all:
+  ///
+  ///  * the app's session tests script perception's answers — the scriptable
+  ///    `BoardVision` fake `app/test/buddy/fake_vision.dart` is built on, and
+  ///    the only way to drive the spec's pause / recalibrate routing without a
+  ///    camera and a corpus frame per case; and
+  ///  * a session that has been told the calibration is gone (by the user
+  ///    asking to recalibrate, say) holds a red with
+  ///    [requiresRecalibration] set before any frame has said so.
+  ///
+  /// [message] is shown to the user as it stands, exactly as the monitor's own
+  /// sentences are, so a caller writing one owes the user a sentence rather
+  /// than a label.
+  const Readability.stated({
+    required this.level,
+    this.cause,
+    this.requiresRecalibration = false,
+    required this.message,
+  });
+
   /// Whether perception answers are to be withheld on this frame.
   ///
   /// Anything but green. A frame that cannot be trusted is a frame no answer
