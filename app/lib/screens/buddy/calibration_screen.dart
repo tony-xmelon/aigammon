@@ -581,6 +581,29 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
 
   /// The live picture, the outline over it, and — on the confirming step — the
   /// position Buddy believes it is looking at.
+  ///
+  /// ## The assumption this whole screen rests on, stated out loud
+  ///
+  /// **Every overlay here maps normalized frame coordinates straight onto the
+  /// preview box, which is only right if the preview shows the whole sensor
+  /// frame, the same way up, unmirrored, and with no letterbox.** The box is
+  /// given the FRAME's aspect ratio and the preview is stretched into it with
+  /// `Positioned.fill` — which squelches `CameraPreview`'s own `AspectRatio`
+  /// rather than fighting it — so under that assumption a handle at (0.3, 0.7)
+  /// of the box is at (0.3, 0.7) of the frame, which is exactly what
+  /// [BoardHandles.quadIn] then converts. Nothing anywhere in Buddy Mode
+  /// handles preview rotation or mirroring.
+  ///
+  /// If the assumption is false, every handle is in the wrong coordinate frame
+  /// and the failure is silent: the outline lands somewhere plausible, the
+  /// calibration may even succeed, and the columns are simply wrong. The
+  /// consolation is that the loud half is loud — a phone held in portrait shows
+  /// a preview turned on its side, which no one can miss — and landscape is the
+  /// natural way to aim a phone at a board anyway.
+  ///
+  /// **This is the FIRST item in Task 15's on-device protocol**, and it needs a
+  /// real phone: put a handle on a real corner, in both orientations, and look
+  /// at whether it stays there.
   Widget _preview(BuildContext context) {
     final frame = _latest?.frame;
     final aspect = frame == null || frame.height == 0
@@ -1460,6 +1483,16 @@ class PhoneBuddyCamera implements BuddyCamera {
         _ => 'The camera could not be started. ${error.description ?? ''}'.trim(),
       };
 
+  /// The controller's own preview widget, handed over unwrapped.
+  ///
+  /// The caller stretches this to fill a box it sized from the FRAME's aspect
+  /// ratio, which overrides the `AspectRatio` `CameraPreview` builds for
+  /// itself. That is deliberate — a letterboxed preview and a full-bleed
+  /// overlay would not be the same picture — and it is only correct while the
+  /// displayed preview and the sensor frame agree about orientation and
+  /// mirroring. See `_CalibrationScreenState._preview`, which states the
+  /// assumption in full and names it as the first thing Task 15 verifies on a
+  /// real phone.
   @override
   Widget preview(BuildContext context) {
     final controller = _controller;
