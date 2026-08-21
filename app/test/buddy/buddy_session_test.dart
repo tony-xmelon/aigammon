@@ -776,6 +776,46 @@ void main() {
       expect(events.whereType<MoveEvent>().length, greaterThan(10),
           reason: 'a real game, not a two-move stub');
     });
+
+    test('a match that ends on an open throw closes the throw with it',
+        () async {
+      // The cube is the one verb that can end a match from the PRE-ROLL gate,
+      // which is precisely the gate at which a physical throw has already been
+      // asked for. Two points on a dropped redouble in a two-point match is
+      // the shortest route to it: Buddy doubles, the user takes and so owns the
+      // cube at 2, and the user's own redouble is dropped.
+      final h = Harness(matchLength: 2, buddyDoubles: true, buddyTakes: false);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.pumpUntil(
+          () => h.session.phase == BuddyPhase.awaitingCubeAnswer);
+      h.session.answerDouble(CubeAction.take);
+      await h.settle();
+      await h.pumpUntil(() => h.preRollFor(h.session.userSide));
+      expect(h.session.awaitingRoll, isTrue,
+          reason: 'the pre-roll gate has asked for a throw nobody has made');
+
+      final saidBefore = h.speech.length;
+      h.session.offerDouble();
+      await h.settle();
+
+      expect(h.session.phase, BuddyPhase.over,
+          reason: 'two points on a dropped redouble decides a two-point match');
+      expect(h.session.awaitingRoll, isFalse,
+          reason: 'the throw the gate asked for is not a throw any more — a '
+              'match that is over cannot take one, and a screen still offering '
+              'the pad is offering a button whose answer runs rollDice on a '
+              'finished game');
+      expect(() => h.session.enterDiceManually(Dice(3, 1)), throwsStateError,
+          reason: 'and the verb behind that button refuses it too, rather '
+              'than folding a roll into a match that has been decided');
+      expect(h.speech.sublist(saidBefore).where((l) => l.contains('rolled')),
+          isEmpty,
+          reason: 'nothing was said about a throw after the last point');
+    });
   });
 
   group('persistence', () {
@@ -969,6 +1009,7 @@ class Harness {
     this.matchLength = 1,
     this.buddySide = Player.black,
     this.buddyDoubles = false,
+    this.buddyTakes = true,
     this.cubeless = false,
     this.seat = BuddySeat.near,
     MatchPersistence persistence = const NoopPersistence(),
@@ -976,7 +1017,7 @@ class Harness {
     speaker = BuddySpeaker();
     policy = RecordingPolicy(
         OpponentPolicy(speaker: speaker, buddySide: buddySide));
-    engine = ScriptedEngine(doubles: buddyDoubles);
+    engine = ScriptedEngine(doubles: buddyDoubles, takes: buddyTakes);
     session = BuddySession(
       engine: engine,
       buddySide: buddySide,
@@ -997,6 +1038,14 @@ class Harness {
   final int matchLength;
   final Player buddySide;
   final bool buddyDoubles;
+
+  /// Whether Buddy takes a cube the user turns. Scripted rather than reasoned:
+  /// a real engine's take/drop is match equity, and the one state this needs —
+  /// a drop that ENDS the match — is a state no correct engine ever drops in,
+  /// since dropping there loses the match outright. See the "a match that ends
+  /// on an open throw" test, which is about what the session does with the
+  /// throw and not about whether Buddy should have dropped.
+  final bool buddyTakes;
   final bool cubeless;
   final BuddySeat seat;
   final FakeVision vision = FakeVision();

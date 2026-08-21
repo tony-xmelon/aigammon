@@ -296,7 +296,29 @@ class BuddySession extends ChangeNotifier {
   /// a screen gates the manual pad on this rather than on a phase: the pad
   /// stays live through a readability outage — it answers the USER, not the
   /// camera — and no phase says both "a roll is open" and "the light is out".
-  bool get awaitingRoll => _roller.isPending;
+  /// **A decided match closes the question, and the request is left where it
+  /// is.** A match can end with a throw still open: the cube is the one verb
+  /// that finishes a game from the PRE-ROLL gate, which is exactly the gate at
+  /// which a physical throw has already been asked for. A request that
+  /// outlived the match would leave the game-over screen with a live Dice
+  /// button whose answer resumes [_requestRoll] — speaking a roll after the
+  /// last point and running `GameController.rollDice` on a finished game,
+  /// inside an unawaited future where the throw goes nowhere.
+  ///
+  /// Read from the CONTROLLER rather than from [phase] because the two can
+  /// disagree for a moment: an outage on the same gate parks the phase in
+  /// [BuddyPhase.paused], where [_derive] does not run, and the match is over
+  /// regardless of what the light is doing.
+  ///
+  /// Cancelling the [BuddyDiceRoller] request instead was the other candidate
+  /// and is the worse one — `cancel` never completes the future
+  /// [_requestRoll] is suspended on, so the in-flight flag its `finally`
+  /// clears would stay set for good, which is the deadlock that verb's own doc
+  /// warns about. Closing the QUESTION leaves nothing able to submit:
+  /// [enterDiceManually] refuses on this same getter, and the frame loop asks
+  /// a session at [BuddyPhase.over] nothing at all.
+  bool get awaitingRoll =>
+      _roller.isPending && !(_controller?.matchOver ?? false);
 
   /// Whether Buddy's double is on the table and the user has not answered it.
   ///
@@ -364,7 +386,10 @@ class BuddySession extends ChangeNotifier {
   /// one: the pad is always open, per the spec's "manual dice entry is always
   /// one tap away".
   void enterDiceManually(Dice dice) {
-    if (!_roller.isPending) {
+    // [awaitingRoll] rather than the roller's own flag: a throw typed after
+    // the last point of the match is refused rather than folded into a game
+    // that has been decided. See that getter.
+    if (!awaitingRoll) {
       throw StateError('no roll is being waited for');
     }
     _acceptDice(dice, null);
