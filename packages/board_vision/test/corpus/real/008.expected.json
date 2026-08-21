@@ -15,9 +15,9 @@
       0,
       4,
       0,
-      3,
+      2,
       0,
-      0,
+      1,
       0,
       -5,
       4,
@@ -85,8 +85,8 @@
     {
       "type": "roll",
       "player": "white",
-      "die1": 3,
-      "die2": 2
+      "die1": 2,
+      "die2": 1
     },
     {
       "type": "move",
@@ -99,7 +99,7 @@
         ],
         [
           10,
-          7,
+          9,
           false
         ]
       ]
@@ -114,7 +114,7 @@
   "synthetic": null,
   "expectRefusal": null,
   "refusalReason": null,
-  "title": "Turn 3 played — W 3-2: 13/8 (one man, via the 11)",
+  "title": "Turn 3 played — W 2-1: 13/10 (one man, via the 11)",
   "instructions": [
     "Cut VID20260820105037 at t=76.5s and take the whole frame.",
     "The board as the ledger leaves it after turn 3.",

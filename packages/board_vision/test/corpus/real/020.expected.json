@@ -17,10 +17,10 @@
       0,
       2,
       0,
-      -1,
+      2,
       0,
-      -5,
-      3,
+      -6,
+      2,
       0,
       0,
       0,
@@ -35,10 +35,186 @@
     ],
     "whiteBar": 1,
     "blackBar": 0,
-    "whiteOff": 1,
+    "whiteOff": 0,
     "blackOff": 0
   },
-  "events": null,
+  "events": [
+    {
+      "type": "openingRoll",
+      "whiteDie": 4,
+      "blackDie": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          7,
+          3,
+          false
+        ],
+        [
+          5,
+          3,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          16,
+          22,
+          false
+        ],
+        [
+          18,
+          22,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 2,
+      "die2": 1
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          12,
+          10,
+          false
+        ],
+        [
+          10,
+          9,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 4
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          0,
+          4,
+          false
+        ],
+        [
+          4,
+          10,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 6,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          12,
+          6,
+          false
+        ],
+        [
+          12,
+          9,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 5
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          0,
+          6,
+          true
+        ],
+        [
+          6,
+          11,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "white",
+      "die1": 5,
+      "die2": 2
+    },
+    {
+      "type": "move",
+      "player": "white",
+      "move": [
+        [
+          24,
+          19,
+          false
+        ],
+        [
+          5,
+          3,
+          false
+        ]
+      ]
+    },
+    {
+      "type": "roll",
+      "player": "black",
+      "die1": 6,
+      "die2": 3
+    },
+    {
+      "type": "move",
+      "player": "black",
+      "move": [
+        [
+          10,
+          13,
+          false
+        ],
+        [
+          13,
+          19,
+          true
+        ]
+      ]
+    }
+  ],
   "dice": null,
   "capture": {
     "board": "folding-case walnut",
@@ -48,10 +224,10 @@
   "synthetic": null,
   "expectRefusal": null,
   "refusalReason": null,
-  "title": "Turn 8 played — the hit man on the hinge, and the stray still out",
+  "title": "Turn 8 played — B 6-3: 11/20* (one man, via the 14 — hits White's man on the 20)",
   "instructions": [
     "Cut VID20260820105037 at t=185.0s and take the whole frame.",
-    "Black played 12/17 17/20*, so the White man that entered last turn is on the hinge ridge and Black stands on the 20 — both read off zooms of the far-right quarter. The turn-7 stray is still off the board, so this position is the ledger's minus that man as well.",
-    "A 3 is lying on the felt and its partner is hidden behind the man on the bar, so the sidecar claims no roll rather than half of one."
+    "The board as the ledger leaves it after turn 8.",
+    "One die is lying on the felt and the other is behind the man on the hinge, showing a clear 6 to the camera; a pair nobody can read whole is not a pair this sidecar claims."
   ]
 }

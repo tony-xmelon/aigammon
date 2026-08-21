@@ -554,11 +554,11 @@ void main() {
       // out of `buildRealSession` — and this pins that the boards written into
       // the sidecars are that replay's own output.
       final withLogs = filmed.where((s) => s.events != null).toList();
-      expect(withLogs.length, 5,
-          reason: 'five positions came off the turn ledger — turns 7 and 8 '
-              'left it in the 2026-08-21 re-audit, because a checker '
-              'physically left the board during turn 7 and no legal event '
-              'chain reaches what those two frames show');
+      expect(withLogs.length, 7,
+          reason: 'seven positions come off the turn ledger. Turns 7 and 8 '
+              'spent a day out of it — the 2026-08-21 audit read a checker as '
+              'having left the board — and the 2026-08-22 measurement put that '
+              'man on the 10-point and both turns back in');
       for (final shot in withLogs) {
         expect(shot.replayedBoard, shot.board, reason: shot.id);
         expect(shot.events!.first, isA<OpeningRollEvent>(), reason: shot.id);
@@ -584,28 +584,33 @@ void main() {
 
     test('every position has thirty checkers on it, wherever they are', () {
       // The one arithmetic a replay cannot get wrong and a hand-read keyframe
-      // can. The two keyframes were counted off zoomed frames by a person, so
-      // this is the check that the counting closed.
+      // can. The two end-game keyframes were counted off zoomed frames by a
+      // person, so this is the check that the counting closed — and it is the
+      // check that caught the 2026-08-21 audit's "a checker left the board"
+      // reading being an accounting claim as well as an optical one: fifteen
+      // men a side are on points in every window of this session.
       for (final shot in filmed) {
         expect(shot.board.checkerCount(Player.white), 15, reason: shot.id);
         expect(shot.board.checkerCount(Player.black), 15, reason: shot.id);
       }
     });
 
-    test('the four board-only shots carry a board and no log at all', () {
-      // Two of them are the end of the footage, which ran on past the ledger
-      // and was not transcribable move by move — hands in shot, a hit nobody
-      // could pin to a turn. The other two are turns 7 and 8: a White checker
-      // left the board during turn 7 and ended up at the near rim, so those
-      // frames show a position no sequence of legal events produces. What
-      // survived in all four cases is a board read off zoomed frames. The
-      // schema takes that as it stands: `events` is nullable, a null one emits
-      // as null and reads back as null, and the harness scores occupancy off
-      // `board` without ever asking how the board got there.
+    test('the two board-only shots carry a board and no log at all', () {
+      // Both are the end of the footage, which ran on past the ledger and was
+      // not transcribable move by move — hands in shot, a hit nobody could pin
+      // to a turn. What survived is a board read off zoomed frames. The schema
+      // takes that as it stands: `events` is nullable, a null one emits as null
+      // and reads back as null, and the harness scores occupancy off `board`
+      // without ever asking how the board got there.
+      //
+      // **018 and 020 were here for exactly one day** and are replayed
+      // positions again; see the ledger's 2026-08-22 note. The mechanism is
+      // what this test is for, so it is pinned on the two shots that still need
+      // it rather than on the four that briefly did.
       final keyframes =
           filmed.where((s) => s.events == null && s.kind != ShotKind.calibration)
               .toList();
-      expect(keyframes.map((s) => s.id), <String>['018', '020', '066', '070']);
+      expect(keyframes.map((s) => s.id), <String>['066', '070']);
       for (final shot in keyframes) {
         expect(shot.replayedBoard, isNull, reason: shot.id);
         expect(shot.toJson()['events'], isNull, reason: shot.id);
@@ -619,28 +624,28 @@ void main() {
       }
     });
 
-    test('the committed logs carry no hit, and the ledger still derives one',
-        () {
+    test('the committed logs carry the two hits the game had', () {
       // A `CheckerMove` carries a hit FLAG as well as two points,
       // `CheckerMove.==` compares it, and Task 7's play matching compares
       // moves against an enumerated set of legal ones — so a log that reaches
       // the right board with every flag false is a trap laid for exactly the
       // corpus that has a real hit in it.
       //
-      // **The committed logs no longer contain one, and that is a consequence
-      // of the 2026-08-21 re-audit rather than a flag going missing.** The
-      // filmed game's first hit is turn 6's `1/7*`, and the last window the
-      // ledger reaches is now turn 5 — turns 7 and 8 carry boards read off the
-      // frames, because a checker left the board during turn 7. Pinned as a
-      // count so that a flag appearing here means something changed.
-      expect(_hopFlags(filmed), (0, 30),
-          reason: 'thirty hops across the five cumulative logs, none of them a '
-              'hit');
+      // The filmed game hits twice: turn 6's `1/7*` and turn 8's `11/20*`. The
+      // logs are cumulative and turn 6's own window never came, so its flag
+      // rides in two of them (018 and 020) and turn 8's in one — three flagged
+      // hops over sixty. Pinned as a count so that a flag going missing means
+      // something changed. Derived rather than annotated: the hit is read off
+      // the point each hop lands on, as the replay walks the turn.
+      expect(_hopFlags(filmed), (3, 60),
+          reason: 'sixty hops across the seven cumulative logs, three of them '
+              'carrying a hit flag');
 
-      // The derivation itself is what the trap is about, so it stays tested —
-      // on a ledger written here, since the filmed one is private and no
-      // longer reaches a hit. Not hand-annotated in either case: the flag is
-      // read off the point each hop lands on, from the board as it stands
+      // The derivation itself is what the trap is about, so it stays tested on
+      // a ledger written here as well — the filmed one is private, and a
+      // fixture can put the hit on the FIRST hop of a turn, which is the case
+      // the real one does not have. Not hand-annotated in either case: the flag
+      // is read off the point each hop lands on, from the board as it stands
       // before that hop.
       final replayed = replayFilmedLedger(const <FilmedTurn>[
         (
@@ -710,12 +715,21 @@ void main() {
       expect(bar.board.whiteBar, 0);
     });
 
-    test('the four rolls a person could read are the only dice claimed', () {
+    test('the four rolls the corpus can stand behind are the only dice claimed',
+        () {
       // Dice values are ground truth and stay in the sidecars whatever the
-      // reader currently manages. Four of the ten frames have a settled pair
-      // a person read off a zoom; the rest have no dice, dice mid-throw, or a
+      // reader currently manages. Four of the ten frames carry a pair this
+      // session can stand behind; the rest have no dice, dice mid-throw, or a
       // pair nobody could attribute, and claiming those would be inventing
       // ground truth.
+      //
+      // **Three of the four were read off zooms and one is derived**, which is
+      // a distinction worth keeping: this camera sits low enough that a die
+      // shows its front face and not its top, so 010's pair was misread as 6-5
+      // on 2026-08-21. It is 6-4, because a ten-pip one-man play out of the
+      // 1-point with the 6-point blocked cannot have been thrown any other way
+      // — the same "ground truth by construction" the boards get, applied to
+      // the felt.
       final withDice = <String, String>{
         for (final shot in filmed.where((s) => s.dice != null))
           shot.id: '${shot.dice!.die1}-${shot.dice!.die2}',
@@ -723,9 +737,24 @@ void main() {
       expect(withDice, <String, String>{
         '003': '4-2',
         '005': '6-4',
-        '010': '6-5',
+        '010': '6-4',
         '013': '6-3',
       });
+      // And each of them is the roll its own turn was played on, which is what
+      // makes them checkable at all: a pair on the felt that contradicted the
+      // ledger beside it would be two answers to one question.
+      for (final shot in filmed.where((s) => s.dice != null)) {
+        final roll = <int>[shot.dice!.die1, shot.dice!.die2]..sort();
+        final rolls = <RollEvent>[
+          for (final event in shot.events!)
+            if (event is RollEvent) event,
+        ];
+        final played = rolls.isEmpty
+            // Turn 1 is played on the opening roll, which is not a RollEvent.
+            ? <int>[4, 2]
+            : <int>[rolls.last.die1, rolls.last.die2];
+        expect(roll, (played..sort()), reason: shot.id);
+      }
     });
 
     test('only the calibration shot carries the board\'s measurements', () {

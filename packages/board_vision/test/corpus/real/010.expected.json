@@ -15,11 +15,11 @@
       0,
       4,
       0,
-      3,
+      2,
       0,
-      0,
-      0,
-      -6,
+      1,
+      -1,
+      -5,
       4,
       0,
       0,
@@ -85,8 +85,8 @@
     {
       "type": "roll",
       "player": "white",
-      "die1": 3,
-      "die2": 2
+      "die1": 2,
+      "die2": 1
     },
     {
       "type": "move",
@@ -99,7 +99,7 @@
         ],
         [
           10,
-          7,
+          9,
           false
         ]
       ]
@@ -108,7 +108,7 @@
       "type": "roll",
       "player": "black",
       "die1": 6,
-      "die2": 5
+      "die2": 4
     },
     {
       "type": "move",
@@ -116,12 +116,12 @@
       "move": [
         [
           0,
-          6,
+          4,
           false
         ],
         [
-          6,
-          11,
+          4,
+          10,
           false
         ]
       ]
@@ -129,7 +129,7 @@
   ],
   "dice": {
     "die1": 6,
-    "die2": 5
+    "die2": 4
   },
   "capture": {
     "board": "folding-case walnut",
@@ -139,10 +139,10 @@
   "synthetic": null,
   "expectRefusal": null,
   "refusalReason": null,
-  "title": "Turn 4 played — B 6-5: 1/7 7/12 (the lover's leap)",
+  "title": "Turn 4 played — B 6-4: 1/11 (one man, via the 5)",
   "instructions": [
     "Cut VID20260820105037 at t=94.5s and take the whole frame.",
     "The board as the ledger leaves it after turn 4.",
-    "The 6 clear and the 5 tilted, both read off a zoom."
+    "Turn 4's own pair, lying where it fell. Read off the board rather than off the pips: this camera is low enough that both dice show a front face and neither up face is legible — a zoom was read as 6-5 on 2026-08-21 and that is what the correction replaces — and a ten-pip one-man play out of the 1-point, with the 6-point blocked four deep, can only have been thrown 6-4."
   ]
 }
