@@ -84,6 +84,32 @@ void main() {
       expect(readability.answersSuppressed, isTrue);
     });
 
+    test('and twenty pixels fires whichever way it went, +x included', () {
+      // **The claim this pins has been written wrong twice**, both times from
+      // this one direction. `CalibrationFingerprint.maxPatchDrift`'s doc first
+      // said a twenty-pixel slide no longer fires, and then that it fires "in
+      // six of the seven directions — only +x stays quiet". Measured, a slide
+      // straight along +x puts two of four patches out and stays silent at 5,
+      // 10 and 15 px, and puts three of four out — 0.120, 0.453, 0.125,
+      // 0.185 — and fires at 20, like the other seven directions. That is the
+      // slowest cell of the whole table, so pinning it from both sides pins
+      // the sensitivity the majority rule bought.
+      final base = _shot();
+      final vision = _vision(base);
+
+      expect(
+        vision.assessReadability(
+            _shot(quad: _slid(kCameraQuad, 10, 0)).frame, _still),
+        _isGreen,
+        reason: 'ten pixels along +x: two of four patches out, and silent',
+      );
+      final slid = vision.assessReadability(
+          _shot(quad: _slid(kCameraQuad, 20, 0)).frame, _still);
+      expect(slid.level, ReadabilityLevel.red);
+      expect(slid.cause, ReadabilityCause.calibrationStale);
+      expect(slid.requiresRecalibration, isTrue);
+    });
+
     test('and a board back where it was reads green again', () {
       // Recovery, which is the half of the contract that makes the other half
       // usable: play resumes where it paused rather than after a ceremony.
@@ -294,60 +320,90 @@ void main() {
     // reads a board down to a fifth of its calibration light, so a light that
     // went red at three tenths would suppress answers that are still right —
     // was measured against the pipeline and is true. What it did not say is
-    // that the light goes red at 0.45 anyway on a bed whose ROOM stays lit,
-    // through a path with nothing to do with this bound: the corner patches
-    // reach outside the playing field, the surround did not dim with the
-    // board, and the patch drift is named by the geometry check's light
+    // that the light goes red at about a half anyway on a bed whose ROOM stays
+    // lit, through a path with nothing to do with this bound: the corner
+    // patches reach outside the playing field, the surround did not dim with
+    // the board, and the patch drift is named by the geometry check's light
     // fallback.
     //
     // Both are real conditions. Which one a session is in depends on whether
     // what dimmed was the room or a lamp aimed at the board, so both get
     // pinned from both sides and the doc's table has to match them.
-    test('the whole room dimming is red exactly where the bound says', () {
-      final base = _shot();
-      final vision = _vision(base);
+    // Both rows are swept a hundredth of a commanded gain at a time, which is
+    // the quantity these brackets are written in and the quantity the doc's
+    // table is now in; the exposure the fingerprint measures is within three
+    // thousandths of it at every cell here.
+    for (final (name, palette, lastGreen, firstRed) in <(
+      String,
+      BoardPalette,
+      double,
+      double
+    )>[
+      ('classic', BoardPalette.classic, 0.17, 0.16),
+      ('blue-red', BoardPalette.blueRed, 0.19, 0.16),
+      ('low-contrast wood', BoardPalette.lowContrastWood, 0.17, 0.16),
+    ]) {
+      test('the whole room dimming is red exactly where the bound says, '
+          'on $name', () {
+        final base = _shot(palette: palette);
+        final vision = _vision(base);
 
-      expect(
-        vision.assessReadability(
-          _shot(lightingGain: 0.18, roomDimsToo: true).frame,
-          _still,
-        ),
-        _isGreen,
-        reason: 'the last green: 0.180 of the calibration light, board and '
-            'room together',
-      );
-      final first = vision.assessReadability(
-        _shot(lightingGain: 0.16, roomDimsToo: true).frame,
-        _still,
-      );
-      expect(first.level, ReadabilityLevel.red);
-      expect(first.cause, ReadabilityCause.tooDark);
-      expect(first.requiresRecalibration, isFalse);
-    });
-
-    test('and a board alone going dark is red from 0.46, not from 0.17', () {
-      // The path the doc did not describe, and the frames that make the cost
-      // of it explicit: at 0.46 the light is red while the board still reads
-      // perfectly. Pinned so that nobody can widen or narrow it without the
-      // number in the doc moving with it.
-      final base = _shot();
-      final vision = _vision(base);
-
-      expect(vision.assessReadability(_shot(lightingGain: 0.48).frame, _still),
+        expect(
+          vision.assessReadability(
+            _shot(palette: palette, lightingGain: lastGreen, roomDimsToo: true)
+                .frame,
+            _still,
+          ),
           _isGreen,
-          reason: 'the last green when only the board dims');
-      final first =
-          vision.assessReadability(_shot(lightingGain: 0.46).frame, _still);
-      expect(first.level, ReadabilityLevel.red);
-      expect(first.cause, ReadabilityCause.tooDark);
-      expect(first.requiresRecalibration, isFalse,
-          reason: 'whatever else this is, it must not be a board that moved');
-      expect(vision.confirmStartingPosition(_shot(lightingGain: 0.46).frame)
-          .discrepancies, isEmpty,
-          reason: 'and the cost, stated as a test rather than as a regret: '
-              'the pipeline reads this frame perfectly and the light '
-              'suppresses it anyway');
-    });
+          reason: 'the last green, board and room together',
+        );
+        final first = vision.assessReadability(
+          _shot(palette: palette, lightingGain: firstRed, roomDimsToo: true)
+              .frame,
+          _still,
+        );
+        expect(first.level, ReadabilityLevel.red);
+        expect(first.cause, ReadabilityCause.tooDark);
+        expect(first.requiresRecalibration, isFalse);
+      });
+    }
+
+    for (final (name, palette, lastGreen, firstRed) in <(
+      String,
+      BoardPalette,
+      double,
+      double
+    )>[
+      ('classic', BoardPalette.classic, 0.48, 0.47),
+      ('blue-red', BoardPalette.blueRed, 0.51, 0.50),
+      ('low-contrast wood', BoardPalette.lowContrastWood, 0.39, 0.38),
+    ]) {
+      test('and a board alone going dark is red from about a half, '
+          'not from 0.17, on $name', () {
+        // The path the doc did not describe, and the frames that make the cost
+        // of it explicit: the light is red here while the board still reads
+        // perfectly. Pinned so that nobody can widen or narrow it without the
+        // numbers in the doc's table moving with it.
+        final base = _shot(palette: palette);
+        final vision = _vision(base);
+
+        expect(
+            vision.assessReadability(
+                _shot(palette: palette, lightingGain: lastGreen).frame, _still),
+            _isGreen,
+            reason: 'the last green when only the board dims');
+        final dark = _shot(palette: palette, lightingGain: firstRed).frame;
+        final first = vision.assessReadability(dark, _still);
+        expect(first.level, ReadabilityLevel.red);
+        expect(first.cause, ReadabilityCause.tooDark);
+        expect(first.requiresRecalibration, isFalse,
+            reason: 'whatever else this is, it must not be a board that moved');
+        expect(vision.confirmStartingPosition(dark).discrepancies, isEmpty,
+            reason: 'and the cost, stated as a test rather than as a regret: '
+                'the pipeline reads this frame perfectly and the light '
+                'suppresses it anyway');
+      });
+    }
 
     test('the dark is named before the geometry, on the same frame', () {
       // Ordering, and it is not cosmetic. The corner patches are an
@@ -467,6 +523,72 @@ void main() {
       expect(first.cause, ReadabilityCause.calibrationStale);
     });
 
+    test('and past a strong enough cast the routing bit inverts', () {
+      // **A regime recorded rather than fixed** — see the section on it in
+      // `ReadabilityMonitor`'s class doc. Past the strength where the cast has
+      // also moved the luma-normalised corner patches, `geometryMatches` gives
+      // out; `exposureMatches` consults the cast and so fails too; and the
+      // fallback names the light on the luma ratio alone. On the wood palette
+      // that boundary sits between 0.425 of a full tungsten shift and 0.44.
+      final base = _shot(palette: BoardPalette.lowContrastWood);
+      final vision = _vision(base);
+
+      final last = vision.assessReadability(
+        _shot(
+          palette: BoardPalette.lowContrastWood,
+          cast: LightCast.tungsten(0.425),
+        ).frame,
+        _still,
+      );
+      expect(last.cause, ReadabilityCause.calibrationStale);
+      expect(last.requiresRecalibration, isTrue,
+          reason: 'the last strength that still routes to recalibration');
+
+      final first = vision.assessReadability(
+        _shot(
+          palette: BoardPalette.lowContrastWood,
+          cast: LightCast.tungsten(0.44),
+        ).frame,
+        _still,
+      );
+      expect(first.level, ReadabilityLevel.red);
+      expect(first.cause, ReadabilityCause.tooBright);
+      expect(first.requiresRecalibration, isFalse,
+          reason: 'and the first that does not');
+    });
+
+    test('so a lamp swapped outright is called too bright, and that is pinned',
+        () {
+      // The canonical case — a 2700 K lamp with no white balance behind it at
+      // all — is the one the inversion swallows. The frame is red and answers
+      // are suppressed, which is safe; what is wrong is the sentence, and
+      // dimming does not walk the user out of it (measured on all three
+      // palettes: tooBright, then tooDark, all the way down to a third of the
+      // calibration light).
+      //
+      // The fix is not free either: clipping moves the measured cast on its
+      // own, so consulting it in the light branch would send a board under a
+      // blazing NEUTRAL lamp to re-drag its corners. This pin is here so the
+      // regime cannot change silently — if it ever comes back
+      // `calibrationStale`, the class doc's section on the inverted routing
+      // bit is the thing to rewrite.
+      final base = _shot(palette: BoardPalette.lowContrastWood);
+      final vision = _vision(base);
+      final swapped = _shot(
+        palette: BoardPalette.lowContrastWood,
+        cast: LightCast.tungsten(1.0),
+      );
+      final readability = vision.assessReadability(swapped.frame, _still);
+
+      expect(readability.level, ReadabilityLevel.red);
+      expect(readability.cause, ReadabilityCause.tooBright);
+      expect(readability.requiresRecalibration, isFalse);
+      expect(vision.confirmStartingPosition(swapped.frame).discrepancies,
+          hasLength(8),
+          reason: 'and the frame really has stopped reading — this is a '
+              'suppressed answer, not a false alarm');
+    });
+
     test('and the lamp coming back goes straight to green', () {
       final base = _shot(palette: BoardPalette.lowContrastWood);
       final vision = _vision(base);
@@ -484,8 +606,8 @@ void main() {
       // **Why the colour check is asked LAST**, and it is measured rather than
       // reasoned. The cast is a board-WIDE statistic, so anything big enough to
       // move the board's average colour moves it: on the blue-red palette a
-      // skin-coloured arm across the far edge takes the cast to 0.129 and
-      // 0.137 against a bound of 0.12 — past it, on a board where nothing has
+      // skin-coloured arm across the far edge takes the cast to 0.128 and
+      // 0.138 against a bound of 0.12 — past it, on a board where nothing has
       // changed but what is lying on the felt.
       //
       // The occlusion check has already spoken by then, and it is right. Move
@@ -583,15 +705,19 @@ void main() {
   group('what the order the checks run in actually costs', () {
     // **The doc said this the wrong way round until a reviewer asked for the
     // frames.** It claimed that something covering most of the board's corners
-    // reads `calibrationStale` rather than `occluded` — the conservative error.
-    // Swept over 28 occluder sizes on all three palettes, `calibrationStale`
-    // never came back once, and what does happen is these three. They are
-    // pinned because a doc nobody can falsify is a doc that drifts.
+    // reads `calibrationStale` rather than `occluded` — the conservative
+    // error — and it does not: swept over 28 occluder sizes on all three
+    // palettes, the 18 cells that come back `calibrationStale` are all on the
+    // blue-red palette and all of them arrive through the CAST check rather
+    // than the geometry (see the class doc's table, and the dice-band case
+    // above, which is one of the eighteen). On the other 66 what happens is
+    // these three. They are pinned because a doc nobody can falsify is a doc
+    // that drifts.
     test('a near-total cover is named blur, because a flat fill has no edges',
         () {
       // The Laplacian dies long before the geometry is reached: an ellipse 0.9
-      // of the board across leaves 0.030 of the calibration frame's contrast
-      // on the classic palette, 0.022 on the blue-red and 0.091 on the wood,
+      // of the board across leaves 0.029 of the calibration frame's contrast
+      // on the classic palette, 0.021 on the blue-red and 0.087 on the wood,
       // against `minSharpnessRatio`'s 0.23.
       final base = _shot();
       final swallowed = _shot(
@@ -610,7 +736,7 @@ void main() {
 
     test('a large pale one is named by the light, not by the geometry', () {
       // Nothing clips — skin is not white — but a band over half the board
-      // lifts the board's own mean luma to 1.380 of its calibration value,
+      // lifts the board's own mean luma to 1.381 of its calibration value,
       // past `CalibrationFingerprint.maxExposureRatio`'s 1.3. The patches go
       // with it, and the fallback names the light.
       final base = _shot();
