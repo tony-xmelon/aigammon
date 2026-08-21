@@ -107,6 +107,39 @@ void main() {
           reason: 'the overlay is derived from the handles, not decoration');
     });
 
+    testWidgets('a handle keeps every delta the finger gave it, not just the '
+        'last one before a frame', (t) async {
+      // A touch screen reports moves faster than a phone draws frames, so
+      // several `onPanUpdate`s arrive between two builds as a matter of course.
+      // A handle that rebases each of them on the position it had at BUILD time
+      // keeps only the last, and the mark under the finger lags it and stops
+      // short — on the precision screen, under the loupe.
+      final h = _Harness();
+      await h.pump(t);
+      await h.toCorners(t);
+
+      final box = t.getSize(find.byKey(const Key('buddy-board-outline')));
+      final gesture =
+          await t.startGesture(t.getCenter(_handleFinder()));
+      // Past the drag slop and settled, so the three moves below are the whole
+      // of what this measures.
+      await gesture.moveBy(const Offset(0, 40));
+      await t.pumpAndSettle();
+      final start = _outline(t).handles.outer[0];
+
+      for (var i = 0; i < 3; i++) {
+        await gesture.moveBy(const Offset(10, 0));
+      }
+      await gesture.up();
+      await t.pumpAndSettle();
+
+      expect(_outline(t).handles.outer[0].dx - start.dx,
+          closeTo(30 / box.width, 1e-9),
+          reason: 'three ten-pixel moves are thirty pixels, whether or not a '
+              'frame happened to be drawn between them');
+      expect(_outline(t).handles.outer[0].dy, closeTo(start.dy, 1e-9));
+    });
+
     testWidgets('a handle under the finger raises a magnifier', (t) async {
       final h = _Harness();
       await h.pump(t);

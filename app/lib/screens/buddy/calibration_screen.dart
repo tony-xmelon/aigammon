@@ -640,18 +640,29 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
             hinge: i >= 4,
             active: _dragging == i,
             onStart: () => setState(() => _dragging = i),
-            onMove: (delta) => setState(() {
-              _handles = _handles.movedTo(
-                i,
-                points[i] +
-                    Offset(delta.dx / box.width, delta.dy / box.height),
-              );
-            }),
+            onMove: (delta) => _nudge(i, delta, box),
             onEnd: () => setState(() => _dragging = null),
           ),
         ),
     ];
   }
+
+  /// Moves handle [i] by [delta] PIXELS of a [box]-sized preview.
+  ///
+  /// **Against the current handle, never against the one this frame was built
+  /// with.** A touch screen reports moves faster than a phone draws frames, so
+  /// several of these arrive between two builds as a matter of course; adding
+  /// each to a position captured at build time keeps only the last of them, and
+  /// the handle lags the finger by the ratio of the two rates and stops short of
+  /// where it was put. On the one screen in the app whose whole purpose is
+  /// placing a point to within a few pixels.
+  void _nudge(int i, Offset delta, Size box) => setState(() {
+        _handles = _handles.movedTo(
+          i,
+          _handles.all[i] +
+              Offset(delta.dx / box.width, delta.dy / box.height),
+        );
+      });
 
   /// The loupe over the handle being dragged.
   ///
