@@ -245,12 +245,14 @@ void _scoreSession(
   plays.finish();
 
   if (uncertifiedDice.isNotEmpty) {
+    final n = uncertifiedDice.length;
     board.notes.add(
-      '$name: ${uncertifiedDice.length} shots have dice in the frame that no '
-      'roll could be certified from (${uncertifiedDice.join(', ')}) and are '
-      'scored on NEITHER dice row. The corpus has no answer to check a '
-      'reading against on those frames, and "no dice were invented" is not a '
-      'claim that can be made about a frame with dice lying in it.',
+      '$name: $n shot${n == 1 ? ' has' : 's have'} dice in the frame that no '
+      'roll could be certified from (${uncertifiedDice.join(', ')}) and '
+      '${n == 1 ? 'is' : 'are'} scored on NEITHER dice row. The corpus has no '
+      'answer to check a reading against on those frames, and "no dice were '
+      'invented" is not a claim that can be made about a frame with dice lying '
+      'in it.',
     );
   }
 }

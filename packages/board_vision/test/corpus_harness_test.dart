@@ -1126,6 +1126,10 @@ String priorReport(Scoreboard board) {
   return (out..writeln('=' * 64)).toString();
 }
 
+/// "1 frame" / "5 frames". The dice split is read at the gate, and a report
+/// that says "1 frames" is a report somebody stops reading carefully.
+String _frames(int n) => '$n frame${n == 1 ? '' : 's'}';
+
 /// The floors, what was measured against them, and how far each still sits
 /// from the spec — printed under the real corpus's scoreboard every run.
 String _realFloorReport(Scoreboard board) {
@@ -1163,11 +1167,12 @@ String _realFloorReport(Scoreboard board) {
           'right, ${pairs.attempts - found} refused outright.')
       ..writeln('  A refusal is the behaviour the design asks for; a wrong '
           'pair would not be.')
-      ..writeln('  Beside them: ${board.totalFor(CorpusMetric.diceAbsence)
-          .attempts} frames with no dice in them at all (the absence row) and '
-          '${excluded.n} with dice in them and no roll to check a reading '
-          'against — scored on neither row, ${excluded.sum.round()} of them '
-          'answered anyway.');
+      ..writeln('  Beside them: ${_frames(board
+              .totalFor(CorpusMetric.diceAbsence)
+              .attempts)} with no dice at all (the absence row) and '
+          '${_frames(excluded.n)} holding dice with no roll to check a '
+          'reading against — scored on neither row, ${excluded.sum.round()} of '
+          'those answered anyway.');
   }
   return (out..writeln('=' * 64)).toString();
 }
