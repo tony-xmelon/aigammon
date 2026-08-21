@@ -1033,14 +1033,34 @@ void main() {
 ///   **That is very probably the right answer rather than a false alarm.**
 ///   Those two are the end-game keyframes, minutes further into the film than
 ///   the other eight, and they are the only two where the drift is everywhere:
-///   seven and eight of their eight patches are past the bound, at 0.14 to
-///   0.47, and their hinge seams have moved as well (0.09 to 0.41 against
-///   0.017 to 0.086 on every other frame). Nothing in the session moves like
-///   that except the board or the phone. What can be said against it is that
-///   this corpus has no ground truth for where the board was — the sidecars
-///   record the position, not the pose — so "the board moved" is the reading
-///   of the evidence and not a labelled fact. It is recorded here so that the
-///   day acts 3 and 4 are filmed there is something to check it against.
+///   seven and eight of their eight patches are past the bound, at 0.138 to
+///   0.465, and their hinge seams have moved as well (**0.076 to 0.265**
+///   against **0.017 to 0.076** on every other frame). Nothing in the session
+///   moves like that except the board or the phone. What can be said against it
+///   is that this corpus has no ground truth for where the board was — the
+///   sidecars record the position, not the pose — so "the board moved" is the
+///   reading of the evidence and not a labelled fact. It is recorded here so
+///   that the day acts 3 and 4 are filmed there is something to check it
+///   against.
+///
+///   (The seam figures read 0.09–0.41 and 0.017–0.086 until they were
+///   re-measured for the Task 9 review. The two ranges still separate, but
+///   they now TOUCH at 0.076 — 066's quietest seam and the worst seam on any
+///   other frame are the same number — so the seams are weaker corroboration
+///   than the old figures made them look. The corner patches are what carries
+///   the reading.)
+///
+///   **And there is a tension in this scoreboard that nothing else on it
+///   records.** The region and occupancy rows below still score 066 and 070,
+///   through a calibration this very row calls stale. Both cannot be wholly
+///   right: if the board really did move between 020 and 066, then some part
+///   of those two frames' far-half misses is the reader sampling columns that
+///   have shifted under it, and not the far-half over-reading the occupancy
+///   note attributes them to. Which part is unanswerable here — there is no
+///   pose ground truth to re-project against — so it is written down rather
+///   than resolved, and it is a reason to expect the occupancy floors to MOVE
+///   when acts 3 and 4 are filmed rather than a reason to discount them now.
+///   Floors are recorded, not excused.
 ///
 ///   Unlike every other row here, this one is pinned from **both** sides —
 ///   see 'the readability row is pinned in both directions'. A floor alone
