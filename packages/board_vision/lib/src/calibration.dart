@@ -64,7 +64,22 @@ class CalibrationFingerprint {
   /// actually does between two frames.
   static const double maxExposureRatio = 1.3;
 
-  /// How far the frame's colour cast may move.
+  /// How far the frame's colour cast may move — [redRatio] and [blueRatio]
+  /// each, either way. See [castMatches], which is the half of
+  /// [exposureMatches] that reads this.
+  ///
+  /// **Load-bearing for a red light rather than only for a "did the scene
+  /// change" answer**, since Task 9's review: a lamp of a different colour is
+  /// one of the two things the spec calls a dead calibration, and this is the
+  /// number that says so. Measured on the bed by warming the light and asking
+  /// the board to read itself back — see `LightCast`, which exists so that the
+  /// condition can be drawn at all. Per palette, as a fraction of a full 2700 K
+  /// shift: the cast leaves this bound at 0.16, 0.10 and 0.18 on the classic,
+  /// blue-red and low-contrast wood boards, and `Calibrator.confirm` first
+  /// misreads a point at 0.25, 0.40 and 0.25. So on every palette the bound
+  /// fires while the board still reads, which is the side to err on — a
+  /// suppressed answer costs one frame, and a board read through a lamp it was
+  /// not learned under costs a phantom checker in the authoritative state.
   static const double maxCastDrift = 0.12;
 
   /// Four corner patches — top-left, top-right, bottom-right, bottom-left, in
@@ -372,24 +387,32 @@ class CalibrationFingerprint {
   /// different events, and only the second is a board that moved.
   ///
   /// **What spoils one patch at a time is the game itself**, which is the part
-  /// that was not obvious and is measured on both corpora. A corner patch
-  /// reaches [cornerInside] onto the playing surface, and the four corners of
-  /// a backgammon board are four of its busiest places: the 1-, 12-, 13- and
-  /// 24-points are all occupied at the start and all change hands during a
-  /// game, and on a cased board the bear-off wells sit under two of the
-  /// patches as well. Measured over the synthetic corpus's thirty frames, men
-  /// arriving at and leaving those places drift a corner patch by up to 0.152
-  /// against a bound of 0.12 — a false "the board moved" every few turns, on a
-  /// board that has not moved at all.
+  /// that was not obvious. A corner patch reaches [cornerInside] onto the
+  /// playing surface, and the four corners of a backgammon board are four of
+  /// its busiest places: the 1-, 12-, 13- and 24-points are all occupied at the
+  /// start and all change hands during a game, and on a cased board the
+  /// bear-off wells sit under two of the patches as well. Measured over the
+  /// synthetic corpus's thirty frames, men arriving at and leaving those places
+  /// drift a single corner patch by up to **0.152** against a bound of 0.12.
   ///
-  /// **The real corpus says the same thing at ten frames.** One filmed game,
-  /// one camera on one table: the averaging rule called six of the ten a board
-  /// that had moved. Per patch, four of those six (010, 013, 018, 020) have
-  /// exactly two patches out of eight past the bound and the other six between
-  /// 0.019 and 0.094. Those four are frames the pipeline reads correctly and
-  /// identifies every play from. The remaining two (066, 070) have seven and
-  /// eight patches out, at 0.14 to 0.47, and those two really are a later
-  /// scene.
+  /// **On the synthetic corpus that spike is all it is, and saying otherwise
+  /// was an overstatement.** This paragraph claimed "a false 'the board moved'
+  /// every few turns" there until a reviewer ran the old rule over the same
+  /// thirty frames: its worst RMS is **0.100**, comfortably inside the bound,
+  /// and it fires on **none** of them. Both rules read that corpus 30/30. What
+  /// the 0.152 spike shows is that one patch CAN go completely wrong while the
+  /// board sits still — which is the worry — not that the averaging rule was
+  /// failing on drawings.
+  ///
+  /// **The real corpus is where it actually fails, and that is the whole of
+  /// the case for the change.** One filmed game, one camera on one table: the
+  /// averaging rule calls **six of the ten** a board that had moved (010, 013,
+  /// 018, 020, 066, 070), at RMS 0.133 to 0.326 against the same 0.12. Per
+  /// patch, four of those six (010, 013, 018, 020) have exactly two patches out
+  /// of eight past the bound and the other six between 0.019 and 0.094 — and
+  /// those four are frames the pipeline reads correctly and identifies every
+  /// play from. The remaining two (066, 070) have seven and eight patches out,
+  /// at 0.138 to 0.465, and those two really are a later scene.
   ///
   /// Half is where that lands: play spoils one patch or two, and nothing
   /// measured on either corpus spoils more than two without the board having
@@ -399,12 +422,19 @@ class CalibrationFingerprint {
   ///
   /// Sensitivity, at the small end. A board slid five or ten pixels under a
   /// 1280-pixel frame puts two of four patches out and no longer fires; twenty
-  /// pixels puts all four out and does. Twenty pixels is about a fifth of a
-  /// point's width, and the tent measurements say a fifth of a column is
-  /// roughly where reading starts to suffer — three of twenty-four points
-  /// misread — so the check now fires at about the displacement that matters
-  /// rather than at the smallest one detectable. What it will not do any more
-  /// is notice a hair, and a hair moves no column.
+  /// pixels puts **two to four** out depending on which way it went, and fires
+  /// in six of the seven directions measured (+x, -x, +y, -y, and three
+  /// diagonals — only a slide straight along +x stays at two and stays quiet).
+  /// The words here said "all four" until a reviewer counted, and the count is
+  /// direction-dependent because the four corners of a board in perspective do
+  /// not move by the same amount.
+  ///
+  /// Twenty pixels is about a fifth of a point's width, and the tent
+  /// measurements say a fifth of a column is roughly where reading starts to
+  /// suffer — three of twenty-four points misread — so the check now fires at
+  /// about the displacement that matters rather than at the smallest one
+  /// detectable. What it will not do any more is notice a hair, and a hair
+  /// moves no column.
   bool geometryMatches(CalibrationFingerprint other) {
     if (other.cornerPatches.length != cornerPatches.length) return false;
     if (other.seamPatches.length != seamPatches.length) return false;
@@ -429,13 +459,34 @@ class CalibrationFingerprint {
     return drifted * 2 <= patches;
   }
 
-  /// Whether the light is still what the colours were learned under.
+  /// Whether the light is still the COLOUR the board's colours were learned
+  /// under — [redRatio] and [blueRatio] both inside [maxCastDrift].
+  ///
+  /// **Split out of [exposureMatches] because the two halves route
+  /// differently, which is the same reason [geometryMatches] is separate.** A
+  /// light that merely dimmed can be divided back out — that is what
+  /// `ColorModel.renormalized` does, and a board at six tenths of its
+  /// calibration light still reads perfectly. A light that changed COLOUR
+  /// cannot: three channels moving by three different factors do not cancel in
+  /// a ratio taken against a reference measured under the old lamp, so what
+  /// the model reads back is a board whose colours have stopped being the ones
+  /// it learned. That is a dead calibration and the session has to be told so
+  /// — see `ReadabilityMonitor.assess`, which is the one caller that needs
+  /// this half on its own.
+  ///
+  /// One signal, one place: [exposureMatches] asks this rather than repeating
+  /// the comparison, so the two can never drift apart.
+  bool castMatches(CalibrationFingerprint other) =>
+      (redRatio - other.redRatio).abs() <= maxCastDrift &&
+      (blueRatio - other.blueRatio).abs() <= maxCastDrift;
+
+  /// Whether the light is still what the colours were learned under — the same
+  /// brightness, to [maxExposureRatio], and the same colour, to
+  /// [castMatches].
   bool exposureMatches(CalibrationFingerprint other) {
     final ratio = math.max(meanLuma, 1.0) / math.max(other.meanLuma, 1.0);
     if (ratio > maxExposureRatio || ratio < 1 / maxExposureRatio) return false;
-    if ((redRatio - other.redRatio).abs() > maxCastDrift) return false;
-    if ((blueRatio - other.blueRatio).abs() > maxCastDrift) return false;
-    return true;
+    return castMatches(other);
   }
 
   /// Both of the above: the scene is the one that was calibrated.

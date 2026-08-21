@@ -33,6 +33,17 @@ enum ReadabilityLevel { green, amber, red }
 /// what happens next belong to the session.
 enum ReadabilityCause {
   /// Part of the playing field is outside the picture this frame came in.
+  ///
+  /// **In practice this is a programming error rather than something a user
+  /// did**, and the message that goes with it is written accordingly. The
+  /// geometry is fixed at calibration and does not move when the phone does —
+  /// see [ReadabilityMonitor._boardIsInFrame] — so the only thing that can
+  /// take the calibrated outline outside the picture is a preview handed over
+  /// at a different size or crop from the one the session calibrated on. A
+  /// user cannot fix that by moving the camera, and telling them to would be
+  /// worse than saying nothing. So the sentence names the frame rather than
+  /// the aim, and a session that shows it is looking at a bug in its own
+  /// plumbing.
   boardOutOfFrame,
 
   /// The board is no longer where — or no longer looks like what — it was
@@ -147,11 +158,11 @@ class Readability {
 ///
 /// ## What it costs
 ///
-/// **Under a hundredth of the picture**, and the number is pinned by a test
+/// **Under a hundredth of the picture**, and the number is pinned to the digit
 /// rather than claimed here: `readability_test.dart` hands the check a frame
-/// that counts its own reads. On the bed's 1280x960 frames — 1,228,800 pixels
-/// — one assessment of a plain board reads **7,812** of them, 0.64%, in four
-/// places:
+/// that counts its own reads and asserts the exact total. On the bed's
+/// 1280x960 frames — 1,228,800 pixels — one assessment of a plain board reads
+/// **7,812** of them, 0.64%, in four places:
 ///
 /// | what | places | reads each | total |
 /// |---|---|---|---|
@@ -163,6 +174,12 @@ class Readability {
 /// Sharpness is five sixths of that and is the one worth watching if the cost
 /// ever has to come down: it is a coarse lattice already, and what each place
 /// costs is five blocks of nine.
+///
+/// **A folding case costs 8,104, which is 292 more rather than the 324 the
+/// third row would suggest**, and the difference is not an error in either
+/// number: a folding board has no bear-off wells, so it has 26 regions where a
+/// cased one has 28, and the two the occlusion walk does not make gives back
+/// 32 reads of the seams' 324. Both numbers are measured and both are pinned.
 ///
 /// Nothing here re-reads the board: no stack is walked, no checker is found,
 /// no region is classified as a whole. That is the difference between a check
@@ -185,32 +202,66 @@ class Readability {
 /// 5. **the geometry**, from the fingerprint's patches — and only asserted as
 ///    [ReadabilityCause.calibrationStale] while the light is still comparable.
 ///    A patch comparison is an APPEARANCE comparison: measured on the bed at
-///    three tenths of the calibration light, with nothing whatever moved, the
-///    patches drift past their bound. Naming the geometry there would send a
-///    user whose board is exactly where they left it to re-drag its corners,
-///    which is the one thing the spec asks this module not to do for a cause
-///    that clears on its own.
-/// 6. **occlusion**, last because it is the only interpretive one — it asks
-///    the colour model what it does not recognize, and a board that has moved
-///    also puts unrecognizable things in every region. The geometry check
-///    above has already spoken by then, so a board that slid is named as one.
+///    0.46 of the calibration light, with nothing whatever moved, the patches
+///    drift past their bound (see [minExposureRatio] for why that happens as
+///    early as it does, and what it costs). Naming the geometry there would
+///    send a user whose board is exactly where they left it to re-drag its
+///    corners, which is the one thing the spec asks this module not to do for
+///    a cause that clears on its own.
+/// 6. **occlusion** — it asks the colour model what it does not recognize, and
+///    a board that has moved also puts unrecognizable things in every region.
+///    The geometry check above has already spoken by then, so a board that slid
+///    is named as one.
+/// 7. **the light's colour**, last of all. The spec names two ways a
+///    calibration dies — "geometry moved, colors no longer match" — and this is
+///    the second. It is asked after occlusion because the cast is a board-WIDE
+///    statistic and anything large enough to change the board's average colour
+///    moves it: measured on the blue-red palette, a skin-coloured arm across
+///    the far edge takes the cast to 0.129 and 0.137 against a bound of 0.12,
+///    with nothing changed but what is lying on the felt. Asked before
+///    occlusion, that frame would send a user with an arm over their board to
+///    re-drag its corners.
 ///
-/// The cost of that ordering is stated rather than hidden: **something that
-/// covers most of the board's corners at once reads as `calibrationStale`
-/// rather than as `occluded`.** `CalibrationFingerprint.geometryMatches` calls
-/// a board moved when more than half its patches have, so it takes an arm
-/// across three of the four corners to do it — a hand over one, or over two,
-/// falls through to the occlusion check as it should. From the patches alone
-/// the two really are the same picture, and the error the ordering makes is
-/// the conservative one: the session offers a recalibration that waiting would
-/// also have fixed.
+/// ## What the ordering actually costs, measured rather than reasoned
+///
+/// The cost was stated the wrong way round until a reviewer asked for the
+/// frames. It is **not** that a large occluder reads as `calibrationStale`:
+/// swept over 28 occluder sizes on all three palettes — bands from a third of
+/// the board's width to the whole of it, and from a sixth of its height to
+/// half — `calibrationStale` never came back once. What actually happens is
+/// three things, and each is the ordering working rather than failing:
+///
+/// * **a near-total cover reads `blur`.** A flat fill has no edges in it, so
+///   the sharpness ratio collapses long before the geometry is reached: an
+///   ellipse 0.9 of the board across leaves 0.030, 0.022 and 0.091 of the
+///   calibration frame's contrast on the three palettes, against a bound of
+///   0.23, and check 4 speaks first on all three.
+/// * **a large pale one reads `tooBright`.** Not from clipping — a skin-toned
+///   fill clips nothing — but because it lifts the board's own mean luma past
+///   `CalibrationFingerprint.maxExposureRatio`: a band over half the board
+///   measures 1.380 and 1.504 of the calibration light on the classic and
+///   blue-red palettes against a bound of 1.3, the patches go with it, and the
+///   geometry check's light fallback names the light rather than the geometry.
+/// * **and a hand over one or two corners falls through to the occlusion
+///   check — which on two of the three palettes then finds nothing, and the
+///   frame reads GREEN.** `geometryMatches` needs more than half the patches
+///   moved, and an arm across the far edge moves two of four. Colour is the
+///   only instrument left after that, and on the classic and wood palettes an
+///   arm across a corner covers no single region enough to be counted. That is
+///   the honest cost: not a misnamed recalibration, an unnamed occlusion.
+///
+/// Every one of the three is pinned in `readability_test.dart`, including the
+/// green, so that none of them can quietly become another.
 ///
 /// ## Numbers, provisionally
 ///
 /// Every bound below was measured, and each says against what. The synthetic
 /// bed can produce six of the seven causes — [ReadabilityCause.motion] is
 /// injected rather than drawn — and `readability_test.dart` produces each of
-/// them.
+/// them. It can also, since Task 9's review, produce a change of light COLOUR
+/// as against a change of level: see `LightCast` in the renderer, which is what
+/// the "colors no longer match" half of a stale calibration is measured
+/// against.
 ///
 /// The real corpus was filmed under one fixed light with hands clear, so it
 /// can only show that the check stays quiet on good frames. It does, on eight
@@ -230,10 +281,10 @@ class ReadabilityMonitor {
   ///
   /// **Measured against what still reads, not against what looks dark**, and
   /// the pipeline is far better at this than it feels: dimmed on the bed, all
-  /// three palettes read their own starting position back correctly down to a
-  /// fifth of their calibration light (0.18 measured), and the first misread
-  /// arrives at 0.15, on the classic palette, at two of its twenty-four
-  /// points. This sits in that gap.
+  /// three palettes read their own starting position back correctly down to
+  /// **0.172** of their calibration light, and the first misread arrives at
+  /// **0.162**, on the classic palette, at four of its twenty-four points —
+  /// the other two are still clean at 0.120. This sits in that gap.
   ///
   /// `ColorModel`'s own envelope says three tenths, and it is the conservative
   /// end of the same measurement — `CalibrationFingerprint.maxExposureRatio`
@@ -241,6 +292,55 @@ class ReadabilityMonitor {
   /// which is a tighter question than whether it can still be read). A
   /// readability light that went red at three tenths would suppress answers the
   /// pipeline is demonstrably still getting right.
+  ///
+  /// ## This is not the only place the light goes red, and the difference is
+  /// physical
+  ///
+  /// The paragraph above was the whole of this doc until a reviewer measured
+  /// the shipped behaviour and found the light going red at **0.45** — two and
+  /// a half times earlier, through a path nothing here described. Both numbers
+  /// are real, and which one a session meets depends on what dimmed:
+  ///
+  /// | what happened | classic | blue-red | wood | named by |
+  /// |---|---|---|---|---|
+  /// | the whole room dims, board and surround together | 0.180 → 0.162 | 0.254 → 0.159 | 0.171 → 0.160 | this bound |
+  /// | only the light on the board drops | 0.482 → 0.460 | 0.550 → 0.503 | 0.400 → 0.351 | the geometry check's light fallback |
+  ///
+  /// Last green, then first red, on each palette. Read the top row's **first
+  /// red** column and the three palettes agree to within three thousandths —
+  /// 0.162, 0.159, 0.160 — which is this bound doing exactly the job its first
+  /// paragraph describes. The last-green column is looser because a room this
+  /// dark also starts to trip the occlusion walk, which cannot recognize
+  /// samples with nothing left in them: between green and red those palettes
+  /// pass through an amber `occluded` step, which is a wait rather than a
+  /// verdict. Both rows are bracketed in `readability_test.dart` so this table
+  /// cannot drift from behaviour again.
+  ///
+  /// **The second row is the corner patches, and it is a real signal rather
+  /// than an artefact.** `CalibrationFingerprint.cornerOutside` reaches each
+  /// patch a little way OUTSIDE the playing field on purpose — the board's own
+  /// outline is what makes a corner informative — so five of every patch's
+  /// nine cells see the table around the board. `geometryMatches` divides both
+  /// sides by their own frame's mean board luma, which is exactly right for
+  /// everything ON the board and exactly wrong for anything that did not dim
+  /// with it: a surround at unchanged brightness over a board at 0.45 reads as
+  /// 2.2 times its calibration value, the patch drifts past
+  /// `maxPatchDrift`, and the light fallback names `tooDark`. Measured across
+  /// all three palettes, the four cells of each patch that lie wholly on the
+  /// playing field drift **0.009–0.014** at that same 0.45 and **0.034–0.058**
+  /// at 0.17 — the board itself has not moved at all.
+  ///
+  /// So the check is telling the truth in both rows: *the board's brightness
+  /// relative to the room it sits in has changed*, which is a different scene
+  /// from the calibrated one even though the board is where it was. **The cost
+  /// is admitted rather than argued away**: between 0.45 and 0.17 a session
+  /// whose board alone went dark is told "it is too dark" while the pipeline
+  /// would still have read every point correctly (measured: zero discrepancies
+  /// at 0.45, 0.40, 0.35 and 0.30 on all three palettes). What it buys is that
+  /// the same frames are never called a board that MOVED: the fallback names
+  /// `tooDark`, which carries no [Readability.requiresRecalibration] and so
+  /// costs the user a suppressed answer rather than a re-drag of four corners,
+  /// and the next frame under restored light answers immediately.
   static const double minExposureRatio = 0.17;
 
   /// How much of the board may be pinned at the top of the sensor's range
@@ -352,8 +452,15 @@ class ReadabilityMonitor {
       return const Readability._(
         level: ReadabilityLevel.red,
         cause: ReadabilityCause.boardOutOfFrame,
-        message: 'I cannot see the whole board. Line the camera up so the '
-            'playing field is inside the picture again.',
+        // Not "line the camera up": a user cannot fix this by moving the
+        // phone, because the outline that fell outside the picture is the
+        // calibrated one and it does not move with the camera. See the doc on
+        // [ReadabilityCause.boardOutOfFrame] — this sentence is for the one
+        // frame a user might ever see it on, and it sends them to the only
+        // action that works.
+        message: 'The picture I am being given is not the one this board was '
+            'set up on, so I cannot line anything up in it. Set the board up '
+            'again from here.',
       );
     }
 
@@ -407,11 +514,32 @@ class ReadabilityMonitor {
       );
     }
 
+    // The second way a calibration dies, and the spec names it in the same
+    // breath as the first: "geometry moved, colors no longer match". Asked
+    // LAST, and the reason is measured — see the class doc.
+    if (!remembered.castMatches(now)) return _colourStale;
+
     return const Readability._(
       level: ReadabilityLevel.green,
       message: 'I can see the board.',
     );
   }
+
+  /// The board is where it was and nothing is lying on it — but the light it
+  /// is under is not the light its colours were learned from.
+  ///
+  /// Same cause and same routing as a board that moved, because it is the same
+  /// event as far as the session is concerned: the calibration is dead and
+  /// only a new one revives it. The sentence differs because what the user has
+  /// to do differs — nobody can be told to put the old lamp back.
+  static const Readability _colourStale = Readability._(
+    level: ReadabilityLevel.red,
+    cause: ReadabilityCause.calibrationStale,
+    requiresRecalibration: true,
+    message: 'The light on the board has changed colour, so the board no '
+        'longer looks like the one I learned. Line the corners up again under '
+        'this light and I will pick the game straight back up.',
+  );
 
   static const Readability _tooDark = Readability._(
     level: ReadabilityLevel.red,
@@ -481,6 +609,17 @@ class ReadabilityMonitor {
   /// looking for what the band's surfaces do not account for. A die lying in
   /// it is therefore unrecognizable BY CONSTRUCTION, and counting it here
   /// would call every roll a hand over the board.
+  ///
+  /// **What that costs is a blind stripe across the middle of the board, and
+  /// it is pinned rather than only explained.** An ellipse 0.60 of the board
+  /// wide lying along the band — an arm laid across the bar, not a die —
+  /// covers nothing this walk looks at, moves two of four corner patches at
+  /// most, and comes back green: the session answers on it. Measured on the
+  /// classic palette and asserted in `readability_test.dart`, so that a later
+  /// idea which closes the blindness has to rewrite this paragraph rather than
+  /// silently making it untrue. The one thing that does catch such a frame is
+  /// the colour check at the end of [assess], and only on a board whose
+  /// colours are far enough from the thing lying on it — see that test too.
   ///
   /// [exposure] is the light this frame is in, already measured, so the colour
   /// model is re-normalized without walking the board a second time for it.
