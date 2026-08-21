@@ -298,8 +298,10 @@ class Readability {
 ///
 /// **And dimming does not walk them out of it**, which is the part worth
 /// saying plainly: measured on all three palettes under a full tungsten cast,
-/// turning the light down goes `tooBright`, `tooBright`, then `tooDark` and
-/// stays there all the way to a third of the calibration light. The cast has
+/// turning the light down in tenths reads `tooBright` twice on blue-red and
+/// wood (`tooDark` from 0.8 of the light) and three times on classic
+/// (`tooDark` from 0.7), and stays red all the way to a third of the
+/// calibration light. The cast has
 /// moved the luma-normalized patches, so `geometryMatches` is false at every
 /// level and the fallback speaks every time. What the user gets is a red light
 /// with the wrong sentence under it until they recalibrate by hand.
@@ -707,7 +709,7 @@ class ReadabilityMonitor {
   ///
   /// **The justification used to be that counting it "would call every roll a
   /// hand over the board", and that overstates the case fourfold.** Measured
-  /// on the bed, a settled roll leaves 0.000, 0.000 and 0.125 of the band's
+  /// on the bed, a settled roll leaves 0.000, 0.125 and 0.000 of the band's
   /// lattice unrecognizable on the three palettes, against [minCoveredShare]'s
   /// 0.5 — nowhere near. What actually settles it is the other end: counting
   /// the band would not buy back the blindness it is blamed for. The one

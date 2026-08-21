@@ -424,7 +424,8 @@ class CalibrationFingerprint {
   /// went, because the four corners of a board in perspective do not move by
   /// the same amount. Measured on the bed's classic palette, sliding the whole
   /// quad by 5, 10, 15 and 20 pixels under a 1280-pixel frame in the eight
-  /// directions the axes and the diagonals give:
+  /// directions the axes and the diagonals give (a diagonal steps the full
+  /// distance on each axis — (20, 20), not a unit vector scaled to 20):
   ///
   /// | slide | patches out | fires in |
   /// |---|---|---|

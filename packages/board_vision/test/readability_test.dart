@@ -639,8 +639,10 @@ void main() {
     test('but in the dice band, which nothing watches, it cannot', () {
       // **The measured cost of the two blindnesses meeting**, pinned so that it
       // cannot change without somebody noticing. `_coveredRegions` leaves the
-      // dice band out by construction — a die IS unrecognizable there, and
-      // counting it would call every roll a hand — so a thing lying across the
+      // dice band out by construction — a die IS unrecognizable there, though
+      // a settled roll strange-marks at most 0.125 of the band against the 0.5
+      // rule, so the exclusion's real work is the strict-greater case the
+      // module doc records — and a thing lying across the
       // band is the one occluder the check above cannot veto. On the blue-red
       // palette an ellipse 0.60 of the board wide lying there moves the cast to
       // 0.119 and 0.139, and the frame comes back as a lamp that changed.
@@ -793,8 +795,10 @@ void main() {
     test('and nothing at all is watching the dice band', () {
       // **The blindness `_coveredRegions` documents, pinned rather than only
       // explained.** The band is left out of the occlusion walk by
-      // construction — a die there is unrecognizable BY DESIGN, and counting
-      // it would call every roll a hand over the board — so an ellipse 0.60 of
+      // construction — a die there is unrecognizable BY DESIGN (a settled roll
+      // strange-marks at most 0.125 of the band, so the exclusion rests on the
+      // strict-greater case in the module doc, not on rolls reading as
+      // hands) — so an ellipse 0.60 of
       // the board wide lying across the middle is invisible to the one check
       // that could see it, and the frame reads green.
       //
