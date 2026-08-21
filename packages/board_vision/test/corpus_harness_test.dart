@@ -595,16 +595,20 @@ void main() {
       // And the five that fail are **one mechanism plus one stray**, named so
       // that a change moving this number says which case it moved:
       //
-      // * four of them are a **point's tip**. This folding case's rim stands
-      //   proud of the felt and hides three quarters of the man at the near end
-      //   of a near-half point, so the reader returns *nothing* there rather
-      //   than a short count: the 10-point's arriving man twice (005->008 and
-      //   010->013), the 1-point's last Black man (008->010), and White's man
-      //   on the hinge after the hit (018->020). Every one of them is a region
-      //   the play just touched, which is what makes this the placement query's
-      //   own worst case on this board;
+      // * four of them are a **point's BASE** — the wide end against the near
+      //   edge, which is where `StackAxis.forRegion` starts a near-half stack
+      //   and where the harness prints "reach 0.000". (Every note in this
+      //   batch called it the tip until 2026-08-23; the tip is the midline end
+      //   and nothing happens there.) This folding case's rim stands proud of
+      //   the felt and hides three quarters of the man standing at that base,
+      //   so the reader returns *nothing* there rather than a short count: the
+      //   10-point's arriving man twice (005->008 and 010->013), the 1-point's
+      //   last Black man (008->010), and White's man on the hinge after the
+      //   hit (018->020). Every one of them is a region the play just touched,
+      //   which is what makes this the placement query's own worst case on
+      //   this board;
       // * the **23-point** reads three men for two — an OVER-count, and the one
-      //   the tip story does not cover. Its run starts at row zero on every
+      //   the rim story does not cover. Its run starts at row zero on every
       //   shot of the session, where the board's own far rim and the shadow in
       //   its seam classify as Black, and half a pitch of that is enough.
       final missed = board.missesOf(CorpusMetric.placementVerified);
@@ -976,12 +980,25 @@ void main() {
 ///   right and being acted on are different things: two of the six come back
 ///   under `PlayMatcher.minConfidence`, so a session would have put the
 ///   candidate list in front of the user rather than acting. Both are turns
-///   whose play lands a man on a **near-half point's tip**, where this case's
-///   raised rim hides three quarters of him — the evidence for the right answer
-///   is thin even though the ranking still finds it. Under the old truth this
-///   read 5/5, and that was a rate over turns which had been transcribed onto
-///   cells the reader happens to see well. The floor drops with it, and the
-///   drop is a finding rather than a regression.
+///   with a rim-hidden man in the difference the matcher is reading, and it is
+///   worth saying which man, since ~~both are turns whose play lands a man on
+///   a near-half point's tip~~ was true of neither end of one of them:
+///
+///     * **005→008** (`13/11 11/10`, 0.455) is the arriving-man case: the play
+///       lands White on the **10-point's base**, against the near rim, and
+///       the reader sees nothing of him;
+///     * **018→020** (`11/14 14/20*`, 0.457) hides both ends of the hit
+///       instead: the man Black moves **leaves** the 11-point's base, which
+///       the reader could not see him on at 018 either, and the White man he
+///       hits arrives **on the hinge**, which the reader cannot see him on at
+///       020. The destination is read — over-read, in fact, at Black 2 for
+///       Black 1.
+///
+///   The evidence for the right answer is thin in both, even though the
+///   ranking still finds it. Under the old truth this read 5/5, and that was a
+///   rate over turns which had been transcribed onto cells the reader happens
+///   to see well. The floor drops with it, and the drop is a finding rather
+///   than a regression.
 /// And the two that arrived with Task 8, **reshaped by the user at the gate
 /// follow-up (2026-08-21)** — one still missing, one that now clears its
 /// target:
@@ -1009,17 +1026,19 @@ void main() {
 ///   bare-bar agreements. See [priorReport].)
 ///
 ///   **The five turns missing are one mechanism plus one stray, and naming the
-///   mechanism is the whole value of the truth fix.** Four of the five fail on
-///   a **point's tip**: this folding case's rim stands proud of the felt, and a
-///   man at the near end of a near-half point is three-quarters behind it. The
-///   reader sees nothing there — not a short count, *nothing* — so the
-///   10-point's arriving man (005→008, 010→013), the 1-point's last Black man
-///   (008→010) and White's man on the hinge (018→020) are all invisible. The
-///   fifth is the **23-point** reading three men for two, an over-count whose
-///   run starts on the board's own far rim. None of this was visible while the
-///   ledger had those men on cells the camera sees; a corpus that had been
-///   quietly flattered is now a corpus that names the one thing this board does
-///   to perception.
+///   mechanism is the whole value of the truth fix.** Four of the five fail at
+///   a **point's BASE** — the wide end against the near edge, where a near-half
+///   stack starts (~~a point's tip~~, which is the midline end and is not
+///   where any of this happens; corrected 2026-08-23). This folding case's rim
+///   stands proud of the felt and a man standing at that base is three quarters
+///   behind it. The reader sees nothing there — not a short count, *nothing* —
+///   so the 10-point's arriving man (005→008, 010→013), the 1-point's last
+///   Black man (008→010) and White's man on the hinge (018→020) are all
+///   invisible. The fifth is the **23-point** reading three men for two, an
+///   over-count whose run starts on the board's own far rim. None of this was
+///   visible while the ledger had those men on cells the camera sees; a corpus
+///   that had been quietly flattered is now a corpus that names the one thing
+///   this board does to perception.
 ///
 /// * **`region colour alone` reads 220/242 and the floor moved down twice, by a
 ///   loss rather than a denominator both times.** Same twenty-fifth region as

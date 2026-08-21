@@ -1113,11 +1113,16 @@ Move _moveOf(BoardState before, FilmedTurn turn) {
 ///   "genuine 8-point undercount" the 2026-08-21 floors were re-measured
 ///   against never existed: **perception was right and the ledger was wrong**;
 /// * **nothing ever left the board.** The cream shape that appears at the near
-///   rim from 008 is a White checker standing at the **10-point's tip**, three
-///   quarters hidden behind the case's raised rim — the same signature the
-///   7-point's lone blot shows at 013 and the 1-point's last Black man shows at
-///   010. Its blob centroid inverts to board x 0.178 against the 10-point's
-///   centre of 0.194, one systematic top-face displacement away; by 013 it is a
+///   rim from 008 is a White checker standing at the **10-point's base** —
+///   the wide end, against the near edge, where `StackAxis.forRegion` puts the
+///   stack's origin and the harness prints "reach 0.000" — three quarters
+///   hidden behind the case's raised rim. (~~The 10-point's tip~~: the tip is
+///   the midline end and nothing happens there. The wording was wrong in every
+///   note this batch wrote, and is corrected throughout on 2026-08-23.) It is
+///   the same signature the 7-point's lone blot shows at 013 and the 1-point's
+///   last Black man shows at 010. Its blob centroid inverts to board x
+///   **0.166 at 008 and 0.178 at 010**, against the 10-point's centre of
+///   0.194 — one systematic top-face displacement away in both; by 013 it is a
 ///   clean two-checker stack (3852 px, top 0.867). All fifteen White men are on
 ///   points in every window;
 /// * **turn 3 was `W 2-1: 13/10`**, one man. The 13-point drops 5→4 (disc
@@ -1126,7 +1131,7 @@ Move _moveOf(BoardState before, FilmedTurn turn) {
 ///   die value was playable from that position, so no die was left unused;
 /// * **turn 4 was `B 6-4: 1/11`**, one man — not `6-5: 1/12`. The 12-point's
 ///   stack top does not move until 018 (0.592 through 013, 0.500 after), and a
-///   separate Black crescent appears at the **11-point's** tip at 010 and is
+///   separate Black crescent appears at the **11-point's base** at 010 and is
 ///   gone at 020. Ten pips with the 6-point blocked cannot be 5-5, so 6-4 is
 ///   the only roll that reaches it;
 /// * **turn 5 was `W 6-3: 13/7 13/10`**, two men — not `5-1: 13/8 8/7`. The
@@ -1138,16 +1143,28 @@ Move _moveOf(BoardState before, FilmedTurn turn) {
 ///   white x3), the 6-point falls 4→3, the 8-point does not move, and the
 ///   2-point is empty in every window. A two-pip hop off the 6 is the whole
 ///   difference, and it makes the turn legal;
-/// * **turn 8 was `B 6-3: 11/17 17/20*`** — the destination and the hit stand,
-///   the origin is the 11-point rather than the 12, and the 6 is the die
-///   visible beside the man on the hinge.
+/// * **turn 8 was `B 6-3: 11/14 14/20*`** (~~`11/17 17/20*`~~, a slip: the
+///   committed hops go via the 14) — the destination and the hit stand, and
+///   the origin is the 11-point rather than the 12. **The ROLL is inferred,
+///   not forced**, which the note claimed on 2026-08-22 and did not earn:
+///   11→20 is nine pips, and at 018 the 15- and 16-points are both open, so
+///   **5-4 reaches the same board by the same road with the same hit** and no
+///   photograph can separate them. 6-3 is chosen for the 6 lying beside the
+///   man on the hinge — and even that is weaker than it sounds, since the 6 in
+///   question is on the face that die presents **to the camera** rather than
+///   on its top (see 020's own note, and the partner die there, whose top does
+///   read and reads 1). The pips are what is certain; the pair is a choice
+///   between two positionally identical rolls.
 ///
 /// The ledger below therefore replays as **eight legal turns**, every play in
 /// `MoveGenerator.legalMoves`'s own list, reproducing all seven photographed
 /// positions exactly. There is no anomaly, nothing off the board, and no shot
 /// that needs a hand-read position — which is the strongest claim this corpus
 /// has ever been able to make about its own ground truth, and it is made by
-/// arithmetic rather than by eye.
+/// arithmetic rather than by eye. What it does **not** claim is that every
+/// roll behind it is pinned: turn 8's is one of two that reach the same board,
+/// and the ledger says which one it took only because a `FilmedTurn` has to
+/// carry a pair to be replayed at all.
 const List<FilmedTurn> _filmedTurns = <FilmedTurn>[
   (
     player: Player.white,

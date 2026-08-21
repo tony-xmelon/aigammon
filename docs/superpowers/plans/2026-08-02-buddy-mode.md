@@ -145,7 +145,7 @@ Four numbers came off the photograph rather than the bed, and each was wrong in 
 
 **Carry into the gate conversation, found while building the above:** the corpus's own JPEG is closer to a cliff than the blur is. At `kCorpusSteepQuad` and `kCorpusLowQuad`, quality-95 JPEG puts the classic palette's far-half black stack (the 19-point, five near-black checkers on an oxblood triangle) on a knife edge: every raw frame calibrates, and whether the same frame survives a round trip flips on a bar width of 0.07 against 0.08 or a tray of 0.02 against 0.05. Measured with plain `renderShot`/`BoardVision.calibrate`, no folding involved; the committed corpus misses it because its six sessions land on the passing side. Same shape as the blur raggedness above, at a knob nobody was watching. Not fixed — it is a sampler-and-colour question and the real corpus is the honest place to answer it. If a real session with dark checkers refuses to calibrate, this belongs beside the chroma note as a reason it is **not** outcome (c).
 
-**As implemented, part four: the corpus has a plan of its own, because it was filmed rather than shot.** It arrived by `FILMING.md`'s one-video route, not by `CHECKLIST.md`'s thirty-three staged photographs, so `capture_plan.dart` gained the mirror of `buildCapturePlan`: `buildRealSession` says what *was* filmed where the other says what to go and film, and `prepare_corpus --plan filmed` prepares it through exactly the same downsample, encoder and sidecar writer — a corpus prepared by some private script beside the tool is a corpus nobody can re-prepare. Ten windows out of one twelve-minute game: a calibration hold, seven positions off the transcribed turn ledger, two end-game keyframes. **The seven positions are not typed in.** The ledger is held in the transcript's own notation and replayed through `backgammon_core` when the session is built, so a mis-transcribed turn throws out of `buildRealSession` naming itself, and the board in each sidecar is the replay's own output — the same ground-truth-by-construction the seeded playouts get, from a game that actually happened. The two keyframes carry a board and no log (the last stretch had hands in it and a hit nobody could attribute to a turn); `events: null` needed no schema change, and the one arithmetic that can be held over a hand-read position — fifteen checkers a side — is pinned. Turns 9–15 are deliberately **excluded**: contaminated windows and an unattributable hit, and a sidecar that guessed would be worse than a shorter corpus. Dice stay in the sidecars for the four rolls a person could read off a zoom (4-2, 6-4, 6-5, 6-3) and are absent from the other six, because claiming a roll nobody could call is inventing ground truth. **(Superseded 2026-08-21 and restored 2026-08-22 — the turn ledger was wrong on five turns, nothing ever left the board, and the corpus is once again seven replayed positions and two end-game keyframes, exactly as described here. One dice sidecar changed: 010's pair is 6-4, derived from the play rather than read off a die this camera cannot see the top of. See the two CORRECTION notes at the end of Task 8.)**
+**As implemented, part four: the corpus has a plan of its own, because it was filmed rather than shot.** It arrived by `FILMING.md`'s one-video route, not by `CHECKLIST.md`'s thirty-three staged photographs, so `capture_plan.dart` gained the mirror of `buildCapturePlan`: `buildRealSession` says what *was* filmed where the other says what to go and film, and `prepare_corpus --plan filmed` prepares it through exactly the same downsample, encoder and sidecar writer — a corpus prepared by some private script beside the tool is a corpus nobody can re-prepare. Ten windows out of one twelve-minute game: a calibration hold, seven positions off the transcribed turn ledger, two end-game keyframes. **The seven positions are not typed in.** The ledger is held in the transcript's own notation and replayed through `backgammon_core` when the session is built, so a mis-transcribed turn throws out of `buildRealSession` naming itself, and the board in each sidecar is the replay's own output — the same ground-truth-by-construction the seeded playouts get, from a game that actually happened. The two keyframes carry a board and no log (the last stretch had hands in it and a hit nobody could attribute to a turn); `events: null` needed no schema change, and the one arithmetic that can be held over a hand-read position — fifteen checkers a side — is pinned. Turns 9–15 are deliberately **excluded**: contaminated windows and an unattributable hit, and a sidecar that guessed would be worse than a shorter corpus. Dice stay in the sidecars for the four rolls a person could read off a zoom (4-2, 6-4, 6-5, 6-3) and are absent from the other six, because claiming a roll nobody could call is inventing ground truth. **(CORRECTION III, 2026-08-23: absent is not the same as not there. Nine of the ten windows have dice somewhere in them; only 001, the calibration hold, is genuinely dice-free. The sidecar now says which with `diceInFrame`, and the metric that was scoring the difference has been rescoped.)** **(Superseded 2026-08-21 and restored 2026-08-22 — the turn ledger was wrong on five turns, nothing ever left the board, and the corpus is once again seven replayed positions and two end-game keyframes, exactly as described here. One dice sidecar changed: 010's pair is 6-4, derived from the play rather than read off a die this camera cannot see the top of. See the three CORRECTION notes at the end of Task 8.)**
 
 **As measured, and it stopped the corpus for a day: a corner set is a property of ONE image at ONE size, and does not survive being scaled onto another.** The session's eight points came from the machine sweep recorded above, run on the **full-resolution, lossless** calibration frame, and they are right there — reproduced at `7401fc3`: separation **7.102**, `confirmStartingPosition` agrees, **24/24** colours right and **21/24** counts exact, the three misses being the 12-, 17- and 19-point tall stacks read short. Scale those same eight points by the downsample factor onto the committed ≤1280 px frame and calibration **refuses** — `checkersNotInStartingPosition`, offending exactly those same three points, now reading empty rather than merely short. It is not the JPEG and it is not chroma. Measured on the one lossless frame available: a quality-95 4:4:4 re-encode at full size fails; a lossless resize to 1280 with no encoder involved at all fails; 1280 as PNG, and 1280 at quality 100, fail identically. Every step of the corpus's own committed representation costs those three stacks the pixels they were surviving on, which is the far-half counting problem already recorded above with a resolution dependence now attached to it.
 
@@ -168,11 +168,11 @@ That rank is **grid-relative, and only that**. An independent review swept a dif
 | calibration | **1.000** (1/1) | 0.950 | +0.050 |
 | start position confirmed | **1.000** (1/1) | — | (watched) |
 | dice pair read | **0.000** (0/4) | 0.980 | **−0.980** |
-| no dice read as no dice | **1.000** (6/6) | 1.000 | +0.000 |
+| no dice read as no dice | ~~**1.000** (6/6)~~ **1.000** (1/1) | 1.000 | +0.000 |
 | region colour and count | **0.784** (189/241) | — | (watched) |
 | region colour alone | **0.954** (230/241) | — | (watched) |
 
-Sliced: counts run 0.800 on the near half against 0.775 on the far, colour 0.942 near against 0.975 far. **The dice number is four refusals, not four misreads** — the reader found no pair at all on any of the four frames that have one, which is the behaviour the design asks for and is why the metric now reports found/right/refused rather than one rate. This board's dice are 0.021 of it across; band-location and tilt work is queued. Every real target that is not the dice one **passes**, which is outcome (b) territory rather than (c). These rates are pinned in `corpus_harness_test.dart` as floors so the real corpus cannot silently get worse, with the spec printed beside them every run.
+Sliced: counts run 0.800 on the near half against 0.775 on the far, colour 0.942 near against 0.975 far. **(The dice-absence denominator was rescoped on 2026-08-23 — five of those six frames have dice lying in them and were being counted as frames with none. Same floor, same perfect score, a set that now matches the row's own sentence. See CORRECTION III.)** **The dice number is four refusals, not four misreads** — the reader found no pair at all on any of the four frames that have one, which is the behaviour the design asks for and is why the metric now reports found/right/refused rather than one rate. This board's dice are 0.021 of it across; band-location and tilt work is queued. Every real target that is not the dice one **passes**, which is outcome (b) territory rather than (c). These rates are pinned in `corpus_harness_test.dart` as floors so the real corpus cannot silently get worse, with the spec printed beside them every run.
 
 **The bar shot, verbatim, because it is the flagship and the answer is the finding.** 066 has a Black checker standing on the worn hinge ridge — the object-versus-surface case in the wild, on the one board whose empty bar already reads like checkers. The machine says:
 
@@ -244,7 +244,7 @@ the scoreboard rather than dropped. **(Superseded 2026-08-21 and restored 2026-0
 measurement showed nothing had left the board, so it is **six pairs** again,
 reading 6/6 identified and 4/6 acted on, with the three unpaired neighbours
 named. The four numbers about the matcher's constants were measured over the
-original six and are kept as measured. See the two CORRECTION notes at the end
+original six and are kept as measured. See the three CORRECTION notes at the end
 of Task 8.)**
 
 **The plan's ambiguity example does not arrive from the door the plan expected —
@@ -267,7 +267,7 @@ twice is not an ambiguity) and ties by resulting board. **(The corpus half of
 this is withdrawn, 2026-08-21 and again 2026-08-22: turn 3 is one man on a 2-1,
 so the filmed game never produced the case and the signal reads 0 of 6. The rule
 about scoring positions rather than hop multisets is unchanged and is carried by
-`play_matcher_test.dart`'s fixtures. See the two CORRECTION notes at the end of
+`play_matcher_test.dart`'s fixtures. See the three CORRECTION notes at the end of
 Task 8.)**
 
 **Other things the task turned up, each measured.** (a) A folding case has no
@@ -530,7 +530,9 @@ that disagreed with itself. The 6-point is fixed and the cap is lifted. ~~What
 the cell was really hiding was an 8-point undercount~~ — wrong again, and
 corrected the day after by measurement: the 8-point holds two men throughout and
 always did. What the cell was hiding is that this board's rim eats the man at a
-point's tip. See the two CORRECTION notes at the end of this task.)**
+point's base — the wide end against the near rim. (Called the *tip* until
+CORRECTION III on 2026-08-23; the tip is the midline end and nothing happens
+there.) See the three CORRECTION notes at the end of this task.)**
 
 **Other things the task turned up, each measured.** (a) **"A whole stack does not
 vanish into a misread" is false**, and the bed proved it: `checkersUnderLamp` on
@@ -693,11 +695,11 @@ least two:
 | claim (2026-08-21) | what the pixels say |
 |---|---|
 | the 8-point holds **three** from turn 1, and the corpus was hiding a genuine 8-point undercount | **two**, from turn 1 to the end. 001 measures 5527 cream px topping at board y 0.783; every later window 3227–3468 px at 0.87. The pipeline reads white x2 on all seven (reach ≈0.113). **The undercount never existed — perception was right about that cell and the ledger was wrong** |
-| a White checker **left the board** during turn 7 and lies at the near rim | nothing ever left it. The cream shape appearing at the rim from **008** is a White man standing at the **10-point's tip**, three quarters behind the case's raised rim: blob centroid inverts to board x 0.178 against the 10-point's centre of 0.194 (one systematic top-face displacement), and by 013 it is a clean two-checker stack, 3852 px topping at 0.867. Fifteen White men are on points in every window |
+| a White checker **left the board** during turn 7 and lies at the near rim | nothing ever left it. The cream shape appearing at the rim from **008** is a White man standing at the **10-point's base** (~~tip~~ — see CORRECTION III), three quarters behind the case's raised rim: blob centroid inverts to board x 0.166 at 008 and 0.178 at 010, against the 10-point's centre of 0.194 (one systematic top-face displacement), and by 013 it is a clean two-checker stack, 3852 px topping at 0.867. Fifteen White men are on points in every window |
 | turn 3 was `W 3-2: 13/8` | **`W 2-1: 13/10`**, one man. The 13-point drops 5→4 (disc count) and the 10-point gains its first man. Three pips with the 12-point blocked can only be the 2 then the 1, and every die value was playable from that position, so no die went unused |
-| turn 4 was `B 6-5: 1/7 7/12` | **`B 6-4: 1/11`**, one man. The 12-point's stack top does not move until 018 (0.592 through 013, 0.500 after); a separate Black crescent appears at the **11-point's** tip at 010 and is gone at 020. Ten pips with the 6-point blocked cannot be 5-5 |
+| turn 4 was `B 6-5: 1/7 7/12` | **`B 6-4: 1/11`**, one man. The 12-point's stack top does not move until 018 (0.592 through 013, 0.500 after); a separate Black crescent appears at the **11-point's base** at 010 and is gone at 020. Ten pips with the 6-point blocked cannot be 5-5 |
 | turn 5 was `W 5-1: 13/8 8/7` | **`W 6-3: 13/7 13/10`**, two men. The 13-point drops 4→2, the 10-point rises 1→2, and the 7-point gains the blot turn 6 then hits. This is the roll lying on the felt in 013's own frame, which the ledger had been reading as the *next* turn's |
-| turn 8 was `B 5-3: 12/17 17/20*` | **`B 6-3: 11/20*`**, one man from the 11-point. Destination and hit stand; the 6 is the die visible beside the man on the hinge |
+| turn 8 was `B 5-3: 12/17 17/20*` | **`B 6-3: 11/14 14/20*`**, one man from the 11-point. Destination and hit stand. ~~The 6 is the die visible beside the man on the hinge~~ — **the ROLL is inferred, not forced**: nine pips, and 5-4 reaches the same board with the same hit (the 15- and 16-points are both open at 018). See CORRECTION III |
 
 **The T7 adjudication, since it is the one that decides whether the game was
 played legally at all.** The question was whether 018 shows `bar/20 6/2`
@@ -725,8 +727,13 @@ instrument, so the shot stays: 20-point **Black 1** (dark run 0.108 against the
 **Black 6** (top 0.500), 17-point 2, 19-point 4, 23-point 2, 24-point White 2
 (all confirmed on a far-right crop), White **on the bar** (the man is
 unmistakable on the hinge at full res), 4-point 3 and 6-point 3 per the table
-above. Turn 8's roll is `6-3` by construction — a nine-pip one-man play, with a
-6 visible beside the bar man — so 018→020 is a certified pair again.
+above. Turn 8's roll is `6-3` **by inference and not by construction** — nine pips by
+one man, and 5-4 reaches the identical board with the identical hit, so the 6
+visible beside the bar man is what chooses between them rather than what proves
+one. (Corrected in CORRECTION III, which also finds that 6 to be on the face
+that die shows the camera rather than on its top.) The PAIR 018→020 is certified
+by the boards either side of it, which is what the matcher row needs; the roll
+is not.
 
 **010's dice are 6-4, not 6-5, and this is the one sidecar fact that changed by
 derivation rather than by reading.** This camera sits low enough that a settled
@@ -753,10 +760,10 @@ last two, so there was nothing left for an annotation to say.
 | calibration, start confirmed | 1/1, 1/1 | 1/1, 1/1 | 001 is the starting position and never moved |
 | dice pair read, no dice read as no dice | 0/4, 6/6 | 0/4, 6/6 | four rolls claimed either way; only 010's value changed |
 | legal-play identification | 5/5 | **6/6** | 018→020 is a pair again, and it is identified right |
-| legal play acted on | 5/5 | **4/6** | the two turns that land a man on a point's **tip** come back under `minConfidence` — right, but not confidently. Under the old truth those men were on cells the camera sees well |
+| legal play acted on | 5/5 | **4/6** | the two turns with a rim-hidden man in the difference come back under `minConfidence` — right, but not confidently. ~~the two turns that land a man on a point's tip~~: true of 005→008 (White arrives at the 10-point's **base**), not of 018→020, where what is hidden is the man **leaving** the 11-point's base and the White man **arriving on the hinge**. Under the old truth those men were on cells the camera sees well |
 | the transit was not the listed one | 0 of 5 | **0 of 6** | turns 4 and 8 are one-man runs whose road no photograph can name, so the ledger records the generator's own representative |
 | region colour and count | 192/242 = 0.793 | **195/242 = 0.806** | three cells the old ledger had wrong |
-| region colour alone | 228/242 = 0.942 | **222/242 = 0.917** | six regions moved onto point tips, where the reader sees *nothing* |
+| region colour alone | 228/242 = 0.942 | **222/242 = 0.917** | six regions moved onto point **bases**, against the near rim, where the reader sees *nothing* |
 | resync, per region | 231/260 = 0.888 | **233/260 = 0.896** | net of the two above |
 | the like-for-like point slice (verified / blind) | 212/240, 192/240 | **214/240, 195/240** | both instruments gain, as a truth fix should make them |
 | rescued from a blind count / lost to it | 21 / 0 | **20 / 0** | one rescue was the prior defending a wrong expectation |
@@ -764,7 +771,9 @@ last two, so there was nothing left for an annotation to say.
 | placement verified (board), full-board resync | 0/5, 0/10 | 0/6, 0/10 | unchanged in kind |
 
 **And the finding the whole episode was hiding: this board's rim eats the man at
-a point's tip.** Four of the five placements that miss are the same mechanism —
+a point's BASE.** (~~a point's tip~~ — the base is the wide end, against the near
+edge, and the tip is the midline end where none of this happens. Corrected in
+CORRECTION III.) Four of the five placements that miss are the same mechanism —
 the folding case's rim stands proud of the felt, so the checker at the near end
 of a near-half point is three quarters behind it and the reader returns
 *nothing* there, not a short count. The 10-point's arriving man (005→008,
@@ -775,6 +784,136 @@ happens to see well, which is the real lesson: **a corpus scored against a wrong
 ground truth does not merely score wrongly, it hides the mechanism that would
 have explained the score.** Two of the floors went down and the pipeline was not
 touched.
+
+**CORRECTION III (2026-08-23): the correction above never re-audited the two
+keyframes, and they were hiding four men between them.** CORRECTION II's
+instruments — cream/dark mask mass per point column on the full-resolution
+frames, stack-top row, blob centroid inverted through the calibration, the
+pipeline's own reader as a second opinion, fifteen men a side — were run over
+the seven **replayed positions** and stopped there. 066 and 070 carry a board
+and no log, they had been read off zooms by a person, and nobody pointed the
+instruments at them. Pointed at them, they say each frame is hiding **two White
+men at the base of a near-half point**, exactly the mechanism CORRECTION II had
+just named, and that the difference had been written down as `whiteOff: 2`. Both
+boards were therefore illegal: thirteen men on points and two borne off a game
+that has borne nothing off.
+
+| cell | sidecar (v3) | measured | instrument |
+|---|---|---|---|
+| 066, 1-point | empty | **White 1** | 1666 cream px against 0–380 in every earlier window; blob centroid inverts to board x 0.962 against the point's centre of 0.961 |
+| 066, 7-point | White 1 | **White 2** | 8243 px topping at board y 0.864 — the two-man signature (the 8-point reads 8420–8923 for two, 12337–14122 for three), not the one-man 1696 the same column shows at 013 |
+| 070, 1-point | empty | **White 1** | 1512 px, a compact blob at board y 0.92–0.97 |
+| 070, 7-point | White 2 | **White 3** | 12771 px topping at 0.765, one whole pitch above 066's |
+| both, Black cells | — | unchanged | audited the same way; the dark mass in the 1-point column at 018/020/066/070 sits at v ≥ 1.045, i.e. on the rim beyond the board's near edge, and is not a man |
+
+**The pipeline was right about the 7-points and the ground truth was wrong** —
+the same shape as the 8-point on 2026-08-22, found the same way. The harness had
+been printing `066: the 7-point: the camera sees White 2, the game says White 1`
+and `070: … White 3, the game says White 2` on every run since Task 8, and it
+was read as the reader over-counting. Corrected White boards: 066 = 1(1) 4(3)
+5(2) 6(2) 7(2) 8(3) 9(1) 24(1), with 066's Black cells and its man on the bar
+unchanged; 070 = 1(1) 4(3) 5(2) 6(2) 7(3) 8(2) 9(1) 22(1). Fifteen a side,
+`whiteOff: 0`, and **nothing in this session ever leaves the board**. The corpus
+loses the only position it had with men off it — the trayless bear-off path is
+covered by `corpus_harness_test.dart`'s folding-case fixture instead — and a
+corroboration falls out of the pair: White's cells still differ by exactly the
+three pips of a 2-1 (8/7, 24/22), because the correction adds the same two men
+to both frames.
+
+| row | before (2026-08-22) | after (2026-08-23) | why it moved |
+|---|---|---|---|
+| calibration, start confirmed | 1/1, 1/1 | 1/1, 1/1 | 001 is untouched |
+| dice pair read | 0/4 | 0/4 | 008 was read at magnification and not certified — see below |
+| no dice read as no dice | ~~6/6~~ | **1/1**, and the row is renamed `no dice in frame, none read` | five of the old six have dice lying in them; the row was scoring the wrong set — see below |
+| region colour and count | 195/242 = 0.806 | **195/242 = 0.806** | two rim-hidden men lost, the two 7-point cells gained; identical rate, different composition |
+| region colour alone | 222/242 = 0.917 | **220/242 = 0.909** | the two 1-points, which the reader sees nothing of |
+| resync, per region | 233/260 = 0.896 | **235/260 = 0.904** | the two 7-point contradictions disappear, and the state-primed read keeps the two 1-points — **this row clears its 0.90 target for the first time**, by a truth fix rather than a pipeline change |
+| the like-for-like point slice (verified / blind) | 214/240, 195/240 | **216/240, 195/240** | the verifier gains, the blind count does not |
+| rescued from a blind count / lost to it | 20 / 0 | **22 / 0** | the two new rescues are exactly the rim-hidden men |
+| legal-play identification, acted on | 6/6, 4/6 | 6/6, 4/6 | the keyframes are in no pair |
+| placement verified (touched), (board), full-board resync | 1/6, 0/6, 0/10 | 1/6, 0/6, 0/10 | unchanged in kind |
+
+**Second finding: `diceAbsence` was paying the reader for failing to see real
+dice.** The row reads *"no dice read as no dice"* and its denominator was every
+shot with no certified roll — six of the ten windows, and **five of those six
+have settled dice lying in them**. A reader that started seeing this board's
+dice would have gone red on the one row it had just got right. Only 001 is
+genuinely dice-free, which is not luck: it is the calibration hold, and a die
+present at calibration is learned as one of the board's own surfaces. So the
+sidecar gains an additive `diceInFrame` (explicit on all ten filmed shots,
+absent from every generated one, where absent means "dice in frame exactly when
+a roll is claimed" and the renderer guarantees it), the fork in `_scoreDice` is
+on that, and there are now three outcomes rather than two: the absence row
+(**1/1**), the pair row (**0/4**), and *dice in frame with no certified roll*,
+scored on **neither** and named in the notes. A corpus with no answer to check a
+reading against must not claim the reading was right. `diceDerived` marks the
+one value that was derived rather than read (010's 6-4).
+
+**What the dice actually show, read at full magnification on 2026-08-23.** How
+much of a die's top this camera sees depends on **where the die lands**, which
+is the scoped version of a claim this batch made too broadly (~~"this camera
+sits low enough that a die shows its front face and not its top"~~ — true of the
+far half, false near the middle):
+
+- **008's note was wrong twice over.** ~~"No dice on the felt: the next roll is
+  mid-throw."~~ Two settled dice lie in the far half at board (0.218, 0.234) and
+  (0.251, 0.279) — absent at t=66.5, in those exact positions at t=76.5 **and**
+  t=84.5, gone by t=94.5, so they are turn 3's own roll left where it fell.
+  Read blind: each die is ~21 px across and presents a top face 7–8 px deep in
+  which no pip pattern can be counted; what is legible is the near-facing
+  **side** of each — a clean diagonal pair on one, five blobs on the other that
+  read as a 3 and a 2 across two faces. A side face is not a roll, so 008 stays
+  uncertified. (Recorded because it is uncomfortable: if those side reads are
+  right, neither die can have a 2 on top, and the ledger's 2-1 for turn 3 is
+  fixed by the **board** — one man, 13/10, three pips with the 12-point blocked
+  — rather than by the felt. A four-pixel pip does not outweigh that arithmetic,
+  and nothing was changed on the strength of it.)
+- **018's dice are settled too**, and one of them carries the most legible top
+  face in the session: the die at board (0.398, 0.514), in the middle band,
+  shows a clean **5**. Its partner is unreadable, and half a pair is not a roll.
+- **020's second die does have a readable top**, at board (0.858, 0.405): a
+  single centred pip, a **1**, with a diagonal pair on its near side. The other
+  die's "clear 6" is on the face it shows **the camera**, not on its top. A 1
+  cannot belong to turn 8's nine-pip one-man play, so that pair is most likely
+  the next roll — and it certainly does not corroborate 6-3.
+- **010's pair stays derived**, and the front faces are consistent with it
+  without settling it: a clean 5 on one (so its top is neither 2 nor 5) and a
+  diagonal run of three, possibly four, on the other (which excludes 3 and 4
+  either way). Tops of 4 and 6 fit.
+
+**Third finding: the mechanism's name pointed at the wrong end of the point.**
+The invisible man stands at a point's **base** — the wide end, against the near
+edge, where `StackAxis.forRegion` puts the stack's origin and where the harness
+prints `reach 0.000`. Every note in this batch called it the **tip**, which is
+the midline end and is where nothing happens. `targets.dart` had it right
+throughout ("the man at the near end of a near-half point"). Renamed in
+`capture_plan.dart`, `corpus_harness_test.dart` and this document; struck
+through rather than deleted wherever it appeared, because a wrong word that is
+quietly replaced is a wrong word nobody can learn from. The related phrasing
+"the two turns whose play lands a man on a point's tip" was wrong about more
+than the word: 005→008 does land a man on the 10-point's base, but 018→020 hides
+the man **leaving** the 11-point's base and the White man **arriving on the
+hinge**, and its destination is read (over-read, at Black 2 for Black 1).
+
+**Fourth: turn 8's roll is inferred rather than forced**, and the note that said
+"by construction" was claiming more than the evidence carries. 11→20 is nine
+pips by one man; at 018 the 15- and 16-points are both open, so **5-4 reaches
+the identical board with the identical hit**. 3-3 is excluded (a fourth 3 would
+have to appear somewhere and does not). 6-3 is chosen for the 6 beside the man
+on the hinge, which the reading above weakens further. The notation slip
+~~`11/17 17/20*`~~ is corrected to the committed `11/14 14/20*`.
+
+**What this episode is, said plainly.** Three corrections in three days, and the
+third is not a new kind of error: it is the *same* error, in the two shots the
+second correction never looked at. The lesson CORRECTION II drew — that a corpus
+scored against wrong ground truth hides the mechanism that would explain the
+score — applies to the auditor as well as to the transcriber. The two keyframes
+were the weakest ground truth in the corpus by their own description, and they
+were the last cells anyone measured. **The corpus's own arithmetic could not
+catch it**: fifteen-a-side counts a man written off as a man, so `checkerCount`
+passed on the wrong boards exactly as it passes on the right ones. What caught
+it was pointing the instruments at every cell, which is now what "re-audited"
+has to mean.
 
 ### Task 9: Continuous readability and calibration re-validation
 

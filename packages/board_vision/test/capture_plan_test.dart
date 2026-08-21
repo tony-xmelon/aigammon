@@ -795,6 +795,17 @@ void main() {
       // the 1-point with the 6-point blocked cannot have been thrown any other
       // way — the same "ground truth by construction" the boards get, applied
       // to the felt.
+      //
+      // **How much of a die's top this camera sees depends on where the die
+      // lands**, and the batch's own wording was too broad about it.
+      // ~~"This camera sits low enough that a die shows its front face and not
+      // its top"~~ is true of the FAR half and false near the middle: measured
+      // 2026-08-23, a die deep in the far half (010's pair at board v 0.23 to
+      // 0.26, 008's at 0.23 to 0.28) presents a front face and a top 7-8 px
+      // deep on a 21 px die, in which no pip pattern can be counted — while
+      // 018's die at v 0.51, in the middle band, shows a clean **5** on its
+      // top face. The scoped claim is the one that survives: this camera loses
+      // a die's top in proportion to how far up the board it lies.
       final withDice = <String, String>{
         for (final shot in filmed.where((s) => s.dice != null))
           shot.id: '${shot.dice!.die1}-${shot.dice!.die2}',
