@@ -539,6 +539,47 @@ void main() {
       expect(h.controller.game.events.whereType<MoveEvent>(), hasLength(1),
           reason: 'the same turn finishes on the new calibration');
     });
+
+    test('a calibration installed without a recalibration drops the epoch too',
+        () async {
+      // `recalibrate()` then `useCalibration()` is a two-call protocol and
+      // nothing enforces the first call — the epoch's held frames were dropped
+      // only by `recalibrate`. A caller that simply installs a fresh
+      // calibration (a re-learn with no outage behind it; the first call at
+      // startup) would leave the old epoch's "before" frame in place, and the
+      // very next play query would difference two pictures of two different
+      // boards. `board_vision` says in as many words that it cannot check
+      // this itself.
+      //
+      // So [useCalibration] drops them on its own, which makes the two calls
+      // idempotent with each other rather than ordered.
+      final h = Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+
+      h.start();
+      await h.stableFrame();
+      expect(h.session.phase, BuddyPhase.awaitingPlay,
+          reason: 'the dice frame is now held as the "before" half of the '
+              'play about to be made');
+
+      final fresh = FakeVision()..willMatchPlay([matchesPlay(0)]);
+      h.session.useCalibration(fresh);
+      expect(h.session.phase, BuddyPhase.awaitingPlay,
+          reason: 'a calibration arriving mid-turn is not an interruption');
+
+      final reAnchor = blankFrame();
+      await h.stableFrame(reAnchor);
+      expect(fresh.playCalls, 0,
+          reason: 'the held frame belongs to the calibration that was just '
+              'replaced, so the first frame of the new epoch only re-anchors');
+
+      await h.stableFrame();
+      expect(fresh.playQueries.single.beforeFrame, same(reAnchor),
+          reason: 'and the play is differenced against a frame from its own '
+              'epoch');
+    });
   });
 
   group('the cube', () {

@@ -365,6 +365,13 @@ class BuddySession extends ChangeNotifier {
     _vision = vision;
     if (seat != null) this.seat = seat;
     _needsRecalibration = false;
+    // Whatever was held was held from the calibration this replaces, and
+    // differencing across two epochs is noise shaped like a play.
+    // [_enterRecalibration] drops the same three, so the two calls are
+    // idempotent with each other rather than an ordered protocol nothing
+    // enforces: a caller that installs a fresh calibration WITHOUT an outage
+    // in front of it gets the same clean slate.
+    _dropEpochFrames();
     if (_phase == BuddyPhase.calibrating) {
       _phase = _pausedFrom ?? BuddyPhase.awaitingDice;
       _pausedFrom = null;
@@ -542,12 +549,22 @@ class BuddySession extends ChangeNotifier {
     _phase = BuddyPhase.calibrating;
     _needsRecalibration = true;
     _vision = null;
-    // The epoch is over. Anything held from it would be differenced against a
-    // frame from a different board, quietly and without an error.
+    _dropEpochFrames();
+    notifyListeners();
+  }
+
+  /// Forgets every frame held from the calibration that is going away.
+  ///
+  /// The epoch is over. Anything held from it would be differenced against a
+  /// frame from a different board, quietly and without an error —
+  /// `board_vision` requires both halves of a play query to come from one
+  /// calibration and says it cannot check that itself. Called from BOTH ends
+  /// of a recalibration ([_enterRecalibration] and [useCalibration]), so a
+  /// caller that only does one of the two still gets a clean slate.
+  void _dropEpochFrames() {
     _beforeFrame = null;
     _candidateFrame = null;
     _lastStableFrame = null;
-    notifyListeners();
   }
 
   // --- the three queries ---------------------------------------------------
