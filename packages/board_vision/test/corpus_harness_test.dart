@@ -574,22 +574,26 @@ void main() {
     test('the state-primed read beats the blind one on real photographs too',
         () {
       // The claim the verifier exists to make, on the only frames that can
-      // settle it — **twenty** regions a blind count reports wrongly and
+      // settle it — **twenty-two** regions a blind count reports wrongly and
       // verification agrees with, none the other way.
       //
-      // Over the 240 point-reads both rows score, that is 214 against 195:
-      // **0.892 against 0.813**. Not the rows' totals, which are 233/260 and
+      // Over the 240 point-reads both rows score, that is 216 against 195:
+      // **0.900 against 0.813**. Not the rows' totals, which are 235/260 and
       // 195/242 — the verifier asks both ends of the bar on every shot and
       // most of those extra reads are bare-bar agreements, so comparing the
       // totals would hand it about a point it did not earn.
       //
-      // Both sides rose through each truth correction and the margin barely
-      // moved (20 rescued now, 21 and 22 before), which is the right shape:
-      // the two instruments were being scored against the same wrong cells, so
-      // correcting them helps both, and neither instrument is what changed.
+      // Both sides moved through each truth correction and the margin has only
+      // widened (22 rescued now, 20, 21 and 22 before), which is the right
+      // shape: the two instruments were being scored against the same wrong
+      // cells, so correcting them helps both, and neither instrument is what
+      // changed. The last two rescues are the keyframes' rim-hidden men on the
+      // 1-point — a blind count sees nothing there and the verifier, handed
+      // "White 1", declines to contradict it, which is the whole query in one
+      // region.
       //
-      // **And twenty regions is still not enough for a clean board**, which is
-      // the finding rather than a caveat — see `kRealCorpusFloors`.
+      // **And twenty-two regions is still not enough for a clean board**, which
+      // is the finding rather than a caveat — see `kRealCorpusFloors`.
       final verified =
           board.sliceOf(CorpusMetric.regionVerified, 'region')['point']!;
       final blind =
@@ -597,10 +601,10 @@ void main() {
       expect(verified.attempts, blind.attempts,
           reason: 'the like-for-like comparison stopped being like for like');
       expect(verified.attempts, 240);
-      expect(verified.successes, 214, reason: '$verified');
+      expect(verified.successes, 216, reason: '$verified');
       expect(blind.successes, 195, reason: '$blind');
 
-      expect(board.signalOf(kPriorRescuedSignal).sum, 20,
+      expect(board.signalOf(kPriorRescuedSignal).sum, 22,
           reason: 'the prior rescued a different number of regions than it did '
               'on the day this landed — re-measure deliberately');
       expect(board.signalOf(kPriorLostSignal).sum, 0,
@@ -853,16 +857,21 @@ void main() {
 /// these as a ratchet against regression, never as a measurement of the
 /// pipeline's accuracy to three decimal places.
 ///
-/// **Re-measured twice, and the second time is the one to read.** The
+/// **Re-measured three times, and the last one is the one to read.** The
 /// 2026-08-21 pass corrected the filmed ledger from a person's reading of
-/// zooms; the 2026-08-22 pass corrected that correction from pixels, and the
-/// numbers below are the pixel pass's. Superseded floors are kept in the git
-/// history rather than here, but the shape of the movement is recorded so that
-/// nobody re-derives it: ~~occupancy 192/242, colour 228/242, play 5/5, acted
-/// 5/5, placement 1/5, verified 231/260~~ belonged to a truth in which a White
-/// checker had left the board, and it had not. See `capture_plan.dart`'s
-/// `_filmedTurns` for the instruments and the plan doc for the before/after
-/// table. Nothing here was hand-tuned to fit, and two of them went **down**.
+/// zooms; the 2026-08-22 pass corrected that correction from pixels; the
+/// 2026-08-23 pass ran the same pixel instruments over the two end-game
+/// **keyframes**, which the pixel pass had never re-audited, and found each of
+/// them hiding two White men behind the near rim where the sidecar had written
+/// `whiteOff: 2`. Superseded floors are kept in the git history rather than
+/// here, but the shape of the movement is recorded so that nobody re-derives
+/// it: ~~occupancy 192/242, colour 228/242, play 5/5, acted 5/5, placement
+/// 1/5, verified 231/260~~ belonged to a truth in which a White checker had
+/// left the board, and it had not; ~~colour 222/242, verified 233/260~~
+/// belonged to one in which four more had been borne off, and they had not.
+/// See `capture_plan.dart`'s `_filmedTurns` and `_filmedKeyframes` for the
+/// instruments and the plan doc for the before/after tables. Nothing here was
+/// hand-tuned to fit, and floors have moved **down** as often as up.
 ///
 /// The two that miss the spec today, and why they are recorded rather than
 /// asserted:
@@ -876,6 +885,15 @@ void main() {
 ///   predicts. The design never trusts a blind count anyway; it is Task 7's
 ///   play matching that the spec sets a threshold for, and this number is what
 ///   that was built against.
+///
+///   **It survived the keyframe correction unchanged, and what happened
+///   underneath it is the finding.** The corrected 066 and 070 cost this row
+///   the two rim-hidden men on their 1-points, which the reader cannot see —
+///   and paid for them with 066's 7-point and 070's, where the reader had been
+///   reading *white x2* and *white x3* against a sidecar saying one and two.
+///   Two lost, two gained, the rate identical, and the two gained are the
+///   pipeline having been right about a cell the ground truth was wrong about:
+///   the same shape as the 8-point on 2026-08-22, found the same way.
 ///
 /// And the one that arrived with Task 7 and **passes**:
 ///
@@ -900,20 +918,30 @@ void main() {
 ///   cells the reader happens to see well. The floor drops with it, and the
 ///   drop is a finding rather than a regression.
 /// And the two that arrived with Task 8, **reshaped by the user at the gate
-/// follow-up (2026-08-21) and still missing**:
+/// follow-up (2026-08-21)** — one still missing, one that now clears its
+/// target:
 ///
-/// * **placement verification 1/6, resync per region 0.896.** The reshape is
+/// * **placement verification 1/6, resync per region 0.904.** The reshape is
 ///   the denominator and only the denominator — the two thresholds are still
 ///   0.95 and 0.90. Placement is now the regions the play touched, one attempt
 ///   per dictated turn; resync is per region, with the whole-board rate kept as
 ///   a watched row (**0/6 and 0/10**, both still recorded below).
 ///
+///   **Resync per region passes 0.90 for the first time on this corpus**, at
+///   0.904 against 0.896 — and not by a pipeline change. The keyframe
+///   correction handed it the two 7-point cells it had been contradicting, and
+///   it kept the two 1-points because a state-primed read does not need to see
+///   a rim-hidden man to decline to contradict him. A floor rising through a
+///   truth fix is the same event as a floor falling through one, and it is
+///   recorded the same way.
+///
 ///   Per region the prior is doing real work: over the 240 point-reads both
-///   rows score, verification is **214/240 = 0.892** against a blind count's
-///   **195/240 = 0.813**, twenty regions rescued and none lost. (Not the rows'
-///   totals — 233/260 against 195/242 — since the verifier asks both ends of
-///   the bar on every shot and most of those extra reads are bare-bar
-///   agreements. See [priorReport].)
+///   rows score, verification is **216/240 = 0.900** against a blind count's
+///   **195/240 = 0.813**, twenty-two regions rescued and none lost — the two
+///   new rescues being exactly those rim-hidden men on the keyframes' 1-points.
+///   (Not the rows' totals — 235/260 against 195/242 — since the verifier asks
+///   both ends of the bar on every shot and most of those extra reads are
+///   bare-bar agreements. See [priorReport].)
 ///
 ///   **The five turns missing are one mechanism plus one stray, and naming the
 ///   mechanism is the whole value of the truth fix.** Four of the five fail on
@@ -928,26 +956,27 @@ void main() {
 ///   quietly flattered is now a corpus that names the one thing this board does
 ///   to perception.
 ///
-/// * **`region colour alone` reads 222/242 and the floor moved down, by a loss
-///   rather than a denominator.** Same twenty-fifth region as before (White on
-///   the hinge at 020, which the reader does not see), and now the rim-hidden
-///   men as well: six regions the old truth put on visible cells are on tips.
-///   That is the direction `ColorModel.classify` breaks ties in on purpose — a
-///   checker that appears contradicts the game and gets asked about; one that
-///   vanishes does not.
+/// * **`region colour alone` reads 220/242 and the floor moved down twice, by a
+///   loss rather than a denominator both times.** Same twenty-fifth region as
+///   ever (White on the hinge at 020, which the reader does not see), then the
+///   rim-hidden men of the ledger's own turns (~~222/242~~), and now the two on
+///   the keyframes' 1-points. Every one of them is a checker that **vanishes**
+///   rather than one that appears, which is the direction `ColorModel.classify`
+///   breaks ties in on purpose — a checker that appears contradicts the game
+///   and gets asked about; one that vanishes does not.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
   CorpusMetric.startConfirmed: 1.0,
   CorpusMetric.dicePair: 0.0,
   CorpusMetric.diceAbsence: 1.0,
   CorpusMetric.regionOccupancy: 195 / 242,
-  CorpusMetric.regionColour: 222 / 242,
+  CorpusMetric.regionColour: 220 / 242,
   CorpusMetric.legalPlay: 6 / 6,
   CorpusMetric.legalPlayActed: 4 / 6,
   CorpusMetric.placementVerified: 1 / 6,
   CorpusMetric.placementVerifiedBoard: 0.0,
   CorpusMetric.boardResynced: 0.0,
-  CorpusMetric.regionVerified: 233 / 260,
+  CorpusMetric.regionVerified: 235 / 260,
 };
 
 /// What the SYNTHETIC corpus scored on the whole-board queries when Task 8

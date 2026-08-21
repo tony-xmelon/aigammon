@@ -8,13 +8,13 @@
   "orientation": "whiteHomeNear",
   "board": {
     "points": [
-      0,
+      1,
       -1,
       0,
       3,
       2,
       2,
-      1,
+      2,
       3,
       1,
       0,
@@ -35,7 +35,7 @@
     ],
     "whiteBar": 0,
     "blackBar": 1,
-    "whiteOff": 2,
+    "whiteOff": 0,
     "blackOff": 0
   },
   "events": null,
@@ -51,7 +51,7 @@
   "title": "End game — a Black checker on the bar",
   "instructions": [
     "Cut VID20260820105037 at t=680.0s and take the whole frame.",
-    "Read cell by cell off five zooms (bar, both far quarters, both near quarters); the Black checker sits ON the worn hinge ridge, which is the object-versus-surface case this corpus exists to ask about.",
+    "Read cell by cell off five zooms (bar, both far quarters, both near quarters); the Black checker sits ON the worn hinge ridge, which is the object-versus-surface case this corpus exists to ask about. Two White men the zooms lost behind the near rim were put back by pixel measurement on 2026-08-23: the 1-point holds ONE (1666 cream px against 0-380 in every window before this one, a blob whose centroid inverts to board x 0.962 against the point centre of 0.961) and the 7-point TWO rather than one (8243 px topping at board y 0.864 — the two-man signature the 8-point measures 8420-8923 for, against 12337-14122 for three). Fifteen White men stand on points here; none is off.",
     "A 3 is visible on the hinge and its partner is not, so the sidecar claims no roll rather than half of one."
   ]
 }

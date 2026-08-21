@@ -715,6 +715,70 @@ void main() {
       expect(bar.board.whiteBar, 0);
     });
 
+    test('nothing in this session is off the board, and the two keyframes are '
+        'why that had to be measured', () {
+      // **The 2026-08-23 correction, pinned cell by cell.** Both keyframes
+      // were read off zooms, and the zooms lost the man standing at the BASE
+      // of a near-half point — the wide end against the case's raised rim,
+      // which hides three quarters of him. Two men per frame went missing that
+      // way and the difference was written down as `whiteOff: 2`, which is the
+      // one thing a hand-read board can get wrong that fifteen-a-side cannot
+      // catch: a man counted off is still a man counted.
+      //
+      // Re-measured in cream pixel mass per point column on the full-res
+      // frames, against the same columns in the eight windows before them:
+      //
+      // * 066's 1-point measures 1666 px where every earlier window measures
+      //   0-380, and the blob's centroid inverts to board x 0.962 against the
+      //   point's own centre of 0.961;
+      // * 066's 7-point measures 8243 px topping at board y 0.864 — the
+      //   two-man signature (the 8-point reads 8420-8923 for two and
+      //   12337-14122 for three), not the one-man 1696 it shows at 013;
+      // * 070's 1-point measures 1512 px in the same place;
+      // * 070's 7-point measures 12771 px topping at 0.765, one whole pitch
+      //   above 066's — three men.
+      //
+      // The pipeline's own reader is the independent witness on the 7-points:
+      // it read *white x2* at 066 and *white x3* at 070 while the sidecars
+      // said one and two, and those two contradictions disappear here. See
+      // `kRealCorpusFloors` in `corpus_harness_test.dart` for what that did to
+      // the scoreboard.
+      for (final shot in filmed) {
+        expect(shot.board.whiteOff, 0, reason: '${shot.id}: nothing in this '
+            'session ever leaves the board');
+        expect(shot.board.blackOff, 0, reason: shot.id);
+      }
+
+      final keyframes = <String, BoardState>{
+        for (final id in <String>['066', '070'])
+          id: filmed.firstWhere((s) => s.id == id).board,
+      };
+      // 1-based points to White's count on them, which is the whole claim.
+      expect(<int, int>{
+        for (var i = 0; i < 24; i++)
+          if (keyframes['066']!.points[i] > 0) i + 1: keyframes['066']!.points[i],
+      }, <int, int>{1: 1, 4: 3, 5: 2, 6: 2, 7: 2, 8: 3, 9: 1, 24: 1});
+      expect(<int, int>{
+        for (var i = 0; i < 24; i++)
+          if (keyframes['070']!.points[i] > 0) i + 1: keyframes['070']!.points[i],
+      }, <int, int>{1: 1, 4: 3, 5: 2, 6: 2, 7: 3, 8: 2, 9: 1, 22: 1});
+
+      // And the corrected pair still differs by one legal turn's worth of
+      // White pips — 8/7 and 24/22, a 2-1 — because the correction adds the
+      // same two men to both frames rather than one to either. Corroboration,
+      // not a claim about the gap: Black's cells differ by more than a single
+      // turn can account for, which is why neither keyframe carries a log.
+      int whiteOn(BoardState board, int index) =>
+          board.points[index] > 0 ? board.points[index] : 0;
+      var pips = 0;
+      for (var i = 0; i < 24; i++) {
+        pips += (whiteOn(keyframes['070']!, i) - whiteOn(keyframes['066']!, i)) *
+            (i + 1);
+      }
+      expect(pips, -3, reason: "White's men moved three pips down the board "
+          'between the two keyframes, which is a 2-1 and nothing else');
+    });
+
     test('the four rolls the corpus can stand behind are the only dice claimed',
         () {
       // Dice values are ground truth and stay in the sidecars whatever the

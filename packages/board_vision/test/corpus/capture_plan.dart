@@ -765,10 +765,15 @@ const double kRealDieSide = 0.021;
 /// * two **keyframes** carry a board and no log. They come from the end of the
 ///   video, which was not transcribable move by move — hands in shot, a hit
 ///   nobody could pin to a turn — and were read off zoomed frames by a person.
-///   They are the weakest ground truth in the corpus and hold the only board
-///   with men borne off, which is the trade that was made knowingly; the
+///   They are the weakest ground truth in the corpus, ~~and hold the only
+///   board with men borne off~~ — and the 2026-08-23 audit is what that
+///   weakness looks like when it is finally measured. The zooms lost two White
+///   men in each frame behind the case's near rim, and the difference was
+///   written down as `whiteOff: 2`. Both men are on the board. The
 ///   `checkerCount` check in `capture_plan_test.dart` is the only arithmetic
-///   that can be held over them.
+///   that can be held over these two, and it is worth knowing what it cannot
+///   see: fifteen a side counts a man written off as a man, so it passed on
+///   the wrong boards exactly as it passes on the right ones.
 ///
 /// The middle of the game (turns 9 to 15) is **not** in the corpus. Its
 /// windows have hands at rest in them and a hit sequence nobody could
@@ -1230,37 +1235,53 @@ typedef _FilmedKeyframe = ({
 /// transcribable move by move — hands in shot, a hit nobody could pin to a
 /// turn. Read cell by cell off zoomed frames, cross-checked against fifteen
 /// checkers a side and against the machine's own deltas either side of them.
-/// They are here because they hold the things the ledger's opening never does —
-/// a checker on the bar, a board with men off it — and because a corpus of
-/// nothing but opening positions would teach the pipeline that stacks are
-/// always where a game starts.
+/// They are here because they hold the thing the ledger's opening never does —
+/// a checker on the bar — and because a corpus of nothing but opening
+/// positions would teach the pipeline that stacks are always where a game
+/// starts. ~~and a board with men off it~~: they were believed to hold that
+/// too, until 2026-08-23 found those men standing against the near rim. No
+/// board in this corpus has a man off it, and the trayless-bear-off path is
+/// covered by the folding-case fixture in `corpus_harness_test.dart` instead.
 ///
 /// **018 and 020 spent a day here and have gone back to [_filmedPositions].**
 /// The 2026-08-21 audit read a White checker as having left the board during
 /// turn 7 and moved both windows out of the replay; measurement on 2026-08-22
 /// found that checker standing on the 10-point, mostly behind the case's rim,
-/// and both turns legal. The `off` count those two carried is gone with them:
-/// nothing in this session is off the felt, and the only shots still writing
-/// `off` are these two, where the game really has borne men off.
+/// and both turns legal. The `off` count those two carried is gone with them.
+///
+/// **And on 2026-08-23 so is the `off` count these two carried.** ~~The only
+/// shots still writing `off` are these two, where the game really has borne men
+/// off~~: the same measurement that acquitted turn 7 was never run over the
+/// keyframes, and when it was, each of them turned out to be hiding two White
+/// men against the near rim rather than to have borne them off — one on the
+/// 1-point and one more on the 7-point than the zooms counted. **Nothing in
+/// this session ever leaves the board**, and no shot in it writes `off` at all.
+/// The numbers are in each keyframe's evidence below.
 final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
   (
     id: '066',
     seconds: '680.0',
     board: BoardState(
       points: const <int>[
-        0, -1, 0, 3, 2, 2, //  1-6   White's home, Black's entered runner on 2
-        1, 3, 1, 0, 0, 0, //   7-12
+        1, -1, 0, 3, 2, 2, //  1-6   White's home, Black's entered runner on 2
+        2, 3, 1, 0, 0, 0, //   7-12
         0, 0, 0, 0, -2, -1, // 13-18
         -3, -2, -2, -1, -2, 1, // 19-24, White's doomed blot on the 24
       ],
       blackBar: 1,
-      whiteOff: 2,
     ),
     title: 'End game — a Black checker on the bar',
     evidence: 'Read cell by cell off five zooms (bar, both far quarters, both '
         'near quarters); the Black checker sits ON the worn hinge ridge, '
         'which is the object-versus-surface case this corpus exists to ask '
-        'about.',
+        'about. Two White men the zooms lost behind the near rim were put '
+        'back by pixel measurement on 2026-08-23: the 1-point holds ONE '
+        '(1666 cream px against 0-380 in every window before this one, a blob '
+        'whose centroid inverts to board x 0.962 against the point centre of '
+        '0.961) and the 7-point TWO rather than one (8243 px topping at board '
+        'y 0.864 — the two-man signature the 8-point measures 8420-8923 for, '
+        'against 12337-14122 for three). Fifteen White men stand on points '
+        'here; none is off.',
     diceNote: 'A 3 is visible on the hinge and its partner is not, so the '
         'sidecar claims no roll rather than half of one.',
   ),
@@ -1269,17 +1290,25 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
     seconds: '729.0',
     board: BoardState(
       points: const <int>[
-        0, -2, 0, 3, 2, 2, //  1-6
-        2, 2, 1, 0, 0, 0, //   7-12
+        1, -2, 0, 3, 2, 2, //  1-6
+        3, 2, 1, 0, 0, 0, //   7-12
         0, 0, 0, 0, -1, -2, // 13-18
         -2, -2, -2, 1, -2, -2, // 19-24, White's straggler trapped on the 22
       ],
-      whiteOff: 2,
     ),
     title: 'End game — the last frame, a White straggler trapped',
     evidence: 'Read cell by cell off five zooms and cross-checked against the '
         "machine's deltas either side; the video ends here with the game "
-        'unfinished.',
+        'unfinished. Two rim-hidden White men were put back by pixel '
+        'measurement on 2026-08-23, the same pair 066 was hiding: the 1-point '
+        'holds ONE (1512 cream px, a compact blob at board y 0.92-0.97) and '
+        'the 7-point THREE rather than two (12771 px topping at 0.765, one '
+        'whole pitch above 066\'s two). Fifteen White men on points, none off '
+        '— and the correction leaves the pair consistent rather than making '
+        'it so, since White\'s cells here still differ from 066\'s by exactly '
+        'the three pips of a 2-1 (8/7, 24/22). That is corroboration and not '
+        'a claim about the gap: Black\'s cells differ by more than one turn '
+        'can account for, which is why both windows carry a board and no log.',
     diceNote: 'Two dice are lying on the felt mid-sequence and neither can be '
         'attributed to a turn, so the sidecar claims no roll.',
   ),
