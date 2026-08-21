@@ -27,7 +27,26 @@ void main() {
 
   group('the seat and the seating it implies', () {
     test('the user sitting by the phone puts their own home board near', () {
-      const white = BuddySetup(
+      // Asked of `orientationFor` directly, which is where the fact lives: the
+      // two screens and the session all derive their coordinate frame through
+      // it, and neither `BuddySetup` nor `CalibrationRequest` carries a copy —
+      // a copy on the request would be the PRE-confirmation seat under a name
+      // that reads like an answer.
+      expect(orientationFor(Player.white, BuddySeat.near),
+          BoardOrientation.whiteHomeNear);
+      expect(orientationFor(Player.white, BuddySeat.far),
+          BoardOrientation.whiteHomeFar);
+      expect(orientationFor(Player.black, BuddySeat.near),
+          BoardOrientation.whiteHomeFar,
+          reason: 'the user plays Black now, so it is BLACK\'s home that is '
+              'near');
+      expect(orientationFor(Player.black, BuddySeat.far),
+          BoardOrientation.whiteHomeNear);
+    });
+
+    test('and the setup names the side the user plays, not the one Buddy does',
+        () {
+      const setup = BuddySetup(
         matchLength: 1,
         cubeless: false,
         difficulty: Difficulty.easy,
@@ -35,22 +54,9 @@ void main() {
         seat: BuddySeat.near,
         phrasing: BuddyPhrasing.terse,
       );
-      expect(white.userSide, Player.white);
-      expect(white.orientation, BoardOrientation.whiteHomeNear);
-
-      expect(
-        white.copyWith(seat: BuddySeat.far).orientation,
-        BoardOrientation.whiteHomeFar,
-      );
-      expect(
-        white.copyWith(buddySide: Player.white).orientation,
-        BoardOrientation.whiteHomeFar,
-        reason: 'the user plays Black now, so it is BLACK\'s home that is near',
-      );
-      expect(
-        white.copyWith(buddySide: Player.white, seat: BuddySeat.far).orientation,
-        BoardOrientation.whiteHomeNear,
-      );
+      expect(setup.userSide, Player.white);
+      expect(setup.copyWith(buddySide: Player.white).userSide, Player.black);
+      expect(setup.copyWith(seat: BuddySeat.far).seat, BuddySeat.far);
     });
   });
 
@@ -101,6 +107,27 @@ void main() {
       // Buddy plays Black by default and the user sits opposite the phone, so
       // White's home is the FAR half — and that is what was calibrated.
       expect(h.learner.calls.single.orientation, BoardOrientation.whiteHomeFar);
+    });
+
+    testWidgets('the side Buddy plays is a choice, and it turns the board over',
+        (t) async {
+      // The one control the test above left on its default. It is half of what
+      // fixes the coordinate frame — the seat is the other half — so a screen
+      // that dropped it would number every point backwards for a user who
+      // plays Black, on a board that calibrated and confirmed.
+      final h = _Harness();
+      await h.pump(t);
+
+      await _tap(t, find.text('White'));
+      await _tap(t, find.text('Opposite'));
+      await _tap(t, find.text('Calibrate the board'));
+      await h.calibrate(t);
+
+      expect(h.launched!.$1.buddySide, Player.white);
+      expect(h.launched!.$1.userSide, Player.black);
+      expect(h.learner.calls.single.orientation, BoardOrientation.whiteHomeNear,
+          reason: 'the user plays Black and sits opposite the phone, so it is '
+              "BLACK's home that is far — which is White's home near");
     });
   });
 }

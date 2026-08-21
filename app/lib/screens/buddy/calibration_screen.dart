@@ -6,6 +6,8 @@ import 'package:board_vision/board_vision.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../buddy/buddy_session.dart';
@@ -314,10 +316,15 @@ class CalibrationRequest {
   /// Where the setup screen was told the user sits. Proposed here rather than
   /// asked again from nothing: the user confirms it against the picture, and
   /// what they confirm comes back on [CalibrationOutcome.seat].
+  ///
+  /// **There is deliberately no `orientation` here.** This seat is the one the
+  /// screen OPENS on, and the screen's whole seat step exists because it can be
+  /// wrong; a getter here would hand a caller the pre-confirmation frame under
+  /// a name that reads like the answer. The 24-point frame is
+  /// `orientationFor(userSide, seat)` computed against the CONFIRMED seat —
+  /// once inside the screen, and once by whoever takes
+  /// [CalibrationOutcome.seat] away.
   final BuddySeat seat;
-
-  /// The 24-point coordinate frame these two imply.
-  BoardOrientation get orientation => orientationFor(userSide, seat);
 
   /// The outline a previous calibration used, when this is a RECALIBRATION.
   ///
@@ -1024,8 +1031,19 @@ class _Notice extends StatelessWidget {
       );
 }
 
-/// One draggable corner.
-class CalibrationHandle extends StatelessWidget {
+/// One corner, draggable — and nudgeable without a finger.
+///
+/// **A drag was the only way to place one of these, and a drag is not a thing
+/// everyone has.** The accepting corner region is narrow enough that this
+/// screen carries a magnifier to help a fingertip land in it; someone driving
+/// the phone with a switch, a keyboard or a screen reader had no way to land in
+/// it at all. So the four arrow keys move a focused handle by
+/// [nudgeStep], and the same four moves are custom semantic actions, which is
+/// how TalkBack and VoiceOver offer them.
+///
+/// The loupe stays a drag affordance: it exists because a finger covers the
+/// handle it is placing, and nothing covers a handle being nudged.
+class CalibrationHandle extends StatefulWidget {
   const CalibrationHandle({
     super.key,
     required this.index,
@@ -1038,6 +1056,16 @@ class CalibrationHandle extends StatelessWidget {
 
   /// The touch target, which is a great deal larger than the mark drawn in it.
   static const double touchSize = 48;
+
+  /// How far one arrow key or one semantic nudge moves a handle, in the
+  /// preview's own logical pixels.
+  ///
+  /// One, because this is the *last* pixel rather than the first: a drag does
+  /// the coarse placement and this is what corrects it. The measured first-pass
+  /// error on a real board was 10 to 40 FRAME pixels onto the wooden rim, and a
+  /// preview is laid out at rather fewer logical pixels than the frame has, so
+  /// a handful of taps covers it.
+  static const double nudgeStep = 1;
 
   final int index;
 
@@ -1052,45 +1080,103 @@ class CalibrationHandle extends StatelessWidget {
   final VoidCallback onEnd;
 
   @override
+  State<CalibrationHandle> createState() => _CalibrationHandleState();
+}
+
+class _CalibrationHandleState extends State<CalibrationHandle> {
+  late final FocusNode _focus = FocusNode(
+    debugLabel: 'calibration handle ${widget.index}',
+  );
+  bool _focused = false;
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    const step = CalibrationHandle.nudgeStep;
+    final by = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowLeft => const Offset(-step, 0),
+      LogicalKeyboardKey.arrowRight => const Offset(step, 0),
+      LogicalKeyboardKey.arrowUp => const Offset(0, -step),
+      LogicalKeyboardKey.arrowDown => const Offset(0, step),
+      _ => null,
+    };
+    if (by == null) return KeyEventResult.ignored;
+    widget.onMove(by);
+    // Handled, so the arrow key does not also move focus to the next handle —
+    // which is what `WidgetsApp`'s own shortcuts would do with it.
+    return KeyEventResult.handled;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final ring = hinge ? 16.0 : 26.0;
+    final ring = widget.hinge ? 16.0 : 26.0;
+    // Focused counts as active: a keyboard user needs to see which of the eight
+    // marks the arrow keys are about, for the same reason a dragging finger
+    // needs to see which one it caught.
+    final lit = widget.active || _focused;
+    const step = CalibrationHandle.nudgeStep;
     return Semantics(
-      label: hinge
-          ? 'Hinge seam ${index - 3} of 4'
-          : 'Board corner ${index + 1} of 4',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onPanStart: (_) => onStart(),
-        onPanUpdate: (d) => onMove(d.delta),
-        onPanEnd: (_) => onEnd(),
-        onPanCancel: onEnd,
-        child: SizedBox(
-          width: touchSize,
-          height: touchSize,
-          child: Center(
-            child: Container(
-              width: ring,
-              height: ring,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: scheme.primary.withValues(alpha: active ? 0.35 : 0.15),
-                border: Border.all(
-                  color: scheme.primary,
-                  width: active ? 3 : 2,
-                ),
-              ),
-              // The mark is a ring around a one-pixel dot rather than a filled
-              // blob: what is being placed is a POINT, and a handle that hides
-              // the corner it is on is the reason the first pass at a real
-              // board landed on the rim.
-              child: Center(
-                child: Container(
-                  width: 3,
-                  height: 3,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
+      label: widget.hinge
+          ? 'Hinge seam ${widget.index - 3} of 4'
+          : 'Board corner ${widget.index + 1} of 4',
+      customSemanticsActions: <CustomSemanticsAction, VoidCallback>{
+        const CustomSemanticsAction(label: 'Nudge left'): () =>
+            widget.onMove(const Offset(-step, 0)),
+        const CustomSemanticsAction(label: 'Nudge right'): () =>
+            widget.onMove(const Offset(step, 0)),
+        const CustomSemanticsAction(label: 'Nudge up'): () =>
+            widget.onMove(const Offset(0, -step)),
+        const CustomSemanticsAction(label: 'Nudge down'): () =>
+            widget.onMove(const Offset(0, step)),
+      },
+      child: Focus(
+        focusNode: _focus,
+        onFocusChange: (has) => setState(() => _focused = has),
+        onKeyEvent: _onKey,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // A tap is how a handle becomes the one the arrow keys are about.
+          onTap: _focus.requestFocus,
+          onPanStart: (_) {
+            _focus.requestFocus();
+            widget.onStart();
+          },
+          onPanUpdate: (d) => widget.onMove(d.delta),
+          onPanEnd: (_) => widget.onEnd(),
+          onPanCancel: widget.onEnd,
+          child: SizedBox(
+            width: CalibrationHandle.touchSize,
+            height: CalibrationHandle.touchSize,
+            child: Center(
+              child: Container(
+                width: ring,
+                height: ring,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: lit ? 0.35 : 0.15),
+                  border: Border.all(
                     color: scheme.primary,
+                    width: lit ? 3 : 2,
+                  ),
+                ),
+                // The mark is a ring around a one-pixel dot rather than a
+                // filled blob: what is being placed is a POINT, and a handle
+                // that hides the corner it is on is the reason the first pass
+                // at a real board landed on the rim.
+                child: Center(
+                  child: Container(
+                    width: 3,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: scheme.primary,
+                    ),
                   ),
                 ),
               ),

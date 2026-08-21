@@ -3,6 +3,8 @@ import 'package:aigammon_app/screens/buddy/calibration_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:board_vision/board_vision.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -205,6 +207,25 @@ void main() {
               'pre-seed them');
     });
 
+    testWidgets('the dice size the session carries is what the board is '
+        'learned with', (t) async {
+      // Not a constant, and the gap is measured: the first real board's dice
+      // are 0.021 of it across against a synthetic bed's 0.075, and every gate
+      // in the dice reader is derived from this number. A screen that dropped
+      // it would calibrate for the bed's dice on anybody's board.
+      final h = _Harness(
+        request: const CalibrationRequest(
+          userSide: Player.white,
+          seat: BuddySeat.near,
+          dieSide: 0.021,
+        ),
+      );
+      await h.pump(t);
+      await h.capture(t);
+
+      expect(h.learner.calls.single.dieSide, closeTo(0.021, 1e-9));
+    });
+
     testWidgets('the confirm step shows what board_vision saw, and start over '
         'keeps the corners', (t) async {
       final h = _Harness();
@@ -213,6 +234,10 @@ void main() {
       await h.capture(t);
 
       expect(find.text(startPositionDisagrees.message), findsOneWidget);
+      expect(_belief(t).offending, <RoiId>{RoiId.point5},
+          reason: 'the sentence names the 6-point and the overlay has to ring '
+              'it — a message about a point the picture does not mark is the '
+              'user hunting for what is wrong');
       final before = _outline(t).handles;
 
       await t.tap(find.text('Start over'));
@@ -224,6 +249,27 @@ void main() {
           reason: 'the cheap restart is the fast path of NUDGING the existing '
               'corners');
       expect(h.outcome, isNull);
+    });
+
+    testWidgets('the belief keeps asking, once per settled frame', (t) async {
+      // The claim the step is built on: a user who sees Buddy disagree with
+      // the board moves a checker, and the answer has to follow the board
+      // rather than stay frozen on the frame it was learned from.
+      final h = _Harness();
+      await h.pump(t);
+      await h.capture(t);
+      expect(h.vision.confirmCalls, 1,
+          reason: 'the frame it was learned from answers immediately');
+
+      h.camera.push(_frame());
+      await t.pumpAndSettle();
+      expect(h.vision.confirmCalls, 2);
+
+      h.camera.push(_frame(), stable: false);
+      await t.pumpAndSettle();
+      expect(h.vision.confirmCalls, 2,
+          reason: 'an unsettled picture is a board mid-move, and is asked '
+              'nothing on any step');
     });
 
     testWidgets('a refused calibration shows the sentence board_vision wrote',
@@ -343,6 +389,94 @@ void main() {
     });
   });
 
+  // A handle that can only be dragged is a handle only some people can place,
+  // on the screen whose whole subject is placing one precisely.
+  group('accessibility', () {
+    testWidgets('the arrow keys place a handle without a finger on it',
+        (t) async {
+      final h = _Harness();
+      await h.pump(t);
+      await h.toCorners(t);
+
+      final box = t.getSize(find.byKey(const Key('buddy-board-outline')));
+      final before = _outline(t).handles.outer[0];
+
+      await t.tap(_handleFinder());
+      await t.pumpAndSettle();
+      for (var i = 0; i < 3; i++) {
+        await t.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      }
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await t.pumpAndSettle();
+
+      const step = CalibrationHandle.nudgeStep;
+      final after = _outline(t).handles.outer[0];
+      expect(after.dx - before.dx, closeTo(3 * step / box.width, 1e-9));
+      expect(after.dy - before.dy, closeTo(-step / box.height, 1e-9),
+          reason: 'up is towards the top of the picture, as it is everywhere '
+              'else');
+    });
+
+    testWidgets('an arrow key moves the handle rather than the focus',
+        (t) async {
+      // `WidgetsApp`'s own shortcuts read arrow keys as directional focus
+      // traversal, so a handle that did not claim them would hand the next
+      // press to a different corner.
+      final h = _Harness();
+      await h.pump(t);
+      await h.toCorners(t);
+      final box = t.getSize(find.byKey(const Key('buddy-board-outline')));
+      final before = _outline(t).handles;
+
+      await t.tap(_handleFinder());
+      await t.pumpAndSettle();
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await t.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await t.pumpAndSettle();
+
+      final after = _outline(t).handles;
+      expect(after.outer[0].dx - before.outer[0].dx,
+          closeTo(2 * CalibrationHandle.nudgeStep / box.width, 1e-9));
+      expect(after.outer.sublist(1), before.outer.sublist(1),
+          reason: 'the other three did not move');
+    });
+
+    testWidgets('and the same four moves are offered as semantic actions',
+        (t) async {
+      // Disposed inside the test body: the end-of-test check for a live
+      // SemanticsHandle runs BEFORE tearDowns.
+      final handle = t.ensureSemantics();
+      final h = _Harness();
+      await h.pump(t);
+      await h.toCorners(t);
+
+      final box = t.getSize(find.byKey(const Key('buddy-board-outline')));
+      final before = _outline(t).handles.outer[0];
+      final node = t.getSemantics(_handleFinder());
+      expect(node.label, 'Board corner 1 of 4');
+
+      final actions = <String, int>{
+        for (final id
+            in node.getSemanticsData().customSemanticsActionIds ?? const <int>[])
+          CustomSemanticsAction.getAction(id)!.label!: id,
+      };
+      expect(actions.keys,
+          containsAll(<String>['Nudge left', 'Nudge right', 'Nudge up',
+              'Nudge down']));
+
+      node.owner!.performAction(
+          node.id, SemanticsAction.customAction, actions['Nudge down']);
+      await t.pumpAndSettle();
+
+      expect(_outline(t).handles.outer[0].dy - before.dy,
+          closeTo(CalibrationHandle.nudgeStep / box.height, 1e-9),
+          reason: 'the action a screen reader offers has to move the handle, '
+              'not merely be listed');
+
+      handle.dispose();
+    });
+  });
+
   group('BeliefPainter', () {
     test('stacks the men at the pitch the calibration measured, from the '
         'origin it measured', () {
@@ -453,6 +587,10 @@ Finder _handleFinder() => find.byKey(const Key('buddy-handle-0'));
 BoardOutlinePainter _outline(WidgetTester t) =>
     t.widget<CustomPaint>(find.byKey(const Key('buddy-board-outline'))).painter!
         as BoardOutlinePainter;
+
+BeliefPainter _belief(WidgetTester t) =>
+    t.widget<CustomPaint>(find.byKey(const Key('buddy-belief'))).painter!
+        as BeliefPainter;
 
 Frame _frame() => blankFrame(width: 64, height: 48);
 

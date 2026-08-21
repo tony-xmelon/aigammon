@@ -1,5 +1,4 @@
 import 'package:backgammon_core/backgammon_core.dart';
-import 'package:board_vision/board_vision.dart';
 import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,14 +32,16 @@ class BuddySetup {
 
   /// Where the user sits. Confirmed again during calibration, against the
   /// picture; see [CalibrationOutcome.seat].
+  ///
+  /// No `orientation` getter beside it, for the reason
+  /// [CalibrationRequest.seat] gives: the frame is `orientationFor(userSide,
+  /// seat)` and it is only worth having once the seat has been confirmed, so it
+  /// is computed where it is used rather than carried here.
   final BuddySeat seat;
 
   final BuddyPhrasing phrasing;
 
   Player get userSide => buddySide.opponent;
-
-  /// The 24-point frame this seating implies.
-  BoardOrientation get orientation => orientationFor(userSide, seat);
 
   BuddySetup copyWith({
     int? matchLength,
