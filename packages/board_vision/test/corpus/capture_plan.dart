@@ -1304,7 +1304,13 @@ final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
         'diagonal pair on the left die, five blobs on the right that read as a '
         '3 and a 2 across two faces — and a side face is not a roll. The turn '
         'itself is 2-1 by arithmetic (one man, 13/10, three pips with the '
-        '12-point blocked), and that is where the ledger gets it.',
+        '12-point blocked), and that is where the ledger gets it. **The two '
+        'readings are in tension, and this note says so rather than choosing '
+        'between them**: if those side reads are right then neither die can '
+        'have a 2 on top, which the board\'s 2-1 requires. A four-pixel pip on '
+        'a face that is not a top does not outweigh that arithmetic, so the '
+        'ledger stands and nothing here was changed on the strength of the '
+        'dice.',
   ),
   (
     id: '010',
@@ -1345,11 +1351,15 @@ final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
     diceInFrame: true,
     diceDerived: false,
     diceNote: '~~Dice in view but not settled enough for a person to call.~~ '
-        'They are settled, and one of them is the most legible top face in the '
-        'session: the die at board (0.398, 0.514) — the middle of the board, '
+        'They are settled, and one of them shows a top face this camera can '
+        'read: the die at board (0.398, 0.514) — the middle of the board, '
         'where this camera sees most of a top — shows a clean **5**, with a '
         'single large pip on its near face. Its partner is not readable, and '
-        'half a pair is not a roll, so the sidecar still claims none.',
+        'half a pair is not a roll, so the sidecar still claims none. '
+        '(~~the most legible top face in the session~~ was a superlative with '
+        'no measurement beside it, and is withdrawn: 020\'s die at board '
+        '(0.858, 0.405) reads its top just as cleanly, and no two tops in this '
+        'session have ever been measured against each other.)',
   ),
   (
     id: '020',

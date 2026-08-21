@@ -868,10 +868,16 @@ far half, false near the middle):
   right, neither die can have a 2 on top, and the ledger's 2-1 for turn 3 is
   fixed by the **board** — one man, 13/10, three pips with the 12-point blocked
   — rather than by the felt. A four-pixel pip does not outweigh that arithmetic,
-  and nothing was changed on the strength of it.)
-- **018's dice are settled too**, and one of them carries the most legible top
-  face in the session: the die at board (0.398, 0.514), in the middle band,
-  shows a clean **5**. Its partner is unreadable, and half a pair is not a roll.
+  and nothing was changed on the strength of it. **That tension is now in 008's
+  own sidecar note as well as here** (2026-08-24): the note recorded both
+  readings and let them sit side by side without saying they disagree, which is
+  a thing a reader has to notice for themselves or not at all.)
+- **018's dice are settled too**, and one of them carries a top face this camera
+  can read: the die at board (0.398, 0.514), in the middle band, shows a clean
+  **5**. Its partner is unreadable, and half a pair is not a roll. (~~the most
+  legible top face in the session~~ — withdrawn 2026-08-24 as a superlative with
+  no measurement beside it. 020's die at board (0.858, 0.405) reads its top just
+  as cleanly, and no two tops in this session have ever been compared.)
 - **020's second die does have a readable top**, at board (0.858, 0.405): a
   single centred pip, a **1**, with a diagonal pair on its near side. The other
   die's "clear 6" is on the face it shows **the camera**, not on its top. A 1
