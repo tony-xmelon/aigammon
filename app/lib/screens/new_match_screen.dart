@@ -17,6 +17,7 @@ import '../game/game_controller.dart';
 import '../game/player_agent.dart';
 import '../tutor/tutor_service.dart';
 import 'game_screen.dart';
+import 'setup_options.dart';
 
 /// The human's chosen side when playing vs the computer. [random] is resolved
 /// to White or Black at match start.
@@ -103,52 +104,26 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _Section(
-                      label: 'Match length',
-                      child: SegmentedButton<int>(
-                        showSelectedIcon: false,
-                        segments: const [
-                          ButtonSegment(value: 1, label: Text('1')),
-                          ButtonSegment(value: 3, label: Text('3')),
-                          ButtonSegment(value: 5, label: Text('5')),
-                          ButtonSegment(value: 7, label: Text('7')),
-                        ],
-                        selected: {_matchLength},
-                        onSelectionChanged: (s) =>
-                            setState(() => _matchLength = s.first),
-                      ),
+                    MatchLengthOptions(
+                      value: _matchLength,
+                      onChanged: (v) => setState(() => _matchLength = v),
                     ),
                     if (widget.vsComputer) ...[
                       const SizedBox(height: 24),
-                      _Section(
-                        label: 'Difficulty',
-                        child: SegmentedButton<Difficulty>(
-                          showSelectedIcon: false,
-                          segments: const [
-                            ButtonSegment(
-                                value: Difficulty.easy, label: Text('Easy')),
-                            ButtonSegment(
-                                value: Difficulty.medium, label: Text('Medium')),
-                            ButtonSegment(
-                                value: Difficulty.hard, label: Text('Hard')),
-                            ButtonSegment(
-                                value: Difficulty.expert, label: Text('Expert')),
-                          ],
-                          selected: {_difficulty},
-                          onSelectionChanged: (s) => setState(() {
-                            _difficulty = s.first;
-                            // Live-update the default until the user overrides
-                            // the toggle — but only when settings don't force a
-                            // fixed tutor default.
-                            if (!_tutorTouched &&
-                                _settingsTutorOverride == null) {
-                              _tutorEnabled = _defaultTutor(_difficulty);
-                            }
-                          }),
-                        ),
+                      DifficultyOptions(
+                        value: _difficulty,
+                        onChanged: (v) => setState(() {
+                          _difficulty = v;
+                          // Live-update the default until the user overrides
+                          // the toggle — but only when settings don't force a
+                          // fixed tutor default.
+                          if (!_tutorTouched && _settingsTutorOverride == null) {
+                            _tutorEnabled = _defaultTutor(_difficulty);
+                          }
+                        }),
                       ),
                       const SizedBox(height: 24),
-                      _Section(
+                      SetupSection(
                         label: 'Your side',
                         child: SegmentedButton<_SideChoice>(
                           showSelectedIcon: false,
@@ -184,10 +159,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
                         _tutorTouched = true;
                       }),
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Play without cube'),
-                      subtitle: const Text('No doubling cube this match'),
+                    CubelessSwitch(
                       value: _cubeless,
                       onChanged: (v) => setState(() => _cubeless = v),
                     ),
@@ -248,7 +220,7 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
           // The header's detail row names the level you chose ("vs AI · Easy ·
           // Pips …"). Only meaningful against the computer.
           opponentDetail:
-              widget.vsComputer ? _difficultyLabel(_difficulty) : null,
+              widget.vsComputer ? difficultyLabel(_difficulty) : null,
           persistedMatchId: matchIdFuture,
           timings: settings.timings,
           interactionOptions: BoardInteractionOptions(
@@ -355,31 +327,3 @@ class _NewMatchScreenState extends ConsumerState<NewMatchScreen> {
   }
 }
 
-/// The display name of a difficulty, matching this screen's own segment labels
-/// so the header's "vs AI · Easy" reads back exactly what was picked here.
-String _difficultyLabel(Difficulty d) => switch (d) {
-      Difficulty.easy => 'Easy',
-      Difficulty.medium => 'Medium',
-      Difficulty.hard => 'Hard',
-      Difficulty.expert => 'Expert',
-    };
-
-/// A labelled setup row: a caption above its control.
-class _Section extends StatelessWidget {
-  const _Section({required this.label, required this.child});
-
-  final String label;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 12),
-        child,
-      ],
-    );
-  }
-}

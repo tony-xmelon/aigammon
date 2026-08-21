@@ -52,6 +52,68 @@ void main() {
       expect(h.controller.state.dice, Dice(5, 2));
       expect(h.controller.state.turn, Player.white);
     });
+
+    test('the seat says which of the two dice the user threw', () async {
+      // The user sits by the phone and plays White; Buddy is Black. The die on
+      // the NEAR half of the board is therefore White's, and it is the lower of
+      // the two — so the opening goes to Black, which is the opposite of what
+      // the left-to-right face order alone would say.
+      final h = Harness(buddySide: Player.black, seat: BuddySeat.near);
+      h.vision.willReadDice([diceAcrossTheBoard(near: 2, far: 5)]);
+
+      h.start();
+      await h.stableFrame();
+
+      expect(h.opening.whiteDie, 2, reason: 'the near die is the user\'s');
+      expect(h.opening.blackDie, 5);
+      expect(h.opening.firstPlayer, Player.black);
+      expect(h.policy.diceReads.single.$1, Player.black,
+          reason: 'the spoken line and the game record agree by construction');
+    });
+
+    test('and the other seat reads the same throw the other way round',
+        () async {
+      final h = Harness(buddySide: Player.black, seat: BuddySeat.far);
+      h.vision.willReadDice([diceAcrossTheBoard(near: 2, far: 5)]);
+
+      h.start();
+      await h.stableFrame();
+
+      expect(h.opening.whiteDie, 5,
+          reason: 'the user sits across the board now, so the FAR die is '
+              'theirs — and they play White');
+      expect(h.opening.firstPlayer, Player.white);
+    });
+
+    test('two dice on one half is not a seat question, and falls back',
+        () async {
+      // Level in y: the picture cannot say who threw which, so the convention
+      // this file had before seats stands, rather than a coin flip dressed up
+      // as a measurement.
+      final h = Harness(buddySide: Player.black, seat: BuddySeat.far);
+      h.vision.willReadDice([diceShowing(6, 3)]);
+
+      h.start();
+      await h.stableFrame();
+
+      expect(h.opening.whiteDie, 6);
+      expect(h.opening.firstPlayer, Player.white);
+    });
+
+    test('a typed opening roll has no felt to read, and falls back too',
+        () async {
+      final h = Harness(buddySide: Player.black, seat: BuddySeat.far);
+      h.vision.willReadDice([null, null]);
+
+      h.start();
+      await h.pumpUntil(() => h.session.needsManualDice);
+      h.session.enterDiceManually(Dice(6, 3));
+      await h.settle();
+
+      expect(h.opening.whiteDie, 6,
+          reason: 'the pad reports two faces and nothing about where they lay');
+      expect(h.opening.firstPlayer, Player.white);
+    });
   });
 
   group('a turn end to end', () {
@@ -783,6 +845,7 @@ class Harness {
     this.buddySide = Player.black,
     this.buddyDoubles = false,
     this.cubeless = false,
+    this.seat = BuddySeat.near,
     MatchPersistence persistence = const NoopPersistence(),
   }) {
     speaker = BuddySpeaker();
@@ -792,6 +855,7 @@ class Harness {
     session = BuddySession(
       engine: engine,
       buddySide: buddySide,
+      seat: seat,
       policy: policy,
       frames: frames.stream,
       matchLength: matchLength,
@@ -809,6 +873,7 @@ class Harness {
   final Player buddySide;
   final bool buddyDoubles;
   final bool cubeless;
+  final BuddySeat seat;
   final FakeVision vision = FakeVision();
   final StreamController<ObservedFrame> frames =
       StreamController<ObservedFrame>.broadcast();
@@ -818,6 +883,11 @@ class Harness {
   late final BuddySession session;
 
   GameController get controller => session.controller!;
+
+  /// The throw that started the match, as the authoritative record holds it:
+  /// White's die and Black's, in that order. What the seat decides.
+  OpeningRollEvent get opening =>
+      controller.game.events.first as OpeningRollEvent;
   List<String> get speech => speaker.lines.map((l) => l.text).toList();
 
   void start() => session.useCalibration(vision);

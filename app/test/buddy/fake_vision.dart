@@ -20,12 +20,21 @@ import 'package:board_vision/board_vision.dart';
 /// therefore "what happens next, and then from now on"; [readabilityCalls] and
 /// friends are how a test asserts that a query stopped being asked.
 class FakeVision implements BoardVision {
-  /// What the session calibrated against. Nothing here reads it, and building
-  /// a real one needs a photographed board, so asking for it is a bug in the
-  /// caller rather than a gap in the fake.
+  FakeVision({BoardCalibration? calibration}) : _learned = calibration;
+
+  final BoardCalibration? _learned;
+
+  /// What this fake was calibrated against.
+  ///
+  /// Null for the session's scenarios, which never look at it — and a real one
+  /// (see [fakeCalibration]) for the calibration screen's, which draws its
+  /// belief overlay through the geometry and therefore genuinely needs a map
+  /// from board space into the picture.
   @override
   BoardCalibration get calibration =>
-      throw UnimplementedError('FakeVision has no calibration to hand out');
+      _learned ??
+      (throw UnimplementedError('this FakeVision was built without a '
+          'calibration to hand out'));
 
   // --- the script ----------------------------------------------------------
 
@@ -33,6 +42,7 @@ class FakeVision implements BoardVision {
   final List<DiceReading?> _dice = <DiceReading?>[null];
   final List<PlayAnswer> _plays = <PlayAnswer>[matchesNothing];
   final List<VerifyAnswer> _verdicts = <VerifyAnswer>[boardAgrees];
+  final List<ConfirmResult> _confirmations = <ConfirmResult>[startPositionAgrees];
 
   /// The next readability verdicts, in order; the last one repeats.
   void willSee(List<Readability> readings) => _replace(_readability, readings);
@@ -47,6 +57,11 @@ class FakeVision implements BoardVision {
 
   /// The next `verifyExpectedBoard` answers.
   void willVerify(List<VerifyAnswer> answers) => _replace(_verdicts, answers);
+
+  /// The next `confirmStartingPosition` answers — the calibration screen's
+  /// safety net, which is the one query a session never asks.
+  void willConfirm(List<ConfirmResult> answers) =>
+      _replace(_confirmations, answers);
 
   static void _replace<T>(List<T> script, List<T> answers) {
     if (answers.isEmpty) {
@@ -64,14 +79,15 @@ class FakeVision implements BoardVision {
   // --- the record ----------------------------------------------------------
 
   /// Every query, in order, as `'readability'`, `'dice'`, `'play'`,
-  /// `'verify'` — for asserting which question a phase asks, and that a paused
-  /// session asks none of them.
+  /// `'verify'`, `'confirm'` — for asserting which question a phase asks, and
+  /// that a paused session asks none of them.
   final List<String> calls = <String>[];
 
   int get readabilityCalls => calls.where((c) => c == 'readability').length;
   int get diceCalls => calls.where((c) => c == 'dice').length;
   int get playCalls => calls.where((c) => c == 'play').length;
   int get verifyCalls => calls.where((c) => c == 'verify').length;
+  int get confirmCalls => calls.where((c) => c == 'confirm').length;
 
   /// The `(before, mover, candidates, beforeFrame)` of every `matchLegalPlay`.
   final List<PlayQuery> playQueries = <PlayQuery>[];
@@ -118,8 +134,10 @@ class FakeVision implements BoardVision {
       DriftReport.of(verifyExpectedBoard(frame, expected));
 
   @override
-  ConfirmResult confirmStartingPosition(Frame frame) =>
-      throw UnimplementedError('calibration is Task 12, not the session');
+  ConfirmResult confirmStartingPosition(Frame frame) {
+    calls.add('confirm');
+    return _next(_confirmations);
+  }
 
   @override
   OccupancyReader occupancyIn(Frame frame) => throw UnimplementedError(
@@ -248,19 +266,113 @@ const Readability staleCalibrationReading = Readability.stated(
   message: 'The board is not where it was when I learned it.',
 );
 
-/// A settled pair of dice showing [a] and [b].
+/// The board in front of the camera is the position every game starts from.
+final ConfirmResult startPositionAgrees = ConfirmResult(
+  agrees: true,
+  discrepancies: const <PointDiscrepancy>[],
+  message: 'That is the starting position.',
+);
+
+/// It is not — and the one clause that says so is the one the screen shows.
+final ConfirmResult startPositionDisagrees = ConfirmResult(
+  agrees: false,
+  discrepancies: <PointDiscrepancy>[
+    const PointDiscrepancy(
+      region: RoiId.point5,
+      pointNumber: 6,
+      expected: CheckerColor.black,
+      observed: CheckerColor.white,
+    ),
+  ],
+  message: 'The 6-point has White on it, where the game starts with Black.',
+);
+
+/// A settled pair of dice showing [a] and [b], both in the middle of the band.
+///
+/// The two centres are level in y on purpose: an opening throw whose dice
+/// cannot be told apart by which half of the board they landed on is exactly
+/// the case the seat-aware split has to refuse, and every scenario that is not
+/// about the opening seat wants that refusal rather than an accident.
 DiceReading diceShowing(int a, int b, {double confidence = 0.9}) => DiceReading(
-      first: _die(a, 0.30),
-      second: _die(b, 0.36),
+      first: _die(a, 0.30, 0.5),
+      second: _die(b, 0.36, 0.5),
       confidence: confidence,
     );
 
-DieReading _die(int face, double x) => DieReading(
+/// An opening throw with one die on each half of the board — one thrown from
+/// the near seat and one from the far one, which is what an opening throw at a
+/// real board looks like and the only shape the seat can resolve.
+///
+/// The two are reported LEFT TO RIGHT, as `DiceReading` promises, so which of
+/// [near] and [far] comes back as `first` is deliberately not the caller's
+/// business: [near] sits at the near end of the band, [far] at the far end.
+DiceReading diceAcrossTheBoard({
+  required int near,
+  required int far,
+  double confidence = 0.9,
+}) =>
+    DiceReading(
+      // Left-to-right: the far player's die happens to be the left one here.
+      first: _die(far, 0.30, RoiAtlas.pointLength + 0.01),
+      second: _die(near, 0.36, 1 - RoiAtlas.pointLength - 0.01),
+      confidence: confidence,
+    );
+
+DieReading _die(int face, double x, double y) => DieReading(
       face: face,
-      center: Pt(x, 0.5),
+      center: Pt(x, y),
       span: 0.075,
       pipContrast: 60,
       squareness: 0.9,
+    );
+
+/// A [BoardCalibration] with a REAL geometry and colours nobody reads.
+///
+/// The split matters. Everything the calibration screen does with a finished
+/// calibration is geometric — it draws the twenty-four columns and the thirty
+/// men of the starting position over the preview — and geometry is pure
+/// arithmetic that needs no photograph, so it is built for real here from
+/// [corners]. The colour model and the stack pitch cannot be had without a
+/// picture of a board, and nothing in a widget test asks them anything, so they
+/// are the smallest values their constructors accept.
+BoardCalibration fakeCalibration({
+  BoardQuad? corners,
+  BoardOrientation orientation = BoardOrientation.whiteHomeNear,
+  BoardProportions proportions = BoardProportions.standard,
+}) =>
+    BoardCalibration(
+      geometry: PlanarBoardGeometry.fromQuad(
+        corners ?? BoardQuad.rect(640, 480),
+      ),
+      orientation: orientation,
+      colors: ColorModel(
+        white: ColorDistribution(
+            mean: const <double>[1.4, 1.4, 1.4],
+            spread: const <double>[0.2, 0.2, 0.2],
+            sampleCount: 4),
+        black: ColorDistribution(
+            mean: const <double>[0.5, 0.5, 0.5],
+            spread: const <double>[0.2, 0.2, 0.2],
+            sampleCount: 4),
+        backgrounds: const <RoiId, RoiBackground>{},
+        boardModes: const <List<double>>[],
+        boardSpread: const <double>[0.15, 0.15, 0.15],
+      ),
+      fingerprint: CalibrationFingerprint(
+        cornerPatches: List<int>.filled(
+          4 * CalibrationFingerprint.cornerCells *
+              CalibrationFingerprint.cornerCells *
+              3,
+          128,
+        ),
+        meanLuma: 128,
+        lumaSpread: 40,
+        redRatio: 1,
+        blueRatio: 1,
+        clippedFraction: 0,
+      ),
+      stacks: const StackMetrics(pitch: 0.08, origin: 0, wellConditioned: true),
+      proportions: proportions,
     );
 
 /// A frame that is only a frame: the session hands it straight to perception,

@@ -31,6 +31,42 @@ const int kDiceReadAttempts = 2;
 /// of seconds of a board that still does not match what Buddy asked for.
 const int kPlacementAttemptsBeforeMirror = 3;
 
+/// Which side of the board the user sits at, as the camera sees it.
+///
+/// Board space runs `y` from the far edge to the near one *as the camera sees
+/// it* (see `Pt`), so "near" and "far" are facts about the picture rather than
+/// about the room — which is exactly what makes them answerable from a frame.
+/// The setup screen asks the question once, in the only form a person can
+/// answer without thinking about coordinate frames: is the phone at your elbow,
+/// or across the board from you?
+///
+/// It earns its keep twice. It is half of what fixes [BoardOrientation] (with
+/// which colour Buddy plays), and it is the whole of what tells the two OPENING
+/// dice apart — see [BuddySession._openingWinner], the one place in the mode
+/// where two dice on one board belong to two different people.
+enum BuddySeat {
+  /// The user is on the same side of the board as the phone: their own half of
+  /// the picture is the near one.
+  near,
+
+  /// The user sits across the board from the phone.
+  far,
+}
+
+/// The 24-point coordinate frame a seat and a colour imply.
+///
+/// A player's own home board is on their own side of the table, so the user's
+/// home board is the near half of the picture exactly when the user is sitting
+/// at the near side of it. Which of the two [BoardOrientation] values that is
+/// then depends on which colour the user is playing, and nothing else.
+///
+/// Lives here rather than on a screen because it is a fact about the board, and
+/// because both the setup screen and the calibration screen need it to agree.
+BoardOrientation orientationFor(Player userSide, BuddySeat seat) =>
+    (userSide == Player.white) == (seat == BuddySeat.near)
+        ? BoardOrientation.whiteHomeNear
+        : BoardOrientation.whiteHomeFar;
+
 /// What the session is doing, and therefore which question the next settled
 /// frame gets asked.
 ///
@@ -117,6 +153,7 @@ class BuddySession extends ChangeNotifier {
   BuddySession({
     required PlayerAgent engine,
     required this.buddySide,
+    required this.seat,
     required this.policy,
     required Stream<ObservedFrame> frames,
     required this.matchLength,
@@ -131,6 +168,10 @@ class BuddySession extends ChangeNotifier {
   /// The side the engine plays. The other side is the user's, and the user
   /// physically executes BOTH.
   final Player buddySide;
+
+  /// Which half of the picture the user is sitting behind. Chosen in setup and
+  /// carried here for [_openingWinner]; see [BuddySeat].
+  final BuddySeat seat;
 
   final BuddyPolicy policy;
   final int matchLength;
@@ -414,17 +455,19 @@ class BuddySession extends ChangeNotifier {
     // The dice are on the board and the men have not moved, so this frame IS
     // the position before the play — the "before" half the matcher needs.
     _beforeFrame = f.frame;
-    _acceptDice(reading.dice, reading.confidence);
+    _acceptDice(reading.dice, reading.confidence, reading);
   }
 
-  void _acceptDice(Dice dice, double? confidence) {
+  /// [reading] is the picture the roll came out of, or null when it was typed.
+  /// Only the opening throw looks at it — see [_asOpening].
+  void _acceptDice(Dice dice, double? confidence, [DiceReading? reading]) {
     if (_openingNeeded && dice.isDouble) {
       // Two people at a board throw again; so does this.
       policy.onOpeningRerolled(dice);
       return;
     }
     _lastConfidence = confidence;
-    _roller.submit(dice);
+    _roller.submit(_openingNeeded ? _asOpening(dice, reading) : dice);
   }
 
   bool get _openingNeeded =>
@@ -681,15 +724,56 @@ class BuddySession extends ChangeNotifier {
     c.rollDice();
   }
 
-  /// White's die is [Dice.die1] and Black's is [Dice.die2].
+  /// An opening throw, put in the order the GAME reads it: White's die first.
   ///
-  /// Which physical die is whose is the one thing about an opening throw that
-  /// a settled frame genuinely cannot answer on its own, and pretending
-  /// otherwise would be the wrong kind of confidence. What makes it safe is
-  /// that it does not have to: the pad is open on the opening throw like every
-  /// other, and the calibration knows which half of the table the user sits at
-  /// — the seat-aware split of `DiceReading`'s two board-space centres is
-  /// Task 12's to wire, on the flow that asked for the throw.
+  /// **This is where the seat does its work, and the ordering is the mechanism
+  /// rather than a label.** `GameController` records an opening as
+  /// `OpeningRollEvent(whiteDie: dice.die1, blackDie: dice.die2)`, and
+  /// `OpeningRollEvent.firstPlayer` is `whiteDie > blackDie`. So the first turn,
+  /// the game record and everything spoken about the throw all follow from
+  /// which face is submitted first — and putting the right one there is the
+  /// whole of the fix. Nothing downstream needs to know a seat exists.
+  ///
+  /// The opening is the one throw in a match whose two dice belong to two
+  /// different people, so it is the one throw where "which physical die is
+  /// whose" has to be answered — and a photograph on its own cannot answer it.
+  /// What answers it is the [seat]: each player throws their single die on
+  /// their own side of the board, so the die nearer the user's own edge is the
+  /// user's. `DiceReading` reports its two dice LEFT TO RIGHT and carries their
+  /// board-space centres, and board space's `y` runs far edge to near edge as
+  /// the camera sees it — so the comparison is on `center.y`, never on the
+  /// left-to-right order, which says nothing about who threw what.
+  ///
+  /// **It refuses rather than guesses when both dice landed on one half.** That
+  /// happens — dice bounce, and a careless throw can put both in one quadrant —
+  /// and the difference between "the seat says" and "the seat cannot say" is
+  /// the difference between a measurement and a coin flip with a rationale
+  /// attached. The fallback is the convention this file had before the seat
+  /// existed: White's die is the left one. A typed roll falls back the same
+  /// way, the pad reporting two faces and nothing about the felt.
+  ///
+  /// Getting it wrong costs a turn order, not a position: the pad is open on
+  /// the opening throw like every other, and the very next thing that happens
+  /// is Buddy saying aloud whose roll it thinks this is.
+  Dice _asOpening(Dice dice, DiceReading? reading) {
+    if (reading == null) return dice;
+    final first = reading.first.center.y;
+    final second = reading.second.center.y;
+    // Strictly opposite sides of the midline. Level, or both on one half, is
+    // the case this refuses.
+    if ((first < 0.5) == (second < 0.5)) return dice;
+    final nearer = first > second ? reading.first : reading.second;
+    final farther = first > second ? reading.second : reading.first;
+    final (user, buddy) = seat == BuddySeat.near
+        ? (nearer.face, farther.face)
+        : (farther.face, nearer.face);
+    return userSide == Player.white ? Dice(user, buddy) : Dice(buddy, user);
+  }
+
+  /// Which side the opening throw gave the first turn to — the same rule
+  /// `OpeningRollEvent.firstPlayer` uses, on dice [_asOpening] has already put
+  /// in White-then-Black order. One rule, so the spoken line and the game can
+  /// never disagree about who is on roll.
   Player _openingWinner(Dice dice) =>
       dice.die1 > dice.die2 ? Player.white : Player.black;
 
