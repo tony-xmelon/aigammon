@@ -31,6 +31,33 @@ const int kDiceReadAttempts = 2;
 /// of seconds of a board that still does not match what Buddy asked for.
 const int kPlacementAttemptsBeforeMirror = 3;
 
+/// How far clear of the midline, in board space, each opening die has to be
+/// before which half it landed on is a reading rather than a rounding.
+///
+/// **Provisional — Task 15's on-device protocol is where this gets measured.**
+/// It is a fact about where thrown dice come to rest on a real board, and there
+/// is no board in this environment. The derivation it ships with:
+///
+///  * *The whole discrimination happens inside the dice band*, which is
+///    `y ∈ [RoiAtlas.pointLength, 1 - RoiAtlas.pointLength]` — 0.16 of the
+///    board deep, leaving each seat 0.08 of its own. So a bare comparison
+///    against `RoiAtlas.midline` separates 0.4999 from 0.5001 exactly as
+///    confidently as it separates 0.43 from 0.57, and one of those two is a
+///    coin flip with a rationale attached.
+///  * *The reader's own resolution* (must be BELOW this): `DiceReader` samples
+///    the band on a lattice `baseLatticeDown` cells deep — 80 at the default
+///    die size — so one cell is 0.16/80 = 0.002 of the board in `y`. Ten cells
+///    is well clear of anywhere a blob's centroid could land by rounding.
+///  * *An ordinary throw* (must be ABOVE this): each player throws over their
+///    own half, and a die that reaches even a quarter of the way into that half
+///    clears this. A die resting a checker's width inside the band's own end
+///    sits at 0.07 — over three times the margin.
+///
+/// What would move it is real throws: dice that bounce off a rim and settle
+/// together are the case this exists for, and how often they do that, and how
+/// close they get, is the measurement the device makes.
+const double kOpeningSeatMargin = 0.02;
+
 /// Which side of the board the user sits at, as the camera sees it.
 ///
 /// Board space runs `y` from the far edge to the near one *as the camera sees
@@ -42,8 +69,8 @@ const int kPlacementAttemptsBeforeMirror = 3;
 ///
 /// It earns its keep twice. It is half of what fixes [BoardOrientation] (with
 /// which colour Buddy plays), and it is the whole of what tells the two OPENING
-/// dice apart — see [BuddySession._openingWinner], the one place in the mode
-/// where two dice on one board belong to two different people.
+/// dice apart — see [BuddySession._asOpening], the one place in the mode where
+/// two dice on one board belong to two different people.
 enum BuddySeat {
   /// The user is on the same side of the board as the phone: their own half of
   /// the picture is the near one.
@@ -170,7 +197,7 @@ class BuddySession extends ChangeNotifier {
   final Player buddySide;
 
   /// Which half of the picture the user is sitting behind. Chosen in setup and
-  /// carried here for [_openingWinner]; see [BuddySeat].
+  /// carried here for [_asOpening]; see [BuddySeat].
   final BuddySeat seat;
 
   final BuddyPolicy policy;
@@ -744,13 +771,19 @@ class BuddySession extends ChangeNotifier {
   /// the camera sees it — so the comparison is on `center.y`, never on the
   /// left-to-right order, which says nothing about who threw what.
   ///
-  /// **It refuses rather than guesses when both dice landed on one half.** That
-  /// happens — dice bounce, and a careless throw can put both in one quadrant —
-  /// and the difference between "the seat says" and "the seat cannot say" is
-  /// the difference between a measurement and a coin flip with a rationale
-  /// attached. The fallback is the convention this file had before the seat
-  /// existed: White's die is the left one. A typed roll falls back the same
-  /// way, the pad reporting two faces and nothing about the felt.
+  /// **It refuses rather than guesses when the two dice are not clearly on two
+  /// halves.** That happens — dice bounce, and a careless throw can put both in
+  /// one quadrant, or leave them touching either side of the seam — and the
+  /// difference between "the seat says" and "the seat cannot say" is the
+  /// difference between a measurement and a coin flip with a rationale
+  /// attached. So each die has to be [kOpeningSeatMargin] clear of
+  /// `RoiAtlas.midline` on its own side, which is a number about how narrow
+  /// this discrimination is: the whole dice band is 0.16 of the board deep, so
+  /// "opposite halves" alone would separate 0.4999 from 0.5001 as confidently
+  /// as it separates the two ends of the band. The fallback is the convention
+  /// this file had before the seat existed: White's die is the left one. A
+  /// typed roll falls back the same way, the pad reporting two faces and
+  /// nothing about the felt.
   ///
   /// Getting it wrong costs a turn order, not a position: the pad is open on
   /// the opening throw like every other, and the very next thing that happens
@@ -759,9 +792,14 @@ class BuddySession extends ChangeNotifier {
     if (reading == null) return dice;
     final first = reading.first.center.y;
     final second = reading.second.center.y;
-    // Strictly opposite sides of the midline. Level, or both on one half, is
-    // the case this refuses.
-    if ((first < 0.5) == (second < 0.5)) return dice;
+    // Strictly opposite sides of the midline, and clear of it on both counts.
+    // Level, both on one half, or two dice resting against the seam is the case
+    // this refuses.
+    if ((first < RoiAtlas.midline) == (second < RoiAtlas.midline)) return dice;
+    if ((first - RoiAtlas.midline).abs() < kOpeningSeatMargin ||
+        (second - RoiAtlas.midline).abs() < kOpeningSeatMargin) {
+      return dice;
+    }
     final nearer = first > second ? reading.first : reading.second;
     final farther = first > second ? reading.second : reading.first;
     final (user, buddy) = seat == BuddySeat.near

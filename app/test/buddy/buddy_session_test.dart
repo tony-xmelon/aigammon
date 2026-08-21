@@ -100,6 +100,44 @@ void main() {
       expect(h.opening.firstPlayer, Player.white);
     });
 
+    test('nor is a throw that came to rest on the seam', () async {
+      // Opposite sides of the midline — by a hair. Two dice a fiftieth of the
+      // board apart in a band that is only 0.16 deep are two dice that landed
+      // together, and which of them crossed the line is a rounding rather than
+      // a reading. The user sits near and plays White, so an attribution here
+      // would hand the opening to Black.
+      final h = Harness(buddySide: Player.black, seat: BuddySeat.near);
+      h.vision.willReadDice([
+        diceEitherSideOfTheMidline(
+            near: 2, far: 5, clearance: kOpeningSeatMargin / 2),
+      ]);
+
+      h.start();
+      await h.stableFrame();
+
+      expect(h.opening.whiteDie, 5,
+          reason: 'the pre-seat convention: White\'s die is the left one');
+      expect(h.opening.firstPlayer, Player.white);
+    });
+
+    test('a throw clear of the seam by the margin IS a seat question',
+        () async {
+      // The other side of the same number, so the margin cannot quietly grow
+      // into a refusal of ordinary throws.
+      final h = Harness(buddySide: Player.black, seat: BuddySeat.near);
+      h.vision.willReadDice([
+        diceEitherSideOfTheMidline(
+            near: 2, far: 5, clearance: kOpeningSeatMargin * 1.01),
+      ]);
+
+      h.start();
+      await h.stableFrame();
+
+      expect(h.opening.whiteDie, 2,
+          reason: 'the near die is the user\'s, and the user plays White');
+      expect(h.opening.firstPlayer, Player.black);
+    });
+
     test('a typed opening roll has no felt to read, and falls back too',
         () async {
       final h = Harness(buddySide: Player.black, seat: BuddySeat.far);

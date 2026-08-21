@@ -311,10 +311,32 @@ DiceReading diceAcrossTheBoard({
   required int far,
   double confidence = 0.9,
 }) =>
+    diceEitherSideOfTheMidline(
+      near: near,
+      far: far,
+      // A checker's width inside each end of the band — where a die that was
+      // thrown rather than placed comes to rest.
+      clearance: RoiAtlas.midline - RoiAtlas.pointLength - 0.01,
+      confidence: confidence,
+    );
+
+/// The same throw, with the two dice [clearance] either side of the midline in
+/// board space — the far seat's above it, the near seat's below.
+///
+/// The seat can only tell two dice apart when each is clear of the midline by
+/// `kOpeningSeatMargin`, so a test that wants to stand on one side of that
+/// number or the other has to be able to say where the dice landed to better
+/// than "one half each".
+DiceReading diceEitherSideOfTheMidline({
+  required int near,
+  required int far,
+  required double clearance,
+  double confidence = 0.9,
+}) =>
     DiceReading(
       // Left-to-right: the far player's die happens to be the left one here.
-      first: _die(far, 0.30, RoiAtlas.pointLength + 0.01),
-      second: _die(near, 0.36, 1 - RoiAtlas.pointLength - 0.01),
+      first: _die(far, 0.30, RoiAtlas.midline - clearance),
+      second: _die(near, 0.36, RoiAtlas.midline + clearance),
       confidence: confidence,
     );
 
