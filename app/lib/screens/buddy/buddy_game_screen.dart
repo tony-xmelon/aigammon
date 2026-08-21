@@ -65,6 +65,45 @@ void openBuddyGame(
       ),
     );
 
+/// Whether the user's Double is a legal verb right now.
+///
+/// **The sixth copy of `GameController`'s private `_doublingLegal`**, and the
+/// house reason for copying it is `game_hud.dart`'s: a control cannot ask the
+/// authority whether it would accept a verb without performing it, so the
+/// button restates the rule and the controller stays the authority behind it.
+/// A copy that drifts PERMISSIVE meets `GameController.offerDouble`'s throw; a
+/// copy that drifts RESTRICTIVE meets nothing at all — the button simply goes
+/// quiet and the user plays a worse match — so this one is pinned against the
+/// controller's actual acceptance on the five states that separate them, in
+/// the "the screen's doubling gate" group of
+/// `test/screens/buddy/buddy_game_screen_test.dart`.
+///
+/// A top-level function rather than a method for exactly that reason: the pin
+/// has to be able to put a real [GameController] into each of those five
+/// states and ask this the same question the button asks.
+///
+/// [awaitingRoll] is [BuddySession.awaitingRoll] — the physical throw that has
+/// been asked for and not answered — and NOT the session's phase. The phase is
+/// what the session is doing and a readability outage overrides it; whether the
+/// cube in the middle of a real table may be turned is not something a dark
+/// frame gets a say in.
+bool buddyDoubleAvailable({
+  required GameController? controller,
+  required bool awaitingRoll,
+  required bool cubeless,
+  required Player userSide,
+}) {
+  final c = controller;
+  if (c == null || cubeless) return false;
+  final s = c.state;
+  return awaitingRoll &&
+      c.awaitingHumanTurn &&
+      s.turn == userSide &&
+      s.phase == GamePhase.awaitingRoll &&
+      !s.isCrawfordGame &&
+      (s.cube.owner == null || s.cube.owner == s.turn);
+}
+
 /// A match against the engine, played on a real board.
 ///
 /// ## What this screen is
@@ -231,16 +270,6 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
 
   GameController? get _controller => _session.controller;
 
-  /// Whether the session is holding a turn open for the user's own play — the
-  /// window in which the mirror accepts a tapped-out correction.
-  bool get _awaitingUserPlay => switch (_session.phase) {
-        BuddyPhase.awaitingPlay ||
-        BuddyPhase.objecting ||
-        BuddyPhase.disambiguating =>
-          true,
-        _ => false,
-      };
-
   /// The user's own home board at the bottom, which is how they are looking at
   /// the felt whichever side of it they are sitting on. (The point NUMBERS are
   /// the app's single White-based 1–24 frame either way — see
@@ -258,7 +287,7 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   /// exactly what a recognised play does — [BuddySession.enterPlayManually]
   /// folds it as the user's, and the policy acknowledges it the same way.
   void _onMirrorMove(Move move) {
-    if (!_awaitingUserPlay) return;
+    if (!_session.awaitingPlay) return;
     _session.enterPlayManually(move);
   }
 
@@ -347,21 +376,23 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   /// [BuddySession.offerDouble] throws when the controller refuses, and that
   /// throw is the backstop rather than the user experience: a dead button that
   /// says why is what the digital game does and what this does.
-  bool get _canDouble {
-    final c = _controller;
-    if (c == null || _session.cubeless) return false;
-    final s = c.state;
-    return _session.phase == BuddyPhase.awaitingDice &&
-        c.awaitingHumanTurn &&
-        s.turn == _session.userSide &&
-        s.phase == GamePhase.awaitingRoll &&
-        !s.isCrawfordGame &&
-        (s.cube.owner == null || s.cube.owner == s.turn);
-  }
+  bool get _canDouble => buddyDoubleAvailable(
+        controller: _controller,
+        awaitingRoll: _session.awaitingRoll,
+        cubeless: _session.cubeless,
+        userSide: _session.userSide,
+      );
 
   /// One sentence explaining why a tap on the disabled Double just did nothing
   /// — the one thing the button itself cannot say. The two rule clauses are
   /// `game_hud.dart`'s, word for word, because they are the same two rules.
+  ///
+  /// Every clause here is a clause of [buddyDoubleAvailable], so no sentence
+  /// can name a rule that is not the one refusing. That mattered: the gate used
+  /// to include the session's PHASE, which a readability outage overrides, and
+  /// the button then went dead behind "You can only double before rolling, on
+  /// your turn." while the user was standing at exactly that gate on exactly
+  /// their turn.
   String _doubleBlockedReason() {
     final c = _controller;
     if (c == null) {
@@ -369,7 +400,7 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
           'first.';
     }
     final s = c.state;
-    if (_session.phase != BuddyPhase.awaitingDice ||
+    if (!_session.awaitingRoll ||
         !c.awaitingHumanTurn ||
         s.turn != _session.userSide) {
       return 'You can only double before rolling, on your turn.';
@@ -527,6 +558,12 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   /// [_onMirrorMove]. That is the spec's tap-correct — the fallback for a play
   /// the camera could not identify — and it goes through the session's manual
   /// verb like every other answer.
+  ///
+  /// `interactive` is [BuddySession.awaitingPlay] rather than a phase, and that
+  /// is load-bearing rather than tidy: [BoardView] rebuilds its move builder
+  /// whenever `interactive` changes, so a phase that flips false for one amber
+  /// frame throws away a correction the user is halfway through tapping —
+  /// under a prompt that says "Nothing is lost."
   Widget _mirror(BuildContext context) {
     final c = _controller;
     if (c == null) {
@@ -540,7 +577,7 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: BoardView(
         state: c.state,
-        interactive: _awaitingUserPlay,
+        interactive: _session.awaitingPlay,
         onMoveCommitted: _onMirrorMove,
         whiteAtBottom: _whiteAtBottom,
         entryControl: _entry,
@@ -590,28 +627,54 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
           'where it stopped.';
     }
     return switch (_session.phase) {
-      BuddyPhase.paused =>
-        'Waiting for a picture Buddy can read. Nothing is lost.',
+      // A pause is perception's, not the user's: whatever the user was already
+      // being asked is still being asked, and its buttons are still under this
+      // sentence (see [_promptActions]). "Waiting for a picture" over a live
+      // Take/Drop would be the screen contradicting itself, so the outage line
+      // is the FALLBACK — what is left to say when the only thing outstanding
+      // is something the camera has to answer.
+      BuddyPhase.paused => _userQuestionLine() ??
+          'Waiting for a picture Buddy can read. Nothing is lost.',
       BuddyPhase.awaitingDice when _session.needsManualDice =>
         'Buddy cannot find the dice. Type the roll instead.',
       BuddyPhase.awaitingDice => _throwLine(c),
-      BuddyPhase.awaitingPlay =>
-        'Make your play on the board. Tap it out here if Buddy does not see '
-            'it.',
-      // Word for word what Buddy just said out loud. The transcript and the
-      // prompt are two channels for one sentence, not two sentences.
-      BuddyPhase.objecting => _session.objection == null
-          ? "That isn't a legal play."
-          : "That isn't a legal play. ${_session.objection}",
-      BuddyPhase.disambiguating => 'Which play was it?',
+      BuddyPhase.awaitingPlay => _kPlayLine,
+      BuddyPhase.objecting => _objectionLine,
+      BuddyPhase.disambiguating => _kCandidateLine,
       BuddyPhase.verifyingPlacement =>
         "Make Buddy's move on the board, then Buddy will carry on.",
-      BuddyPhase.awaitingCubeAnswer => 'Buddy doubles. Take or drop?',
+      BuddyPhase.awaitingCubeAnswer => _kCubeLine,
       BuddyPhase.thinking => 'Buddy is thinking.',
       BuddyPhase.over => _outcomeLine(),
       BuddyPhase.calibrating => 'Waiting for a calibration.',
     };
   }
+
+  /// The sentence for whichever question the USER has open, or null when the
+  /// only thing outstanding is something perception has to answer.
+  ///
+  /// Read from the session's open questions rather than from its phase, which
+  /// is what lets the paused line fall through to it. The order is the
+  /// scheduler's own priority in `BuddySession._derive`.
+  String? _userQuestionLine() {
+    if (_session.awaitingCubeAnswer) return _kCubeLine;
+    if (_session.candidates.isNotEmpty) return _kCandidateLine;
+    if (_session.awaitingPlay) {
+      return _session.objection == null ? _kPlayLine : _objectionLine;
+    }
+    return null;
+  }
+
+  static const String _kPlayLine =
+      'Make your play on the board. Tap it out here if Buddy does not see it.';
+  static const String _kCandidateLine = 'Which play was it?';
+  static const String _kCubeLine = 'Buddy doubles. Take or drop?';
+
+  /// Word for word what Buddy just said out loud. The transcript and the
+  /// prompt are two channels for one sentence, not two sentences.
+  String get _objectionLine => _session.objection == null
+      ? "That isn't a legal play."
+      : "That isn't a legal play. ${_session.objection}";
 
   /// Whose dice are on the table. A hand throws for both sides in this mode,
   /// so which pair to pick up is a real question and the screen answers it.
@@ -630,57 +693,70 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
         : 'Buddy wins the match.';
   }
 
+  /// The buttons that answer whatever the prompt is asking.
+  ///
+  /// **Gated on the session's open QUESTIONS, never on its phase**, and that is
+  /// the whole of what keeps a match playable through a readability outage. An
+  /// outage parks the phase in [BuddyPhase.paused] so that perception stops
+  /// claiming things about a picture it cannot read — a suppression of what the
+  /// CAMERA may say, which is not the same thing as a suppression of what the
+  /// user may do. A cube on the table stays takeable and two candidate plays
+  /// stay separable, exactly as the manual dice pad stays live (see
+  /// [BuddySession.awaitingRoll], which shipped this decision first).
+  ///
+  /// The order is the scheduler's own priority in `BuddySession._derive`, so
+  /// the slot can never show an answer to a question that has been overtaken.
   Widget _promptActions(BuildContext context) {
-    switch (_session.phase) {
-      case BuddyPhase.awaitingCubeAnswer:
-        // Take and DROP, not the digital dialog's Take and Pass: Buddy has
-        // just said "take or drop?" out loud, and the buttons under a spoken
-        // question have to be the words in it.
-        return Row(
-          children: <Widget>[
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => _session.answerDouble(CubeAction.drop),
-                child: const Text('Drop'),
-              ),
+    if (_session.awaitingCubeAnswer) {
+      // Take and DROP, not the digital dialog's Take and Pass: Buddy has just
+      // said "take or drop?" out loud, and the buttons under a spoken question
+      // have to be the words in it.
+      return Row(
+        children: <Widget>[
+          Expanded(
+            child: OutlinedButton(
+              onPressed: () => _session.answerDouble(CubeAction.drop),
+              child: const Text('Drop'),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(
-                onPressed: () => _session.answerDouble(CubeAction.take),
-                child: const Text('Take'),
-              ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: FilledButton(
+              onPressed: () => _session.answerDouble(CubeAction.take),
+              child: const Text('Take'),
             ),
-          ],
-        );
-      case BuddyPhase.disambiguating:
-        return ListView(
-          key: const Key('buddy-candidates'),
-          scrollDirection: Axis.horizontal,
-          children: <Widget>[
-            for (final move in _session.candidates) ...<Widget>[
-              OutlinedButton(
-                onPressed: () => _session.pickCandidate(move),
-                child: Text(_speaker.phrasing.describePlay(move).text),
-              ),
-              const SizedBox(width: 8),
-            ],
-          ],
-        );
-      case BuddyPhase.over:
-        return Row(
-          children: <Widget>[
-            Expanded(
-              child: FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Done'),
-              ),
-            ),
-          ],
-        );
-      default:
-        return const SizedBox.shrink();
+          ),
+        ],
+      );
     }
+    if (_session.candidates.isNotEmpty) {
+      return ListView(
+        key: const Key('buddy-candidates'),
+        scrollDirection: Axis.horizontal,
+        children: <Widget>[
+          for (final move in _session.candidates) ...<Widget>[
+            OutlinedButton(
+              onPressed: () => _session.pickCandidate(move),
+              child: Text(_speaker.phrasing.describePlay(move).text),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ],
+      );
+    }
+    if (_session.phase == BuddyPhase.over) {
+      return Row(
+        children: <Widget>[
+          Expanded(
+            child: FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Done'),
+            ),
+          ),
+        ],
+      );
+    }
+    return const SizedBox.shrink();
   }
 
   /// Everything Buddy said, oldest at the top and the newest already in view.

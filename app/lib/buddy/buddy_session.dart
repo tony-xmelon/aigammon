@@ -298,6 +298,32 @@ class BuddySession extends ChangeNotifier {
   /// camera — and no phase says both "a roll is open" and "the light is out".
   bool get awaitingRoll => _roller.isPending;
 
+  /// Whether Buddy's double is on the table and the user has not answered it.
+  ///
+  /// The cube's [awaitingRoll], and live for the same reason: it is exactly
+  /// the condition [answerDouble] is a legal verb under, and it is a question
+  /// put to the USER. A readability outage parks [phase] in
+  /// [BuddyPhase.paused] to stop perception claiming things about a picture it
+  /// cannot read; a cube in the middle of a real table is not a claim about a
+  /// picture, and the answer to it must not go away with the light.
+  bool get awaitingCubeAnswer => _humanAgent.pendingCube.value != null;
+
+  /// Whether the session is holding the user's turn open for their play.
+  ///
+  /// Exactly the condition [enterPlayManually] is a legal verb under, and
+  /// therefore exactly when the belief mirror accepts a tapped-out correction.
+  /// It survives an outage for the reason [awaitingCubeAnswer] does — and for
+  /// one more: the prompt says "Nothing is lost." while the light is out, and a
+  /// half-tapped correction thrown away by a 350ms nudge would make that
+  /// sentence false.
+  ///
+  /// Not gated on [_placementExpected], which outranks a pending play in
+  /// [_derive]: the two never coincide, because the controller asks for a play
+  /// only after a roll and [_derive] returns at the placement check before it
+  /// asks for one.
+  bool get awaitingPlay =>
+      _controller != null && _humanAgent.pendingMove.value != null;
+
   // --- what a screen calls -------------------------------------------------
 
   /// Installs a calibration and lets play run.

@@ -172,9 +172,36 @@ void main() {
           reason: "Readability.message is written to be shown as it stands, so "
               'the light names the cause rather than merely going red');
       expect(h.vision.playCalls, playsBefore,
-          reason: 'every answer is suppressed while the light is not green');
-      expect(_prompt(t).toLowerCase(), contains('read'),
-          reason: 'and the screen says the match is waiting, not stuck');
+          reason: "every PERCEPTION answer is suppressed while the light is "
+              'not green');
+      expect(_prompt(t).toLowerCase(), contains('tap it out'),
+          reason: 'the suppression is the camera\'s, not the user\'s: the '
+              'question the user was already being asked is still the question '
+              'on the screen, and its answer is still a tap away');
+    });
+
+    testWidgets('and with nothing open for the user, the prompt says the match '
+        'is waiting rather than stuck', (t) async {
+      // The other half of the line above. When the only thing outstanding IS
+      // something the camera has to answer — here a dictated move whose
+      // placement is being checked — there is no user question to show, and
+      // the outage sentence is what belongs in the slot.
+      final h = _Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)])
+        ..willVerify([boardAgrees]);
+      await h.pump(t);
+      await h.frame(t); // the opening roll
+      await h.frame(t); // the user's play, folded
+      await h.frame(t); // Buddy's roll, and the move it dictates
+      expect(_prompt(t).toLowerCase(), contains("buddy's move"));
+
+      h.vision.willSee([tooDarkReading]);
+      await h.frame(t);
+
+      expect(_prompt(t), 'Waiting for a picture Buddy can read. Nothing is '
+          'lost.');
     });
 
     testWidgets('a stale calibration routes to the corner flow with the '
@@ -304,6 +331,134 @@ void main() {
               "not identify is still the user's play, and it folds through the "
               'session rather than mutating a board');
       expect(_transcript(t), isNotEmpty);
+    });
+  });
+
+  group('an outage suppresses perception, never the user', () {
+    // The decision the dice pad already ships — see [BuddySession.awaitingRoll]
+    // — applied to every other user verb. A readability outage suspends what
+    // perception may CLAIM about the board and nothing whatever about what a
+    // person sitting at it may DO, so each probe here drops ONE non-green frame
+    // into the middle of a question the user was already being asked and checks
+    // that the answer is still there to give.
+
+    testWidgets('Take and Drop answer a double through a dark frame',
+        (t) async {
+      final h = _Harness(matchLength: 3, buddyDoubles: true);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)]);
+      await h.pump(t);
+      await h.frame(t); // the opening roll
+      await h.frame(t); // the user's play, folded — and Buddy's cube question
+      expect(_prompt(t).toLowerCase(), contains('take or drop'));
+
+      h.vision.willSee([tooDarkReading]);
+      await h.frame(t);
+
+      expect(_readability(t), 'It is too dark to read the board.',
+          reason: 'the light is out, so the session has stopped asking');
+      expect(find.widgetWithText(OutlinedButton, 'Drop'), findsOneWidget,
+          reason: 'the cube is on the table and the user has not answered — a '
+              'camera that cannot see is not a reason to take the answer away');
+      expect(find.widgetWithText(FilledButton, 'Take'), findsOneWidget);
+      expect(_prompt(t).toLowerCase(), contains('take or drop'),
+          reason: 'and the sentence over two live buttons is the question they '
+              'answer, not "waiting for a picture"');
+
+      await t.tap(find.widgetWithText(FilledButton, 'Take'));
+      await h.settle(t);
+      expect(_lines(t), contains('You take.'),
+          reason: 'the answer is not merely rendered, it lands');
+    });
+
+    testWidgets('the candidate picker survives a dark frame', (t) async {
+      final h = _Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesAmbiguously(0, 1)]);
+      await h.pump(t);
+      await h.frame(t); // the opening roll
+      await h.frame(t); // two legal plays leave the same position
+
+      final buttons = find.descendant(
+        of: find.byKey(const Key('buddy-candidates')),
+        matching: find.byType(OutlinedButton),
+      );
+      expect(buttons, findsNWidgets(2));
+
+      h.vision.willSee([tooDarkReading]);
+      await h.frame(t);
+
+      expect(buttons, findsNWidgets(2),
+          reason: 'the two plays perception could not separate are still the '
+              'two the user can separate');
+      expect(_prompt(t).toLowerCase(), contains('which play'));
+
+      final board = boardPainterOf(t).board;
+      await t.tap(buttons.last);
+      await t.pumpAndSettle();
+      expect(boardPainterOf(t).board, isNot(board),
+          reason: 'and picking one still folds it');
+    });
+
+    testWidgets('Double stays live, because doubling is the user speaking',
+        (t) async {
+      // A 3-point match, so the cube is live rather than dead for Crawford —
+      // the state the gated-button test deliberately does NOT use.
+      final h = _Harness(matchLength: 3);
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)])
+        ..willVerify([boardAgrees]);
+      await h.pump(t);
+      for (var i = 0; i < 4; i++) {
+        await h.frame(t); // opening, play, Buddy's move, placement verified
+      }
+
+      final button = find.widgetWithText(OutlinedButton, 'Double');
+      expect(_prompt(t).toLowerCase(), contains('throw your dice'),
+          reason: 'the pre-roll gate: the one moment the cube is a verb');
+      expect(isButtonEnabled(t, button), isTrue);
+
+      h.vision.willSee([tooDarkReading]);
+      await h.frame(t);
+
+      expect(isButtonEnabled(t, button), isTrue,
+          reason: 'the cube in the middle of the table is the user\'s to turn '
+              'whatever the camera can see');
+
+      await t.tap(button);
+      await h.settle(t);
+      expect(_lines(t), contains('You double.'));
+    });
+
+    testWidgets('a half-tapped correction survives a dark frame', (t) async {
+      final h = _Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesNothing]);
+      await h.pump(t);
+      await h.frame(t); // the opening roll
+      await h.frame(t); // the picture cannot say what the hand did
+
+      // ONE hop of a two-hop play: staged on the mirror, not committed.
+      await tapBoardPoint(t, boardPainterOf(t).highlightedSources.first);
+      await tapBoardPoint(t, boardPainterOf(t).highlightedDestinations.first);
+      final undo = find.widgetWithText(OutlinedButton, 'Undo');
+      expect(isButtonEnabled(t, undo), isTrue,
+          reason: 'one hop is staged, so there is something to undo');
+
+      h.vision.willSee([tooDarkReading]);
+      await h.frame(t);
+
+      expect(find.widgetWithText(FilledButton, 'Confirm'), findsOneWidget,
+          reason: 'the entry is still open — the bar has not swapped back to '
+              'Dice and Double');
+      expect(isButtonEnabled(t, undo), isTrue,
+          reason: '"Nothing is lost." is a promise about the half-finished '
+              'play the user has already tapped out, and a 350ms nudge is '
+              'exactly when it gets tested');
     });
   });
 
