@@ -32,8 +32,11 @@ import '../game/tap_when_disabled.dart';
 /// drives the whole flow from "the user dragged a handle" to "a calibration
 /// came out".
 abstract interface class BuddyCamera {
-  /// Starts the camera. Never throws: a camera that cannot be opened comes
-  /// back as [CameraUnavailable].
+  /// Starts the camera and takes one HOLD on it. Never throws: a camera that
+  /// cannot be opened comes back as [CameraUnavailable].
+  ///
+  /// Calling it twice is not an error and does not start a second camera; see
+  /// [close] for what the hold is and why there is one.
   Future<CameraOpening> open();
 
   /// Every frame the gate published, stable or not. The unstable ones are what
@@ -43,8 +46,56 @@ abstract interface class BuddyCamera {
   /// What to draw under the corner handles.
   Widget preview(BuildContext context);
 
-  /// Releases the camera. Safe to call more than once.
+  /// Gives up one hold. The LAST one out turns the camera off.
+  ///
+  /// **One close per [open], and not one more.** Two screens share this camera
+  /// and their lifetimes overlap in both directions: the calibration flow
+  /// hands over to the game screen, which opens before the popped route
+  /// disposes, and the game screen pushes the flow back for a recalibration,
+  /// which closes as it pops under a screen that is still playing a match. So
+  /// holds are COUNTED (see [CameraHold]), and an unbalanced close is not the
+  /// free no-op it looks like — it releases somebody else's hold, and the
+  /// failure is a preview that goes black under a screen still using it with
+  /// nothing logged anywhere.
+  ///
+  /// This is the one part of the contract that changed when the count arrived:
+  /// it used to say "safe to call more than once", which was true of the
+  /// unconditional teardown the count replaced.
   Future<void> close();
+}
+
+/// The balanced hold [BuddyCamera] hands out, counted.
+///
+/// Lives on THIS side of the plugin edge on purpose. The counting is the part
+/// with a bug in it — before there was one, whichever of the two screens
+/// disposed second took the camera away from the one still using it — and it
+/// is pure arithmetic that a `flutter test` can reach, while everything it
+/// guards is a plugin call that one cannot. [PhoneBuddyCamera] is then three
+/// one-line calls into this.
+class CameraHold {
+  int _users = 0;
+
+  /// How many screens are currently holding the camera open.
+  int get users => _users;
+
+  /// One more screen wants it.
+  void acquire() => _users++;
+
+  /// One screen is done with it. True when the LAST hold has just gone — the
+  /// caller that has to tear the camera down.
+  ///
+  /// A close with nothing held answers true (there is nothing left to keep
+  /// alive) and leaves the count at zero rather than below it: a negative
+  /// count would swallow the next real close and leave the camera running.
+  bool release() {
+    if (_users > 0) _users--;
+    return _users == 0;
+  }
+
+  /// Everyone is gone, whatever the count said — the provider's own teardown
+  /// rather than a screen's, so it does not wait for a screen that has leaked
+  /// a hold.
+  void releaseAll() => _users = 0;
 }
 
 /// How opening the camera ended.
@@ -1425,7 +1476,7 @@ class PhoneBuddyCamera implements BuddyCamera {
   final CameraFrameSource _source = CameraFrameSource();
   CameraController? _controller;
 
-  /// How many screens are currently holding this camera open.
+  /// The screens currently holding this camera open.
   ///
   /// **Two screens share it, and their lifetimes overlap in both directions.**
   /// The calibration flow hands over to the game screen (which opens before
@@ -1435,14 +1486,17 @@ class PhoneBuddyCamera implements BuddyCamera {
   /// second takes the camera away from the one still using it, and the failure
   /// is a preview that goes black with no error anywhere. So [open] and [close]
   /// are balanced calls and only the last [close] tears anything down.
-  int _users = 0;
+  ///
+  /// The counting itself is [CameraHold], above the plugin edge, because it is
+  /// pure and it is the half that can be got wrong.
+  final CameraHold _hold = CameraHold();
 
   @override
   Stream<ObservedFrame> get frames => _source.frames;
 
   @override
   Future<CameraOpening> open() async {
-    _users++;
+    _hold.acquire();
     if (_controller != null) return const CameraReady();
     const noCamera = CameraUnavailable(
       'This device has no camera Buddy Mode can watch the board with. '
@@ -1518,8 +1572,7 @@ class PhoneBuddyCamera implements BuddyCamera {
   /// Gives up one screen's hold. The last one out turns the camera off.
   @override
   Future<void> close() async {
-    if (_users > 0) _users--;
-    if (_users > 0) return;
+    if (!_hold.release()) return;
     final controller = _controller;
     _controller = null;
     await _source.stop();
@@ -1529,7 +1582,7 @@ class PhoneBuddyCamera implements BuddyCamera {
   /// Releases the gate as well — the provider's own teardown, not a screen's,
   /// so it ignores the count rather than waiting for a screen that has leaked.
   Future<void> shutDown() async {
-    _users = 0;
+    _hold.releaseAll();
     await close();
     await _source.dispose();
   }

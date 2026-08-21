@@ -389,6 +389,65 @@ void main() {
     });
   });
 
+  group('CameraHold', () {
+    // The count two screens share one camera through. It is the half of
+    // `PhoneBuddyCamera` that is decidable without a device, and the half with
+    // a bug in it: before there was a count, whichever of the two screens
+    // disposed second took the camera away from the one still using it, and
+    // the failure was a preview that went black with nothing logged anywhere.
+
+    test('one screen in, one screen out', () {
+      final hold = CameraHold();
+      hold.acquire();
+      expect(hold.users, 1);
+      expect(hold.release(), isTrue,
+          reason: 'nobody else is holding it, so this close is the teardown');
+      expect(hold.users, 0);
+    });
+
+    test('the handover: the second close is the one that tears down', () {
+      // Both directions of the overlap look like this. The calibration route
+      // pops INTO the game screen, which opens before the popped route
+      // disposes; the game screen pushes the route BACK, which closes as it
+      // pops under a screen still playing a match.
+      final hold = CameraHold()
+        ..acquire()
+        ..acquire();
+
+      expect(hold.release(), isFalse,
+          reason: 'the screen that is going away must tear nothing down while '
+              'another one is still looking through the camera');
+      expect(hold.users, 1);
+      expect(hold.release(), isTrue);
+      expect(hold.users, 0);
+    });
+
+    test('an unbalanced close cannot drive the count negative', () {
+      final hold = CameraHold();
+
+      expect(hold.release(), isTrue,
+          reason: 'nothing is held, so there is nothing left to keep alive');
+      expect(hold.users, 0,
+          reason: 'a count below zero would swallow the NEXT real close and '
+              'leave the camera running with no screen on it');
+
+      hold.acquire();
+      expect(hold.release(), isTrue);
+    });
+
+    test('the provider teardown does not wait for a screen that leaked', () {
+      final hold = CameraHold()
+        ..acquire()
+        ..acquire();
+
+      hold.releaseAll();
+      expect(hold.users, 0);
+      expect(hold.release(), isTrue,
+          reason: 'shutDown releases everyone and then closes, and that close '
+              'has to be the one that turns the camera off');
+    });
+  });
+
   // A handle that can only be dragged is a handle only some people can place,
   // on the screen whose whole subject is placing one precisely.
   group('accessibility', () {
