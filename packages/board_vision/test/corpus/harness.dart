@@ -631,10 +631,8 @@ void _scoreOccupancy(
     final gone = expected.whiteOff + expected.blackOff;
     board.notes.add(
       '${shot.id}: $gone checker${gone == 1 ? '' : 's'} off a board with no '
-      'bear-off wells. A checker that leaves a folding case leaves it '
-      'altogether — borne off, or in the real corpus\'s turn-7 window simply '
-      'put down beside the board — so nothing in the picture can be scored '
-      'for it.',
+      'bear-off wells. A checker borne off a folding case leaves it '
+      'altogether, so nothing in the picture can be scored for it.',
     );
   }
 }

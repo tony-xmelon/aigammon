@@ -915,7 +915,7 @@ void main() {
 ///   the bar on every shot and most of those extra reads are bare-bar
 ///   agreements. See [priorReport].)
 ///
-///   **The five turns missing are one mechanism and two strays, and naming the
+///   **The five turns missing are one mechanism plus one stray, and naming the
 ///   mechanism is the whole value of the truth fix.** Four of the five fail on
 ///   a **point's tip**: this folding case's rim stands proud of the felt, and a
 ///   man at the near end of a near-half point is three-quarters behind it. The
