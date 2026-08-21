@@ -9,23 +9,37 @@
          working perfectly in development. No plugin in this app contributes the
          permission through manifest merging, so nothing else supplies it. -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Play Nearby's QR join: the guest points its camera at the code on the
-         host's screen. Same rule as INTERNET above — it must live in THIS
-         manifest, not only in src/debug, or the scanner is dead on a release
-         build while working perfectly in development. mobile_scanner does not
-         contribute the permission by merging; it only requests it at runtime,
-         and a runtime request for a permission the manifest never declared is
-         denied outright.
+    <!-- TWO features now, and both need this one line. Play Nearby's QR join:
+         the guest points its camera at the code on the host's screen. Buddy
+         Mode: the phone watches a physical board for a whole match. Same rule
+         as INTERNET above — it must live in THIS manifest, not only in
+         src/debug, or both are dead on a release build while working perfectly
+         in development. Neither mobile_scanner nor camera contributes the
+         permission by merging; they only request it at runtime, and a runtime
+         request for a permission the manifest never declared is denied
+         outright.
 
          Android grants CAMERA at runtime, so declaring it here costs nothing
-         until the user actually taps "Scan QR code". -->
+         until the user actually taps "Scan QR code" or starts a Buddy match. -->
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Buddy Mode's dice-roll listener: a transient detector on the mic's
+         amplitude stream that tells perception when to look. It is STRICTLY an
+         attention hint — the mode works identically with this permission
+         denied — so it is asked for in context, at the first Buddy session,
+         and a refusal is remembered rather than re-nagged. Declared here for
+         the same reason as CAMERA: a runtime request for an undeclared
+         permission never reaches the user at all. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- Scanning is one optional path into a LAN game (discovery and typed
          addresses are the others), so a device with no camera must still be
          able to install the app. Without this, declaring CAMERA would make the
-         hardware an implicit Play Store requirement. -->
+         hardware an implicit Play Store requirement. The microphone entry says
+         the same thing for RECORD_AUDIO, and more strongly: the dice listener
+         is an optimization inside an optional mode, so it must never be able
+         to cost the app an install. -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <!-- Deliberately NO usesCleartextTraffic and no network_security_config, even
          though Play Nearby dials a plain `ws://` LAN address and API 28+ blocks
          cleartext by default.

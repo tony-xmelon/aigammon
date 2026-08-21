@@ -30,15 +30,28 @@
 	     exchange UDP discovery datagrams on the Wi-Fi. iOS shows this string in
 	     the local-network permission prompt. See native/README.md for the
 	     multicast-entitlement caveat — manual address entry works without it. -->
-	<!-- Nearby (LAN) play, QR join: the guest scans the code on the host's
-	     screen to pick up its address, port and room code. iOS shows this
-	     string in the camera permission prompt, and App Review rejects a build
-	     that links a camera API without one. Declining it is not a dead end —
-	     the Join tab still finds hosts by discovery and takes a typed address. -->
+	<!-- TWO features share this one prompt, and iOS only ever shows it once, so
+	     the string has to be true for both:
+
+	       * Nearby (LAN) play, QR join — the guest scans the code on the host's
+	         screen to pick up its address, port and room code;
+	       * Buddy Mode — the phone watches a physical board for a whole match.
+
+	     App Review rejects a build that links a camera API without this key,
+	     and iOS terminates the process on first use. Declining it is not a dead
+	     end for either feature: the Join tab still finds hosts by discovery and
+	     takes a typed address, and Buddy Mode is one mode among several. -->
 	<key>NSCameraUsageDescription</key>
-	<string>AIGammon uses the camera to scan the QR code shown by another device, so you can join its game without typing its address.</string>
+	<string>AIGammon uses the camera to scan the QR code shown by another device, and — in Buddy Mode — to watch your physical board so it can follow the game.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>AIGammon uses the local network to find and play against another device on the same Wi-Fi.</string>
+	<!-- Buddy Mode's dice-roll listener: a transient detector that tells
+	     perception when to look at the board. STRICTLY an attention hint — the
+	     mode works identically with this denied — so the string promises
+	     nothing more than listening for the dice, and the app asks in context
+	     at the first Buddy session rather than at launch. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AIGammon can listen for the sound of your dice landing, so Buddy knows when to look at the board. Buddy Mode works without this.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

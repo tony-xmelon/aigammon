@@ -17,11 +17,14 @@ dependencies:
   # encoder) — it paints on a canvas and pulls in no platform channel, so it
   # costs the app nothing on the platforms that never scan.
   qr_flutter: ^4.1.0
-  # The camera preview the guest scans with. A plugin, so it does have native
-  # code on Android/iOS/macOS/web, but it is the only way to reach a camera and
-  # its dependency list is small (collection, meta, plugin_platform_interface,
-  # web). Requires CAMERA on Android and NSCameraUsageDescription on iOS — see
-  # the manifest and Info.plist, and test/android_manifest_test.dart.
+  # The camera preview the guest scans with, and the barcode decoder behind it.
+  # A plugin, so it does have native code on Android/iOS/macOS/web, but its
+  # dependency list is small (collection, meta, plugin_platform_interface, web)
+  # and it is the only thing here that decodes a QR code. It is NOT the app's
+  # only camera any more — Buddy Mode uses `camera` below, for frames this
+  # package does not expose — but both want CAMERA on Android and
+  # NSCameraUsageDescription on iOS; see the manifest and Info.plist, and
+  # test/android_manifest_test.dart plus test/ios_info_plist_test.dart.
   mobile_scanner: ^7.4.0
   drift_flutter: ^0.2.0
   sqlite3_flutter_libs: ^0.5.24
@@ -40,6 +43,39 @@ dependencies:
   firebase_performance: ^0.11.4+5
   firebase_crashlytics: ^5.2.6
   url_launcher: ^6.3.2
+  # --- Buddy Mode (Plan 19) ---------------------------------------------------
+  # The perception core: frames in, typed answers about a PHYSICAL board out.
+  # Pure Dart on purpose — no camera, no plugin, no dart:ui — so it builds and
+  # tests on this Windows dev machine against a committed corpus. The app owns
+  # the camera and hands it `Frame`s; see lib/buddy/camera_frame_source.dart.
+  board_vision:
+    path: ../packages/board_vision
+  # The camera Buddy Mode watches the board through. Distinct from
+  # mobile_scanner above, which owns the QR path and exposes no frame stream:
+  # this is the only plugin that surrenders raw YUV420 planes
+  # (`startImageStream`), which is precisely what board_vision needs. The two
+  # never run at once — QR join and a Buddy match are different screens — but
+  # they do share the CAMERA permission and the iOS usage string.
+  camera: ^0.12.0+2
+  # Buddy's voice. Wraps the platform TTS engine on each OS, so it adds no
+  # model or asset weight; lib/buddy/speaker.dart still guards it to Android/iOS
+  # the way lib/analytics/firebase_observability.dart guards FlutterFire,
+  # because Buddy Mode as a whole is mobile-only.
+  #
+  # WINDOWS BUILD PREREQUISITE: this package ships a Windows plugin whose
+  # CMakeLists calls `find_program(nuget)` and FATAL_ERRORs without it — so
+  # `flutter run -d windows` fails with "nuget.exe not found" on a machine that
+  # has no NuGet CLI, even though nothing on Windows ever calls the plugin.
+  # `winget install Microsoft.NuGet` fixes it; see the toolchain section of
+  # README.md. There is no supported way to exclude a plugin from one platform's
+  # build, so the prerequisite is the fix.
+  flutter_tts: ^4.2.5
+  # The gyroscope half of the stable-frame gate. Perception may only read a
+  # frame the phone was HOLDING STILL for; the accelerometer/gyro stream is the
+  # cheap half of that test (the other half is an inter-frame pixel diff, which
+  # costs nothing extra). Tiny plugin, event channels only, and its answer is
+  # injected into board_vision as a single bool — see `MotionHint`.
+  sensors_plus: ^7.1.0
 
 dev_dependencies:
   flutter_test:
@@ -51,6 +87,14 @@ dev_dependencies:
   build_runner: ^2.4.11
   sqlite3: ^2.4.6
   flutter_launcher_icons: ^0.14.1
+  # Test-only, and only for `CameraImageData` / `CameraImagePlane` /
+  # `CameraImageFormat`: `package:camera` re-exports a `show` list that leaves
+  # those three out, so the ONLY way to hand a synthetic `CameraImage` to
+  # `YuvFrame.fromCameraImage` is to build one from the platform interface
+  # directly. That conversion — the luma row stride, and iOS's two-plane NV12
+  # layout — is the most bug-prone code in lib/buddy/camera_frame_source.dart
+  # and the least likely to be caught on a device, so it is worth the entry.
+  camera_platform_interface: ^2.13.1
 
 flutter:
   uses-material-design: true

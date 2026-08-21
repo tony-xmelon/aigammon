@@ -14,11 +14,14 @@ import 'package:flutter_test/flutter_test.dart';
 /// CAMERA is here for the same reason and by the same lesson: Play Nearby's QR
 /// join asks for it at runtime, and a runtime request for a permission the
 /// manifest never declared is refused without ever showing the user a prompt.
+/// RECORD_AUDIO joins them for Buddy Mode's dice-roll listener.
 void main() {
   const mainManifest = 'android/app/src/main/AndroidManifest.xml';
   const internet =
       '<uses-permission android:name="android.permission.INTERNET"/>';
   const camera = '<uses-permission android:name="android.permission.CAMERA"/>';
+  const recordAudio =
+      '<uses-permission android:name="android.permission.RECORD_AUDIO"/>';
 
   test('the MAIN manifest declares INTERNET (not just debug/profile)', () {
     final main = File(mainManifest).readAsStringSync();
@@ -34,6 +37,30 @@ void main() {
         reason: 'the QR scanner on the Join tab requests CAMERA at runtime; '
             'without the declaration in src/main the release build is denied '
             'the permission outright, with no prompt to the user');
+  });
+
+  test('the MAIN manifest declares RECORD_AUDIO (not just debug/profile)', () {
+    final main = File(mainManifest).readAsStringSync();
+    expect(main, contains(recordAudio),
+        reason: "Buddy Mode's dice-roll listener requests RECORD_AUDIO at "
+            'runtime; without the declaration in src/main the release build is '
+            'denied the permission outright, with no prompt to the user');
+  });
+
+  test('the microphone is declared OPTIONAL hardware', () {
+    // Exactly the CAMERA lesson again: RECORD_AUDIO makes
+    // android.hardware.microphone an implicit Play Store filter unless the
+    // feature is explicitly optional. The dice listener is an attention hint
+    // that Buddy Mode works identically without, so a device with no usable
+    // microphone must still be able to install.
+    final main = File(mainManifest).readAsStringSync();
+    expect(
+      main,
+      contains('<uses-feature android:name="android.hardware.microphone" '
+          'android:required="false"/>'),
+      reason: 'RECORD_AUDIO without an optional uses-feature hides the app '
+          'from devices with no microphone',
+    );
   });
 
   test('the camera is declared OPTIONAL hardware', () {

@@ -90,6 +90,14 @@ git submodule update --init --recursive
 - **Flutter** (stable channel) with Windows desktop support enabled. Desktop
   builds require **Developer Mode** turned on (Settings → For developers) so
   Flutter can create the symlinks its plugins need.
+- **NuGet CLI** (`nuget.exe`) on `PATH` — `winget install Microsoft.NuGet`.
+  Buddy Mode's `flutter_tts` dependency ships a Windows plugin whose
+  `CMakeLists.txt` shells out to NuGet for CppWinRT and hard-fails without it,
+  so a desktop build stops at `nuget.exe not found. Please install it.` before
+  compiling a line of app code. Nothing on Windows ever *calls* that plugin —
+  Buddy Mode is mobile-only and `lib/buddy/speaker.dart` guards it — but
+  Flutter offers no way to exclude a plugin from one platform's build, so the
+  Windows toolchain has to satisfy it.
 - **Rust**, `stable-x86_64-pc-windows-gnu` toolchain.
 - A **full MinGW-w64** on `PATH` — Rust's self-contained MinGW ships no GNU
   assembler (`as.exe`), so `dlltool` fails when building the engine. This
