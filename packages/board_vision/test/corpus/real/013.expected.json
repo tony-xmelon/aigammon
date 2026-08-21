@@ -166,5 +166,6 @@
     "Cut VID20260820105037 at t=117.5s and take the whole frame.",
     "The board as the ledger leaves it after turn 5.",
     "Turn 5's own pair, still lying where it fell — the 6 and the 3 the two men off the 13-point were played with. The ledger read this as the NEXT turn's roll until 2026-08-22, when the board said otherwise."
-  ]
+  ],
+  "diceInFrame": true
 }

@@ -53,5 +53,6 @@
     "Cut VID20260820105037 at t=729.0s and take the whole frame.",
     "Read cell by cell off five zooms and cross-checked against the machine's deltas either side; the video ends here with the game unfinished. Two rim-hidden White men were put back by pixel measurement on 2026-08-23, the same pair 066 was hiding: the 1-point holds ONE (1512 cream px, a compact blob at board y 0.92-0.97) and the 7-point THREE rather than two (12771 px topping at 0.765, one whole pitch above 066's two). Fifteen White men on points, none off — and the correction leaves the pair consistent rather than making it so, since White's cells here still differ from 066's by exactly the three pips of a 2-1 (8/7, 24/22). That is corroboration and not a claim about the gap: Black's cells differ by more than one turn can account for, which is why both windows carry a board and no log.",
     "Two dice are lying on the felt mid-sequence and neither can be attributed to a turn, so the sidecar claims no roll."
-  ]
+  ],
+  "diceInFrame": true
 }

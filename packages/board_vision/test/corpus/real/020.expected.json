@@ -228,6 +228,7 @@
   "instructions": [
     "Cut VID20260820105037 at t=185.0s and take the whole frame.",
     "The board as the ledger leaves it after turn 8.",
-    "One die is lying on the felt and the other is behind the man on the hinge, showing a clear 6 to the camera; a pair nobody can read whole is not a pair this sidecar claims."
-  ]
+    "Two dice are in the picture and neither settles a roll. One lies against the man on the hinge and shows a clear 6 **to the camera** — a face pointing at the lens, not a top face, which is why it cannot be a die of the roll on its own. The other, at board (0.858, 0.405), has the better top face of the two and it carries a single centred pip: a **1**, measured 2026-08-23, with a diagonal pair on its near side. A 1 cannot be part of the nine-pip one-man play the ledger records for turn 8, so this pair is most likely the next roll rather than that one. Either way it is not a pair this sidecar claims, and turn 8's roll is inferred from the board — see [_filmedTurns]."
+  ],
+  "diceInFrame": true
 }

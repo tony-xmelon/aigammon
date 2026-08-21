@@ -100,5 +100,6 @@
     "Cut VID20260820105037 at t=49.5s and take the whole frame.",
     "The board as the ledger leaves it after turn 2.",
     "Black's roll still on the left leaf, read off a zoom."
-  ]
+  ],
+  "diceInFrame": true
 }

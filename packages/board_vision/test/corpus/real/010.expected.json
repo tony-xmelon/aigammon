@@ -143,6 +143,8 @@
   "instructions": [
     "Cut VID20260820105037 at t=94.5s and take the whole frame.",
     "The board as the ledger leaves it after turn 4.",
-    "Turn 4's own pair, lying where it fell. Read off the board rather than off the pips: this camera is low enough that both dice show a front face and neither up face is legible — a zoom was read as 6-5 on 2026-08-21 and that is what the correction replaces — and a ten-pip one-man play out of the 1-point, with the 6-point blocked four deep, can only have been thrown 6-4."
-  ]
+    "Turn 4's own pair, lying where it fell in the far half. DERIVED rather than read, which is what the sidecar's `diceDerived` says in a form a machine can check: a die this deep into the far half shows this camera a front face and a sliver of top, and neither up face is legible — a zoom was read as 6-5 on 2026-08-21 and that is what the correction replaces. A ten-pip one-man play out of the 1-point, with the 6-point blocked four deep, can only have been thrown 6-4. The front faces are consistent with it and do not settle it: a clean 5 on the left die, so its top is neither 2 nor 5; a diagonal run of three pips (possibly four) on the right, which excludes 3 and 4 from its top either way."
+  ],
+  "diceInFrame": true,
+  "diceDerived": true
 }

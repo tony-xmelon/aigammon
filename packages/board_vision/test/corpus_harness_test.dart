@@ -406,6 +406,51 @@ void main() {
       expect(violations, isEmpty, reason: board.report());
     });
 
+    test('the two dice rows ask about disjoint frames, and five belong to '
+        'neither', () {
+      // **The row that was paying for the wrong behaviour.** `diceAbsence`
+      // says "no dice read as no dice", and until 2026-08-23 its denominator
+      // was every shot with no certified roll — which on this corpus is six
+      // frames, and **five of them have settled dice lying in them**. 008's
+      // two are unmistakable at full resolution; 018's near die shows a clean
+      // 5 on its top face. So the reader was scoring 6/6 for missing real
+      // dice, and the day it started seeing them the row would have gone red.
+      //
+      // The fork is now on `CorpusShot.diceInFrame`, and this is the test that
+      // says so: one frame in this session has no dice in it (001, the
+      // calibration hold — and it has to be, since a die present at
+      // calibration is learned as part of the board), four carry a certified
+      // roll, and the remaining five are scored on neither row and named.
+      expect(board.totalFor(CorpusMetric.diceAbsence).attempts, 1,
+          reason: 'the absence row is over frames with no dice in them, and '
+              'this session has exactly one: ${board.report()}');
+      expect(board.totalFor(CorpusMetric.diceAbsence).successes, 1);
+
+      final excluded = board.signalOf(kDiceUncertifiedSignal);
+      expect(excluded.n, 5, reason: 'five frames have dice and no roll');
+      expect(excluded.sum, 0,
+          reason: 'the reader answered on a frame the corpus cannot check it '
+              'against — that is not a failure, but it is new, and the note '
+              'and the floors should be re-read deliberately');
+
+      final note =
+          board.notes.firstWhere((n) => n.contains('NEITHER dice row'));
+      for (final id in <String>['008', '018', '020', '066', '070']) {
+        expect(note, contains(id), reason: note);
+      }
+
+      // And between them the three outcomes account for every shot exactly
+      // once, which is the arithmetic that makes an exclusion visible instead
+      // of merely absent.
+      expect(
+        board.totalFor(CorpusMetric.dicePair).attempts +
+            board.totalFor(CorpusMetric.diceAbsence).attempts +
+            excluded.n,
+        board.shots,
+        reason: board.report(),
+      );
+    });
+
     test('the dice metric says found, right and refused, not one rate', () {
       // The distinction the gate turns on. Zero pairs read is two completely
       // different findings — a reader that answers wrongly, or a reader that
@@ -880,6 +925,26 @@ void main() {
 ///   at all rather than reading a wrong one. This board's dice are 0.021 of it
 ///   across against the synthetic bed's 0.075, and the band-location and tilt
 ///   work that would let a die that small be found is queued, not done.
+///
+///   **The denominator stayed at four when it was audited, and that is a
+///   finding rather than an oversight.** Nine of the ten frames have dice in
+///   them; 008's two are settled, unmistakable, and were read at full
+///   magnification on 2026-08-23 — and what came back was the near-facing
+///   *side* of each die, not the top a roll is read from, which at this
+///   distance is 7-8 px deep on a 21 px die. A pair the corpus cannot read is
+///   not a pair the corpus may claim, so 008 stays uncertified and joins the
+///   five frames scored on neither dice row.
+///
+/// And one that changed shape rather than value:
+///
+/// * **no dice in frame, none read: 1/1, from ~~6/6~~.** Same floor, same
+///   perfect score, a denominator that now means what the row's sentence says.
+///   Five of the old six had dice lying in them, so the row was paying the
+///   reader for missing this board's dice and would have gone red the day it
+///   stopped. See `CorpusMetric.diceAbsence` and `_scoreDice`. One frame in
+///   this session has no dice in it at all, and it is the calibration hold —
+///   which is not luck, since a die present at calibration is learned as part
+///   of the board.
 /// * **region occupancy 0.806** (195/242, from 192/242). Counts on this board
 ///   run short, worst on tall stacks, exactly as the plan doc's far-half note
 ///   predicts. The design never trusts a blind count anyway; it is Task 7's
@@ -1071,13 +1136,19 @@ String _realFloorReport(Scoreboard board) {
   final pairs = board.totalFor(CorpusMetric.dicePair);
   if (pairs.attempts > 0) {
     final found = board.signalOf(kDiceFoundSignal).sum.round();
+    final excluded = board.signalOf(kDiceUncertifiedSignal);
     out
       ..writeln()
       ..writeln('  dice, split three ways: ${pairs.attempts} rolls in the '
           'sidecars, $found found by the reader, ${pairs.successes} read '
           'right, ${pairs.attempts - found} refused outright.')
       ..writeln('  A refusal is the behaviour the design asks for; a wrong '
-          'pair would not be.');
+          'pair would not be.')
+      ..writeln('  Beside them: ${board.totalFor(CorpusMetric.diceAbsence)
+          .attempts} frames with no dice in them at all (the absence row) and '
+          '${excluded.n} with dice in them and no roll to check a reading '
+          'against — scored on neither row, ${excluded.sum.round()} of them '
+          'answered anyway.');
   }
   return (out..writeln('=' * 64)).toString();
 }

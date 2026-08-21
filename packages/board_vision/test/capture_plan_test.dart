@@ -783,17 +783,18 @@ void main() {
         () {
       // Dice values are ground truth and stay in the sidecars whatever the
       // reader currently manages. Four of the ten frames carry a pair this
-      // session can stand behind; the rest have no dice, dice mid-throw, or a
-      // pair nobody could attribute, and claiming those would be inventing
-      // ground truth.
+      // session can stand behind; the other six carry no value, and — as of
+      // 2026-08-23 — five of those six have dice sitting in them all the same.
+      // See the `diceInFrame` test below for that distinction, which used to
+      // be lost.
       //
       // **Three of the four were read off zooms and one is derived**, which is
-      // a distinction worth keeping: this camera sits low enough that a die
-      // shows its front face and not its top, so 010's pair was misread as 6-5
-      // on 2026-08-21. It is 6-4, because a ten-pip one-man play out of the
-      // 1-point with the 6-point blocked cannot have been thrown any other way
-      // — the same "ground truth by construction" the boards get, applied to
-      // the felt.
+      // a distinction worth keeping and now carries a machine-readable mark
+      // (`diceDerived`) rather than only a sentence. 010's pair was misread as
+      // 6-5 on 2026-08-21; it is 6-4, because a ten-pip one-man play out of
+      // the 1-point with the 6-point blocked cannot have been thrown any other
+      // way — the same "ground truth by construction" the boards get, applied
+      // to the felt.
       final withDice = <String, String>{
         for (final shot in filmed.where((s) => s.dice != null))
           shot.id: '${shot.dice!.die1}-${shot.dice!.die2}',
@@ -819,6 +820,62 @@ void main() {
             : <int>[rolls.last.die1, rolls.last.die2];
         expect(roll, (played..sort()), reason: shot.id);
       }
+    });
+
+    test('"no roll claimed" and "no dice in the picture" are different '
+        'questions, and only one frame answers yes to the second', () {
+      // **The conflation `CorpusMetric.diceAbsence` was scoring**, fixed
+      // 2026-08-23. Nine of these ten frames have dice somewhere in them and
+      // four carry a value, so a metric whose denominator was "shots with no
+      // certified roll" was asking "did the reader invent a roll?" of five
+      // frames with real dice lying in them — paying it for missing them, and
+      // set to go red the day it stopped.
+      //
+      // Only 001 is genuinely dice-free, and that is not luck: it is the
+      // calibration hold, and a die present at calibration is learned as one
+      // of the board's own surfaces and then invisible for the whole session.
+      expect(<String, bool>{
+        for (final shot in filmed) shot.id: shot.hasDiceInFrame,
+      }, <String, bool>{
+        '001': false,
+        '003': true,
+        '005': true,
+        '008': true,
+        '010': true,
+        '013': true,
+        '018': true,
+        '020': true,
+        '066': true,
+        '070': true,
+      });
+
+      // Exactly one shot's value was DERIVED rather than read, and it says so
+      // where a machine can see it.
+      expect(filmed.where((s) => s.hasDerivedDice).map((s) => s.id),
+          <String>['010']);
+      expect(filmed.firstWhere((s) => s.id == '010').dice, Dice(6, 4));
+      for (final shot in filmed.where((s) => s.dice == null)) {
+        expect(shot.hasDerivedDice, isFalse,
+            reason: '${shot.id} has no roll to have derived');
+      }
+
+      // Both fields are additive: they are written when the session sets them
+      // and read back identically, and a sidecar that never heard of them
+      // still answers both questions the old way.
+      for (final shot in filmed) {
+        final decoded = CorpusShot.fromJson(
+          jsonDecode(jsonEncode(shot.toJson())) as Map<String, dynamic>,
+        );
+        expect(decoded.hasDiceInFrame, shot.hasDiceInFrame, reason: shot.id);
+        expect(decoded.hasDerivedDice, shot.hasDerivedDice, reason: shot.id);
+        expect(shot.toJson().containsKey('diceDerived'), shot.hasDerivedDice,
+            reason: '${shot.id}: read-off-the-pips is the silent default');
+      }
+      final generated = flatten(buildCapturePlan()).first;
+      expect(generated.toJson().containsKey('diceInFrame'), isFalse,
+          reason: 'no generated sidecar has to be rewritten for this');
+      expect(generated.hasDiceInFrame, generated.dice != null,
+          reason: 'and absent has to mean the thing that is true of them');
     });
 
     test('only the calibration shot carries the board\'s measurements', () {

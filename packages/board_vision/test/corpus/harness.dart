@@ -22,7 +22,9 @@
 /// * a position shot — every region's colour and count against the sidecar,
 ///   plus the raw stack length behind each count;
 /// * a dice shot — the pair, exactly, and nothing else;
-/// * any shot with no dice — that no dice were invented;
+/// * a shot with **no dice in the frame** — that no dice were invented. Not
+///   the same set as "no roll in the sidecar", which is the distinction
+///   `_scoreDice` exists to draw;
 /// * a degraded shot — that it was refused, by whichever instrument the
 ///   sidecar names.
 ///
@@ -53,6 +55,16 @@ import 'scoreboard.dart';
 /// The denominator is `CorpusMetric.dicePair`'s attempts, so between them the
 /// two say found, right and refused. See [_scoreDice].
 const String kDiceFoundSignal = 'dice found when a roll was there';
+
+/// The frames that have dice in them and no roll the corpus will stand behind
+/// — scored on neither dice row, counted here so that the exclusion is visible
+/// rather than merely absent.
+///
+/// Its `n` is how many such frames there were; its `sum` is how many of them
+/// the reader answered anyway. That second number is the one to watch: a
+/// reading on a frame like this cannot be scored, but it is the first sign
+/// that the dice work has started to bite. See [_scoreDice].
+const String kDiceUncertifiedSignal = 'dice in frame, no roll to check against';
 
 /// Whether the play identified correctly was written with DIFFERENT hops from
 /// the one the sidecar records — the same position by another transit.
@@ -175,9 +187,13 @@ void _scoreSession(
     slices: _slicesOf(calibrationShot),
     detail: '${calibrationShot.id} ($name): ${confirmed.message}',
   );
+  // Shots with dice in them that no roll could be certified from. Collected
+  // across the session so the note can say how many and which — see
+  // [_scoreDice].
+  final uncertifiedDice = <String>[];
   _scoreOccupancy(board, vision, calibrationFrame, calibrationShot);
   _scoreResync(board, vision, calibrationFrame, calibrationShot);
-  _scoreDice(board, vision, calibrationFrame, calibrationShot);
+  _scoreDice(board, vision, calibrationFrame, calibrationShot, uncertifiedDice);
 
   // Play identification walks the same pass, keeping the previous shot's frame,
   // so no image is decoded twice.
@@ -220,13 +236,23 @@ void _scoreSession(
 
       _scoreOccupancy(board, vision, frame, shot);
       _scoreResync(board, vision, frame, shot);
-      _scoreDice(board, vision, frame, shot);
+      _scoreDice(board, vision, frame, shot, uncertifiedDice);
     }
 
     plays.offer(shot, frame);
   }
 
   plays.finish();
+
+  if (uncertifiedDice.isNotEmpty) {
+    board.notes.add(
+      '$name: ${uncertifiedDice.length} shots have dice in the frame that no '
+      'roll could be certified from (${uncertifiedDice.join(', ')}) and are '
+      'scored on NEITHER dice row. The corpus has no answer to check a '
+      'reading against on those frames, and "no dice were invented" is not a '
+      'claim that can be made about a frame with dice lying in it.',
+    );
+  }
 }
 
 /// The query the whole mode turns on, over every pair of a session's shots that
@@ -729,21 +755,52 @@ void _scoreResync(
 }
 
 /// The roll, or the absence of one.
+///
+/// ## Three outcomes, not two, and the third is what the row was hiding
+///
+/// A shot with no certified [CorpusShot.dice] used to mean one thing to this
+/// function: score it on [CorpusMetric.diceAbsence], "no dice read as no
+/// dice". On the real corpus that put **five frames with dice lying in them**
+/// into a row whose sentence is about frames with none — so the reader was
+/// being paid for failing to see real dice, and a reader that started seeing
+/// them would have gone red on a row it had just got right. A metric that
+/// punishes the behaviour it exists to encourage is worse than no metric.
+///
+/// So the fork is now on [CorpusShot.hasDiceInFrame]:
+///
+/// * **no dice in the picture** — the absence row, asking exactly its own
+///   question. One frame of the real corpus (its calibration hold) and every
+///   dice-free synthetic shot;
+/// * **dice in the picture and a roll certified** — the pair row, unchanged;
+/// * **dice in the picture and no roll certified** — scored on **neither**,
+///   and named in the notes. There is no honest question here: the corpus
+///   cannot say the reader is wrong (it has no answer to check against) and
+///   must not say it is right (there are dice there). The ids go into
+///   [uncertified] so the session can say how many and why.
 void _scoreDice(
   Scoreboard board,
   BoardVision vision,
   Frame frame,
   CorpusShot shot,
+  List<String> uncertified,
 ) {
   final reading = vision.readDice(frame);
   final slices = _slicesOf(shot);
 
   if (shot.dice == null) {
+    if (shot.hasDiceInFrame) {
+      uncertified.add(shot.id);
+      // Watched, promised nothing, and counted where the report can reach it:
+      // a denominator that shrank quietly is how a corpus stops testing
+      // something, and this one shrank by five.
+      board.signal(kDiceUncertifiedSignal, reading == null ? 0 : 1);
+      return;
+    }
     board.record(
       CorpusMetric.diceAbsence,
       ok: reading == null,
       slices: slices,
-      detail: '${shot.id}: read $reading on a board with no dice on it',
+      detail: '${shot.id}: read $reading on a frame with no dice in it',
     );
     return;
   }

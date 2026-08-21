@@ -309,8 +309,54 @@ class CorpusShot {
   /// has been edited by hand.
   final List<GameEvent>? events;
 
-  /// The roll showing on the felt, or null when there are no dice in the shot.
+  /// The roll this corpus is prepared to stand behind, or null when it will
+  /// not claim one.
+  ///
+  /// ~~The roll showing on the felt, or null when there are no dice in the
+  /// shot.~~ Both halves of that were wrong, and the real footage is what
+  /// separated them.
+  ///
+  /// **Null does not mean "no dice in the picture".** That is [diceInFrame],
+  /// and the two came apart the moment the corpus met a camera at table
+  /// height: **nine** of the ten filmed windows have dice somewhere in them
+  /// and only four carry a value here. Null means the corpus will not claim a
+  /// roll — usually a settled, perfectly visible pair whose TOP faces this
+  /// camera cannot resolve.
+  ///
+  /// **And a value here is not always something read off the pips.** See
+  /// [diceDerived]: 010's 6-4 is derived from the play it made possible, which
+  /// is the same ground-truth-by-construction the boards get, applied to the
+  /// felt.
   final Dice? dice;
+
+  /// Whether physical dice are visible in the frame at all — however
+  /// unreadable, whoever they belong to — or null when the shot does not say.
+  ///
+  /// **Absent means "dice are in the frame exactly when [dice] claims a
+  /// roll"**, which is true of every generated shot by construction (the
+  /// renderer draws dice if and only if the plan gave it some) and is why this
+  /// field is additive: no synthetic sidecar has to be rewritten, and none is.
+  /// The filmed session writes it explicitly on all ten of its shots, because
+  /// that is precisely where the assumption fails.
+  ///
+  /// It exists because a metric was quietly rewarding the wrong thing.
+  /// `CorpusMetric.diceAbsence` asks "did the reader invent a roll?", and its
+  /// denominator was every shot with no certified value — six of the ten real
+  /// windows, five of which have dice lying in them. A reader that started
+  /// seeing this board's dice would have *lost* marks on that row. With this
+  /// field the denominator is what the row's sentence says: frames with no
+  /// dice in them. See `_scoreDice`.
+  final bool? diceInFrame;
+
+  /// Whether [dice] was DERIVED from the play rather than read off the pips,
+  /// or null when it was read (or when there is no roll at all).
+  ///
+  /// One shot carries it: 010, whose pair is fixed by arithmetic — a ten-pip
+  /// one-man play out of the 1-point with the 6-point blocked four deep cannot
+  /// have been thrown any other way. That is as sound as a reading and it is
+  /// not the same *kind* of evidence, so a machine-readable mark says which,
+  /// rather than leaving the distinction in a sentence only a person reads.
+  final bool? diceDerived;
 
   final CaptureConditions capture;
 
@@ -349,9 +395,18 @@ class CorpusShot {
     this.proportions,
     this.foldingCorners,
     this.dieSide,
+    this.diceInFrame,
+    this.diceDerived,
   }) : instructions = List<String>.unmodifiable(instructions);
 
   bool get expectsRefusal => expectRefusal != null;
+
+  /// Whether there are dice in this picture at all. See [diceInFrame] for what
+  /// an absent field means and why the derivation is safe.
+  bool get hasDiceInFrame => diceInFrame ?? (dice != null);
+
+  /// Whether [dice], if there is one, was derived rather than read.
+  bool get hasDerivedDice => diceDerived ?? false;
 
   /// Whether somebody has to tap this shot's four corners.
   ///
@@ -419,6 +474,8 @@ class CorpusShot {
             clearProportions ? null : (proportions ?? this.proportions),
         foldingCorners: foldingCorners ?? this.foldingCorners,
         dieSide: dieSide ?? this.dieSide,
+        diceInFrame: diceInFrame,
+        diceDerived: diceDerived,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -449,6 +506,11 @@ class CorpusShot {
           'foldingCorners': _foldingToJson(foldingCorners!),
         // And again: no key at all when nobody measured the dice.
         if (dieSide != null) 'dieSide': dieSide,
+        // Same rule again, and here the absent case carries a meaning rather
+        // than an absence — see [diceInFrame]. Every generated sidecar leaves
+        // both of these out, which is what makes them additive.
+        if (diceInFrame != null) 'diceInFrame': diceInFrame,
+        if (diceDerived != null) 'diceDerived': diceDerived,
       };
 
   factory CorpusShot.fromJson(Map<String, dynamic> json) {
@@ -510,6 +572,10 @@ class CorpusShot {
       // Absent on every sidecar written before dice had a measured size, and
       // absent means the synthetic bed's — see [dieSide].
       dieSide: (json['dieSide'] as num?)?.toDouble(),
+      // Absent on every generated sidecar, where "dice in frame" and "a roll
+      // is claimed" cannot come apart. See [diceInFrame] and [diceDerived].
+      diceInFrame: json['diceInFrame'] as bool?,
+      diceDerived: json['diceDerived'] as bool?,
     );
   }
 
@@ -806,6 +872,12 @@ CaptureSession buildRealSession() {
     required BoardState board,
     required List<GameEvent>? events,
     required Dice? dice,
+    // Required rather than defaulted, on all ten, because the whole point of
+    // the field is that this session is where "a roll is claimed" and "there
+    // are dice in the picture" stop being the same question. A default would
+    // let a new window inherit the wrong one silently.
+    required bool diceInFrame,
+    required bool diceDerived,
     required String title,
     required List<String> notes,
     FoldingCorners? foldingCorners,
@@ -836,6 +908,10 @@ CaptureSession buildRealSession() {
         ],
         foldingCorners: foldingCorners,
         dieSide: dieSide,
+        diceInFrame: diceInFrame,
+        // Written only when it is true, so that "read off the pips" stays the
+        // silent default and a derived value has to say so.
+        diceDerived: diceDerived ? true : null,
       );
 
   shots.add(filmed(
@@ -845,6 +921,10 @@ CaptureSession buildRealSession() {
     board: BoardState.initial(),
     events: null,
     dice: null,
+    // The only frame in the session with no dice anywhere in it, and it has to
+    // be: a die present at calibration is learned as part of the board.
+    diceInFrame: false,
+    diceDerived: false,
     title: 'Calibration — the starting position',
     notes: <String>[
       'Act 1 of FILMING.md: the board set for the start of a game, home '
@@ -865,6 +945,8 @@ CaptureSession buildRealSession() {
       board: position.board,
       events: position.log,
       dice: cut.dice,
+      diceInFrame: cut.diceInFrame,
+      diceDerived: cut.diceDerived,
       title: 'Turn ${cut.afterTurn} played — '
           '${_filmedTurns[cut.afterTurn - 1].notation}',
       notes: <String>[
@@ -883,6 +965,8 @@ CaptureSession buildRealSession() {
       // No log: see the class doc. A board with no story is still a board.
       events: null,
       dice: null,
+      diceInFrame: cut.diceInFrame,
+      diceDerived: false,
       title: cut.title,
       notes: <String>[cut.evidence, cut.diceNote],
     ));
@@ -1134,11 +1218,19 @@ const List<FilmedTurn> _filmedTurns = <FilmedTurn>[
 ];
 
 /// A window cut from the footage, and which turn's board it shows.
+///
+/// [dice] is what the corpus will stand behind and [diceInFrame] is what is
+/// physically in the picture; they are different questions on this footage and
+/// conflating them is what `CorpusMetric.diceAbsence` was doing until
+/// 2026-08-23. [diceDerived] marks a value fixed by arithmetic rather than
+/// read off the pips.
 typedef _FilmedCut = ({
   String id,
   String seconds,
   int afterTurn,
   Dice? dice,
+  bool diceInFrame,
+  bool diceDerived,
   String diceNote,
 });
 
@@ -1161,6 +1253,8 @@ final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
     seconds: '33.5',
     afterTurn: 1,
     dice: Dice(4, 2),
+    diceInFrame: true,
+    diceDerived: false,
     diceNote: 'The opening roll is still lying where it fell — a settled pair '
         'a person read off a zoom.',
   ),
@@ -1169,6 +1263,8 @@ final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
     seconds: '49.5',
     afterTurn: 2,
     dice: Dice(6, 4),
+    diceInFrame: true,
+    diceDerived: false,
     diceNote: "Black's roll still on the left leaf, read off a zoom.",
   ),
   (
@@ -1176,25 +1272,49 @@ final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
     seconds: '76.5',
     afterTurn: 3,
     dice: null,
-    diceNote: 'No dice on the felt: the next roll is mid-throw.',
+    diceInFrame: true,
+    diceDerived: false,
+    diceNote: '~~No dice on the felt: the next roll is mid-throw.~~ Wrong on '
+        'both counts, and corrected 2026-08-23. TWO SETTLED DICE are lying in '
+        'the far half, at board (0.218, 0.234) and (0.251, 0.279): absent at '
+        't=66.5, in these exact positions at t=76.5 and t=84.5, gone by '
+        't=94.5 — so they are this turn\'s own roll, left where they fell '
+        'until Black picked them up. No roll is claimed all the same, because '
+        'the faces a roll is read from are the ones this camera cannot see. '
+        'Measured at full resolution: each die is about 21 px across and '
+        'presents a top face 7-8 px deep, in which no pip pattern can be '
+        'counted. What IS legible is the near-facing side of each — a clean '
+        'diagonal pair on the left die, five blobs on the right that read as a '
+        '3 and a 2 across two faces — and a side face is not a roll. The turn '
+        'itself is 2-1 by arithmetic (one man, 13/10, three pips with the '
+        '12-point blocked), and that is where the ledger gets it.',
   ),
   (
     id: '010',
     seconds: '94.5',
     afterTurn: 4,
     dice: Dice(6, 4),
-    diceNote: "Turn 4's own pair, lying where it fell. Read off the board "
-        'rather than off the pips: this camera is low enough that both dice '
-        'show a front face and neither up face is legible — a zoom was read as '
-        '6-5 on 2026-08-21 and that is what the correction replaces — and a '
-        'ten-pip one-man play out of the 1-point, with the 6-point blocked '
-        'four deep, can only have been thrown 6-4.',
+    diceInFrame: true,
+    diceDerived: true,
+    diceNote: "Turn 4's own pair, lying where it fell in the far half. DERIVED "
+        'rather than read, which is what the sidecar\'s `diceDerived` says in '
+        'a form a machine can check: a die this deep into the far half shows '
+        'this camera a front face and a sliver of top, and neither up face is '
+        'legible — a zoom was read as 6-5 on 2026-08-21 and that is what the '
+        'correction replaces. A ten-pip one-man play out of the 1-point, with '
+        'the 6-point blocked four deep, can only have been thrown 6-4. The '
+        'front faces are consistent with it and do not settle it: a clean 5 on '
+        'the left die, so its top is neither 2 nor 5; a diagonal run of three '
+        'pips (possibly four) on the right, which excludes 3 and 4 from its '
+        'top either way.',
   ),
   (
     id: '013',
     seconds: '117.5',
     afterTurn: 5,
     dice: Dice(6, 3),
+    diceInFrame: true,
+    diceDerived: false,
     diceNote: "Turn 5's own pair, still lying where it fell — the 6 and the 3 "
         'the two men off the 13-point were played with. The ledger read this '
         "as the NEXT turn's roll until 2026-08-22, when the board said "
@@ -1205,17 +1325,33 @@ final List<_FilmedCut> _filmedPositions = <_FilmedCut>[
     seconds: '162.5',
     afterTurn: 7,
     dice: null,
-    diceNote: 'Dice in view but not settled enough for a person to call, so '
-        'the sidecar claims none.',
+    diceInFrame: true,
+    diceDerived: false,
+    diceNote: '~~Dice in view but not settled enough for a person to call.~~ '
+        'They are settled, and one of them is the most legible top face in the '
+        'session: the die at board (0.398, 0.514) — the middle of the board, '
+        'where this camera sees most of a top — shows a clean **5**, with a '
+        'single large pip on its near face. Its partner is not readable, and '
+        'half a pair is not a roll, so the sidecar still claims none.',
   ),
   (
     id: '020',
     seconds: '185.0',
     afterTurn: 8,
     dice: null,
-    diceNote: 'One die is lying on the felt and the other is behind the man on '
-        'the hinge, showing a clear 6 to the camera; a pair nobody can read '
-        'whole is not a pair this sidecar claims.',
+    diceInFrame: true,
+    diceDerived: false,
+    diceNote: 'Two dice are in the picture and neither settles a roll. One '
+        'lies against the man on the hinge and shows a clear 6 **to the '
+        'camera** — a face pointing at the lens, not a top face, which is why '
+        'it cannot be a die of the roll on its own. The other, at board '
+        '(0.858, 0.405), has the better top face of the two and it carries a '
+        'single centred pip: a **1**, measured 2026-08-23, with a diagonal '
+        'pair on its near side. A 1 cannot be part of the nine-pip one-man '
+        'play the ledger records for turn 8, so this pair is most likely the '
+        'next roll rather than that one. Either way it is not a pair this '
+        'sidecar claims, and turn 8\'s roll is inferred from the board — see '
+        '[_filmedTurns].',
   ),
 ];
 
@@ -1226,6 +1362,7 @@ typedef _FilmedKeyframe = ({
   BoardState board,
   String title,
   String evidence,
+  bool diceInFrame,
   String diceNote,
 });
 
@@ -1271,6 +1408,7 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
       blackBar: 1,
     ),
     title: 'End game — a Black checker on the bar',
+    diceInFrame: true,
     evidence: 'Read cell by cell off five zooms (bar, both far quarters, both '
         'near quarters); the Black checker sits ON the worn hinge ridge, '
         'which is the object-versus-surface case this corpus exists to ask '
@@ -1297,6 +1435,7 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
       ],
     ),
     title: 'End game — the last frame, a White straggler trapped',
+    diceInFrame: true,
     evidence: 'Read cell by cell off five zooms and cross-checked against the '
         "machine's deltas either side; the video ends here with the game "
         'unfinished. Two rim-hidden White men were put back by pixel '

@@ -35,11 +35,20 @@ enum CorpusMetric {
   /// The settled pair was read, and read right. The spec's highest target.
   dicePair('dice pair read'),
 
-  /// A board with no dice on it read as no dice. Not from the spec's table —
-  /// it is the same counterweight [CorpusMetric.expectedRefusal] is, one step
-  /// smaller: an invented roll enters the authoritative game state exactly as
-  /// a misread one does.
-  diceAbsence('no dice read as no dice'),
+  /// A frame with **no dice in it** read as no dice. Not from the spec's table
+  /// — it is the same counterweight [CorpusMetric.expectedRefusal] is, one
+  /// step smaller: an invented roll enters the authoritative game state
+  /// exactly as a misread one does.
+  ///
+  /// **The denominator is frames with no dice in the picture, and it did not
+  /// used to be** (~~'no dice read as no dice'~~, over every shot with no
+  /// certified roll). On the real corpus that was six frames, five of which
+  /// have settled dice lying in them whose top faces the camera cannot
+  /// resolve — so the row was paying the reader for missing real dice, and
+  /// would have gone red the day it stopped missing them. Frames with dice in
+  /// them and no certified roll are now scored on neither dice row and named
+  /// in the notes; see `_scoreDice` and `CorpusShot.diceInFrame`.
+  diceAbsence('no dice in frame, none read'),
 
   /// A shot the corpus labels unreadable was refused. Never scored as an
   /// answer; see `PerceptionTargets.expectedRefusal`.

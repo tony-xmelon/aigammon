@@ -128,5 +128,13 @@ class PerceptionTargets {
   /// two shots: the honest answer is a named refusal, and one confident wrong
   /// answer there costs more than the refusal ever saves. Hence 1.0, and hence
   /// no fallback column.
+  ///
+  /// **Two rows are held to this number**, and the second is worth naming
+  /// because it was measuring the wrong thing until 2026-08-23: `unreadable
+  /// shot refused`, and `no dice in frame, none read` — a roll invented out of
+  /// bare felt enters the authoritative game state exactly as a misread one
+  /// does. That second row's denominator is frames with **no dice in the
+  /// picture**, which is not the same set as frames with no roll in the
+  /// sidecar; see `CorpusMetric.diceAbsence`.
   static const double expectedRefusal = 1.0;
 }

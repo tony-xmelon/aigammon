@@ -206,6 +206,7 @@
   "instructions": [
     "Cut VID20260820105037 at t=162.5s and take the whole frame.",
     "The board as the ledger leaves it after turn 7.",
-    "Dice in view but not settled enough for a person to call, so the sidecar claims none."
-  ]
+    "~~Dice in view but not settled enough for a person to call.~~ They are settled, and one of them is the most legible top face in the session: the die at board (0.398, 0.514) — the middle of the board, where this camera sees most of a top — shows a clean **5**, with a single large pip on its near face. Its partner is not readable, and half a pair is not a roll, so the sidecar still claims none."
+  ],
+  "diceInFrame": true
 }

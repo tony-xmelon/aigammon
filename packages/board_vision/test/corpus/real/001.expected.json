@@ -105,5 +105,6 @@
       632.0
     ]
   },
-  "dieSide": 0.021
+  "dieSide": 0.021,
+  "diceInFrame": false
 }
