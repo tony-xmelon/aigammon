@@ -89,9 +89,22 @@ class OpponentPolicy implements BuddyPolicy {
 
   bool _saidRed = false;
 
+  /// The roll Buddy has had announced and not yet played, or null.
+  ///
+  /// The latch that keeps one throw to one line. Buddy's dictated play follows
+  /// its roll within the same turn and both lines named the dice, so the
+  /// transcript read "I rolled 6-3." / "I rolled 6-3 — play 13/8, 24/22" — one
+  /// throw said twice, a second apart, in the channel that IS the user's record
+  /// of the match. Set here, spent in [onBuddyMoveChosen], and cleared by the
+  /// user's own roll so that a dictation which somehow arrives without a roll
+  /// in front of it still names one.
+  Dice? _buddyRollSaid;
+
   @override
   void onDiceRead(Player roller, Dice dice, double? confidence) {
-    final who = roller == buddySide ? 'I rolled' : 'You rolled';
+    final mine = roller == buddySide;
+    _buddyRollSaid = mine ? dice : null;
+    final who = mine ? 'I rolled' : 'You rolled';
     final d = BuddyPhrasing.describeDice(dice);
     speaker.say(BuddyLine('$who ${d.text}.', speech: '$who ${d.speech}.'));
   }
@@ -117,22 +130,52 @@ class OpponentPolicy implements BuddyPolicy {
   void onIllegalPlayObserved(String reason) =>
       speaker.say(BuddyLine("That isn't a legal play. $reason"));
 
+  /// **The roll is named here only if nothing has named it yet.** In every
+  /// production path [onDiceRead] has just said it — the session announces a
+  /// roll the moment it is read and dictates the play once the engine has
+  /// answered — so this ordinarily says the play and nothing else. The
+  /// alternative is kept rather than deleted because the dice are an argument
+  /// of this method: a caller that dictates a play without a roll in front of
+  /// it deserves a line that still says which throw it belongs to.
   @override
   void onBuddyMoveChosen(Dice dice, Move play) {
-    final described = speaker.phrasing.describePlay(play);
-    final d = BuddyPhrasing.describeDice(dice);
+    final said = _buddyRollSaid == dice;
+    _buddyRollSaid = null;
+    final d = said ? null : BuddyPhrasing.describeDice(dice);
     if (play.checkerMoves.isEmpty) {
-      speaker.say(BuddyLine(
-        'I rolled ${d.text} — no play, so it is back to you.',
-        speech: 'I rolled ${d.speech}. No play, so it is back to you.',
-      ));
+      speaker.say(d == null
+          ? const BuddyLine('No play, so it is back to you.')
+          : BuddyLine(
+              'I rolled ${d.text} — no play, so it is back to you.',
+              speech: 'I rolled ${d.speech}. No play, so it is back to you.',
+            ));
       return;
     }
-    speaker.say(BuddyLine(
-      'I rolled ${d.text} — play ${described.text}',
-      speech: 'I rolled ${d.speech}. Play ${described.speech}',
-    ));
+    final body = _dictation(speaker.phrasing.describePlay(play));
+    speaker.say(d == null
+        ? body
+        : BuddyLine(
+            'I rolled ${d.text} — ${_lowerFirst(body.text)}',
+            speech: 'I rolled ${d.speech}. ${body.speech}',
+          ));
   }
+
+  /// The play as an instruction to a pair of hands.
+  ///
+  /// Terse hands back notation, which needs a verb in front of it; friendly
+  /// hands back a finished imperative sentence, which does not — a verb in
+  /// front of that one reads "play Move one checker from 13 to 8".
+  BuddyLine _dictation(BuddyLine described) =>
+      switch (speaker.phrasing) {
+        BuddyPhrasing.terse => BuddyLine(
+            'Play ${described.text}',
+            speech: 'Play ${described.speech}',
+          ),
+        BuddyPhrasing.friendly => described,
+      };
+
+  static String _lowerFirst(String s) =>
+      s.isEmpty ? s : '${s[0].toLowerCase()}${s.substring(1)}';
 
   @override
   void onPlacementVerified(bool correct, String? fix) {

@@ -4,6 +4,8 @@ import '../analytics/analytics_events.dart';
 import '../analytics/analytics_screen_view.dart';
 import '../branding/app_mark.dart';
 import '../branding/app_version.dart';
+import 'buddy/buddy_game_screen.dart';
+import 'buddy/buddy_setup_screen.dart';
 import 'history_screen.dart';
 import 'lan_screen.dart';
 import 'new_match_screen.dart';
@@ -95,6 +97,26 @@ class HomeScreen extends StatelessWidget {
                             icon: Icons.people_outline,
                             onPressed: () => _open(context, vsComputer: false),
                           ),
+                          // A local mode like the two above it — the opponent
+                          // is the engine and the board is the one on the
+                          // table — so it sits with them rather than with the
+                          // two remote ones. Hidden where the mode cannot run
+                          // at all: it needs a camera to watch a board and a
+                          // voice to call the play, and a desktop has neither.
+                          if (isBuddyModeSupportedPlatform) ...[
+                            const SizedBox(height: 12),
+                            _ModeButton(
+                              label: 'Play with Buddy',
+                              icon: Icons.videocam_outlined,
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const BuddySetupScreen(
+                                    launch: openBuddyGame,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 12),
                           _ModeButton(
                             label: 'Play Nearby',

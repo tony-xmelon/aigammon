@@ -29,11 +29,19 @@ class FakeBuddyCamera implements BuddyCamera {
   bool opened = false;
   bool closed = false;
 
+  /// Balanced with [PhoneBuddyCamera]'s own count, and for the same reason: a
+  /// recalibration pushed from the game screen opens this camera a second time
+  /// and closes it as it pops, under a screen that is still playing a match.
+  /// A fake that shut the frame stream on the first close would make that
+  /// resume untestable — and untested is how the real one would have shipped.
+  int _users = 0;
+
   @override
   Stream<ObservedFrame> get frames => _frames.stream;
 
   @override
   Future<CameraOpening> open() async {
+    _users++;
     opened = true;
     return opening;
   }
@@ -44,7 +52,8 @@ class FakeBuddyCamera implements BuddyCamera {
 
   @override
   Future<void> close() async {
-    if (closed) return;
+    if (_users > 0) _users--;
+    if (_users > 0 || closed) return;
     closed = true;
     await _frames.close();
   }

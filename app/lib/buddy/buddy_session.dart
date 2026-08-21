@@ -9,7 +9,7 @@ import '../game/game_controller.dart';
 import '../game/player_agent.dart';
 import 'buddy_dice_roller.dart';
 import 'buddy_policy.dart';
-import 'camera_frame_source.dart';
+import 'observed_frame.dart';
 import 'perception_human_agent.dart';
 
 /// Unreadable dice frames in a row before the manual pad is offered.
@@ -198,7 +198,15 @@ class BuddySession extends ChangeNotifier {
 
   /// Which half of the picture the user is sitting behind. Chosen in setup and
   /// carried here for [_asOpening]; see [BuddySeat].
-  final BuddySeat seat;
+  ///
+  /// **Not final**, for the same kind of reason `BuddySpeaker.phrasing` is not:
+  /// the calibration flow confirms this against a photograph of the board, and
+  /// a recalibration mid-match confirms it again — a user who moved round the
+  /// table has a different near half, and the throw that opens the next game
+  /// has to be read from where they are sitting now. [useCalibration] is what
+  /// moves it, because a re-confirmed seat and a fresh calibration are one
+  /// answer rather than two.
+  BuddySeat seat;
 
   final BuddyPolicy policy;
   final int matchLength;
@@ -282,6 +290,14 @@ class BuddySession extends ChangeNotifier {
   /// The side the user plays.
   Player get userSide => buddySide.opponent;
 
+  /// Whether a physical roll has been asked for and nobody has answered it.
+  ///
+  /// Exactly the condition under which [enterDiceManually] is a legal verb, so
+  /// a screen gates the manual pad on this rather than on a phase: the pad
+  /// stays live through a readability outage — it answers the USER, not the
+  /// camera — and no phase says both "a roll is open" and "the light is out".
+  bool get awaitingRoll => _roller.isPending;
+
   // --- what a screen calls -------------------------------------------------
 
   /// Installs a calibration and lets play run.
@@ -290,8 +306,16 @@ class BuddySession extends ChangeNotifier {
   /// after it, because it is the same event: a board has been learned and the
   /// session may look at it again. A recalibration resumes at the phase the
   /// outage interrupted — the spec's "play resumes exactly where it paused".
-  void useCalibration(BoardVision vision) {
+  ///
+  /// [seat] is the seat the calibration was CONFIRMED against, when the flow
+  /// that produced this vision asked again (it always does — the seat step is
+  /// how the 24-point frame is fixed). It arrives with the calibration rather
+  /// than through a setter of its own because it is part of the same answer: a
+  /// user who moved round the table recalibrates, and the throw that opens the
+  /// next game has to be read from where they are sitting now.
+  void useCalibration(BoardVision vision, {BuddySeat? seat}) {
     _vision = vision;
+    if (seat != null) this.seat = seat;
     _needsRecalibration = false;
     if (_phase == BuddyPhase.calibrating) {
       _phase = _pausedFrom ?? BuddyPhase.awaitingDice;
@@ -300,6 +324,15 @@ class BuddySession extends ChangeNotifier {
     _advance();
     notifyListeners();
   }
+
+  /// The user asked to fix the aim.
+  ///
+  /// Identical in every respect to the outage a stale calibration causes — the
+  /// phase to come back to is remembered, the game state is untouched, and the
+  /// frames held from this epoch are dropped because differencing across two
+  /// calibrations is noise shaped like a play. The only difference is who
+  /// noticed, and that difference belongs to the screen.
+  void recalibrate() => _enterRecalibration();
 
   /// The roll the user typed on the pad. Also the escape hatch for a misread
   /// one: the pad is always open, per the spec's "manual dice entry is always

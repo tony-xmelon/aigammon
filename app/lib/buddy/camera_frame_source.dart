@@ -7,6 +7,14 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import 'observed_frame.dart';
+
+/// Re-exported so every caller that already had a frame source in scope keeps
+/// working — the value type moved out of this file to keep two plugins off the
+/// session's import graph, which is a fact about packaging rather than about
+/// anything a caller does. See `observed_frame.dart`.
+export 'observed_frame.dart';
+
 // -----------------------------------------------------------------------------
 // The provisional numbers.
 //
@@ -326,41 +334,6 @@ class MotionTracker {
   }
 
   MotionHint hintAt(Duration now) => MotionHint(deviceStill: stillAt(now));
-}
-
-/// One frame that made it through the gate, and what the gate thinks of it.
-@immutable
-class ObservedFrame {
-  const ObservedFrame({
-    required this.frame,
-    required this.motion,
-    required this.isStable,
-    required this.sceneChange,
-    required this.at,
-  });
-
-  /// The RGB frame, ready for any `BoardVision` query.
-  final Frame frame;
-
-  /// What the GYRO says — nothing else. Handed straight to
-  /// `BoardVision.assessReadability`, which turns a false [MotionHint] into the
-  /// amber "hold still" cause. Deliberately not folded together with
-  /// [sceneChange]: a hand moving over a phone that never budged must not tell
-  /// the user to hold the phone still.
-  final MotionHint motion;
-
-  /// Whether this frame may answer a perception QUERY: the phone was still
-  /// AND the picture has stopped changing for [kQuietFramesRequired] frames.
-  ///
-  /// An unstable frame is still published, because the readability light is
-  /// exactly what a user needs while things are unstable.
-  final bool isStable;
-
-  /// Measured difference from the previous frame, 0..1. 1.0 for the first
-  /// frame of a session, which has nothing to be compared with.
-  final double sceneChange;
-
-  final Duration at;
 }
 
 /// Converts [YuvFrame]s, running at most one at a time and keeping only the

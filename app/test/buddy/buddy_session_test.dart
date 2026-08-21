@@ -181,12 +181,19 @@ void main() {
 
       expect(h.policy.buddyMoves, hasLength(1));
       expect(h.policy.buddyMoves.single.$1, Dice(6, 3));
-      final dictated =
-          h.speaker.lines.firstWhere((l) => l.text.contains(' — play '));
-      expect(dictated.text, startsWith('I rolled 6-3 — play '));
-      expect(dictated.speech, startsWith('I rolled 6 3. Play '),
-          reason: 'the dictation renders the dice for both channels too, and '
-              'the sentence around them is not the same sentence');
+
+      // ONE line names the roll, and the one after it is the play. Buddy's
+      // dictation used to restate the dice — "I rolled 6-3." followed a beat
+      // later by "I rolled 6-3 — play 13/8" — which is one throw said twice in
+      // the channel that IS the user's record of the match.
+      final buddyLines =
+          h.speaker.lines.skipWhile((l) => l.text != 'I rolled 6-3.').toList();
+      expect(buddyLines.where((l) => l.text.contains('6-3')), hasLength(1));
+      expect(buddyLines[0].speech, 'I rolled 6 3.',
+          reason: 'the roll renders for both channels: the hyphen is the score '
+              "sheet's and a TTS engine reads it as a subtraction");
+      expect(buddyLines[1].text, startsWith('Play '));
+      expect(buddyLines[1].speech, startsWith('Play '));
       expect(h.session.phase, BuddyPhase.verifyingPlacement,
           reason: 'the man is dictated, not placed — the board must catch up');
 
@@ -271,6 +278,86 @@ void main() {
       expect(h.session.needsBeliefMirror, isFalse,
           reason: 'the board caught up, so the mirror comes down with it');
       expect(h.session.phase, BuddyPhase.awaitingDice);
+    });
+  });
+
+  // The transcript is the user's whole record of the match — it is the channel
+  // that survives a loud room, a muted phone and a platform with no voice — so
+  // what it repeats matters as much as what it says.
+  group('one roll, one line', () {
+    /// A real legal play, so no test here has to hand-build a [Move].
+    Move play(Dice dice) =>
+        MoveGenerator.legalMoves(BoardState.initial(), Player.black, dice)
+            .first;
+
+    ({BuddySpeaker speaker, OpponentPolicy policy}) buddy(
+        [BuddyPhrasing phrasing = BuddyPhrasing.terse]) {
+      final speaker = BuddySpeaker(phrasing: phrasing);
+      addTearDown(speaker.dispose);
+      return (
+        speaker: speaker,
+        policy: OpponentPolicy(speaker: speaker, buddySide: Player.black),
+      );
+    }
+
+    test('a dictation leaves the roll to the line that already said it', () {
+      final b = buddy();
+      b.policy.onDiceRead(Player.black, Dice(6, 3), 0.9);
+      b.policy.onBuddyMoveChosen(Dice(6, 3), play(Dice(6, 3)));
+
+      final said = b.speaker.lines;
+      expect(said.map((l) => l.text).where((t) => t.contains('6-3')),
+          hasLength(1),
+          reason: 'one throw, one mention — the pair used to read "I rolled '
+              '6-3." and then "I rolled 6-3 — play 13/8" a beat later');
+      expect(said.first.text, 'I rolled 6-3.');
+      expect(said.last.text, startsWith('Play '));
+      expect(said.last.speech, startsWith('Play '));
+    });
+
+    test('and states it when nothing has', () {
+      // Not a path the session takes — it announces every roll as it is read —
+      // but the dice are an argument of the method, and a caller that dictates
+      // a play without a throw in front of it deserves a line that says which
+      // throw it belongs to.
+      final b = buddy();
+      b.policy.onBuddyMoveChosen(Dice(6, 3), play(Dice(6, 3)));
+
+      expect(b.speaker.lines.single.text, startsWith('I rolled 6-3 — play '));
+      expect(b.speaker.lines.single.speech, startsWith('I rolled 6 3. Play '));
+    });
+
+    test("the user's own roll is not Buddy's, and does not spend the latch",
+        () {
+      final b = buddy();
+      b.policy.onDiceRead(Player.white, Dice(6, 3), 0.9);
+      b.policy.onBuddyMoveChosen(Dice(6, 3), play(Dice(6, 3)));
+
+      expect(b.speaker.lines.first.text, 'You rolled 6-3.');
+      expect(b.speaker.lines.last.text, startsWith('I rolled 6-3 — play '),
+          reason: 'the roll the user threw is a different sentence about a '
+              'different throw');
+    });
+
+    test('a dance says the roll once too', () {
+      final b = buddy();
+      b.policy.onDiceRead(Player.black, Dice(6, 3), 0.9);
+      b.policy.onBuddyMoveChosen(Dice(6, 3), Move.none);
+
+      expect(b.speaker.lines.last.text, 'No play, so it is back to you.');
+    });
+
+    test('the friendly phrasing dictates its own sentence, not a verb and one',
+        () {
+      // `describePlay` hands back a finished imperative in this phrasing, so a
+      // verb in front of it reads "play Move one checker from 13 to 8".
+      final b = buddy(BuddyPhrasing.friendly);
+      b.policy.onDiceRead(Player.black, Dice(6, 3), 0.9);
+      b.policy.onBuddyMoveChosen(Dice(6, 3), play(Dice(6, 3)));
+
+      final dictated = b.speaker.lines.last.text;
+      expect(dictated, startsWith('Move '));
+      expect(dictated, isNot(contains('play Move')));
     });
   });
 

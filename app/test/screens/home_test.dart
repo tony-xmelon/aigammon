@@ -7,11 +7,13 @@ import 'package:aigammon_app/data/match_repository.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
 import 'package:aigammon_app/engine/engine_provider.dart';
 import 'package:aigammon_app/game/player_agent.dart';
+import 'package:aigammon_app/screens/buddy/buddy_setup_screen.dart';
 import 'package:aigammon_app/screens/game_screen.dart';
 import 'package:aigammon_app/screens/home_screen.dart';
 import 'package:aigammon_app/screens/new_match_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:engine_bindings/engine_bindings.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -383,6 +385,48 @@ void main() {
       await t.pumpAndSettle();
       expect(tutorSwitchValue(t), isTrue,
           reason: 'a touched toggle stays authoritative');
+    });
+  });
+
+  group('the Buddy Mode entry', () {
+    // A belt-and-braces reset for a test that fails part way through; the
+    // desktop test below clears the override inside its own body, because
+    // `testWidgets` checks the foundation debug variables before any teardown
+    // registered against it has run.
+    tearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    testWidgets('sits with the local modes on a phone and opens its setup',
+        (t) async {
+      await t.pumpWidget(_app());
+
+      final buddy = find.text('Play with Buddy');
+      expect(buddy, findsOneWidget);
+      // A local mode, listed with the other two and above the remote pair.
+      expect(t.getTopLeft(find.text('Two Players')).dy,
+          lessThan(t.getTopLeft(buddy).dy));
+      expect(t.getTopLeft(buddy).dy,
+          lessThan(t.getTopLeft(find.text('Play Nearby')).dy));
+
+      await t.tap(buddy);
+      await t.pumpAndSettle();
+      expect(find.byType(BuddySetupScreen), findsOneWidget);
+    });
+
+    testWidgets('is not offered on a desktop, which has no board to watch',
+        (t) async {
+      // Buddy Mode is a camera propped over a real board and a voice reading
+      // the play out loud, and this app also runs on Windows and Linux, where
+      // it has neither. The entry is hidden rather than shown-and-refused.
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+
+      await t.pumpWidget(_app());
+
+      expect(find.text('Play with Buddy'), findsNothing);
+      expect(find.text('Play Nearby'), findsOneWidget,
+          reason: 'the rest of the home screen is unaffected — Play Nearby '
+              'works perfectly well through a typed address');
+
+      debugDefaultTargetPlatformOverride = null;
     });
   });
 

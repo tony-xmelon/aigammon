@@ -1425,11 +1425,24 @@ class PhoneBuddyCamera implements BuddyCamera {
   final CameraFrameSource _source = CameraFrameSource();
   CameraController? _controller;
 
+  /// How many screens are currently holding this camera open.
+  ///
+  /// **Two screens share it, and their lifetimes overlap in both directions.**
+  /// The calibration flow hands over to the game screen (which opens before
+  /// the popped route disposes), and the game screen pushes the calibration
+  /// flow back for a recalibration (which closes as it pops, under a screen
+  /// that is still playing a match). Without a count, whichever one disposes
+  /// second takes the camera away from the one still using it, and the failure
+  /// is a preview that goes black with no error anywhere. So [open] and [close]
+  /// are balanced calls and only the last [close] tears anything down.
+  int _users = 0;
+
   @override
   Stream<ObservedFrame> get frames => _source.frames;
 
   @override
   Future<CameraOpening> open() async {
+    _users++;
     if (_controller != null) return const CameraReady();
     const noCamera = CameraUnavailable(
       'This device has no camera Buddy Mode can watch the board with. '
@@ -1502,16 +1515,21 @@ class PhoneBuddyCamera implements BuddyCamera {
     return CameraPreview(controller);
   }
 
+  /// Gives up one screen's hold. The last one out turns the camera off.
   @override
   Future<void> close() async {
+    if (_users > 0) _users--;
+    if (_users > 0) return;
     final controller = _controller;
     _controller = null;
     await _source.stop();
     await controller?.dispose();
   }
 
-  /// Releases the gate as well — the provider's own teardown, not a screen's.
+  /// Releases the gate as well — the provider's own teardown, not a screen's,
+  /// so it ignores the count rather than waiting for a screen that has leaked.
   Future<void> shutDown() async {
+    _users = 0;
     await close();
     await _source.dispose();
   }
