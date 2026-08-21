@@ -26,8 +26,8 @@
       0,
       -2,
       -1,
-      -3,
       -2,
+      -3,
       -2,
       -1,
       -2,
@@ -51,7 +51,7 @@
   "title": "End game — a Black checker on the bar",
   "instructions": [
     "Cut VID20260820105037 at t=680.0s and take the whole frame.",
-    "Read cell by cell off five zooms (bar, both far quarters, both near quarters); the Black checker sits ON the worn hinge ridge, which is the object-versus-surface case this corpus exists to ask about. Two White men the zooms lost behind the near rim were put back by pixel measurement on 2026-08-23: the 1-point holds ONE (1666 cream px against 0-380 in every window before this one, a blob whose centroid inverts to board x 0.962 against the point centre of 0.961) and the 7-point TWO rather than one (8243 px topping at board y 0.864 — the two-man signature the 8-point measures 8420-8923 for, against 12337-14122 for three). Fifteen White men stand on points here; none is off.",
+    "Read cell by cell off five zooms (bar, both far quarters, both near quarters); the Black checker sits ON the worn hinge ridge, which is the object-versus-surface case this corpus exists to ask about. Two White men the zooms lost behind the near rim were put back by pixel measurement on 2026-08-23: the 1-point holds ONE (1666 cream px against 0-380 in every window before this one, a blob whose centroid inverts to board x 0.962 against the point centre of 0.961) and the 7-point TWO rather than one (8243 px topping at board y 0.864 — the two-man signature the 8-point measures 8420-8923 for, against 12337-14122 for three). Fifteen White men stand on points here; none is off. **And Black's far half was transposed, corrected 2026-08-24**: ~~19-point Black 3, 20-point Black 2~~ is the 19-point holding **2** and the 20-point **3**. Per-checker dark mass across points 19-23 decides it — the corrected 2/3/2/1/2 reads 1403/1393/1459/1219/1314 px per checker, a 16% spread over five cells and 0.7% between the two in dispute, where 3/2 reads 935 against 2090 and puts them a factor of 2.2 apart. The stack depths agree: 0.172 and 0.256 of board depth against 0.180 for the two-man 21- and 23-points and 0.092 for the one-man 22. Nothing moved off the board, so fifteen a side sees none of this.",
     "A 3 is visible on the hinge and its partner is not, so the sidecar claims no roll rather than half of one."
   ],
   "diceInFrame": true

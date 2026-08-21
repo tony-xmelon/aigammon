@@ -1411,6 +1411,16 @@ typedef _FilmedKeyframe = ({
 /// 1-point and one more on the 7-point than the zooms counted. **Nothing in
 /// this session ever leaves the board**, and no shot in it writes `off` at all.
 /// The numbers are in each keyframe's evidence below.
+///
+/// **And on 2026-08-24, two adjacent-column swaps in Black's far half.** 066
+/// had the 19- and 20-points the wrong way round and 070 the 17- and 18-points;
+/// both are corrected in the boards below. The mechanism is the one a hand-read
+/// zoom of a far half is most prone to — an **adjacent-column swap**, where the
+/// count is right and the column it is written into is one across — and it is
+/// invisible to every guard this corpus had. Fifteen a side still counts
+/// fifteen, because no man leaves the board; the reader's own disagreement
+/// prints stay silent, because it disagrees at both cells either way. Only
+/// pointing the instrument at the cell finds it.
 final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
   (
     id: '066',
@@ -1420,7 +1430,7 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
         1, -1, 0, 3, 2, 2, //  1-6   White's home, Black's entered runner on 2
         2, 3, 1, 0, 0, 0, //   7-12
         0, 0, 0, 0, -2, -1, // 13-18
-        -3, -2, -2, -1, -2, 1, // 19-24, White's doomed blot on the 24
+        -2, -3, -2, -1, -2, 1, // 19-24, White's doomed blot on the 24
       ],
       blackBar: 1,
     ),
@@ -1436,7 +1446,16 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
         '0.961) and the 7-point TWO rather than one (8243 px topping at board '
         'y 0.864 — the two-man signature the 8-point measures 8420-8923 for, '
         'against 12337-14122 for three). Fifteen White men stand on points '
-        'here; none is off.',
+        'here; none is off. **And Black\'s far half was transposed, corrected '
+        '2026-08-24**: ~~19-point Black 3, 20-point Black 2~~ is the 19-point '
+        'holding **2** and the 20-point **3**. Per-checker dark mass across '
+        'points 19-23 decides it — the corrected 2/3/2/1/2 reads '
+        '1403/1393/1459/1219/1314 px per checker, a 16% spread over five '
+        'cells and 0.7% between the two in dispute, where 3/2 reads 935 '
+        'against 2090 and puts them a factor of 2.2 apart. The stack depths '
+        'agree: 0.172 and 0.256 of board depth against 0.180 for the '
+        'two-man 21- and 23-points and 0.092 for the one-man 22. Nothing '
+        'moved off the board, so fifteen a side sees none of this.',
     diceNote: 'A 3 is visible on the hinge and its partner is not, so the '
         'sidecar claims no roll rather than half of one.',
   ),
@@ -1447,7 +1466,7 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
       points: const <int>[
         1, -2, 0, 3, 2, 2, //  1-6
         3, 2, 1, 0, 0, 0, //   7-12
-        0, 0, 0, 0, -1, -2, // 13-18
+        0, 0, 0, 0, -2, -1, // 13-18
         -2, -2, -2, 1, -2, -2, // 19-24, White's straggler trapped on the 22
       ],
     ),
@@ -1464,7 +1483,18 @@ final List<_FilmedKeyframe> _filmedKeyframes = <_FilmedKeyframe>[
         'it so, since White\'s cells here still differ from 066\'s by exactly '
         'the three pips of a 2-1 (8/7, 24/22). That is corroboration and not '
         'a claim about the gap: Black\'s cells differ by more than one turn '
-        'can account for, which is why both windows carry a board and no log.',
+        'can account for, which is why both windows carry a board and no log. '
+        '**Black\'s 17- and 18-points were transposed here, corrected '
+        '2026-08-24**: ~~17-point Black 1, 18-point Black 2~~ is the 17-point '
+        'holding **2** and the 18-point **1** — the arrangement 066 already '
+        'records. Rectified through the calibration, the 17 column carries two '
+        'discs and the 18 column one on both frames, their dark centroids at '
+        'board x 0.365 and 0.429 against column centres of 0.351 and 0.429; '
+        'the dark run down the 17-point reaches twice as deep as the '
+        '18-point\'s (0.128 against 0.064 of board depth here, 0.136 against '
+        '0.072 at 066, where the pair is already committed 2 and 1); and the '
+        'dark masks of the two frames over that band overlap at IoU 0.78, '
+        'which is to say nothing moved there between them.',
     diceNote: 'Two dice are lying on the felt mid-sequence and neither can be '
         'attributed to a turn, so the sidecar claims no roll.',
   ),

@@ -623,26 +623,26 @@ void main() {
     test('the state-primed read beats the blind one on real photographs too',
         () {
       // The claim the verifier exists to make, on the only frames that can
-      // settle it — **twenty-two** regions a blind count reports wrongly and
+      // settle it — **twenty-five** regions a blind count reports wrongly and
       // verification agrees with, none the other way.
       //
-      // Over the 240 point-reads both rows score, that is 216 against 195:
-      // **0.900 against 0.813**. Not the rows' totals, which are 235/260 and
-      // 195/242 — the verifier asks both ends of the bar on every shot and
+      // Over the 240 point-reads both rows score, that is 218 against 194:
+      // **0.908 against 0.808**. Not the rows' totals, which are 237/260 and
+      // 194/242 — the verifier asks both ends of the bar on every shot and
       // most of those extra reads are bare-bar agreements, so comparing the
       // totals would hand it about a point it did not earn.
       //
       // Both sides moved through each truth correction and the margin has only
-      // widened (22 rescued now, 20, 21 and 22 before), which is the right
+      // widened (25 rescued now, 20, 21, 22 and 22 before), which is the right
       // shape: the two instruments were being scored against the same wrong
       // cells, so correcting them helps both, and neither instrument is what
-      // changed. The last two rescues are the keyframes' rim-hidden men on the
-      // 1-point — a blind count sees nothing there and the verifier, handed
-      // "White 1", declines to contradict it, which is the whole query in one
-      // region.
+      // changed. The three newest rescues are the far-half cells CORRECTION IV
+      // untangled (066's 19- and 20-points, 070's 18-point): a blind count
+      // over-reads each of them and the verifier, handed the corrected count,
+      // declines to follow it up.
       //
-      // **And twenty-two regions is still not enough for a clean board**, which
-      // is the finding rather than a caveat — see `kRealCorpusFloors`.
+      // **And twenty-five regions buys exactly one clean board out of ten**,
+      // which is the finding rather than a caveat — see `kRealCorpusFloors`.
       final verified =
           board.sliceOf(CorpusMetric.regionVerified, 'region')['point']!;
       final blind =
@@ -650,10 +650,10 @@ void main() {
       expect(verified.attempts, blind.attempts,
           reason: 'the like-for-like comparison stopped being like for like');
       expect(verified.attempts, 240);
-      expect(verified.successes, 216, reason: '$verified');
-      expect(blind.successes, 195, reason: '$blind');
+      expect(verified.successes, 218, reason: '$verified');
+      expect(blind.successes, 194, reason: '$blind');
 
-      expect(board.signalOf(kPriorRescuedSignal).sum, 22,
+      expect(board.signalOf(kPriorRescuedSignal).sum, 25,
           reason: 'the prior rescued a different number of regions than it did '
               'on the day this landed — re-measure deliberately');
       expect(board.signalOf(kPriorLostSignal).sum, 0,
@@ -906,18 +906,22 @@ void main() {
 /// these as a ratchet against regression, never as a measurement of the
 /// pipeline's accuracy to three decimal places.
 ///
-/// **Re-measured three times, and the last one is the one to read.** The
+/// **Re-measured four times, and the last one is the one to read.** The
 /// 2026-08-21 pass corrected the filmed ledger from a person's reading of
 /// zooms; the 2026-08-22 pass corrected that correction from pixels; the
 /// 2026-08-23 pass ran the same pixel instruments over the two end-game
 /// **keyframes**, which the pixel pass had never re-audited, and found each of
 /// them hiding two White men behind the near rim where the sidecar had written
-/// `whiteOff: 2`. Superseded floors are kept in the git history rather than
+/// `whiteOff: 2`; the 2026-08-24 pass found two **adjacent-column swaps** left
+/// in the same two keyframes' far halves — Black's cells, right counts written
+/// one column across. Superseded floors are kept in the git history rather than
 /// here, but the shape of the movement is recorded so that nobody re-derives
 /// it: ~~occupancy 192/242, colour 228/242, play 5/5, acted 5/5, placement
 /// 1/5, verified 231/260~~ belonged to a truth in which a White checker had
 /// left the board, and it had not; ~~colour 222/242, verified 233/260~~
-/// belonged to one in which four more had been borne off, and they had not.
+/// belonged to one in which four more had been borne off, and they had not;
+/// ~~occupancy 195/242, verified 235/260, full-board resync 0/10~~ belonged to
+/// one in which two pairs of Black cells were transposed, and they were.
 /// See `capture_plan.dart`'s `_filmedTurns` and `_filmedKeyframes` for the
 /// instruments and the plan doc for the before/after tables. Nothing here was
 /// hand-tuned to fit, and floors have moved **down** as often as up.
@@ -949,7 +953,7 @@ void main() {
 ///   this session has no dice in it at all, and it is the calibration hold —
 ///   which is not luck, since a die present at calibration is learned as part
 ///   of the board.
-/// * **region occupancy 0.806** (195/242, from 192/242). Counts on this board
+/// * **region occupancy 0.802** (194/242, from 195/242). Counts on this board
 ///   run short, worst on tall stacks, exactly as the plan doc's far-half note
 ///   predicts. The design never trusts a blind count anyway; it is Task 7's
 ///   play matching that the spec sets a threshold for, and this number is what
@@ -964,6 +968,15 @@ void main() {
 ///   pipeline having been right about a cell the ground truth was wrong about:
 ///   the same shape as the 8-point on 2026-08-22, found the same way.
 ///
+///   **The far-half swap of 2026-08-24 then cost it one net cell**, and the
+///   composition is again worth more than the rate. 070's 17-point turns into
+///   a hit — the reader had been reading *black x2* there all along and is now
+///   agreed with — while 066's 19-point and 070's 18-point turn into misses,
+///   because the corrected count at each is one lower than the reader's. 066's
+///   20-point is a miss either way (the reader reads four; the truth was two
+///   and is now three), so it moves nothing. One gained, two lost, and every
+///   one of the three is this board's far half over-reading a stack.
+///
 /// And the one that arrived with Task 7 and **passes**:
 ///
 /// * **legal-play identification 6/6.** The query the whole mode turns on, over
@@ -973,7 +986,7 @@ void main() {
 ///   returned to the replay; **six is still a small denominator** and a floor
 ///   of 1.0 over it is a ratchet, not a claim that the pipeline is perfect. The
 ///   number is what the delta design predicts — the counts this corpus reads
-///   are biased and the bias cancels, which is why 0.806 per-region counting
+///   are biased and the bias cancels, which is why 0.802 per-region counting
 ///   supports 1.000 play identification, and it now does so over two turns
 ///   whose moved man the reader **cannot see at all** (see the placement note).
 /// * **legal play acted on 4/6, and this row is the one that moved most.** Being
@@ -1003,25 +1016,33 @@ void main() {
 /// follow-up (2026-08-21)** — one still missing, one that now clears its
 /// target:
 ///
-/// * **placement verification 1/6, resync per region 0.904.** The reshape is
+/// * **placement verification 1/6, resync per region 0.912.** The reshape is
 ///   the denominator and only the denominator — the two thresholds are still
 ///   0.95 and 0.90. Placement is now the regions the play touched, one attempt
 ///   per dictated turn; resync is per region, with the whole-board rate kept as
-///   a watched row (**0/6 and 0/10**, both still recorded below).
+///   a watched row (**0/6 and 1/10**, both still recorded below).
 ///
-///   **Resync per region passes 0.90 for the first time on this corpus**, at
-///   0.904 against 0.896 — and not by a pipeline change. The keyframe
-///   correction handed it the two 7-point cells it had been contradicting, and
-///   it kept the two 1-points because a state-primed read does not need to see
-///   a rim-hidden man to decline to contradict him. A floor rising through a
-///   truth fix is the same event as a floor falling through one, and it is
-///   recorded the same way.
+///   **Resync per region passes 0.90, and by more than it used to.** It first
+///   cleared the target on 2026-08-23 at 0.904 against 0.896; the far-half
+///   swap of 2026-08-24 took it to **0.912**, +0.012 clear. Neither move was a
+///   pipeline change. The keyframe correction handed it the two 7-point cells
+///   it had been contradicting and kept the two 1-points, because a
+///   state-primed read does not need to see a rim-hidden man to decline to
+///   contradict him; the far-half swap handed it 066's 20-point and 070's
+///   17-point the same way. A floor rising through a truth fix is the same
+///   event as a floor falling through one, and it is recorded the same way.
+///
+///   **And one whole board now resyncs, which none did before: 070.** Its only
+///   whole-board disagreement was the 17-point, and the 17-point was the
+///   transposition. `full-board resync (board)` goes 0/10 to 1/10 and the floor
+///   moves with it — a watched row is still a ratchet.
 ///
 ///   Per region the prior is doing real work: over the 240 point-reads both
-///   rows score, verification is **216/240 = 0.900** against a blind count's
-///   **195/240 = 0.813**, twenty-two regions rescued and none lost — the two
-///   new rescues being exactly those rim-hidden men on the keyframes' 1-points.
-///   (Not the rows' totals — 235/260 against 195/242 — since the verifier asks
+///   rows score, verification is **218/240 = 0.908** against a blind count's
+///   **194/240 = 0.808**, twenty-five regions rescued and none lost — the three
+///   newest being 066's 19- and 20-points and 070's 18-point, where the blind
+///   count over-reads the stack and the prior does not follow it.
+///   (Not the rows' totals — 237/260 against 194/242 — since the verifier asks
 ///   both ends of the bar on every shot and most of those extra reads are
 ///   bare-bar agreements. See [priorReport].)
 ///
@@ -1043,24 +1064,29 @@ void main() {
 /// * **`region colour alone` reads 220/242 and the floor moved down twice, by a
 ///   loss rather than a denominator both times.** Same twenty-fifth region as
 ///   ever (White on the hinge at 020, which the reader does not see), then the
-///   rim-hidden men of the ledger's own turns (~~222/242~~), and now the two on
+///   rim-hidden men of the ledger's own turns (~~222/242~~), and then the two on
 ///   the keyframes' 1-points. Every one of them is a checker that **vanishes**
 ///   rather than one that appears, which is the direction `ColorModel.classify`
 ///   breaks ties in on purpose — a checker that appears contradicts the game
 ///   and gets asked about; one that vanishes does not.
+///
+///   **The far-half swap did not move it at all**, and that is the row's own
+///   definition working: a transposed pair is Black on both cells before and
+///   Black on both after, so colour alone can never see it. It is the reason
+///   this kind of error survived three audits — see CORRECTION IV.
 const Map<CorpusMetric, double> kRealCorpusFloors = <CorpusMetric, double>{
   CorpusMetric.calibration: 1.0,
   CorpusMetric.startConfirmed: 1.0,
   CorpusMetric.dicePair: 0.0,
   CorpusMetric.diceAbsence: 1.0,
-  CorpusMetric.regionOccupancy: 195 / 242,
+  CorpusMetric.regionOccupancy: 194 / 242,
   CorpusMetric.regionColour: 220 / 242,
   CorpusMetric.legalPlay: 6 / 6,
   CorpusMetric.legalPlayActed: 4 / 6,
   CorpusMetric.placementVerified: 1 / 6,
   CorpusMetric.placementVerifiedBoard: 0.0,
-  CorpusMetric.boardResynced: 0.0,
-  CorpusMetric.regionVerified: 235 / 260,
+  CorpusMetric.boardResynced: 1 / 10,
+  CorpusMetric.regionVerified: 237 / 260,
 };
 
 /// What the SYNTHETIC corpus scored on the whole-board queries when Task 8

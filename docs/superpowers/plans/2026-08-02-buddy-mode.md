@@ -786,7 +786,8 @@ have explained the score.** Two of the floors went down and the pipeline was not
 touched.
 
 **CORRECTION III (2026-08-23): the correction above never re-audited the two
-keyframes, and they were hiding four men between them.** CORRECTION II's
+keyframes, and they were hiding four men between them.** (It did not finish the
+job either — see CORRECTION IV.) CORRECTION II's
 instruments — cream/dark mask mass per point column on the full-resolution
 frames, stack-top row, blob centroid inverted through the calibration, the
 pipeline's own reader as a second opinion, fifteen men a side — were run over
@@ -804,7 +805,7 @@ that has borne nothing off.
 | 066, 7-point | White 1 | **White 2** | 8243 px topping at board y 0.864 — the two-man signature (the 8-point reads 8420–8923 for two, 12337–14122 for three), not the one-man 1696 the same column shows at 013 |
 | 070, 1-point | empty | **White 1** | 1512 px, a compact blob at board y 0.92–0.97 |
 | 070, 7-point | White 2 | **White 3** | 12771 px topping at 0.765, one whole pitch above 066's |
-| both, Black cells | — | unchanged | audited the same way; the dark mass in the 1-point column at 018/020/066/070 sits at v ≥ 1.045, i.e. on the rim beyond the board's near edge, and is not a man |
+| both, Black cells | — | ~~unchanged~~ | audited the same way; the dark mass in the 1-point column at 018/020/066/070 sits at v ≥ 1.045, i.e. on the rim beyond the board's near edge, and is not a man. **The near-half claim stands; the far half did not — two pairs of Black cells were transposed, and CORRECTION IV finds them** |
 
 **The pipeline was right about the 7-points and the ground truth was wrong** —
 the same shape as the 8-point on 2026-08-22, found the same way. The harness had
@@ -914,6 +915,66 @@ catch it**: fifteen-a-side counts a man written off as a man, so `checkerCount`
 passed on the wrong boards exactly as it passes on the right ones. What caught
 it was pointing the instruments at every cell, which is now what "re-audited"
 has to mean.
+
+**CORRECTION IV (2026-08-24): the keyframes' Black cells were transposed, two
+pairs of them, and every guard this corpus has was blind to it by construction.**
+CORRECTION III put four White men back on the board and wrote that the Black
+cells were "audited the same way" and unchanged. The near-half half of that is
+true. The far half was not audited cell by cell, and it carried two
+**adjacent-column swaps** — the right number of men written into the column next
+door.
+
+| cell | sidecar (v4) | measured | instrument |
+|---|---|---|---|
+| 070, 17-point | Black 1 | **Black 2** | rectified through the committed calibration on the atlas's own column bounds: two discs in the 17 column, one in the 18, on this frame and on 066 alike. The dark run down the 17-point reaches twice as deep as the 18-point's — 0.128 against 0.064 of board depth at 070, 0.136 against 0.072 at 066, where the pair is already committed 2 and 1 |
+| 070, 18-point | Black 2 | **Black 1** | the same measurement, read the other way. Disc centroids sit at board x 0.365 and 0.429 against column centres of 0.351 and 0.429, so the columns are not in doubt; and the two frames' dark masks over that band overlap at **IoU 0.78**, which is to say nothing moved there between 066 and 070 |
+| 066, 19-point | Black 3 | **Black 2** | per-checker dark mass across points 19–23. The corrected 2/3/2/1/2 reads **1403 / 1393 / 1459 / 1219 / 1314** px per checker — 16% spread over five cells, 0.7% between the two in dispute. The sidecar's 3/2 reads **935 against 2090**, a factor of 2.2 apart on adjacent cells of one board |
+| 066, 20-point | Black 2 | **Black 3** | the same arithmetic; and the stack depths agree — 0.172 and 0.256 of board depth against 0.180 for the two-man 21- and 23-points and 0.092 for the one-man 22 |
+
+**Why three audits missed it, said plainly: a transposition is invisible to
+everything except looking at the cell.** Fifteen a side counts the same fifteen —
+no man leaves the board, so `checkerCount` passes on the swapped board exactly as
+it passes on the right one, which is the same blindness CORRECTION III named and
+a *different* instance of it. `region colour alone` cannot see it either: the
+cells are Black before and Black after, so that row does not move by a single
+read (220/242, unchanged, and the row is doing what it says). And the reader's
+own disagreement prints do not flag it, because the reader disagrees at those
+cells under either truth — it reads Black 3 at 066's 19-point and Black 4 at the
+20-point, so swapping the two expectations swaps which line is printed and not
+whether one is.
+
+**The reader's far-half readings at these cells stay honest perception misses.**
+Nothing here says the pipeline was right and the truth wrong, which is what
+CORRECTION II and III both found; this time the truth was wrong *and* the reader
+is still wrong. It reads **Black 4 on 066's 20-point where the board holds
+three**, and it over-reads 070's 18-point at two for one. Those are now scored
+against the correct cells rather than against transposed ones, which is the only
+thing that changed about them: the far half of this board over-reads tall stacks,
+and it did so before this correction and does so after.
+
+| row | before (2026-08-23) | after (2026-08-24) | why it moved |
+|---|---|---|---|
+| calibration, start confirmed | 1/1, 1/1 | 1/1, 1/1 | 001 is untouched |
+| dice pair read, no dice in frame none read | 0/4, 1/1 | 0/4, 1/1 | no dice claim changed |
+| region colour and count | ~~195/242 = 0.806~~ | **194/242 = 0.802** | 070's 17-point becomes a hit (the reader had been reading Black 2 there all along); 066's 19-point and 070's 18-point become misses, the corrected count at each being one under the reader's. 066's 20-point misses either way. One gained, two lost |
+| region colour alone | 220/242 = 0.909 | 220/242 = 0.909 | **unchanged, and that is the row working**: a transposed pair is Black on both cells before and after |
+| resync, per region | ~~235/260 = 0.904~~ | **237/260 = 0.912** | 066's 20-point and 070's 17-point stop being contradictions. The target is still met and by more — +0.012 clear of 0.90 where it was +0.004 |
+| full-board resync (board) | ~~0/10~~ | **1/10** | **070 now resyncs as a whole board, the first in this corpus to do so.** Its only whole-board disagreement was the 17-point, and the 17-point was the transposition. The floor moves up with it |
+| the like-for-like point slice (verified / blind) | ~~216/240, 195/240~~ | **218/240, 194/240** | the verifier gains two, the blind count loses one |
+| rescued from a blind count / lost to it | ~~22 / 0~~ | **25 / 0** | 066's 19- and 20-points and 070's 18-point: the blind count over-reads each and the prior declines to follow |
+| legal-play identification, acted on | 6/6, 4/6 | 6/6, 4/6 | the keyframes are in no pair |
+| placement verified (touched), (board) | 1/6, 0/6 | 1/6, 0/6 | same reason |
+
+**The lesson, and it is not the one from three days ago.** CORRECTION III's was
+that the auditor must point the instruments at *every* cell, not only at the ones
+a previous correction was about. This one is narrower and sharper: **conservation
+is not verification.** Every check this corpus had that could run without looking
+at a photograph — fifteen a side, legal replay, reader-disagreement prints — is
+satisfied by a board with two columns swapped, because a swap conserves
+everything they count. The only thing that finds it is measuring the cell. Four
+corrections in four days, and the corpus is now measured cell by cell in both
+halves of both keyframes rather than in the half a previous correction happened
+to be looking at.
 
 ### Task 9: Continuous readability and calibration re-validation
 
