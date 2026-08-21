@@ -390,8 +390,18 @@ class BuddySpeaker {
       if (_disposed || generation != _generation) return;
       try {
         if (!_configured) {
-          _configured = true;
+          // The flag latches AFTER the await, not before, and that ordering is
+          // the whole guarantee. [BuddyTts.configure] is where
+          // `awaitSpeakCompletion(true)` is applied — the switch that makes
+          // `speak` complete when the utterance ENDS rather than when it
+          // starts, which is what serializes this queue into one line at a
+          // time. Latch first and a `configure` that throws (into the `catch`
+          // below, which swallows) is never retried: every later line goes out
+          // through an unconfigured engine that returns immediately, the
+          // queue stops being a queue, and Buddy talks over itself for the
+          // rest of the session with nothing on fire.
           await engine.configure();
+          _configured = true;
         }
         await engine.speak(line.speech);
       } catch (error, stack) {

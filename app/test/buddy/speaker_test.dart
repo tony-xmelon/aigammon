@@ -26,8 +26,19 @@ class FakeBuddyTts implements BuddyTts {
   /// Thrown by the next [speak] call, once.
   Object? failNext;
 
+  /// Thrown by the next [configure] call, once. The call is still COUNTED —
+  /// the point of the tests that use it is how many attempts were made.
+  Object? failNextConfigure;
+
   @override
-  Future<void> configure() async => configureCalls++;
+  Future<void> configure() async {
+    configureCalls++;
+    final failure = failNextConfigure;
+    if (failure != null) {
+      failNextConfigure = null;
+      throw failure;
+    }
+  }
 
   @override
   Future<void> speak(String text) {
@@ -328,6 +339,85 @@ void main() {
           reason: 'the queued line was abandoned, not spoken after the stop');
       expect(speaker.lines.length, 2,
           reason: 'both lines were still SAID by Buddy, so both stay on screen');
+    });
+  });
+
+  group('configuration', () {
+    test('the engine is configured once, not once per line', () async {
+      final tts = FakeBuddyTts();
+      final speaker = BuddySpeaker(engine: tts);
+      addTearDown(speaker.dispose);
+
+      await speaker.speak('one');
+      await speaker.speak('two');
+      await speaker.speak('three');
+
+      expect(tts.configureCalls, 1);
+    });
+
+    test('a configure that throws is retried on the next line', () async {
+      // The guarantee at stake is `awaitSpeakCompletion(true)`, which
+      // configure is the only place that applies. A speaker that marked itself
+      // configured BEFORE the call would take a single transient failure — a
+      // channel not up yet at the first line of a session — and spend the rest
+      // of the match speaking through an engine whose `speak` returns
+      // immediately: the queue below stops serializing and Buddy talks over
+      // itself, with nothing thrown and nothing logged outside debug mode.
+      final tts = FakeBuddyTts()..failNextConfigure = StateError('no channel');
+      final speaker = BuddySpeaker(engine: tts);
+      addTearDown(speaker.dispose);
+
+      await speaker.speak('the line that pays for it');
+      expect(tts.configureCalls, 1);
+      expect(tts.spoken, isEmpty,
+          reason: 'the failure came before speak, and is swallowed');
+
+      await speaker.speak('the next line');
+      expect(tts.configureCalls, 2, reason: 'the flag never latched');
+      expect(tts.spoken, ['the next line']);
+
+      // And having succeeded, it latches: no third attempt.
+      await speaker.speak('a third line');
+      expect(tts.configureCalls, 2);
+      expect(tts.spoken, ['the next line', 'a third line']);
+    });
+
+    test('a failed configure still leaves the line on screen', () async {
+      // The transcript is the channel that matters when the voice is broken.
+      final tts = FakeBuddyTts()..failNextConfigure = StateError('no channel');
+      final speaker = BuddySpeaker(engine: tts);
+      addTearDown(speaker.dispose);
+
+      await speaker.speak('You rolled 6-3.');
+
+      expect(speaker.lines.map((l) => l.text).toList(), ['You rolled 6-3.']);
+    });
+
+    test('a failed first line does not wedge the queue behind it', () async {
+      // Deliberately NOT claimed as proof that the "one line at a time"
+      // guarantee survives: this fake serializes on its own completers, so it
+      // would serialize with or without `awaitSpeakCompletion`. Only
+      // `configureCalls` above can see that difference. What this pins is the
+      // other half — that the line lost to a failed configure does not take
+      // the rest of the session's queue down with it.
+      final tts = FakeBuddyTts()
+        ..failNextConfigure = StateError('no channel')
+        ..autoComplete = false;
+      final speaker = BuddySpeaker(engine: tts);
+      addTearDown(speaker.dispose);
+
+      await speaker.speak('lost line');
+
+      unawaited(speaker.speak('first real line'));
+      unawaited(speaker.speak('second real line'));
+      await pumpEventQueue();
+
+      expect(tts.spoken, ['first real line'],
+          reason: 'the second line waits for the first to finish');
+      tts.finishNext();
+      await pumpEventQueue();
+      expect(tts.spoken, ['first real line', 'second real line']);
+      tts.finishNext();
     });
   });
 

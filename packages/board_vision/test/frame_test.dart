@@ -261,6 +261,103 @@ void main() {
     });
   });
 
+  group('Frame.fromYuv420 signal range', () {
+    // ── One picture, written out twice ──────────────────────────────────────
+    //
+    // The same 8x2 image expressed in both conventions a camera plugin can
+    // hand over. The studio-range copy is built by the standard's own scaling,
+    // rounded to a byte exactly as a sensor's output is:
+    //
+    //   Y' = 16  + Y       * 219/255      (0..255 -> 16..235)
+    //   C' = 128 + (C-128) * 224/255      (0..255 -> 16..240 about 128)
+    //
+    // Chroma sits on four column pairs. The OUTER two are neutral, so the luma
+    // extremes can be read with no colour in the way; the middle two are warm
+    // (U=96, V=200) and cool (U=160, V=60), so the chroma half of the scaling
+    // is exercised rather than assumed.
+    int studioLuma(int y) => (16 + y * 219 / 255).round();
+    int studioChroma(int c) => (128 + (c - 128) * 224 / 255).round();
+
+    final fullY = Uint8List.fromList([
+      0, 255, 96, 160, 96, 160, 64, 192, // row 0: both luma extremes, neutral
+      8, 247, 128, 128, 128, 128, 32, 224, // row 1
+    ]);
+    final fullU = Uint8List.fromList([128, 96, 160, 128]);
+    final fullV = Uint8List.fromList([128, 200, 60, 128]);
+
+    final studioY = Uint8List.fromList(fullY.map(studioLuma).toList());
+    final studioU = Uint8List.fromList(fullU.map(studioChroma).toList());
+    final studioV = Uint8List.fromList(fullV.map(studioChroma).toList());
+
+    Frame decode(Uint8List y, Uint8List u, Uint8List v,
+            {bool videoRange = false}) =>
+        Frame.fromYuv420(
+          y: y,
+          u: u,
+          v: v,
+          width: 8,
+          height: 2,
+          uvRowStride: 4,
+          uvPixelStride: 1,
+          videoRange: videoRange,
+        );
+
+    test('studio-range planes decoded as full range are measurably crushed',
+        () {
+      // The bug, pinned from the direction it actually bites. iOS is the
+      // platform that ships this: `camera_avfoundation` hard-codes
+      // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange for `yuv420` and
+      // offers no way to ask for the full-range flavour, so every iOS frame
+      // arrives on the studio scale whatever this package would prefer.
+      final full = decode(fullY, fullU, fullV);
+      final naive = decode(studioY, studioU, studioV);
+
+      // The neutral column pair, where luma is the whole story: black lifts
+      // off the floor and white falls off the ceiling by exactly the footroom
+      // and headroom the studio range reserves.
+      expect(full.pixelAt(0, 0), (0, 0, 0));
+      expect(naive.pixelAt(0, 0), (16, 16, 16));
+      expect(full.pixelAt(1, 0), (255, 255, 255));
+      expect(naive.pixelAt(1, 0), (235, 235, 235));
+
+      // 219 levels of contrast where the picture holds 255 — a 14.1% loss of
+      // margin, taken in exactly the dim rooms the readability checks exist
+      // for.
+      expect((235 - 16) / 255, closeTo(0.8588, 0.0001));
+
+      // And the consequence with a name in this package:
+      // `CalibrationFingerprint.clippedFraction` counts channels AT 255, and
+      // `ReadabilityMonitor` raises `tooBright` from it. Nothing in the crushed
+      // decode can ever reach 255, so that cause is structurally dead on iOS —
+      // a board under a blazing lamp would report itself perfectly lit.
+      expect(full.rgb.where((b) => b == 255), hasLength(4));
+      expect(naive.rgb.where((b) => b == 255), isEmpty);
+    });
+
+    test('videoRange: true recovers the full-range picture', () {
+      // The whole of the fix: the same photons, decoded through either
+      // convention, must land on the same RGB. Only the round trip's own
+      // byte quantization may survive — a studio byte covers 255/219 of a full
+      // one in luma and 255/224 in chroma, and the matrix amplifies the chroma
+      // half by up to 1.772.
+      final full = decode(fullY, fullU, fullV);
+      final fixed = decode(studioY, studioU, studioV, videoRange: true);
+
+      var worst = 0;
+      for (var i = 0; i < full.rgb.length; i++) {
+        final delta = (full.rgb[i] - fixed.rgb[i]).abs();
+        if (delta > worst) worst = delta;
+      }
+      // Measured: ONE level, over all 48 bytes. The arithmetic bound is a
+      // little over two — half a studio luma byte is 255/219/2 = 0.58 of a
+      // full one, half a chroma byte is 255/224/2 = 0.57, the blue term
+      // amplifies that by 1.772, and the final round adds another half — so
+      // the pin is the measurement, not the bound. Before the fix this same
+      // comparison read **20**.
+      expect(worst, 1, reason: 'worst per-byte deviation was $worst');
+    });
+  });
+
   group('Pt', () {
     test('has value equality and a stable hashCode', () {
       expect(const Pt(1.5, -2.25), const Pt(1.5, -2.25));

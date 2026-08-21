@@ -149,6 +149,55 @@ void main() {
       expect(frame.toFrame().width, w);
     });
 
+    test('the two-plane path decodes as STUDIO range, the three-plane path not',
+        () {
+      // The plane count is how the signal range is known, because nothing else
+      // says: `camera_avfoundation` hard-codes
+      // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange for `yuv420` and has
+      // no API for the full-range twin, while Android forwards YUV_420_888 as
+      // the sensor made it, full range by convention.
+      //
+      // The luma below is written on the STUDIO scale: 16 is that scale's
+      // black and 235 its white. Read as full range those come out 16 and 235
+      // — a picture that never reaches either end, which costs 14% of the
+      // contrast margin and leaves
+      // CalibrationFingerprint.clippedFraction (and so
+      // ReadabilityCause.tooBright) permanently at zero.
+      const w = 8, h = 8;
+      final luma = Uint8List(w * h)..fillRange(0, w * h, 126);
+      luma[0] = 16; // studio black
+      luma[1] = 235; // studio white
+
+      final cbcr = Uint8List(8 * 4)..fillRange(0, 32, 128); // neutral
+      final ios = YuvFrame.fromCameraImage(image([
+        plane(luma, w),
+        plane(cbcr, 8),
+      ], w, h));
+
+      expect(ios.videoRange, isTrue);
+      final expanded = ios.toFrame();
+      expect(expanded.pixelAt(0, 0), (0, 0, 0), reason: 'studio black is 0');
+      expect(expanded.pixelAt(1, 0), (255, 255, 255),
+          reason: 'studio white is 255 — the value tooBright is counted from');
+      expect(expanded.pixelAt(4, 4), (128, 128, 128),
+          reason: '(126 - 16) * 255/219 = 128.08');
+
+      // The same bytes down the Android path must NOT be expanded: there they
+      // are already the picture, and expanding them would blow the contrast
+      // out the other way.
+      final android = YuvFrame.fromCameraImage(image([
+        plane(luma, w, perPixel: 1),
+        plane(Uint8List(4 * 4)..fillRange(0, 16, 128), 4, perPixel: 1),
+        plane(Uint8List(4 * 4)..fillRange(0, 16, 128), 4, perPixel: 1),
+      ], w, h));
+
+      expect(android.videoRange, isFalse);
+      final asIs = android.toFrame();
+      expect(asIs.pixelAt(0, 0), (16, 16, 16));
+      expect(asIs.pixelAt(1, 0), (235, 235, 235));
+      expect(asIs.pixelAt(4, 4), (126, 126, 126));
+    });
+
     test('a format that is not YUV420 is refused, loudly', () {
       expect(
         () => YuvFrame.fromCameraImage(CameraImage.fromPlatformInterface(
@@ -489,6 +538,163 @@ void main() {
       pipeline.submit(1);
       await pumpEventQueue();
       expect(out, isEmpty);
+    });
+  });
+
+  group('a pipeline that is broken rather than unlucky', () {
+    // The failure this exists for is not a crash — it is a preview that runs
+    // beautifully while producing zero frames, forever. Every conversion
+    // failure is caught and printed under kDebugMode, so the release build a
+    // user has says nothing at all. The counter is what makes the condition
+    // observable from outside.
+
+    /// A pipeline whose conversions fail until [ok] is set.
+    (LatestOnlyPipeline<int, int>, List<FrameConversionFault>, void Function())
+        broken() {
+      var ok = false;
+      final pipeline = LatestOnlyPipeline<int, int>((n) async {
+        if (!ok) throw StateError('unconvertible frame');
+        return n;
+      });
+      final faults = <FrameConversionFault>[];
+      pipeline.faults.listen(faults.add);
+      return (pipeline, faults, () => ok = true);
+    }
+
+    Future<void> feed(LatestOnlyPipeline<int, int> p, int count) async {
+      for (var i = 0; i < count; i++) {
+        p.submit(i);
+        await pumpEventQueue();
+      }
+    }
+
+    test('one bad frame is a frame; a run of them is a fault', () async {
+      final (pipeline, faults, _) = broken();
+      addTearDown(pipeline.close);
+
+      await feed(pipeline, kConversionFailureLimit - 1);
+      expect(faults, isEmpty,
+          reason: 'a burst of odd frames during a mode change is not a fault');
+      expect(pipeline.consecutiveFailures, kConversionFailureLimit - 1);
+
+      await feed(pipeline, 1);
+      expect(faults, hasLength(1));
+      expect(faults.single.consecutiveFailures, kConversionFailureLimit);
+      expect(faults.single.error, isStateError);
+    });
+
+    test('the fault is said once per episode, not once per frame', () async {
+      // Four a second for as long as the session lasts is a log to scroll
+      // past, not a signal to act on.
+      final (pipeline, faults, _) = broken();
+      addTearDown(pipeline.close);
+
+      await feed(pipeline, kConversionFailureLimit * 4);
+      expect(faults, hasLength(1));
+      expect(pipeline.consecutiveFailures, kConversionFailureLimit * 4);
+    });
+
+    test('a conversion that works clears the streak and re-arms the fault',
+        () async {
+      final (pipeline, faults, mend) = broken();
+      addTearDown(pipeline.close);
+
+      await feed(pipeline, kConversionFailureLimit);
+      expect(faults, hasLength(1));
+
+      mend();
+      await feed(pipeline, 1);
+      expect(pipeline.consecutiveFailures, 0);
+
+      // Broken again later is a new episode, and must be heard again.
+      final (second, secondFaults, _) = broken();
+      addTearDown(second.close);
+      await feed(second, kConversionFailureLimit);
+      expect(secondFaults, hasLength(1));
+    });
+
+    test('the gate re-exposes both, because the gate is what a session holds',
+        () async {
+      final gate = FrameGate(
+        converter: (_) async => throw StateError('unconvertible frame'),
+      );
+      addTearDown(gate.dispose);
+      final faults = <FrameConversionFault>[];
+      gate.faults.listen(faults.add);
+
+      for (var i = 0; i < kConversionFailureLimit; i++) {
+        gate.offer(flat(120), kObservationInterval * i);
+        await pumpEventQueue();
+      }
+
+      expect(faults, hasLength(1));
+      expect(gate.consecutiveFailures, kConversionFailureLimit);
+    });
+
+    test('frames still flow while nothing is wrong', () async {
+      final gate = FrameGate(
+        converter: (planes) async => Frame(Uint8List(3), 1, 1),
+      );
+      addTearDown(gate.dispose);
+      final faults = <FrameConversionFault>[];
+      gate.faults.listen(faults.add);
+
+      for (var i = 0; i < kConversionFailureLimit * 2; i++) {
+        gate.offer(flat(120), kObservationInterval * i);
+        await pumpEventQueue();
+      }
+
+      expect(faults, isEmpty);
+      expect(gate.consecutiveFailures, 0);
+    });
+  });
+
+  group('the image format is checked rather than assumed', () {
+    // kBuddyImageFormat used to be a constant nothing read. A controller built
+    // with any other format does not fail at start(): it fails once per frame,
+    // inside a catch that only prints under kDebugMode — so a release build
+    // shows a live preview and produces nothing, with no way to find out why.
+
+    CameraController controllerFor(ImageFormatGroup? group) => CameraController(
+          const CameraDescription(
+            name: 'test',
+            lensDirection: CameraLensDirection.back,
+            sensorOrientation: 0,
+          ),
+          ResolutionPreset.medium,
+          imageFormatGroup: group,
+        );
+
+    test('yuv420 is what Buddy Mode reads', () {
+      expect(kBuddyImageFormat, ImageFormatGroup.yuv420);
+      expect(() => checkBuddyImageFormat(kBuddyImageFormat), returnsNormally);
+    });
+
+    test('every other format is refused by name', () {
+      for (final group in ImageFormatGroup.values) {
+        if (group == kBuddyImageFormat) continue;
+        expect(() => checkBuddyImageFormat(group), throwsArgumentError,
+            reason: '$group is not something YuvFrame can convert');
+      }
+    });
+
+    test('a null format is refused too — it is bgra8888 on iOS', () {
+      // `CameraController(imageFormatGroup: null)` reaches the platform as
+      // ImageFormatGroup.unknown, and camera_avfoundation maps BOTH unknown
+      // and bgra8888 to kCVPixelFormatType_32BGRA. So the value that looks
+      // like "no opinion" is in fact the wrong answer on every iPhone.
+      expect(() => checkBuddyImageFormat(null), throwsArgumentError);
+    });
+
+    test('start refuses a mismatched controller before touching a plugin',
+        () async {
+      final source = CameraFrameSource();
+      addTearDown(source.dispose);
+
+      await expectLater(
+        source.start(controllerFor(ImageFormatGroup.bgra8888)),
+        throwsArgumentError,
+      );
     });
   });
 

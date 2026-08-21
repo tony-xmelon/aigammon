@@ -10,12 +10,16 @@ import 'package:sensors_plus/sensors_plus.dart';
 // -----------------------------------------------------------------------------
 // The provisional numbers.
 //
-// None of the five constants below can be measured from this machine: they are
-// properties of a phone's sensor, a phone's gyroscope and a room with a
-// backgammon board in it, and there is no device in this environment. Each one
-// therefore ships with the arithmetic that produced it, so the on-device
-// protocol in Task 15 has something to disagree WITH rather than a number to
-// re-guess from nothing.
+// Seven constants follow. FOUR of them — the quiet threshold, the quiet run,
+// the gyro rate and the settle time — cannot be measured from this machine at
+// all: they are properties of a phone's sensor, a phone's gyroscope and a room
+// with a backgammon board in it, and there is no device in this environment.
+// Each of those is marked **Provisional** and ships with the arithmetic that
+// produced it, so the on-device protocol in Task 15 has something to disagree
+// WITH rather than a number to re-guess from nothing. The observation interval
+// says out loud that it is NOT provisional in that sense — it is a budget, not
+// a measurement — and the two grid constants are derived here from noise
+// arithmetic that needs no device.
 // -----------------------------------------------------------------------------
 
 /// Cells per side in the change-detection grid. 16 → 256 cells.
@@ -86,6 +90,19 @@ const double kGyroStillRate = 0.12;
 /// exposure and a focus settle.
 const Duration kMotionSettleTime = Duration(milliseconds: 350);
 
+/// Consecutive conversion failures after which the pipeline stops calling it
+/// bad luck and says so on [FrameGate.faults].
+///
+/// **Not provisional either** — it is a shape, not a measurement. One frame
+/// that will not convert is a frame; five in a row at [kObservationInterval]
+/// apart is 1.25 seconds in which nothing the camera produced could be read,
+/// and every cause of that is systemic (the wrong pixel format, a plane layout
+/// nobody anticipated, an isolate that will not spawn) rather than transient.
+/// Low enough to fire long before a user gives up on a preview that is doing
+/// nothing; high enough that a burst of odd frames during a resolution change
+/// does not cry wolf.
+const int kConversionFailureLimit = 5;
+
 /// How often a frame is actually converted and published.
 ///
 /// The camera delivers 30 a second and perception wants a handful; this is the
@@ -115,6 +132,7 @@ class YuvFrame {
     required this.yRowStride,
     required this.uvRowStride,
     required this.uvPixelStride,
+    this.videoRange = false,
   });
 
   final Uint8List y;
@@ -128,6 +146,23 @@ class YuvFrame {
   final int uvRowStride;
   final int uvPixelStride;
 
+  /// Whether these planes are on the STUDIO scale (luma 16..235) rather than
+  /// the full 0..255 one — true on iOS, false on Android.
+  ///
+  /// Not a setting and not a guess: `camera_avfoundation` hard-codes
+  /// `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange` for its `yuv420` format
+  /// and exposes no way to ask for the FullRange twin, while Android forwards
+  /// `YUV_420_888` as the sensor produced it, which is full range by
+  /// convention. So the flag is derived from the plane count in
+  /// [YuvFrame.fromCameraImage] — two planes IS the bi-planar VideoRange
+  /// format — and defaults false everywhere else, because every other producer
+  /// of these planes (tests, the synthetic renderer) works in full range.
+  ///
+  /// Getting it wrong loses 14% of the contrast margin and permanently
+  /// disables `ReadabilityCause.tooBright`; `Frame.fromYuv420` carries the
+  /// measurement.
+  final bool videoRange;
+
   /// Reads a `CameraImage` without copying a byte.
   ///
   /// Handles both layouts the plugin delivers, which are not the same shape:
@@ -137,11 +172,17 @@ class YuvFrame {
   ///    `bytesPerRow` padding often enough that ignoring it is the classic
   ///    version of this bug — the picture shears diagonally and every later
   ///    measurement is quietly wrong.
-  ///  * **iOS** (`kCVPixelFormatType_420YpCbCr8BiPlanar…`) gives TWO: luma, and
-  ///    one interleaved CbCr plane. `Frame.fromYuv420` already understands that
-  ///    layout, as pixel stride 2 with V a one-byte-offset VIEW of the same
-  ///    buffer — so this builds the views rather than repacking, and
-  ///    `Uint8List.sublistView` makes that free.
+  ///  * **iOS** (`kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`) gives TWO:
+  ///    luma, and one interleaved CbCr plane. `Frame.fromYuv420` already
+  ///    understands that layout, as pixel stride 2 with V a one-byte-offset
+  ///    VIEW of the same buffer — so this builds the views rather than
+  ///    repacking, and `Uint8List.sublistView` makes that free.
+  ///
+  /// The plane count carries a second fact besides the layout: it is also how
+  /// the SIGNAL RANGE is known. Two planes means the bi-planar iOS format,
+  /// which `camera_avfoundation` only ever creates in its VideoRange flavour;
+  /// three means Android's `YUV_420_888`, full range by convention. See
+  /// [videoRange].
   factory YuvFrame.fromCameraImage(CameraImage image) {
     if (image.format.group != ImageFormatGroup.yuv420) {
       throw ArgumentError.value(
@@ -164,6 +205,7 @@ class YuvFrame {
         yRowStride: luma.bytesPerRow,
         uvRowStride: uv.bytesPerRow,
         uvPixelStride: 2,
+        videoRange: true,
       );
     }
     if (planes.length < 3) {
@@ -179,6 +221,7 @@ class YuvFrame {
       yRowStride: luma.bytesPerRow,
       uvRowStride: planes[1].bytesPerRow,
       uvPixelStride: planes[1].bytesPerPixel ?? 1,
+      videoRange: false,
     );
   }
 
@@ -193,6 +236,7 @@ class YuvFrame {
         yRowStride: yRowStride,
         uvRowStride: uvRowStride,
         uvPixelStride: uvPixelStride,
+        videoRange: videoRange,
       );
 
   /// The luma byte at [x], [y], honouring [yRowStride].
@@ -329,10 +373,14 @@ class ObservedFrame {
 /// something is in flight, a new arrival replaces the one waiting behind it and
 /// [dropped] counts the loss; a stale frame is worth less than nothing.
 class LatestOnlyPipeline<I, O> {
-  LatestOnlyPipeline(this._convert);
+  LatestOnlyPipeline(this._convert, {this.failureLimit = kConversionFailureLimit});
+
+  /// Consecutive failures that constitute a [FrameConversionFault].
+  final int failureLimit;
 
   final Future<O> Function(I) _convert;
   final _out = StreamController<O>.broadcast();
+  final _faults = StreamController<FrameConversionFault>.broadcast();
 
   /// At most one element. A list rather than an `I?` because `I` may itself be
   /// nullable, and "no pending frame" must not alias "a pending null".
@@ -342,6 +390,7 @@ class LatestOnlyPipeline<I, O> {
   bool _closed = false;
   int _dropped = 0;
   int _failures = 0;
+  int _streak = 0;
 
   /// Arrivals thrown away because a newer one landed first.
   int get dropped => _dropped;
@@ -350,7 +399,22 @@ class LatestOnlyPipeline<I, O> {
   /// frame must not end the session.
   int get failures => _failures;
 
+  /// Failures since the last conversion that worked. Readable at any time, so
+  /// a caller that attached after the fault fired can still find out.
+  int get consecutiveFailures => _streak;
+
   Stream<O> get output => _out.stream;
+
+  /// Fires once when [consecutiveFailures] reaches [failureLimit], and not
+  /// again until a conversion succeeds and breaks the streak.
+  ///
+  /// **Once per episode, not once per frame.** A pipeline that is broken is
+  /// broken at four frames a second, and a fault repeated at that rate is a
+  /// log to scroll past rather than a signal to act on. Separate from [output]
+  /// rather than an error event on it, because a listener that only wants
+  /// frames must not have to write an `onError` to avoid an uncaught
+  /// asynchronous error.
+  Stream<FrameConversionFault> get faults => _faults.stream;
 
   void submit(I input) {
     if (_closed) return;
@@ -369,11 +433,20 @@ class LatestOnlyPipeline<I, O> {
         final next = _pending.removeLast();
         try {
           final result = await _convert(next);
+          _streak = 0;
           if (!_closed && !_out.isClosed) _out.add(result);
         } catch (error, stack) {
           _failures++;
+          _streak++;
           if (kDebugMode) {
             debugPrint('frame conversion failed: $error\n$stack');
+          }
+          if (_streak == failureLimit && !_closed && !_faults.isClosed) {
+            _faults.add(FrameConversionFault(
+              error: error,
+              stackTrace: stack,
+              consecutiveFailures: _streak,
+            ));
           }
         }
       }
@@ -387,7 +460,36 @@ class LatestOnlyPipeline<I, O> {
     _closed = true;
     _pending.clear();
     await _out.close();
+    await _faults.close();
   }
+}
+
+/// Said once when a run of [kConversionFailureLimit] frames in a row failed to
+/// convert — the signal that the camera pipeline is not merely unlucky.
+///
+/// Deliberately plumbing rather than a screen: what a session DOES about it
+/// (say something, offer recalibration, fall back to manual entry) is Task 11's
+/// and Task 13's to decide. What this file owes them is that the condition is
+/// observable at all, because the alternative — the per-frame `catch` on its
+/// own — prints in debug mode and is perfectly silent in the build a user has.
+@immutable
+class FrameConversionFault {
+  const FrameConversionFault({
+    required this.error,
+    required this.stackTrace,
+    required this.consecutiveFailures,
+  });
+
+  /// What the most recent conversion threw.
+  final Object error;
+  final StackTrace stackTrace;
+
+  /// How many in a row had failed when this was raised.
+  final int consecutiveFailures;
+
+  @override
+  String toString() =>
+      'FrameConversionFault($consecutiveFailures in a row: $error)';
 }
 
 /// How a [FrameGate] turns planes into a frame. A seam so tests need no
@@ -464,6 +566,13 @@ class FrameGate {
 
   /// Frames dropped by the newest-wins policy.
   int get dropped => _pipeline.dropped;
+
+  /// Raised when [kConversionFailureLimit] frames in a row fail to convert.
+  /// See [LatestOnlyPipeline.faults].
+  Stream<FrameConversionFault> get faults => _pipeline.faults;
+
+  /// Conversion failures since the last one that worked.
+  int get consecutiveFailures => _pipeline.consecutiveFailures;
 
   /// Feeds one gyroscope reading. Magnitude in rad/s.
   void onGyro(double magnitude, Duration at) => _motion.sample(magnitude, at);
@@ -551,12 +660,19 @@ class CameraFrameSource {
   Stream<ObservedFrame> get frames => gate.frames;
   Stream<ObservedFrame> get stableFrames => gate.stableFrames;
 
+  /// Raised when the conversion has failed [kConversionFailureLimit] times in
+  /// a row. See [LatestOnlyPipeline.faults].
+  Stream<FrameConversionFault> get faults => gate.faults;
+
   /// Starts streaming from an already-initialized [controller].
   ///
   /// The controller is the caller's: the calibration screen needs the same one
   /// for its preview, and two controllers on one camera is a platform error on
-  /// both OSes.
+  /// both OSes. That is also why the format has to be CHECKED here rather than
+  /// set here — see [checkBuddyImageFormat], which runs before anything else
+  /// in this method touches a plugin.
   Future<void> start(CameraController controller) async {
+    checkBuddyImageFormat(controller.imageFormatGroup);
     if (_controller != null) return;
     _controller = controller;
     _clock.start();
@@ -608,11 +724,43 @@ class CameraFrameSource {
   }
 }
 
+/// Throws unless [group] is [kBuddyImageFormat].
+///
+/// Split out of [CameraFrameSource.start] so the rule is reachable from
+/// `flutter test`, where a `CameraController` can be constructed but never
+/// initialized. Throws rather than asserts, deliberately: an assert is removed
+/// from the build where this failure is invisible, which is the only build
+/// where it matters.
+///
+/// A null [group] is refused with the rest. It means "whatever the platform
+/// defaults to", and the platform default is `bgra8888` on iOS — so the one
+/// value that looks like "no opinion" is in fact the wrong answer on half the
+/// devices Buddy Mode runs on.
+void checkBuddyImageFormat(ImageFormatGroup? group) {
+  if (group == kBuddyImageFormat) return;
+  throw ArgumentError.value(
+    group,
+    'imageFormatGroup',
+    'Buddy Mode reads $kBuddyImageFormat; a controller built with anything '
+        'else produces frames YuvFrame.fromCameraImage cannot convert, one '
+        'per frame, silently in release',
+  );
+}
+
 /// The image format Buddy Mode asks the camera for.
 ///
 /// `yuv420` on both platforms, which is what [YuvFrame.fromCameraImage] and
-/// `Frame.fromYuv420` are written against — Android delivers `YUV_420_888` and
-/// iOS the bi-planar full-range flavour, and the conversion handles both. NOT
-/// `bgra8888`: it would skip a conversion, but it also triples the bytes
-/// crossing the platform boundary thirty times a second.
+/// `Frame.fromYuv420` are written against — Android delivers `YUV_420_888`
+/// (three planes, full range) and iOS
+/// `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange` (two planes, studio
+/// range), and the conversion handles both. NOT `bgra8888`: it would skip a
+/// conversion, but it also triples the bytes crossing the platform boundary
+/// thirty times a second.
+///
+/// **[CameraFrameSource.start] refuses a controller built with anything else**,
+/// which is the whole reason this constant is not merely advice. A mismatched
+/// controller does not fail at `start`: it fails once per frame, forever,
+/// inside a `catch` that only prints in debug mode — so a release build would
+/// show a live preview and never produce a single [ObservedFrame], with
+/// nothing anywhere saying why.
 const ImageFormatGroup kBuddyImageFormat = ImageFormatGroup.yuv420;
