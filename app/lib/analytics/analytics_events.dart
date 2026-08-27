@@ -72,7 +72,16 @@ abstract final class AnalyticsEvents {
   // — travels as a rate on [buddySessionEnded] rather than as a stream of
   // events nobody could afford to send.
 
-  /// A Buddy match began — the camera is open and a calibration is installed.
+  /// A Buddy match began — a calibration is installed and the game screen is
+  /// mounting.
+  ///
+  /// **Not "the camera is open".** This fires from `initState`, before the open
+  /// it kicks off has come back, so a session whose camera never opened at all
+  /// is counted here. That is the denominator worth having: it is how many
+  /// times a user got as far as starting a match, and what became of each one
+  /// is what [buddySessionEnded]'s completion rate answers — a camera that
+  /// failed shows up there as a session that ended without completing.
+  ///
   /// Params: [AnalyticsParams.mode], [AnalyticsParams.matchLength],
   /// [AnalyticsParams.difficulty], [AnalyticsParams.cubeless],
   /// [AnalyticsParams.buddySeat], [AnalyticsParams.buddyPhrasing],

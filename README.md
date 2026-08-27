@@ -105,6 +105,17 @@ git submodule update --init --recursive
     Visual Studio 2022 satisfies. Like the voice, the microphone is never
     reached on Windows — `lib/buddy/dice_sound_trigger.dart` guards it — but
     the plugin is still registered and compiled into a desktop build.
+  - **On ANDROID the same plugin is a CI watch item, not a local one.**
+    `record_android` 2.1.2 builds itself with AGP 9.2.1 where
+    `android/settings.gradle.kts` pins 9.0.1 for the app, and it requires
+    `compileSdk` 36 — which is exactly the `flutter.compileSdkVersion` of
+    Flutter 3.44.8, so there is no headroom above it. Nothing on this machine
+    sees either: there is no local Android toolchain, and a desktop build never
+    reads a Gradle file. `.github/workflows/android.yml` assembles a real APK,
+    so **that** is where a plugin bumping its own minimum lands — as a Gradle
+    failure naming the version it wanted. The fix if it fires is to raise the
+    pin (or the Flutter channel) rather than to pin the plugin back, since the
+    requirement is the plugin's own build script and not a preference.
 - **Rust**, `stable-x86_64-pc-windows-gnu` toolchain.
 - A **full MinGW-w64** on `PATH` — Rust's self-contained MinGW ships no GNU
   assembler (`as.exe`), so `dlltool` fails when building the engine. This
