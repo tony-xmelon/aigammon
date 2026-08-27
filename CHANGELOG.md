@@ -15,6 +15,73 @@ set by CI from the workflow run number and is not tracked here.
 > section. No git tags exist for them either; see "Releasing" in the README for
 > the tagging convention that starts with the next release.
 
+## [0.14.0] — 2026-08-27
+
+**Buddy Mode**: play on your real board against the engine, with the phone
+propped up watching. Its perception core is a new pure-Dart package scored
+against a committed corpus of real board photographs, so a perception
+regression fails CI exactly like a rules regression. CI has no camera, so the
+mode's true acceptance test is a scripted on-device run —
+[`docs/buddy-mode-test-protocol.md`](docs/buddy-mode-test-protocol.md).
+
+### Added
+
+- **Buddy Mode** (Android/iOS): a guided calibration teaches Buddy your board —
+  drag the handles onto the corners of the felt (four more on the seam for a
+  folding case) and confirm the belief it draws over the starting position. It
+  learns *your* board's checker, felt and point colours from those thirty
+  checkers; **no colour constants exist anywhere in the pipeline**.
+- Buddy reads your dice and your plays off the felt and speaks its own
+  ("You rolled 6-3." … "I rolled 5-2 — play 13/8, 24/22."), acknowledges a
+  legal play, **objects to an illegal one with the reason**, offers a choice
+  when two plays look the same, and names the checker you put in the wrong
+  place until the board matches. Every spoken line is mirrored on screen.
+- A **readability light** evaluated on every stable frame for the whole
+  session, not only when an answer is wanted: it names its cause ("It is too
+  dark to read the board", "The board is not where it was when I learned it"),
+  speaks the drop to red **once** rather than nagging, and routes a moved board
+  or a shifted light straight into recalibration — which reopens on the corners
+  with the handles already where they were. The match resumes exactly where it
+  paused; a readability outage never touches the game state.
+- Cube play by voice ("I double — take or drop?") with the on-screen Double
+  button under the digital game's gating rules, Crawford included; dances,
+  game and match results announced; the finished match lands in **History**
+  with post-game analysis through the standard persistence path.
+- Fallbacks are always one tap away: type the roll, or tap the play out on the
+  belief mirror. Repeated misplacements escalate to the mirror with the
+  discrepancy highlighted.
+- An **optional microphone hint**: Buddy hears the dice land and looks sooner.
+  It is an optimization, never a dependency — the mode plays identically with
+  the permission refused, and **nothing is recorded**: the audio never leaves
+  the device, never reaches a file, and is reduced to one number per 16 ms and
+  dropped. Camera and microphone are asked for in context, beside the thing
+  they are for.
+- Two settings (Settings → Buddy Mode): how Buddy words a play out loud
+  (**terse** "13/8, 24/22" or **friendly** "Move one checker from 13 to 8"),
+  and whether it listens for the dice.
+- [`packages/board_vision`](packages/board_vision) — the perception core, pure
+  Dart with no camera and no Flutter so its suite runs in CI: homography and
+  the ROI atlas, calibration and colour learning, occupancy and dice reading,
+  state-primed legal-play matching, expected-board verification and drift
+  recovery, and continuous readability. Its tests score the committed corpus
+  against accuracy thresholds.
+- Buddy telemetry through the existing analytics seam — sessions started and
+  ended, calibration attempts, recalibrations entered, per-fallback counters
+  and a readability-red rate — which is what decides where perception effort
+  goes after launch.
+- [`docs/buddy-mode-test-protocol.md`](docs/buddy-mode-test-protocol.md), the
+  scripted on-device acceptance run: the seven things that ship as arithmetic
+  rather than measurement, then a calibration and a match with twelve
+  checkpoints.
+
+### Changed
+
+- Windows desktop builds now need the **NuGet CLI** (`nuget.exe`) on `PATH`.
+  Buddy Mode's `flutter_tts` dependency ships a Windows plugin that shells out
+  to NuGet and hard-fails without it. Nothing on Windows ever calls it — Buddy
+  Mode is mobile-only and guarded — but Flutter offers no way to exclude a
+  plugin from one platform's build. See the toolchain section of the README.
+
 ## [0.13.0] — 2026-08-01
 
 Production readiness: crash visibility, Firebase telemetry, a sweep of live
