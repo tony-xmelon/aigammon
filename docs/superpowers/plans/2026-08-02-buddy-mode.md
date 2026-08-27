@@ -43,11 +43,11 @@ class BoardQuad { final Pt topLeft, topRight, bottomRight, bottomLeft; }
 enum BoardOrientation { whiteHomeNear, whiteHomeFar } // + doc: user's seat fixes it
 ```
 
-- [ ] Step 1: Failing tests: `Frame` length validation throws on mismatch; `Frame.fromYuv420` converts a hand-computed 4×2 YUV block to known RGB values (assert exact bytes for BT.601 full-range; document the choice).
-- [ ] Step 2: Implement `frame.dart`, `geometry_types.dart`; tests green.
-- [ ] Step 3: Synthetic renderer (test util, uses `package:image`): draws a top-down board (points, bar, off trays, checkers by per-point counts, two dice with pips) from parameters `{BoardState board, Dice? dice, palette, lightingGain}`, then perspective-warps it by an arbitrary quad and returns a `Frame` + the ground-truth quad. This is the workhorse every Phase 1–2 test uses. Unit test: renderer output round-trips (a rendered checker's center pixel classifies to its palette color).
-- [ ] Step 4: `dart analyze --fatal-infos` + `dart test` green; register the package in CI's package matrix (`.github/workflows/ci.yml` — add `board_vision` to the existing `strategy.matrix.package` list; keep per-package cache key pattern).
-- [ ] Step 5: Commit `feat(vision): board_vision scaffold — frames, geometry types, synthetic board renderer`.
+- [x] Step 1: Failing tests: `Frame` length validation throws on mismatch; `Frame.fromYuv420` converts a hand-computed 4×2 YUV block to known RGB values (assert exact bytes for BT.601 full-range; document the choice).
+- [x] Step 2: Implement `frame.dart`, `geometry_types.dart`; tests green.
+- [x] Step 3: Synthetic renderer (test util, uses `package:image`): draws a top-down board (points, bar, off trays, checkers by per-point counts, two dice with pips) from parameters `{BoardState board, Dice? dice, palette, lightingGain}`, then perspective-warps it by an arbitrary quad and returns a `Frame` + the ground-truth quad. This is the workhorse every Phase 1–2 test uses. Unit test: renderer output round-trips (a rendered checker's center pixel classifies to its palette color).
+- [x] Step 4: `dart analyze --fatal-infos` + `dart test` green; register the package in CI's package matrix (`.github/workflows/ci.yml` — add `board_vision` to the existing `strategy.matrix.package` list; keep per-package cache key pattern).
+- [x] Step 5: Commit `feat(vision): board_vision scaffold — frames, geometry types, synthetic board renderer`.
 
 ### Task 2: Homography and the ROI atlas
 
@@ -58,10 +58,10 @@ enum BoardOrientation { whiteHomeNear, whiteHomeFar } // + doc: user's seat fixe
 
 Board coordinate system (pin it): the playing field is the unit rectangle (0,0)–(1,1) with White's home board bottom-right under `whiteHomeNear`. `RoiAtlas.forOrientation(o)` yields quadrilateral ROIs in board space for: 24 points (indexed exactly as `backgammon_core`'s 0–23), `bar`, both `off` trays, and `diceZone` (the central band of both halves). Points are trapezoids covering the triangle plus stack overflow headroom toward the bar.
 
-- [ ] Step 1: Failing tests: DLT recovers a known homography (map 4 corners + 10 random interior points, error < 1e-6); degenerate quad (collinear corners) throws; `mapToBoard(mapToImage(p)) == p`.
-- [ ] Step 2: Implement; green.
-- [ ] Step 3: Failing tests: ROI atlas — point 0/11/12/23 land where the renderer drew them (render a board with a single checker on each of those points; sample the mapped ROI; assert the checker's pixels dominate); orientation flip mirrors correctly; ROIs are disjoint except designed overlaps (headroom vs diceZone).
-- [ ] Step 4: Implement; green. Commit `feat(vision): homography + ROI atlas over a unit-board coordinate system`.
+- [x] Step 1: Failing tests: DLT recovers a known homography (map 4 corners + 10 random interior points, error < 1e-6); degenerate quad (collinear corners) throws; `mapToBoard(mapToImage(p)) == p`.
+- [x] Step 2: Implement; green.
+- [x] Step 3: Failing tests: ROI atlas — point 0/11/12/23 land where the renderer drew them (render a board with a single checker on each of those points; sample the mapped ROI; assert the checker's pixels dominate); orientation flip mirrors correctly; ROIs are disjoint except designed overlaps (headroom vs diceZone).
+- [x] Step 4: Implement; green. Commit `feat(vision): homography + ROI atlas over a unit-board coordinate system`.
 
 ### Task 3: Calibration — color learning from the start position, and confirmation
 
@@ -88,10 +88,10 @@ class BoardVision {
 
 Classification is **relative** (sample vs. its own ROI's learned background) — the spec's lighting-robustness mechanism. No color constants anywhere; add a test that greps `lib/` for hex color literals and fails if any appear (crude but binding).
 
-- [ ] Step 1: Failing tests: calibrate on a rendered start position learns two separable checker colors for three different palettes (classic brown/white-black, blue board/red-white checkers, low-contrast wood); classify achieves 100% on the renderer's own checkers under `lightingGain` 0.6–1.4.
-- [ ] Step 2: Implement color model + calibrate; green.
-- [ ] Step 3: Failing test: `confirmStartingPosition` accepts a correct start, rejects a board with two checkers swapped (names the offending points in `ConfirmResult.discrepancies`).
-- [ ] Step 4: Implement; green. Commit `feat(vision): calibration learns each board's colors from the known start position`.
+- [x] Step 1: Failing tests: calibrate on a rendered start position learns two separable checker colors for three different palettes (classic brown/white-black, blue board/red-white checkers, low-contrast wood); classify achieves 100% on the renderer's own checkers under `lightingGain` 0.6–1.4.
+- [x] Step 2: Implement color model + calibrate; green.
+- [x] Step 3: Failing test: `confirmStartingPosition` accepts a correct start, rejects a board with two checkers swapped (names the offending points in `ConfirmResult.discrepancies`).
+- [x] Step 4: Implement; green. Commit `feat(vision): calibration learns each board's colors from the known start position`.
 
 ### Task 4: Occupancy estimation and dice reading (prototypes)
 
@@ -100,10 +100,10 @@ Classification is **relative** (sample vs. its own ROI's learned background) —
 - Create: `packages/board_vision/lib/src/dice_reader.dart` (die-blob candidates in diceZone → per-face pip blobs → `DiceReading?` with confidence; reject when ≠ 2 candidate dice)
 - Test: `packages/board_vision/test/occupancy_test.dart`, `test/dice_reader_test.dart`
 
-- [ ] Step 1: Failing occupancy tests on rendered boards: empty/1/2/3/5-stack points at near AND far half, three palettes, gains 0.6–1.4 — assert color always right; count exact ≤2, within ±1 at 3–5 (the prior-based verifier in Task 8 closes the rest).
-- [ ] Step 2: Implement; green.
-- [ ] Step 3: Failing dice tests: all 21 face pairs rendered at 3 positions/rotations read exactly; one die missing → null (never a guess); confidence drops under gain 0.5.
-- [ ] Step 4: Implement; green. Commit `feat(vision): occupancy and dice-pip prototypes`.
+- [x] Step 1: Failing occupancy tests on rendered boards: empty/1/2/3/5-stack points at near AND far half, three palettes, gains 0.6–1.4 — assert color always right; count exact ≤2, within ±1 at 3–5 (the prior-based verifier in Task 8 closes the rest).
+- [x] Step 2: Implement; green.
+- [x] Step 3: Failing dice tests: all 21 face pairs rendered at 3 positions/rotations read exactly; one die missing → null (never a guess); confidence drops under gain 0.5.
+- [x] Step 4: Implement; green. Commit `feat(vision): occupancy and dice-pip prototypes`.
 
 ### Task 5: Corpus infrastructure — checklist generator, prep tool, threshold harness
 
@@ -114,14 +114,14 @@ Classification is **relative** (sample vs. its own ROI's learned background) —
 - Create: `packages/board_vision/test/corpus_harness_test.dart` — walks `test/corpus/{synthetic,real}/`, runs calibrate→confirm→occupancy→dice per shot against its sidecar, prints a per-metric scoreboard, and **asserts `targets.dart` thresholds**. Synthetic corpus (rendered by Task 1's renderer, committed as PNGs by a small generator in `tool/`) keeps the harness meaningful before real photos land.
 - Test: harness runs green on the synthetic corpus.
 
-- [ ] Steps: checklist generator (+unit test: deterministic for the seed, sidecars legal per `backgammon_core` replay) → prep tool → synthetic corpus generation + commit of images → harness green → commit `feat(vision): corpus checklist, prep tool, and the threshold harness`.
+- [x] Steps: checklist generator (+unit test: deterministic for the seed, sidecars legal per `backgammon_core` replay) → prep tool → synthetic corpus generation + commit of images → harness green → commit `feat(vision): corpus checklist, prep tool, and the threshold harness`.
 
 ### Task 6: USER-GATED — real corpus v1 and the go/no-go gate
 
 **Files:** `packages/board_vision/test/corpus/real/*` (new photos+sidecars), `docs/superpowers/plans/2026-08-02-buddy-mode.md` (append the gate record).
 
-- [ ] Step 1: Hand the user `corpus/CHECKLIST.md`; they shoot with a normal camera app on ≥2 boards × ≥3 lighting conditions and drop the files in a folder.
-- [ ] Step 2: Run `prepare_corpus`, commit the corpus, run the harness. Iterate obvious quick fixes (≤1 day class) if a metric is near-miss.
+- [x] Step 1: Hand the user `corpus/CHECKLIST.md`; they shoot with a normal camera app on ≥2 boards × ≥3 lighting conditions and drop the files in a folder.
+- [x] Step 2: Run `prepare_corpus`, commit the corpus, run the harness. Iterate obvious quick fixes (≤1 day class) if a metric is near-miss.
 **Carry into the gate conversation (measured in Task 5, before any photograph):**
 
 - **Chroma subsampling is a capture artifact, not an algorithm failure.** Phone cameras write JPEG at 4:2:0 — colour at a quarter of the resolution of brightness — and classification here is per-pixel and per-colour. Measured on the synthetic boards: a brown board with cream points and near-black checkers stops calibrating at 4:2:0 quality 95 and is fine at 4:4:4. `prepare_corpus` re-encodes at 4:4:4 and cannot restore what the phone discarded at capture. A dark-checkers-on-warm-board session that refuses to calibrate is the first candidate for this, and reading it as outcome (c) would be wrong.
@@ -169,8 +169,20 @@ That rank is **grid-relative, and only that**. An independent review swept a dif
 | start position confirmed | **1.000** (1/1) | — | (watched) |
 | dice pair read | **0.000** (0/4) | 0.980 | **−0.980** |
 | no dice read as no dice | ~~**1.000** (6/6)~~ **1.000** (1/1) | 1.000 | +0.000 |
-| region colour and count | **0.784** (189/241) | — | (watched) |
-| region colour alone | **0.954** (230/241) | — | (watched) |
+| region colour and count | ~~**0.784** (189/241)~~ **0.802** (194/242) | — | (watched) |
+| region colour alone | ~~**0.954** (230/241)~~ **0.909** (220/242) | — | (watched) |
+
+**Both region rows moved through the ledger truth-fixes of
+2026-08-21/22/23/24, not through a pipeline regression.** The denominator
+gained a region and the corrected cells moved in both directions;
+`kRealCorpusFloors`'s doc comment in
+`packages/board_vision/test/corpus_harness_test.dart` accounts for each one by
+name. The thing to carry out of it is that **every loss on the colour-alone row
+is a checker that *vanishes*** — the rim-hidden men at the base of a point, and
+White on the hinge at 020 — which is the direction `ColorModel.classify` breaks
+ties in on purpose: a checker that appears contradicts the game and gets asked
+about, and one that vanishes does not. The sliced figures immediately below are
+the Task-6-day readings and are kept as measured.
 
 Sliced: counts run 0.800 on the near half against 0.775 on the far, colour 0.942 near against 0.975 far. **(The dice-absence denominator was rescoped on 2026-08-23 — five of those six frames have dice lying in them and were being counted as frames with none. Same floor, same perfect score, a set that now matches the row's own sentence. See CORRECTION III.)** **The dice number is four refusals, not four misreads** — the reader found no pair at all on any of the four frames that have one, which is the behaviour the design asks for and is why the metric now reports found/right/refused rather than one rate. This board's dice are 0.021 of it across; band-location and tilt work is queued. Every real target that is not the dice one **passes**, which is outcome (b) territory rather than (c). These rates are pinned in `corpus_harness_test.dart` as floors so the real corpus cannot silently get worse, with the spec printed beside them every run.
 
@@ -180,8 +192,8 @@ Sliced: counts run 0.800 on the near half against 0.775 on the far, colour 0.942
 
 So it **found the object and could not name its colour**. The reach walk measured a run 1.28 checkers deep standing on the strip — the body is there, and `_settleEmptyRegions` has not swallowed it — but the classifier returned `none`, so the count collapsed to zero. That is a much narrower problem than the one the spine work was afraid of (a ridge that reads as checkers everywhere): presence is being detected on a surface the colour model was deliberately taught to treat as empty, and what is missing is the step that resolves a detected body against the two checker clouds rather than against the region's own settled surfaces. It belongs with the far-half counting work, not with the geometry.
 
-- [ ] Step 3: **GATE.** Present the scoreboard vs `targets.dart` to the user. Outcomes: (a) targets met → proceed; (b) dice under target → proceed with tap-to-enter dice as the shipped default and schedule the micro-classifier as follow-up; (c) geometry/color structurally missed → stop, redesign with the user. Record the outcome and numbers in an "As measured (gate)" note appended to this plan doc.
-- [ ] Step 4: Commit `test(vision): real-board corpus v1 + gate record`.
+- [x] Step 3: **GATE.** Present the scoreboard vs `targets.dart` to the user. Outcomes: (a) targets met → proceed; (b) dice under target → proceed with tap-to-enter dice as the shipped default and schedule the micro-classifier as follow-up; (c) geometry/color structurally missed → stop, redesign with the user. Record the outcome and numbers in an "As measured (gate)" note appended to this plan doc.
+- [x] Step 4: Commit `test(vision): real-board corpus v1 + gate record`.
 
 ## Phase 2 — Perception to target (Tasks 7–9)
 
@@ -200,9 +212,9 @@ List<PlayMatch> matchLegalPlay(Frame frame, BoardState before, Player mover,
     List<Move> legalPlays);
 ```
 
-- [ ] Step 1: Failing tests (rendered before/after pairs): unique identification across 30 seeded turns incl. hits, bar entries, bear-offs, doubles; **ambiguity honesty** — two plays with identical resulting positions (e.g. 13/9 via 13/11 11/9 vs 13/10 10/9 when both intermediate points are empty) must return both above threshold, not a fake unique winner; a physically impossible diff (checker teleported) ranks nothing above threshold.
-- [ ] Step 2: Implement; green. Extend the corpus harness with play-ID scoring over the mid-game shots; thresholds asserted.
-- [ ] Step 3: Commit `feat(vision): state-primed legal-play matcher`.
+- [x] Step 1: Failing tests (rendered before/after pairs): unique identification across 30 seeded turns incl. hits, bar entries, bear-offs, doubles; **ambiguity honesty** — two plays with identical resulting positions (e.g. 13/9 via 13/11 11/9 vs 13/10 10/9 when both intermediate points are empty) must return both above threshold, not a fake unique winner; a physically impossible diff (checker teleported) ranks nothing above threshold.
+- [x] Step 2: Implement; green. Extend the corpus harness with play-ID scoring over the mid-game shots; thresholds asserted.
+- [x] Step 3: Commit `feat(vision): state-primed legal-play matcher`.
 
 **As implemented (Task 7): the signature could not be one frame, and Phase 1 is
 why.** The plan pinned `matchLegalPlay(Frame, BoardState before, Player, List<Move>)`
@@ -218,6 +230,20 @@ positional signature is otherwise exactly the plan's. The session already holds
 that frame — it is the one the previous query ran on. **The proof that the
 difference is the right instrument is the pair of numbers themselves: 0.784
 per-region counting supports 1.000 play identification on the same ten frames.**
+
+**(Both rates in the argument above are the Task-6-day readings, and both have
+since moved.)** Per-region colour ~~0.954~~ **0.909**, colour-with-count
+~~0.784~~ **0.802** — through the ledger truth-fixes of 2026-08-21/22/23/24
+rather than any pipeline change; see the annotated table in Task 6 and
+`kRealCorpusFloors`. The argument above is kept exactly as written, because it
+is the record of why `beforeFrame:` exists — and the new pair does not weaken
+it, it strengthens it. Colour alone lost four rim-hidden men, and this board's
+rim hides them in *every* frame of the session, which is precisely the fixed
+bias the argument turns on: an absolute comparison pays it on every region of
+every candidate, a difference between two frames of one session subtracts it
+from itself. And 0.802 per-region counting supports the same 1.000 play
+identification on the same ten frames, so the closing sentence reads 0.802
+today and means exactly what it meant then.
 
 **As measured (Task 7): synthetic 64/64, real 6/6.** Sixty-four seeded turns from
 two `backgammon_core` playouts (32 each, no dance in either), rendered before and
@@ -1031,7 +1057,9 @@ Readability assessReadability(Frame f, MotionHint motion);
 - **The on-board-cells alternative is recorded as rejected.** Restricting the patch comparison to the four cells of each corner that lie wholly on the playing field would remove the `tooDark`-when-only-the-board-dims cost — and it misses slides: on wood a 15-px slide fires in six of eight directions on the whole patch and two of eight on the inner cells, and two are still missed at 20 px. It would also invalidate every figure `maxPatchDrift` is derived from, all whole-patch.
 - **Precision drift in the new figures, corrected against re-measurement:** the near-total-cover contrast ratios are 0.029/0.021/0.087 (not 0.030/0.022/0.091), the pale-band luma ratios 1.381/1.507 (not 1.380/1.504), and the far-edge arm's cast 0.128/0.138 (not 0.129/0.137). The `minExposureRatio` table's cells are now the true adjacent boundaries in commanded gain, with which quantity they are in said out loud, and all six are bracketed by tests rather than two.
 
-**Carry into Task 9, found in Task 6's geometry work:** `CalibrationFingerprint.geometryMatches` compares the four **outer** corner patches and nothing else, so it is blind to the one way a folding case goes stale without moving. A case standing open on a table is tented, and the tent is what `FoldingBoardGeometry` was built for: the spine settles flatter over a session — a leaf nudged, a table knocked, the case simply relaxing — and the middle of the board moves while all four corners sit exactly where they were. Every column near the hinge shifts, the hinge strip's own plane is wrong, and the fingerprint says nothing has changed. Measured, in the geometry that made the folding path exist: a tent angle wrong enough to matter puts mid-board columns half a column out and collapses separability, which is the same failure a moved board causes and the same routing (`requiresRecalibration`) — it just is not currently detected. Task 9 needs a patch on the **hinge seams** as well as the corners on a board calibrated through `calibrateFolding`: those four points are exactly where a tent change shows and exactly where a slide does not. Cheap, since the eight points are already in the calibration.
+**Carry into Task 9, found in Task 6's geometry work:** `CalibrationFingerprint.geometryMatches` compares the four **outer** corner patches and nothing else, so it is blind to the one way a folding case goes stale without moving. A case standing open on a table is tented, and the tent is what `FoldingBoardGeometry` was built for: the spine settles flatter over a session — a leaf nudged, a table knocked, the case simply relaxing — and the middle of the board moves while all four corners sit exactly where they were. Every column near the hinge shifts, the hinge strip's own plane is wrong, and the fingerprint says nothing has changed. Measured, in the geometry that made the folding path exist: a tent angle wrong enough to matter puts mid-board columns half a column out and collapses separability, which is the same failure a moved board causes and the same routing (`requiresRecalibration`) — ~~it just is not currently detected~~ **and it IS detected now: Task 9 closed exactly this, so the clause was true the day it was written and stopped being true in the commit that closed it (annotated here in the whole-branch review round)**. Task 9 needs a patch on the **hinge seams** as well as the corners on a board calibrated through `calibrateFolding`: those four points are exactly where a tent change shows and exactly where a slide does not. Cheap, since the eight points are already in the calibration.
+
+**As implemented (the carry above, in Task 9): `CalibrationFingerprint.seamPatches`, and the blindness is pinned rather than only closed.** The seams are sampled at `(leftLeafEnd, 0)`, `(rightLeafStart, 0)` and the two points below them — board-space coordinates the folding calibration already holds, so nothing has to be *found* in the picture — and `geometryMatches` walks them beside the corner patches under the same per-patch drift bound and the same majority rule, so a flat board (no seams, empty list) is byte-for-byte the check it always was. Measured on the bed at a ridge relaxed from 0.050 to 0.040 of the board's width: the four **corner** patches drift 0.056, 0.090, 0.138 and 0.156 — two of four past the bound, which is the slack the game's own men are allowed to spoil, so the corners alone say nothing has happened — while the four **seam** patches drift 0.350, 0.398, 0.537 and 0.608. Six of eight, and the check fires: red, `calibrationStale`, `requiresRecalibration`. `packages/board_vision/test/readability_test.dart:127` holds both halves, the second test running the same frame through `CalibrationFingerprint.cornersOnly` — the four-corner fingerprint this class used to be — and asserting it passes, so a change that quietly undid the fix would have to make that mutation test green as well.
 
 ## Phase 3 — The mode ships (Tasks 10–15)
 
@@ -1306,6 +1334,147 @@ Nothing regressed and nothing was skipped. The engine DLL was present, so the `e
 - **The doc ends with a fill-in form and a definition of SHIP.** SHIP requires item 1 in landscape plus every checkpoint whose failure would corrupt game state (C4's attribution, C5's misreads, C6's premature folds, C7's silent acceptance, C8's objection, C10's score). Everything else is a number to record — and the doc says where each number goes back: **at the constant**, with the measurement and the device beside it, and for `kQuietFramesRequired` with the frame rate.
 - **README picked up three pieces of drift this branch created, beyond the mode description.** `packages/board_vision` was missing from the repository-layout table and from "Run the tests"; the CI section still listed the `packages` matrix as three packages when `ci.yml` has run four since Task 5. Also fixed: the "Releasing" section said to bump `app/pubspec.yaml` and never mentioned `app_version.dart` — which is exactly the omission the plan records as having bitten v0.13.0.
 - **Not done here, deliberately.** No merge, no push, no tag, no `master` (Step 4 is the user's). No whole-branch review (Step 2 is a separate reviewer's). No `packages/` or corpus changes — this round is verification, docs and the version pair only.
+- **And on the tag specifically, because Step 4 asks for one: this repository has NO git tags at all.** `git tag` comes back empty — there is no `v0.13.0`, and nothing before it either — so `v0.14.0` would be **the first tag this repo has ever carried**, not the second. README's "Releasing" section documents an annotated-tag convention that says tagging starts *from v0.13.0 onward* and that earlier releases are deliberately not tagged retroactively; that convention has never actually been run. Which makes three questions the **user's at Step 4** and nobody else's: whether to start tagging at all, whether `v0.14.0` is where it starts, and whether v0.13.0 gets back-tagged despite the README's own "not retroactively" rule (its merge commit carries the version in the subject line, which is what that rule leans on). Nothing on this branch creates a tag, and nothing here should.
+
+**As implemented (Task 15, Step 2 — the whole-branch review's fix round): the
+placement safety net did not exist, and the merged manifest asked for a
+camera.**
+
+*App suite 1057+7skip → 1072+7skip; `flutter analyze` clean; `packages/`
+untouched. Step 2's checkbox is left unticked deliberately — the fix round has
+landed, but whether the review is closed is the reviewer's call rather than the
+implementer's.*
+
+- **BLOCKER — `needsBeliefMirror` was raised, tested, and read by nothing.** The
+  session set the flag at `kPlacementAttemptsBeforeMirror` and no screen looked
+  at it; worse, `_placementExpected` had no clearing verb but a clean
+  verification. So a placement that *cannot* verify closed every forward path at
+  once: the dice button dead (no roll is open at that gate), the mirror
+  non-interactive (no play is pending), Double refused, the prompt saying "Make
+  Buddy's move on the board" forever, both manual verbs throwing, a
+  recalibration landing straight back in `verifyingPlacement`, and backing out
+  losing the match — History cannot resume one. **And it is not hypothetical:**
+  the real corpus scores placement verification at **1 in 6**, on a static board
+  under a steady light, because this folding case's rim hides a man at the base
+  of a near-half point. A user who had placed the checker correctly had nowhere
+  to go.
+  The spec's escalation now ships in full. The mirror becomes the big picture
+  (the two `Expanded` flexes swap), each region the dictated play touched **and
+  the camera disagrees about** wears the analysis board's own strong highlight
+  ring, and the prompt reads `RegionVerification.message` verbatim — the
+  camera's reading against the game's, in the order the sentence was written
+  for. Under it are two answers: **"I've fixed it"**
+  (`BuddySession.retryPlacement` — lowers the escalation and re-arms the count;
+  the query never stopped, so a clean frame finishes it and a still-wrong board
+  escalates again three frames later) and **"Skip this check"**
+  (`BuddySession.acceptPlacementUnverified` — the user overruling the camera).
+  The skip cannot corrupt anything, and the reason is structural rather than a
+  promise: the dictated move was applied when the engine returned it, so
+  verification is a question about the *felt* catching up with a state that
+  already moved. What the skip does have to get right is the **anchor** — the
+  play matcher differences two frames, so the last settled picture becomes
+  `_beforeFrame`; a stale one would offer the matcher Buddy's move and the
+  user's as a single change. That is the mutation the session test turns on.
+  The policy speaks a caveat (`onPlacementSkipped` — *"I'll take your word for
+  it. I could not see that one land, so if we have come apart it will show up as
+  a play I cannot read."*) and the screen counts it as a **fourth**
+  `buddy_fallback_used` kind, `placement_skipped`. It earns a name of its own:
+  the other three are "the camera could not answer, so a person did", and this
+  one is "the camera answered wrongly and a person said so" — its rate against
+  dictated turns is the field reading of the one perception target still short.
+  **Red-first:** the reviewer's wedge probe went in as three widget tests before
+  any of this existed, and all three failed on the buttons not being there.
+  **Mutation:** un-wiring the screen's eight `needsBeliefMirror` reads reds all
+  three again; dropping the anchor line reds the session's skip test on frame
+  identity.
+- **BLOCKER — the merged Android manifest required a camera.**
+  `camera_android_camerax` contributes
+  `<uses-feature android:name="android.hardware.camera.any" />` with no
+  `required` attribute, **which defaults to true**, and the app's three optional
+  declarations name *different* features, so none of them cancelled it. Every
+  camera-less device would have lost install eligibility — a regression against
+  `master`, whose only camera plugin declares its own feature optional, for an
+  app whose camera is optional in both modes that use one. Fixed with
+  `android:required="false"` **plus `tools:replace="android:required"`** (and
+  the `tools` namespace, which was not declared): a plain `false` loses, because
+  the merger OR-s the two flags and the plugin's implicit true wins — silently.
+  `android_manifest_test.dart` pins the entry *including* `tools:replace`, since
+  that attribute is the entire mechanism and reads like noise to a tidy-up.
+  **What no test in this repository can do is verify the merge**, which needs
+  Gradle; that is now protocol item 4's `aapt dump badging` check (expect
+  `uses-feature-not-required:'android.hardware.camera.any'` and no bare line
+  beside it) and the Play Console's device catalogue. The same comment records
+  `WRITE_EXTERNAL_STORAGE (maxSdkVersion 28)`, also merged in from camerax, and
+  why removing it is not worth `tools:node="remove"` on a declaration the plugin
+  may come to rely on.
+- **Backgrounding was unrecoverable, and there was no `WidgetsBindingObserver`
+  anywhere in the app.** Android reclaims the camera from a backgrounded app; a
+  phone propped over a board for a whole match gets backgrounded. What was left
+  was a `CameraController` that still looked like an object — black preview, no
+  frames again, and "Fix the aim" going straight back through an `open()` that
+  answered `CameraReady` on the strength of `_controller != null`. Both halves
+  are fixed: `BuddyCameraLifecycle`, a mixin both camera-owning screens use,
+  releases on `inactive` and re-opens on `resumed`; and `open()` now asks the
+  controller it is holding whether it is still initialized, and replaces it
+  rather than adopting it. The mixin keeps **one bit of intent and one bit of
+  fact** and reconciles them in a loop, rather than a pile of flags: the hold is
+  counted and shared by two screens, and every transition is asynchronous, so a
+  suspend can land inside a resume. The `_stopping` bit is not decoration —
+  `State.mounted` is still true inside `dispose`, so a `setState` from the
+  release path there is an assertion failure, which is exactly how it first ran.
+  Two widget tests: a scripted pause→resume (the fake camera sees close then
+  open, no frame reaches the session in between, and the position, score,
+  transcript and turn are identical afterwards), and a screen disposed *while
+  backgrounded* not closing a hold it no longer has. Mutation: dropping
+  `addObserver` reds both.
+- **The in-flight open/dispose race, and how far a test could follow it.**
+  `open()` takes its hold synchronously and then suspends on the plugin; a
+  `close()` landing in that window released the hold, found nothing built, and
+  tore nothing down — and the resuming `open()` went on to start a camera and a
+  gyroscope subscription with nothing left to turn them off. `_startMic`'s
+  pattern is now applied after each of the three awaits, undoing exactly what
+  has been constructed so far. **Only the first of the three is reachable from
+  `flutter test`**, and that is a fact about the plugin rather than about the
+  guard: past it, `open()` holds a real `CameraController` a test host cannot
+  initialize. So `enumerateCameras()` is a `@visibleForTesting` seam — the one
+  on this side of the edge — a subclass holds it open while a close lands on it,
+  and the test asserts the answer is *"the camera was closed before it finished
+  opening"* rather than *"this device has no camera"*, which is what makes the
+  abandonment visible at all. The empty-list branch was reordered to sit *after*
+  the guard for exactly that reason. The other two checks are protocol item 8.
+- **Protocol item 8 is new, and it is where four of these land.** Background the
+  app mid-match for 30 seconds; background it at the corners stage with handles
+  already dragged; and the nasty one — background (then back out) during the
+  first second of a calibration screen, before the preview appears, watching the
+  phone's camera indicator afterwards. The doc's Part 1 is eight items now, not
+  seven.
+- **Three findings that could only be written down.** (1) `flutter_tts`'s
+  Windows plugin activates WinRT in its constructor, so a Windows N/KN edition
+  without the Media Feature Pack dies at plugin registration — before any Dart
+  guard can run. Dev-target only (Buddy Mode is mobile, the speech path is
+  guarded, CI never builds Windows) and unfixable without patching the plugin;
+  it is a README toolchain note beside the nuget one. (2) The strong-cast regime
+  in C9: past a cast strong enough to move the luma-normalised corner patches,
+  the routing bit inverts and a red arrives with `requiresRecalibration`
+  **false**, which dimming does not clear. Recorded in Task 9 already; the
+  protocol now warns the tester so it is not re-discovered as a new bug. (3) The
+  18-of-84 blue-red occluder reads, likewise — C9 now says a hand *should* be
+  amber and that how reliably it is amber on the tester's own board colours is a
+  measurement rather than a confirmation.
+- **The small ones.** `history_screen.dart`'s `_modeLabel` had no case for
+  `'buddy'` **or** `'lan'`, and its fallback is the raw column value — so both
+  showed their database spelling beside four modes that read like English; the
+  new test enumerates every mode `MatchRepository.startMatch` is called with, so
+  the next one cannot ship nameless. Three protocol quotes carried a full stop
+  terse `describePlay` does not emit (it joins notation and stops), and the C12b
+  quote now says out loud that the *friendly* line is a sentence and does end in
+  one. The result sheet gained a **placement-verification row** — verified first
+  try / corrected / mirror-escalated / skipped-as-unseeable — which is the
+  reading `PerceptionTargets.placementVerification` has been waiting for, and an
+  item-8 block.
+- **Not done here.** No `packages/` change, so the 1/6 placement rate is
+  untouched and the escape hatch is what ships beside it. No tag (see the bullet
+  above). No merge and no push — Step 4 is the user's.
 
 ---
 
@@ -1319,3 +1488,10 @@ Nothing regressed and nothing was skipped. The engine DLL was present, so the `e
 > calibration and colour proven on the real corpus; counts workable with
 > the corner-spread caveat; dice ship as tap-to-enter while the queued
 > band-location/tilt work continues. Phase 2 (Tasks 7-9) authorized.
+>
+> *Read that date as the plan's, not the gate's. `2026-08-02` is this file's
+> own authoring date, carried down from the top rather than typed for the
+> occasion; **the decision was taken on 2026-08-20**, eighteen days later, by
+> `9d70341 docs(plan): the Phase-1 gate is decided — outcome (b), proceed`,
+> which is the evidence for it. The heading is left exactly as it was signed
+> and annotated rather than rewritten.*

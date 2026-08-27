@@ -31,11 +31,20 @@ mode's true acceptance test is a scripted on-device run —
   folding case) and confirm the belief it draws over the starting position. It
   learns *your* board's checker, felt and point colours from those thirty
   checkers; **no colour constants exist anywhere in the pipeline**.
-- Buddy reads your dice and your plays off the felt and speaks its own
-  ("You rolled 6-3." … "I rolled 5-2 — play 13/8, 24/22."), acknowledges a
-  legal play, **objects to an illegal one with the reason**, offers a choice
-  when two plays look the same, and names the checker you put in the wrong
-  place until the board matches. Every spoken line is mirrored on screen.
+- **You type the roll; Buddy reads the play.** The three-tap dice pad is the
+  shipping dice path and is always open — the Phase-1 gate settled that
+  (outcome (b)), so it is the path rather than a fallback. The camera's dice
+  reader is queued rather than shipped, and what it does today is **decline
+  rather than misread**: on the real corpus it found no pair on any of the
+  four frames carrying a certified roll, and read none of them wrong. This
+  board's dice are 0.021 of it across, and the band-location and tilt work
+  that would let a die that small be found is scheduled, not done.
+- Buddy reads your **plays** off the felt — 6 of 6 play identification on the
+  real corpus — and speaks both sides of the table ("You rolled 6-3." … "I
+  rolled 5-2 — play 13/8, 24/22."), acknowledges a legal play, **objects to an
+  illegal one with the reason**, offers a choice when two plays look the same,
+  and names the checker you put in the wrong place until the board matches.
+  Every spoken line is mirrored on screen.
 - A **readability light** evaluated on every stable frame for the whole
   session, not only when an answer is wanted: it names its cause ("It is too
   dark to read the board", "The board is not where it was when I learned it"),
@@ -47,9 +56,19 @@ mode's true acceptance test is a scripted on-device run —
   button under the digital game's gating rules, Crawford included; dances,
   game and match results announced; the finished match lands in **History**
   with post-game analysis through the standard persistence path.
-- Fallbacks are always one tap away: type the roll, or tap the play out on the
-  belief mirror. Repeated misplacements escalate to the mirror with the
-  discrepancy highlighted.
+- Fallbacks are always one tap away: tap the play out on the belief mirror
+  when the felt is not read, and the dice pad is live throughout — it is the
+  dice path proper rather than a fallback, and it answers the user, so it
+  stays open even through a readability outage. Repeated misplacements
+  escalate to the mirror with the discrepancy highlighted — the board Buddy
+  believes in, at full size, with a ring on each region the play touched and
+  the camera disagrees about, and the contradiction named in words. That
+  escalation has **two ways out**: *I've fixed it*, which hands the question
+  back to the camera, and *Skip this check*, which is the user overruling it —
+  the board is right and Buddy cannot see it, which the real corpus says
+  happens. A skip is spoken with a caveat ("I'll take your word for it…") and
+  counted, because how often it is needed is the field measure of the one
+  perception target still short.
 - An **optional microphone hint**: Buddy hears the dice land and looks sooner.
   It is an optimization, never a dependency — the mode plays identically with
   the permission refused, and **nothing is recorded**: the audio never leaves
@@ -69,8 +88,12 @@ mode's true acceptance test is a scripted on-device run —
   ended, calibration attempts, recalibrations entered, per-fallback counters
   and a readability-red rate — which is what decides where perception effort
   goes after launch.
+- Buddy Mode releases the camera when the app goes to the background and takes
+  it back on resume, rejoining the match exactly where it was — Android
+  reclaims the camera from a backgrounded app, and a phone propped over a board
+  for a whole match will be interrupted.
 - [`docs/buddy-mode-test-protocol.md`](docs/buddy-mode-test-protocol.md), the
-  scripted on-device acceptance run: the seven things that ship as arithmetic
+  scripted on-device acceptance run: the eight things that ship as arithmetic
   rather than measurement, then a calibration and a match with twelve
   checkpoints.
 

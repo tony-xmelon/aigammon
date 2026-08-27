@@ -266,6 +266,22 @@ landed, placement verification on the real corpus went from **0/6 boards to 2/6
 turns** — the far-half tall-stack undercount is what the rest depends on, and
 that is perception work rather than bookkeeping.
 
+**It reads ~~2/6~~ 1/6 today, and every step of the fall was a truth fix rather
+than a regression.** Two corrections to the filmed ledger took it there — the
+2026-08-21 pass from a person's reading of zooms, the 2026-08-22 pass from
+pixel measurement — and between them the figure went 2/6, briefly 3/6, then
+1/6. What they exposed is a single mechanism, which is the whole value of the
+correction: this folding case's **rim stands proud of the felt**, so a man at
+the *base* of a near-half point — the wide end, against the near edge, where a
+stack starts — is three quarters behind it, and the reader returns *nothing*
+there rather than a short count. **Four of the five missing turns are exactly
+that**; the fifth is the 23-point over-counting a run that starts on the
+board's own far rim. None of it was visible while the ledger had those men on
+cells the camera sees, so a corpus that had been quietly flattered now names
+the one thing this board does to perception. The evidence and the per-turn
+breakdown live at `kRealCorpusFloors` in
+`packages/board_vision/test/corpus_harness_test.dart`.
+
 ## Readability indicator
 
 A three-state light (green/amber/red) over the preview, computed from:

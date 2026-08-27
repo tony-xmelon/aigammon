@@ -1,7 +1,7 @@
 # Buddy Mode — on-device test protocol
 
 **This is the acceptance test for Buddy Mode.** Everything else the mode has —
-1057 app tests, 521 `board_vision` tests including the scored corpus, a clean
+1072 app tests, 521 `board_vision` tests including the scored corpus, a clean
 analyzer on seven packages — runs on a machine with no camera, no microphone,
 no gyroscope and no backgammon board. None of it can tell you whether a phone
 pointed at your board plays a game of backgammon with you.
@@ -12,10 +12,10 @@ on **each device family you ship to** (one Android, one iPhone).
 
 It has two parts, and the order is load-bearing:
 
-- **Part 1 — the open questions.** Seven things that ship as *arithmetic rather
+- **Part 1 — the open questions.** Eight things that ship as *arithmetic rather
   than measurement*, in priority order. The first one is a correctness question
   that can invalidate everything measured after it, so it runs before anything
-  else. Items 2–7 are numbers and behaviours that want their first contact with
+  else. Items 2–8 are numbers and behaviours that want their first contact with
   reality.
 - **Part 2 — the scripted match.** A calibration and one short game against
   Buddy, with twelve checkpoints covering every path the mode has: dice, plays,
@@ -65,7 +65,7 @@ this protocol into a test of the screen only.
 
 ---
 
-# Part 1 — the seven open questions
+# Part 1 — the eight open questions
 
 ## 1. The preview↔frame mapping — BLOCKING, run this first
 
@@ -78,11 +78,12 @@ by a `Positioned.fill` (it stretches rather than letterboxes), and **there is no
 rotation or mirroring handling anywhere in Buddy Mode.** The assumption is
 stated in full at `_CalibrationScreenState._preview`
 (`app/lib/screens/buddy/calibration_screen.dart`) and again at
-`PhoneBuddyCamera.preview` (`app/lib/buddy/camera_frame_source.dart`).
+`PhoneBuddyCamera.preview` (same file — the plugin edge lives at the bottom of
+it).
 
 **Why it is first.** If sensor and preview disagree, the failure is **silent**:
 the outline still looks plausible, the calibration may well succeed, and every
-column is simply in the wrong place. Every number you measure in items 2–7 would
+column is simply in the wrong place. Every number you measure in items 2–8 would
 then be a number about a broken coordinate frame.
 
 **What to do**
@@ -246,14 +247,48 @@ the commit you are testing**, and (b) confirm the APK it produced actually
 installs and starts Buddy Mode on a real phone — a build that compiles and an
 app that runs are two claims.
 
+**And read the MERGED manifest, which is the only place this next thing is
+visible.** `camera_android_camerax` contributes
+`<uses-feature android:name="android.hardware.camera.any" />` with **no
+`required` attribute, which defaults to TRUE** — and the app's own optional
+declarations name *different* features (`android.hardware.camera`,
+`…camera.autofocus`, `…microphone`), so none of them cancels it. Left alone, an
+app whose camera is optional in both modes that use one would require a camera
+to install, and Play would filter it off every camera-less device.
+`AndroidManifest.xml` overrides it with `android:required="false"` **plus
+`tools:replace="android:required"`** — the plain attribute loses, because the
+merger OR-s the two `required` flags together and the plugin's implicit true
+wins. `app/test/android_manifest_test.dart` pins the source line including the
+`tools:replace`; **nothing in the repository can check that the merger honoured
+it**, which is why it is here:
+
+```powershell
+# on the APK android.yml produced (or a local `flutter build apk --release`)
+aapt dump badging app-release.apk | Select-String "camera"
+```
+
 **Pass** — `android.yml` green, APK installs, Buddy Mode's home tile is present
-and the calibration screen opens the camera.
+and the calibration screen opens the camera; and the badging dump shows
+`uses-feature-not-required:'android.hardware.camera.any'` with **no** bare
+`uses-feature:'android.hardware.camera.any'` line beside it. The Play Console's
+**device catalogue** on the uploaded artifact says the same thing in the other
+direction: the supported-device count must not fall when Buddy Mode ships.
 
 **Fail** — a Gradle failure naming AGP or `compileSdk`. **The fix is to raise the
 pin (or the Flutter channel), not to pin the plugin back**: the requirement is
-the plugin's own build script, not a preference.
+the plugin's own build script, not a preference. Or: a bare
+`uses-feature:'android.hardware.camera.any'` in the badging dump, which means
+the `tools:replace` did not take and the install base just shrank.
 
-**Write down:** the workflow run and its result; the Flutter version CI used.
+*(While you are in the dump you will also see
+`uses-permission:'android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'`.
+That is `camera_android_camerax`'s, for capture-to-file paths Buddy Mode never
+calls — it takes an image stream and converts frames in an isolate. It is
+expected, it is capped at API 28, and nothing ever requests it. See the comment
+beside it in `AndroidManifest.xml` for why removing it is not worth the cost.)*
+
+**Write down:** the workflow run and its result; the Flutter version CI used;
+the two `camera.any` lines from the badging dump, verbatim.
 
 ---
 
@@ -396,6 +431,56 @@ the place to look.
 
 ---
 
+## 8. Backgrounding — the camera coming back after the app goes away
+
+**Why it is here.** A phone propped over a board for a whole match *will* be
+interrupted: a notification pulled down, a call, the screen locking, the user
+checking something else. **Android takes the camera back when that happens**,
+and what the app is left holding is a `CameraController` that still looks like
+an object and refers to nothing. Buddy Mode now releases the camera on
+`inactive` and re-opens it on `resumed`
+(`BuddyCameraLifecycle` in `app/lib/screens/buddy/calibration_screen.dart`), and
+`PhoneBuddyCamera.open` re-checks whether the controller it is holding is still
+initialized rather than answering `CameraReady` on the strength of it being
+non-null.
+
+Both halves are pinned by widget tests against the fake camera. What no test
+here can reach is **the plugin actually giving the camera back**, which is the
+whole question — and one race inside `open()` that a test host cannot get to:
+two of its three abandonment checks are past a `CameraController` that
+`flutter test` cannot initialize.
+
+**What to do**
+
+1. Mid-match, with the light green, **background the app for 30 seconds** —
+   home button, or pull the notification shade down and leave it. Come back.
+2. Repeat it **at the corners stage of a calibration**, with handles you have
+   already dragged.
+3. The nastier one, for the race: on the **calibration screen**, background the
+   app *while the preview is still black* — in the first second after the screen
+   opens, before the camera has finished coming up. Come back. Then do it again
+   and instead **back out of the screen entirely** during that same first
+   second.
+
+**Pass** — after each resume the preview comes back on its own within a second
+or two, the readability light returns to green, and **play continues**: the
+position, the score, the transcript and whose turn it is are exactly as you left
+them, and the next settled frame is answered normally. The dragged corners in
+(2) are still where you put them, and the stage has not reset. In (3) nothing is
+left running: the phone's camera-in-use indicator goes out, and the app does not
+warm up or drain noticeably afterwards.
+
+**Fail** — a preview that stays black after a resume; a readability light stuck
+red or stuck on its last verdict with no new frames; "Fix the aim" going through
+the flow and coming back to a dead camera; the calibration stage or the handles
+resetting; the camera indicator staying **on** after (3)'s back-out, which is
+the leaked stream this item exists for.
+
+**Write down:** seconds to recover the preview on each device; whether anything
+about the match moved; the camera-indicator result for (3).
+
+---
+
 # Part 2 — the scripted match
 
 One calibration and one short game, twelve checkpoints. Run it end to end
@@ -502,7 +587,9 @@ matters: a fallback costs a tap, a misread costs the game.
 **Do:** Make a legal play on the board. Move the checkers the way you always do
 — unhurriedly, hand over the board, done.
 
-**You should hear:** the play read back, terse — *"13/8, 24/22."*
+**You should hear:** the play read back, terse — *"13/8, 24/22"*, with **no
+full stop**: terse `describePlay` joins hop notations and stops, and a spoken
+line that ends in one came from somewhere else.
 
 **You should see:** the belief mirror update to match your board.
 
@@ -521,7 +608,8 @@ failure — tap the right one.
 one of its checkers deliberately wrong** — right checker, wrong destination,
 one point off — and let go.
 
-**You should hear:** first *"I rolled 5-2 — play 13/8, 24/22."*, then, after you
+**You should hear:** first *"I rolled 5-2 — play 13/8, 24/22"* (no full stop —
+see C6), then, after you
 misplace it, ***"That isn't quite it."*** followed by the fix naming the
 discrepancy.
 
@@ -532,13 +620,50 @@ showing the **correct** expected position, not your wrong one.
 the ordinary case and is deliberately not narrated; the next line (a roll, a
 play, a double) is the acknowledgement.
 
-**Then:** get it wrong **three times in a row**. On the third,
-`kPlacementAttemptsBeforeMirror` escalates to the on-screen belief mirror with
-the discrepancy highlighted.
+**Then:** get it wrong **three times in a row**
+(`kPlacementAttemptsBeforeMirror`). On the third, the screen escalates.
+
+**You should see, on the escalation:**
+
+- the **belief mirror becomes the big picture** — it and the camera preview swap
+  sizes, so the position Buddy is holding is what you are looking at;
+- a **bright ring** on the points the dictated play touched and the camera
+  disagrees about. Only those: the session claimed a hand went to those regions
+  and nothing wider, so a ring anywhere else is a bug. (A region the game says
+  is **bare** cannot be ringed — the ring hangs on a checker — so a discrepancy
+  of the "something is standing where nothing should be" kind is named in the
+  sentence and not drawn. That is by design; note it if you see it.)
+- the prompt naming **what the camera sees against what the game holds**, in the
+  region's own words — e.g. *"Buddy still cannot see its move — the 8-point: the
+  camera sees nothing, the game says White 2."*;
+- **two buttons: "Skip this check" and "I've fixed it".**
+
+**Do next, and this is the half that matters:** try both.
+
+1. **"I've fixed it"** — put the checker right first, then tap it. The
+   escalation comes down and the camera takes the question back; the next
+   settled frame verifies and play carries on with **nothing spoken** (a board
+   being correct is not narrated). Tap it *without* fixing anything and the
+   escalation should come back three frames later, with the correction spoken
+   again.
+2. **"Skip this check"** — with the board **actually correct** and Buddy still
+   unable to see it. This is the case the real corpus measures at **1 in 6**: a
+   folding case whose rim stands proud of the felt hides a man at the *base* of
+   a near-half point from the camera and from nobody else. You should hear
+   ***"I'll take your word for it. I could not see that one land, so if we have
+   come apart it will show up as a play I cannot read."*** and play should go
+   straight on to the next throw.
 
 **Failure looks like:** a wrong placement silently accepted (the worst failure in
 the mode — the physical board and the game state have now diverged with nobody
-told); a correction naming the wrong checker; the escalation never arriving.
+told); a correction naming the wrong checker; the escalation never arriving;
+**the escalation arriving with no way out of it** — a placement that cannot
+verify used to close every forward path at once (no dice, no Double, a
+non-interactive mirror, and a recalibration that landed straight back here), so
+if either button is missing or dead, that is a blocker rather than a note.
+Also a failure: play NOT continuing after a skip, or the position moving when
+you skip — the game advanced when Buddy chose the move, and a skip discards a
+question about the felt, not a decision about the game.
 
 ---
 
@@ -579,8 +704,24 @@ named**; perception answers suppressed while red; the authoritative game state
 no cause named; the game state changing during the outage; the light staying red
 after the condition clears.
 
-*(A hand over the board is **amber** and transient — Buddy carries on. A lamp
-switched off is **red**. These are different by design.)*
+*(A hand over the board is meant to be **amber** and transient — Buddy carries
+on. A lamp switched off is **red**. These are different by design. How reliably
+the first holds is one of the things this checkpoint is measuring rather than
+confirming: on the synthetic corpus an occluder sweep of 84 shots comes back
+`calibrationStale` — red, "the board is not where it was" — on **18 of them,
+all on the blue-red palette**, and all of them through the colour-cast check
+rather than the geometry one. Red is the safe direction (answers suppressed,
+nothing touched), and the cost is a needless trip to "Fix the aim". **Write down
+what your board's colours actually did**, because a board whose felt and
+checkers are close in hue is the case that behaves like the blue-red one.)*
+
+*(One more known regime, recorded rather than fixed: past a **strong enough
+colour cast** — a lamp swapped outright rather than dimmed — the routing bit
+inverts. `geometryMatches` gives out, the light falls back to the luma ratio
+alone, and the verdict is red with `tooBright`/`tooDark` and
+`requiresRecalibration` **false**, which does not clear by dimming. If you swap
+the bulb and get a red that will not route you to recalibration, that is this,
+and it is a named open limitation rather than a new finding.)*
 
 ---
 
@@ -656,7 +797,8 @@ disagreeing with what you heard.
 just far enough to hear one dictated play.
 
 **You should hear:** *"Move one checker from 13 to 8, and one from 24 to 22."*
-instead of *"Play 13/8, 24/22."*
+instead of *"Play 13/8, 24/22"*. The **friendly** line is a finished sentence and
+ends in a full stop; the terse one is notation and does not.
 
 **Failure looks like:** the setting not taking effect until an app restart; a
 friendly line reading *"Play move one checker from 13 to 8"* (a verb doubled in
@@ -685,6 +827,9 @@ PART 1
 6. frame gate      FRAME RATE: __ fps   pause folded early: __ / 10
                    nudge recovery: __ s   light: steady / twitchy
 7. VideoRange      Android attempts: __   iPhone attempts: __   beliefs match: Y/N
+8. backgrounding   preview back in __ s (match) / __ s (calibration)
+                   match state intact: Y/N   stage+handles intact: Y/N
+                   camera indicator off after a back-out mid-open: Y/N
 
 PART 2 (pass / fail / note)
 C1  three preconditions           ____
@@ -694,6 +839,9 @@ C4  opening throw + mic dialog    ____
 C5  dice read                     ____   (tap-to-enter fallbacks this game: __)
 C6  play observed                 ____
 C7  dictation + correction loop   ____
+    placement verification: verified first try __ / corrected then verified __
+                            mirror escalated __ / SKIPPED as unseeable __
+                            (of __ dictated turns this game)
 C8  illegal play objection        ____
 C9  readability outage            ____
 C10 mid-game recalibration        ____
@@ -708,8 +856,18 @@ Numbers that must go back into the source:
 **What "SHIP" requires.** Part 1 item 1 in landscape, and every Part 2
 checkpoint whose failure would corrupt the game state — C4's attribution, C5's
 misreads, C6's premature folds, C7's silent acceptance, C8's objection, C10's
-score surviving a recalibration. Everything else is a number to write down and a
-judgement to make.
+score surviving a recalibration. C7's two escalation buttons are on that list
+too, for a different reason: they are not about corrupting state, they are the
+only way out of a placement that cannot verify, and without them the match is
+over. Everything else is a number to write down and a judgement to make.
+
+**The placement row is the one to read first.** `PerceptionTargets`
+`placementVerification` promises 0.95 and the real corpus scores **1 in 6**,
+with a known mechanism and no fix yet — so the four counts under C7 are the
+first field reading of that gap. *Skipped as unseeable* is the interesting
+number: it is the rate at which a correctly placed board could not be confirmed,
+which is what the queued perception work has to move. The app counts it too, as
+`buddy_fallback_used` / `placement_skipped`.
 
 **Where the numbers go.** Items 2, 3 and 6 each name constants that currently
 ship with arithmetic rather than a measurement. A number that moves gets changed

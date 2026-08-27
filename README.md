@@ -25,15 +25,20 @@ engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
   for a folding case) and confirm the position it draws back over the picture.
   It learns *your* board's checker and felt colours from the thirty checkers of
   the starting position — **no colour constants exist anywhere in the
-  pipeline**. After that it reads your dice and your plays off the felt and
-  speaks its own ("You rolled 6-3." … "I rolled 5-2 — play 13/8, 24/22."),
+  pipeline**. After that it reads your **plays** off the felt and speaks both
+  sides of the table ("You rolled 6-3." … "I rolled 5-2 — play 13/8, 24/22."),
   objects to an illegal play with the reason, names the checker you put in the
   wrong place, doubles by voice, and says when it has lost the board — a
   **readability light** names the cause and a nudged board reopens
   recalibration with the handles where they were, with the match resuming
-  exactly where it paused. The microphone is an optional optimization (it hears
-  the dice land and looks sooner; nothing is recorded), and every fallback is
-  one tap away — type the roll, or tap the play out on the belief mirror.
+  exactly where it paused. **The roll is typed rather than read**: the
+  three-tap dice pad is the shipping dice path and is always open, because the
+  camera's dice reader **declines rather than misreads** on the real corpus
+  today — it found no pair on any of the four frames carrying a certified
+  roll, and read none of them wrong — with the band-location and tilt work
+  that would find dice this small still queued. The microphone is an optional
+  optimization (it hears the dice land and looks sooner; nothing is recorded),
+  and the belief mirror is one tap away for a play the felt does not give up.
   Matches land in History with analysis like any other. The perception core is
   [`packages/board_vision`](packages/board_vision), scored in CI against a
   committed corpus of real board photographs; the on-device acceptance run is
@@ -118,6 +123,22 @@ git submodule update --init --recursive
   Buddy Mode is mobile-only and `lib/buddy/speaker.dart` guards it — but
   Flutter offers no way to exclude a plugin from one platform's build, so the
   Windows toolchain has to satisfy it.
+  - **On a Windows N/KN edition the same plugin can take the desktop build
+    down at launch, and nothing on this side of the seam can stop it.**
+    `flutter_tts_plugin.cpp` constructs a WinRT `SpeechSynthesizer` and a
+    `Windows.Media.Playback.MediaPlayer` in the plugin's own constructor,
+    which `RegisterWithRegistrar` runs unconditionally while Flutter registers
+    plugins — before any Dart code, and so before any guard of ours. On an N
+    or KN edition without the **Media Feature Pack** those classes are not
+    registered, the activation throws, and `flutter run -d windows` dies as it
+    starts rather than when something asks for a voice. It is a **dev-target
+    problem only**: Buddy Mode is Android/iOS
+    (`isBuddyModeSupportedPlatform`), the app's own speech path is guarded
+    (`isBuddySpeechSupportedPlatform` → `SilentBuddyTts` off-mobile) and never
+    calls the plugin, and CI never builds Windows. The only real fix is
+    patching the plugin, so this is **recorded rather than fixed** — install
+    the Media Feature Pack on such a machine, or develop on an edition that
+    ships it.
   - Buddy Mode's **`record`** dependency (the dice-sound attention hint) is the
     same shape of dependency and needs **nothing extra**: `record_windows`
     builds against the Windows SDK's own Media Foundation headers and calls no
