@@ -27,14 +27,32 @@ class FakeBuddyCamera implements BuddyCamera {
       StreamController<ObservedFrame>.broadcast();
 
   bool opened = false;
+
+  /// Whether the last hold has gone — the camera is off, and [push] publishes
+  /// nothing until somebody opens it again.
+  ///
+  /// **Not a terminal state**, exactly as it is not one on the real camera:
+  /// `PhoneBuddyCamera.close` stops the frame SOURCE and disposes the
+  /// controller, but `CameraFrameSource.stop` leaves the gate's streams alive
+  /// (only `dispose` closes them), so a subscriber — the session, which
+  /// subscribes once in its constructor — survives a close and hears the
+  /// frames that follow the next open. A fake that closed its stream on the
+  /// first release would have made the whole backgrounding path untestable,
+  /// and untested is how the real one would have shipped.
   bool closed = false;
+
+  /// How many times each verb has been called, in the balance a lifecycle
+  /// test reads: backgrounding gives a hold up and resuming takes one back.
+  int opens = 0;
+  int closes = 0;
 
   /// Balanced with [PhoneBuddyCamera]'s own count, and for the same reason: a
   /// recalibration pushed from the game screen opens this camera a second time
   /// and closes it as it pops, under a screen that is still playing a match.
-  /// A fake that shut the frame stream on the first close would make that
-  /// resume untestable — and untested is how the real one would have shipped.
   int _users = 0;
+
+  /// How many screens are holding it right now.
+  int get users => _users;
 
   @override
   Stream<ObservedFrame> get frames => _frames.stream;
@@ -42,7 +60,9 @@ class FakeBuddyCamera implements BuddyCamera {
   @override
   Future<CameraOpening> open() async {
     _users++;
+    opens++;
     opened = true;
+    closed = false;
     return opening;
   }
 
@@ -60,10 +80,20 @@ class FakeBuddyCamera implements BuddyCamera {
 
   @override
   Future<void> close() async {
+    closes++;
     if (_users > 0) _users--;
-    if (_users > 0 || closed) return;
+    if (_users > 0) return;
     closed = true;
-    await _frames.close();
+  }
+
+  /// `PhoneBuddyCamera.shutDown`'s counterpart: the provider's own teardown,
+  /// which is the only thing that ends the frame stream for good. Every
+  /// harness hangs this off `addTearDown`, so a test that leaves a screen
+  /// mounted still ends with a closed controller.
+  Future<void> shutDown() async {
+    _users = 0;
+    closed = true;
+    if (!_frames.isClosed) await _frames.close();
   }
 
   /// The frame clock, advanced one observation interval per frame — a real one

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:aigammon_app/analytics/app_analytics.dart';
 import 'package:aigammon_app/buddy/buddy_session.dart';
 import 'package:aigammon_app/screens/buddy/calibration_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
 import 'package:board_vision/board_vision.dart';
+import 'package:camera/camera.dart' show CameraDescription;
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -514,6 +517,46 @@ void main() {
           reason: 'shutDown releases everyone and then closes, and that close '
               'has to be the one that turns the camera off');
     });
+
+    test('an open abandoned while it is still enumerating gives nothing back',
+        () async {
+      // **The in-flight race, at the one point of it a test host can reach.**
+      // `PhoneBuddyCamera.open` takes its hold synchronously and then suspends
+      // on the plugin. A `close()` landing during that suspension — a screen
+      // disposing, or the app being backgrounded — releases the hold, finds
+      // nothing built yet, and tears nothing down; an `open` that then resumed
+      // blindly would go on to start a camera and a gyroscope subscription
+      // with no screen left to turn them off.
+      //
+      // Only the FIRST of the three checks is reachable here, and that is a
+      // fact about the plugin rather than about the guard: past this point
+      // `open` has constructed a real `CameraController`, which `flutter test`
+      // cannot initialize. The other two are item 8 of the on-device protocol
+      // (background the app during calibration, before the preview appears).
+      final camera = _CameraHeldOpen();
+      final opening = camera.open();
+      expect(camera.enumerations, 1,
+          reason: 'the hold is taken and the plugin call is in flight');
+
+      await camera.close();
+      camera.gate.complete(const <CameraDescription>[]);
+
+      final result = await opening;
+      expect(
+        (result as CameraUnavailable).message,
+        'The camera was closed before it finished opening.',
+        reason: 'and NOT "this device has no camera" — the guard answers '
+            'before the enumeration is interpreted, which is what makes the '
+            'abandonment visible at all',
+      );
+
+      // Nothing was adopted, either: the next open starts from the beginning
+      // rather than handing back a CameraReady over a controller that was
+      // never built.
+      await camera.open();
+      expect(camera.enumerations, 2);
+      await camera.close();
+    });
   });
 
   // A handle that can only be dragged is a handle only some people can place,
@@ -746,6 +789,23 @@ List<double> _stackDepths(StackMetrics stacks) {
 
 const Size _beliefBox = Size(640, 480);
 
+/// The real [PhoneBuddyCamera] with its one seam held open.
+///
+/// A subclass rather than a fake, because what is under test IS the real
+/// class's sequencing — the fake camera above it has no plugin calls to be
+/// abandoned between.
+class _CameraHeldOpen extends PhoneBuddyCamera {
+  final Completer<List<CameraDescription>> gate =
+      Completer<List<CameraDescription>>();
+  int enumerations = 0;
+
+  @override
+  Future<List<CameraDescription>> enumerateCameras() {
+    enumerations++;
+    return gate.future;
+  }
+}
+
 class _Harness {
   _Harness({
     this.opening = const CameraReady(),
@@ -770,7 +830,7 @@ class _Harness {
       appAnalyticsProvider.overrideWithValue(analytics),
     ]);
     addTearDown(container.dispose);
-    addTearDown(camera.close);
+    addTearDown(camera.shutDown);
     await t.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: MaterialApp(

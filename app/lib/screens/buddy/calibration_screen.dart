@@ -112,6 +112,120 @@ class CameraHold {
   void releaseAll() => _users = 0;
 }
 
+/// One screen's hold on the shared camera, kept in step with the app's own
+/// lifecycle.
+///
+/// ## What this exists for
+///
+/// **Android takes the camera back when the app goes away.** A phone propped
+/// over a board for a whole match will be backgrounded — a notification, a call,
+/// the screen locking — and when it comes back the `CameraController` the
+/// screen is still holding is an object that no longer refers to anything: the
+/// preview is black, the frame stream never publishes again, and nothing
+/// anywhere says why. Buddy Mode had no [WidgetsBindingObserver] at all, so
+/// that state was permanent for the rest of the match, and the one control that
+/// looks like a way out — "Fix the aim" — went back through
+/// [BuddyCamera.open], which used to return `CameraReady` on the strength of a
+/// non-null controller.
+///
+/// ## Desired against actual, rather than a pile of flags
+///
+/// The hold is a **counted** resource shared by two screens, so an unbalanced
+/// close releases somebody else's (see [BuddyCamera.close]) — and every
+/// transition here is asynchronous, so a suspend can land inside a resume and a
+/// resume inside a suspend. Rather than guard each interleaving, the mixin
+/// keeps one bit of intent ([_wantsCamera]) and one bit of fact
+/// ([_holdsCamera]) and reconciles them in a loop that only one caller is ever
+/// inside. Every ordering ends with the two equal, and every `open` is matched
+/// by exactly one `close`.
+///
+/// ## Suspending on `inactive`, not only on `paused`
+///
+/// Flutter reports Android's `onPause` as [AppLifecycleState.inactive] and
+/// `onStop` as [AppLifecycleState.paused], and the camera is genuinely gone by
+/// the second — but a permission dialog, a notification shade and a phone call
+/// all produce the first, and the plugin's own example releases there. So does
+/// this. The cost of releasing early is a reopen nobody sees; the cost of
+/// releasing late is a dead camera that survives the resume.
+mixin BuddyCameraLifecycle<T extends StatefulWidget>
+    on State<T>, WidgetsBindingObserver {
+  /// The shared camera this screen holds.
+  BuddyCamera get lifecycleCamera;
+
+  /// How opening ended — or `null`, which means the camera has been given up
+  /// and there is nothing to show until it comes back.
+  ///
+  /// Called only while the screen is mounted, so an implementation may
+  /// `setState` in it directly.
+  void onCameraOpening(CameraOpening? opening);
+
+  bool _wantsCamera = false;
+  bool _holdsCamera = false;
+  bool _reconciling = false;
+
+  /// Whether [stopCamera] has run — the screen is going away rather than
+  /// merely losing the camera for a while.
+  ///
+  /// It gates the callback rather than the release, because `State.mounted` is
+  /// still TRUE inside `dispose` (the element is defunct, not detached) and a
+  /// `setState` from there is an assertion failure. There is nothing to tell a
+  /// screen that is being taken apart, so it is not told.
+  bool _stopping = false;
+
+  /// Whether this screen is holding the camera open right now.
+  bool get holdsCamera => _holdsCamera;
+
+  /// Takes the first hold and starts following the app's lifecycle. Call from
+  /// `initState`.
+  void startCamera() {
+    WidgetsBinding.instance.addObserver(this);
+    _wantsCamera = true;
+    unawaited(_reconcile());
+  }
+
+  /// Gives the hold up — if this screen still has one — and stops following.
+  /// Call from `dispose`.
+  ///
+  /// Idempotent against a backgrounded screen, which is the case that made the
+  /// bookkeeping necessary: a screen disposed while the app is in the
+  /// background has ALREADY released its hold, and closing again would take the
+  /// camera away from whichever screen resumed first.
+  void stopCamera() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopping = true;
+    _wantsCamera = false;
+    unawaited(_reconcile());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (_stopping) return;
+    _wantsCamera = state == AppLifecycleState.resumed;
+    unawaited(_reconcile());
+  }
+
+  Future<void> _reconcile() async {
+    if (_reconciling) return;
+    _reconciling = true;
+    try {
+      while (_wantsCamera != _holdsCamera) {
+        if (_wantsCamera) {
+          _holdsCamera = true;
+          final opening = await lifecycleCamera.open();
+          if (mounted && _wantsCamera) onCameraOpening(opening);
+        } else {
+          _holdsCamera = false;
+          if (mounted && !_stopping) onCameraOpening(null);
+          await lifecycleCamera.close();
+        }
+      }
+    } finally {
+      _reconciling = false;
+    }
+  }
+}
+
 /// How opening the camera ended.
 sealed class CameraOpening {
   const CameraOpening();
@@ -482,9 +596,13 @@ class CalibrationScreen extends ConsumerStatefulWidget {
   ConsumerState<CalibrationScreen> createState() => _CalibrationScreenState();
 }
 
-class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
+class _CalibrationScreenState extends ConsumerState<CalibrationScreen>
+    with WidgetsBindingObserver, BuddyCameraLifecycle<CalibrationScreen> {
   late final BuddyCamera _camera = ref.read(buddyCameraProvider);
   StreamSubscription<ObservedFrame>? _frames;
+
+  @override
+  BuddyCamera get lifecycleCamera => _camera;
 
   late CalibrationStage _stage;
   late BoardHandles _handles;
@@ -514,12 +632,25 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     // A recalibration opens on the corners: the board has already been
     // explained once, and what changed is where it is.
     _stage = seeded == null ? CalibrationStage.aiming : CalibrationStage.corners;
-    unawaited(_open());
+    startCamera();
   }
 
-  Future<void> _open() async {
-    final opening = await _camera.open();
-    if (!mounted) return;
+  /// The camera opened, or was given up because the app went away.
+  ///
+  /// **The stage is not touched**, and that is the point: a user who takes a
+  /// call while dragging the corners comes back to the corners they had
+  /// dragged, and one who takes it at the confirmation step comes back to the
+  /// belief drawn over the board it was learned from. What a suspension costs
+  /// is the live picture and the queries that ride on it — nothing this screen
+  /// has decided.
+  ///
+  /// The subscription is cancelled and re-made rather than kept, because a
+  /// resume calls this again: a listener left in place would be joined by a
+  /// second one and every settled frame would run [_onFrame] twice.
+  @override
+  void onCameraOpening(CameraOpening? opening) {
+    unawaited(_frames?.cancel());
+    _frames = null;
     setState(() => _opening = opening);
     if (opening is CameraReady) {
       _frames = _camera.frames.listen(_onFrame);
@@ -528,8 +659,12 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
 
   @override
   void dispose() {
+    // Before the subscription, so no frame arrives on a half-torn-down screen;
+    // and instead of a bare `close()`, because a screen disposed while the app
+    // is backgrounded has already given its hold up and closing again would
+    // release somebody else's.
+    stopCamera();
     unawaited(_frames?.cancel());
-    unawaited(_camera.close());
     super.dispose();
   }
 
@@ -1533,23 +1668,78 @@ class PhoneBuddyCamera implements BuddyCamera {
   @override
   void attend() => _source.gate.attend();
 
+  /// Nobody is holding this camera any more, so whatever [open] was in the
+  /// middle of building is not wanted.
+  ///
+  /// Returned rather than thrown because [open]'s contract is that it never
+  /// throws, and read by nobody in practice: the only caller that can produce
+  /// it is a screen that has already disposed, and every caller checks
+  /// `mounted` before it looks. It is a real sentence anyway, because a message
+  /// nobody expects to see is exactly the one that eventually appears.
+  static const CameraOpening _abandoned = CameraUnavailable(
+    'The camera was closed before it finished opening.',
+  );
+
+  /// The plugin's camera enumeration, behind a method rather than called
+  /// inline.
+  ///
+  /// **The one seam on this side of the edge**, and it buys exactly one thing:
+  /// the first of [open]'s three abandonment checks becomes reachable from
+  /// `flutter test`, because a subclass can hold this future open while a
+  /// `close()` lands on it. Everything past that check has constructed a real
+  /// `CameraController`, which a test host cannot initialize, so the other two
+  /// are verified on a device instead — see item 8 of
+  /// `docs/buddy-mode-test-protocol.md`.
+  @visibleForTesting
+  Future<List<CameraDescription>> enumerateCameras() => availableCameras();
+
   @override
   Future<CameraOpening> open() async {
     _hold.acquire();
-    if (_controller != null) return const CameraReady();
+    final existing = _controller;
+    if (existing != null) {
+      // **Not a blind early return.** Android takes the camera away from a
+      // backgrounded app, and the controller left behind still looks like an
+      // object: `_controller != null` is true, and the screen that asked to
+      // reopen would be handed `CameraReady()` over a dead preview and a frame
+      // stream that never publishes again. So the held controller has to be
+      // asked whether it is still alive, and replaced rather than reused when
+      // it is not.
+      if (existing.value.isInitialized && !existing.value.hasError) {
+        return const CameraReady();
+      }
+      _controller = null;
+      await _source.stop();
+      await existing.dispose();
+    }
     const noCamera = CameraUnavailable(
       'This device has no camera Buddy Mode can watch the board with. '
       'Everything else in the app works without one.',
     );
-    final List<CameraDescription> cameras;
+    List<CameraDescription> cameras;
     try {
-      cameras = await availableCameras();
+      cameras = await enumerateCameras();
     } catch (_) {
       // Broad on purpose: a desktop with no `camera` implementation raises a
       // MissingPluginException rather than a CameraException, and "there is no
       // camera here" is the same answer either way.
-      return noCamera;
+      cameras = const <CameraDescription>[];
     }
+    // **The abandonment check after every await, and this is the first of
+    // three.** `close()` can land while this is suspended — a screen disposing,
+    // or the app being backgrounded — and it releases the hold this method took
+    // at its first line. Resuming past that point starts a camera and a gyro
+    // subscription that nothing will ever turn off, because the close that
+    // would have done it has already run and found nothing to tear down. The
+    // pattern is `_startMic`'s in `buddy_game_screen.dart`: after each await,
+    // check the thing that says whether the work is still wanted, and undo
+    // exactly what has been constructed so far.
+    //
+    // It is asked BEFORE the empty list is interpreted, and that ordering is
+    // what makes this check the one a test can reach: on a machine with no
+    // camera plugin the enumeration throws, and "nobody wants it any more" is
+    // the truer answer than "this device has none".
+    if (_hold.users == 0) return _abandoned;
     if (cameras.isEmpty) return noCamera;
     final back = cameras.firstWhere(
       (c) => c.lensDirection == CameraLensDirection.back,
@@ -1570,8 +1760,22 @@ class PhoneBuddyCamera implements BuddyCamera {
       // is what makes the ask in-context: it happens on the screen that
       // explains why Buddy needs to look at the board.
       await controller.initialize();
+      if (_hold.users == 0) {
+        // Initialized and unwanted: dispose it and leave [_controller] null, so
+        // the next open builds a fresh one rather than adopting this orphan.
+        await controller.dispose();
+        return _abandoned;
+      }
       _controller = controller;
       await _source.start(controller);
+      if (_hold.users == 0) {
+        // Streaming and unwanted. The teardown is `close`'s, run by hand,
+        // because `close` itself already ran and had nothing to do.
+        _controller = null;
+        await _source.stop();
+        await controller.dispose();
+        return _abandoned;
+      }
       return const CameraReady();
     } on CameraException catch (error) {
       await controller.dispose();

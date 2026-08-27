@@ -188,7 +188,7 @@ class _Harness {
       boardLearnerProvider.overrideWithValue(learner),
     ]);
     addTearDown(container.dispose);
-    addTearDown(camera.close);
+    addTearDown(camera.shutDown);
     await container.read(settingsProvider.future);
     await t.pumpWidget(UncontrolledProviderScope(
       container: container,
