@@ -480,13 +480,21 @@ void main() {
     }
 
     /// Every frame a gate published for [script], as (when, stable, change).
+    ///
+    /// [beforeEach] runs with the index of the frame about to be offered, so a
+    /// test can put something else on the event queue BETWEEN two frames —
+    /// which is the only way to have audio arriving while frames are, rather
+    /// than before they start.
     Future<List<(Duration, bool, double)>> publishedFor(
       FrameGate gate,
-      List<(YuvFrame, Duration)> script,
-    ) async {
+      List<(YuvFrame, Duration)> script, {
+      Future<void> Function(int index)? beforeEach,
+    }) async {
       final seen = <(Duration, bool, double)>[];
       gate.frames.listen((f) => seen.add((f.at, f.isStable, f.sceneChange)));
-      for (final (planes, at) in script) {
+      for (var i = 0; i < script.length; i++) {
+        await beforeEach?.call(i);
+        final (planes, at) = script[i];
         gate.offer(planes, at);
         await pumpEventQueue();
       }
@@ -595,10 +603,21 @@ void main() {
 
     test('a gate nobody nudges is the gate that existed before the microphone',
         () async {
-      // The inertness proof. One script, two gates: one wired to a live
-      // DiceSoundListener over a microphone that only ever hears a quiet room,
-      // and one with nothing attached at all. If the wiring can be told apart
-      // from its own absence, the feature is not the hint it claims to be.
+      // The inertness proof. One script, three gates: one with nothing
+      // attached at all, and two wired to a live DiceSoundListener over a
+      // microphone that only ever hears a quiet room. If the wiring can be
+      // told apart from its own absence, the feature is not the hint it claims
+      // to be.
+      //
+      // What it proves, exactly: room tone raises no hint (asserted first, so
+      // the equalities below are claims about an un-nudged gate — a nudged one
+      // publishes differently BY DESIGN, which is what the three tests above
+      // are for), and a detector that is subscribed, running and consuming
+      // audio publishes frame for frame what a gate with no microphone
+      // publishes. The two wired arrangements differ in WHEN the audio
+      // arrives: one drains the whole six seconds before the first frame, the
+      // other delivers it between the frames, so "the streams interleave" is
+      // tested rather than assumed.
       final script = <(YuvFrame, Duration)>[
         for (var i = 0; i < 40; i++)
           (
@@ -613,21 +632,45 @@ void main() {
       addTearDown(bare.dispose);
       final withoutMic = await publishedFor(bare, script);
 
+      // Six seconds of a room with nothing in it, all of it delivered and
+      // drained before the first frame is offered.
+      final tone = quietRoom(count: 400);
       final wired = FrameGate(converter: tinyConvert);
       addTearDown(wired.dispose);
       final mic = FakeMicSource();
       final listener =
           DiceSoundListener(source: mic, onLookNow: wired.attend);
       expect(await listener.start(), MicOpening.listening);
-      // Six seconds of a room with nothing in it, delivered before and during.
-      await mic.play(quietRoom(count: 400));
+      await mic.play(tone);
       await pumpEventQueue();
       final withMic = await publishedFor(wired, script);
       await listener.stop();
 
+      // The same six seconds again, ten hops at a time between one frame and
+      // the next: the microphone is live for the whole of the script rather
+      // than finished before it starts.
+      final interleaved = FrameGate(converter: tinyConvert);
+      addTearDown(interleaved.dispose);
+      final liveMic = FakeMicSource();
+      final liveListener =
+          DiceSoundListener(source: liveMic, onLookNow: interleaved.attend);
+      expect(await liveListener.start(), MicOpening.listening);
+      final hops = tone.length ~/ script.length;
+      final withMicDuring = await publishedFor(
+        interleaved,
+        script,
+        beforeEach: (i) => liveMic.play(tone.sublist(i * hops, (i + 1) * hops)),
+      );
+      await liveListener.stop();
+
       expect(listener.hintsFired, 0, reason: 'a quiet room is not a throw');
+      expect(liveListener.hintsFired, 0);
+      expect(withoutMic, isNotEmpty,
+          reason: 'three empty lists would be equal and prove nothing');
       expect(withMic, withoutMic,
           reason: 'identical frames in, identical frames out');
+      expect(withMicDuring, withoutMic,
+          reason: 'and the same with the two streams interleaved');
     });
   });
 
