@@ -29,15 +29,6 @@ class SettingsRepository {
     await db.into(db.settings).insertOnConflictUpdate(_toCompanion(settings));
   }
 
-  /// Latches the one-time drag hint as SHOWN, touching that column only.
-  ///
-  /// Deliberately not `save(snapshot.copyWith(dragHintShown: true))`. The
-  /// caller of this is the game screen, whose snapshot was read when the match
-  /// STARTED and whose hint fires whenever the player first picks up a checker
-  /// — an unbounded gap during which any other field may have been written by
-  /// the settings screen. A full-row upsert would carry the stale snapshot's
-  /// values back over those, silently reverting them; a single-column write
-  /// cannot.
   /// Latches the microphone hint OFF because the operating system refused it,
   /// touching that column only.
   ///
@@ -55,6 +46,15 @@ class SettingsRepository {
         .write(const SettingsCompanion(buddyMicHint: Value(false)));
   }
 
+  /// Latches the one-time drag hint as SHOWN, touching that column only.
+  ///
+  /// Deliberately not `save(snapshot.copyWith(dragHintShown: true))`. The
+  /// caller of this is the game screen, whose snapshot was read when the match
+  /// STARTED and whose hint fires whenever the player first picks up a checker
+  /// — an unbounded gap during which any other field may have been written by
+  /// the settings screen. A full-row upsert would carry the stale snapshot's
+  /// values back over those, silently reverting them; a single-column write
+  /// cannot.
   Future<void> markDragHintShown() async {
     await (db.update(db.settings)..where((t) => t.id.equals(1)))
         .write(const SettingsCompanion(dragHintShown: Value(true)));

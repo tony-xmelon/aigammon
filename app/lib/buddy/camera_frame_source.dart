@@ -76,9 +76,27 @@ const double kSceneQuietThreshold = 0.004;
 ///
 /// **Provisional.** One quiet pair is not enough: a hand pausing over the board
 /// mid-placement produces one, and reading the board then would fold a
-/// half-finished play. Three at [kObservationInterval] apart is ~0.75s of
-/// nothing happening, which is longer than a pause and shorter than a user
-/// waiting.
+/// half-finished play.
+///
+/// **What it gates is ~100ms, not the ~0.75s this doc used to claim.** The
+/// quiet run is updated on every frame [FrameGate.offer] is handed, BEFORE the
+/// throttle (rule 1 there) — so three of them is three frames at the CAMERA's
+/// rate, which is 3/30 ≈ 0.1s on a phone, not the 0.75s that three frames
+/// [kObservationInterval] apart would be. The old arithmetic counted the wrong
+/// cadence, and no test caught it because every test in
+/// `camera_frame_source_test.dart` offers frames exactly one observation
+/// interval apart, which is the one rate at which the two readings coincide.
+///
+/// Left at 3 regardless, and the correction cuts in the attention nudge's
+/// favour rather than against it: if a settled board is reachable a tenth of a
+/// second after the dice stop, then the 250ms throttle rather than this run is
+/// the dominant wait between a throw landing and a frame that can be read —
+/// and that wait is exactly what [FrameGate.attend] removes. Moving the number
+/// now would be trading a measurement nobody has for a different guess. What
+/// SHOULD move it is Task 15's on-device protocol, which is the first place a
+/// mid-placement pause can be timed against a real frame rate; whatever it
+/// answers has to be written down with the sampling rate beside it, because
+/// this constant is a count of frames and means nothing without one.
 const int kQuietFramesRequired = 3;
 
 /// Gyroscope magnitude, in radians per second, below which the phone counts as
