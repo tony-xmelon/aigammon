@@ -844,10 +844,14 @@ class BuddySession extends ChangeNotifier {
 
   /// Forgets the outstanding placement and everything raised on its behalf.
   ///
-  /// The three ways out of [BuddyPhase.verifyingPlacement] all come through
-  /// here — a clean verification, and the mirror's two answers — so a fourth
-  /// cannot be written that clears four of the five fields and leaves a stale
-  /// mirror up over a session that has moved on.
+  /// The two ways OUT of [BuddyPhase.verifyingPlacement] both come through
+  /// here — a clean verification and the mirror's "skip". The mirror's other
+  /// answer, [retryPlacement], deliberately does not: retrying means the
+  /// placement stays outstanding, so it hand-resets only the attempt
+  /// bookkeeping and keeps [_placementExpected]. Anything that genuinely
+  /// leaves the phase must call this, so an exit cannot be written that
+  /// clears some of these six fields and leaves a stale mirror up over a
+  /// session that has moved on.
   void _clearPlacement() {
     _placementExpected = null;
     _placementTouched = null;
