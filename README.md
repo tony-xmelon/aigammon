@@ -19,6 +19,25 @@ engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
   blunder) with the **equity loss** versus the engine's best move, and
   **match-aware cube advice** that respects the score via a match-equity table
   (MET) and a Janowski cubeful-equity advisor rather than money-game odds.
+- **Buddy Mode** (Android/iOS) — play on your **real board** against the engine,
+  with the phone propped up watching. A guided calibration teaches Buddy your
+  board: drag the handles onto the corners of the felt (four more on the seam
+  for a folding case) and confirm the position it draws back over the picture.
+  It learns *your* board's checker and felt colours from the thirty checkers of
+  the starting position — **no colour constants exist anywhere in the
+  pipeline**. After that it reads your dice and your plays off the felt and
+  speaks its own ("You rolled 6-3." … "I rolled 5-2 — play 13/8, 24/22."),
+  objects to an illegal play with the reason, names the checker you put in the
+  wrong place, doubles by voice, and says when it has lost the board — a
+  **readability light** names the cause and a nudged board reopens
+  recalibration with the handles where they were, with the match resuming
+  exactly where it paused. The microphone is an optional optimization (it hears
+  the dice land and looks sooner; nothing is recorded), and every fallback is
+  one tap away — type the roll, or tap the play out on the belief mirror.
+  Matches land in History with analysis like any other. The perception core is
+  [`packages/board_vision`](packages/board_vision), scored in CI against a
+  committed corpus of real board photographs; the on-device acceptance run is
+  [`docs/buddy-mode-test-protocol.md`](docs/buddy-mode-test-protocol.md).
 - **Match history + post-game analysis** — finished matches are saved and can be
   replayed move by move; a background pass replays the event log through the
   engine to flag **blunders** and summarise cube/checker errors.
@@ -64,6 +83,7 @@ file).
 | [`packages/match_transport`](packages/match_transport) | The `MatchTransport` seam both multiplayer modes run on: the interface and its normative fold/resync contract, the shared wire frames, the commit-reveal fair-dice protocol, an in-memory reference transport, and `transport_contract.dart` — the contract as a reusable suite, run against all three implementations. |
 | [`packages/lan_play`](packages/lan_play) | Play Nearby over a LAN — UDP discovery, a WebSocket host server + guest client, the JSON wire protocol, and `SocketTransport` (host and guest halves) over a dumb append-only relay. No game authority anywhere. |
 | [`packages/online_client`](packages/online_client) | Firebase-backed online-play client — pure Dart, no Firebase SDK: anonymous auth and direct Firestore documents over REST (match create/join by invite code, append-only event log), plus `FirestoreTransport` on Firestore's **real-time `Listen` gRPC stream with a polling fallback**. Runs against the emulator in tests. |
+| [`packages/board_vision`](packages/board_vision) | Buddy Mode's perception core — pure Dart, no camera and no Flutter, so it runs in CI. Homography and the ROI atlas, calibration and colour learning (no colour constants anywhere), occupancy and dice reading, state-primed legal-play matching, expected-board verification and drift recovery, continuous readability. Its suite scores a committed corpus of real board photographs against accuracy thresholds. |
 | [`firebase/`](firebase/) | The online backend, which is **only** Firestore security rules (`firestore.rules`) — no Cloud Functions, free Spark plan — plus their emulator rules-test suite, emulator config, and the deploy guide ([`DEPLOY.md`](firebase/DEPLOY.md)). |
 | [`native/wildbg`](native/wildbg) | The vendored [wildbg](https://github.com/carsten-wenderdel/wildbg) engine — a **git submodule**, never edited directly. |
 | [`native/engine_shim`](native/engine_shim) | Thin C shim (`cdylib`, `aigammon_engine`) — a verbatim copy of wildbg's `wildbg-c` crate plus a `wildbg_new_with_path` constructor that loads nets from disk at runtime. Windows/Android/iOS build scripts live here. |
@@ -142,6 +162,9 @@ cd packages/backgammon_core; dart pub get; dart test
 # FFI bindings — unit suite (no native lib) then the engine profile (real DLL + nets)
 cd packages/engine_bindings; dart pub get; dart test; dart test -P engine
 
+# Buddy Mode's perception core, corpus harness included
+cd packages/board_vision; dart pub get; dart test
+
 # Flutter app — widget/unit tests, then desktop integration test (real engine)
 cd app; flutter pub get; flutter test
 flutter test integration_test -d windows
@@ -168,6 +191,14 @@ default to the **local emulator suite** — no configuration needed; start it fr
 pwsh firebase/run-emulator-tests.ps1
 ```
 
+**If `pwsh` came from the Microsoft Store**, run the script with
+`powershell.exe -File firebase/run-emulator-tests.ps1` instead. The Store build
+is MSIX-packaged and hands its child processes a **virtualized `%LOCALAPPDATA%`**,
+which hides the real pub cache from them: the emulator's own suites pass, and
+then leg 2 dies on ``Could not find `bin\test.dart` in package `test` `` before a
+single test loads. It is the shell, not the code — the identical command run
+from `cmd`, Git Bash or Windows PowerShell passes.
+
 Creating the project, enabling anonymous sign-in, deploying the rules
 (`firebase deploy --only firestore:rules`), retrieving the Web API key, and
 building a production release with the online defines are documented in
@@ -176,10 +207,12 @@ building a production release with the online defines are documented in
 ## Continuous integration
 
 - **`ci.yml`** (push to `master`, all PRs) runs:
-  - **`packages`** (Linux, matrixed over `backgammon_core`, `lan_play`,
-    `match_transport`): `dart analyze --fatal-infos` + `dart test` each.
-    `lan_play` runs under its `ci` preset, which retries twice — it is the only
-    suite here that binds real sockets.
+  - **`packages`** (Linux, matrixed over `backgammon_core`, `board_vision`,
+    `lan_play`, `match_transport`): `dart analyze --fatal-infos` + `dart test`
+    each. `lan_play` runs under its `ci` preset, which retries twice — it is the
+    only suite here that binds real sockets. `board_vision` scores the committed
+    corpus, so a Buddy Mode perception regression turns this job red exactly
+    like a rules one.
   - **`engine`** (Linux): `cargo fmt --check`, `clippy`, the Rust shim's own
     tests, then the cdylib build followed by `dart test` and
     `dart test -P engine` against the real `.so`.
@@ -211,8 +244,11 @@ building a production release with the online defines are documented in
 ## Releasing
 
 Every release is a merge to `master` that bumps `version:` in `app/pubspec.yaml`
-and adds a section to [`CHANGELOG.md`](CHANGELOG.md). From v0.13.0 onward it also
-gets an **annotated tag**:
+— **and `appVersion` in `app/lib/branding/app_version.dart` with it**, since the
+home screen's footer reads the second one and `app_version_test.dart` fails the
+suite if the pair drifts — and adds a section to
+[`CHANGELOG.md`](CHANGELOG.md). From v0.13.0 onward it also gets an
+**annotated tag**:
 
 ```bash
 # on master, at the merge commit
