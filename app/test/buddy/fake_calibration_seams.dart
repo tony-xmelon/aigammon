@@ -66,6 +66,13 @@ class FakeBuddyCamera implements BuddyCamera {
     await _frames.close();
   }
 
+  /// The frame clock, advanced one observation interval per frame — a real one
+  /// is a `Stopwatch` in `CameraFrameSource` and runs forwards all session.
+  /// `BuddySession` samples its readability metric on it, so a fake that
+  /// stamped every frame `Duration.zero` would hand a whole match's worth of
+  /// frames to one sample.
+  Duration _at = Duration.zero;
+
   /// One frame from the gate. An UNSETTLED one is how a test says "the phone
   /// moved": the screen publishes it as the preview and asks it nothing.
   void push(Frame frame, {bool stable = true}) {
@@ -75,8 +82,9 @@ class FakeBuddyCamera implements BuddyCamera {
       motion: MotionHint.still,
       isStable: stable,
       sceneChange: 0,
-      at: Duration.zero,
+      at: _at,
     ));
+    _at += kObservationInterval;
   }
 }
 

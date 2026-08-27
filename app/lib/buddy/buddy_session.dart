@@ -31,6 +31,24 @@ const int kDiceReadAttempts = 2;
 /// of seconds of a board that still does not match what Buddy asked for.
 const int kPlacementAttemptsBeforeMirror = 3;
 
+/// The shortest gap between two frames [BuddySession.readabilityRedRate] will
+/// count.
+///
+/// **A methodology constant, not a behaviour one.** Nothing the session DOES
+/// changes with it; it decides only how the red rate thins the frames it
+/// tallies, so that the number says how much of a session the light was out
+/// for rather than how often the camera happened to publish. See
+/// [BuddySession._tallyReadability] for why those are not the same question.
+///
+/// It has to be the frame gate's ordinary cadence, `kObservationInterval`, and
+/// it is restated here rather than imported because that constant lives in
+/// `camera_frame_source.dart` with `package:camera` and `package:sensors_plus`
+/// behind it — which is the very import `observed_frame.dart` exists to keep
+/// off this file's graph. `buddy_session_test.dart` imports both and pins the
+/// two equal, because a drift would not fail anything: it would quietly stop
+/// the sampler thinning, and hand Task 15 a confounded number that looks fine.
+const Duration kReadabilitySampleInterval = Duration(milliseconds: 250);
+
 /// How far clear of the midline, in board space, each opening die has to be
 /// before which half it landed on is a reading rather than a rounding.
 ///
@@ -252,7 +270,9 @@ class BuddySession extends ChangeNotifier {
   final Map<Player, Dice> _lastDice = <Player, Dice>{};
 
   int _framesAssessed = 0;
+  int _framesSampled = 0;
   int _framesRed = 0;
+  Duration? _lastSampleAt;
 
   int? _cubeConsideredAtEvent;
   int? _announcedGame;
@@ -278,11 +298,12 @@ class BuddySession extends ChangeNotifier {
   ///
   /// Not the same as how many arrived: a frame that lands with no calibration
   /// installed is never assessed, because a dead calibration cannot judge its
-  /// own readability. Those are outside this count, and therefore outside
-  /// [readabilityRedRate]'s denominator.
+  /// own readability. Those are outside this count — and outside
+  /// [readabilityRedRate] too, which counts a thinned SUBSET of this one. See
+  /// [_tallyReadability].
   int get framesAssessed => _framesAssessed;
 
-  /// The fraction of [framesAssessed] that came back red, 0..1 — the spec's
+  /// The fraction of a session the readability light was red, 0..1 — the spec's
   /// field-tuning metric, aggregated here rather than emitted per frame.
   ///
   /// The reason it lives on the session at all: readability is assessed four
@@ -290,8 +311,13 @@ class BuddySession extends ChangeNotifier {
   /// a real kitchen is one number at the end. A session that never assessed a
   /// frame reports 0 rather than a NaN, which is the honest reading of "the
   /// light was never red" for a session that never had a light.
+  ///
+  /// **Its denominator is time, sampled — not published frames.** The rate is
+  /// taken over at most one assessment per [kReadabilitySampleInterval], so
+  /// how fast frames arrive cannot move it. [_tallyReadability] is where that
+  /// happens and why.
   double get readabilityRedRate =>
-      _framesAssessed == 0 ? 0 : _framesRed / _framesAssessed;
+      _framesSampled == 0 ? 0 : _framesRed / _framesSampled;
 
   /// The calibration is dead and the guided corner flow has to run.
   bool get needsRecalibration => _needsRecalibration;
@@ -511,11 +537,8 @@ class BuddySession extends ChangeNotifier {
     if (vision == null) return;
 
     final reading = vision.assessReadability(f.frame, f.motion);
-    // Counted on EVERY assessed frame, not only on the ones that change the
-    // verdict: the metric is how much of a session the light was out for, and a
-    // light that stays red for a minute is one notification and 240 frames.
     _framesAssessed++;
-    if (reading.level == ReadabilityLevel.red) _framesRed++;
+    _tallyReadability(reading, f.at);
     if (_readability == null || _differs(_readability!, reading)) {
       _readability = reading;
       policy.onReadability(reading);
@@ -548,6 +571,37 @@ class BuddySession extends ChangeNotifier {
             BuddyPhase.over:
         break;
     }
+  }
+
+  /// Folds one assessed frame into [readabilityRedRate] — at most one per
+  /// [kReadabilitySampleInterval], on the frame clock.
+  ///
+  /// Counted on every SAMPLED frame rather than only on the ones that change
+  /// the verdict, because the question is how much of a session the light was
+  /// out for and a light that stays red for a minute is one notification and
+  /// 240 frames.
+  ///
+  /// **The thinning is what makes the number mean anything, and `attend()` is
+  /// why it is needed.** A nudge triples the publication rate for 1.5s (see
+  /// `FrameGate.attend`), and it fires when the dice stop — so the extra
+  /// frames land squarely on the hand withdrawing over the board, which is the
+  /// reddest moment of a turn. Counting every published frame would therefore
+  /// report a HIGHER red rate for a session with the microphone on than for an
+  /// identical one with it off, and the difference would be the throttle
+  /// rather than the room: the mic setting would look like a readability
+  /// problem. Sampling at the gate's ordinary cadence puts the same moments in
+  /// the denominator at the same weight however often the camera published
+  /// them.
+  ///
+  /// The clock is the frame's own, which is monotonic within a session (a
+  /// `Stopwatch` in `CameraFrameSource`), so the first frame always samples
+  /// and every later one is measured from the last that did.
+  void _tallyReadability(Readability reading, Duration at) {
+    final last = _lastSampleAt;
+    if (last != null && at - last < kReadabilitySampleInterval) return;
+    _lastSampleAt = at;
+    _framesSampled++;
+    if (reading.level == ReadabilityLevel.red) _framesRed++;
   }
 
   static bool _differs(Readability a, Readability b) =>

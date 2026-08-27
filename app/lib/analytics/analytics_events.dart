@@ -165,12 +165,23 @@ abstract final class AnalyticsParams {
   /// denominator for every "did the mode survive a whole match" question.
   static const buddyCompleted = 'buddy_completed';
 
-  /// The fraction of assessed frames whose readability was red, 0..1.
+  /// The fraction of a session the readability light was red, 0..1.
   ///
-  /// Aggregated over the session and sent once. Frames the session never
-  /// assessed (there was no calibration) are outside the denominator, so this
-  /// is "how often could the camera not read a board it was pointed at" rather
-  /// than "how often was there no answer".
+  /// Aggregated over the session and sent once, over at most ONE assessment
+  /// per `kReadabilitySampleInterval` — the frame gate's ordinary cadence —
+  /// rather than over every frame that happened to be published. That makes it
+  /// **independent of the attention nudge**: the microphone triples the
+  /// publication rate for a second and a half after each throw, landing on the
+  /// hand withdrawing over the board, so a per-frame denominator would report
+  /// a worse-lit room for [micState] `listening` than for the same room with
+  /// the hint off. As it stands this can be read straight across every
+  /// [micState] without segmenting on it — though the event carries [micState]
+  /// regardless, because it costs nothing and a question nobody has asked yet
+  /// may still want the split.
+  ///
+  /// Frames the session never assessed (there was no calibration) are outside
+  /// it altogether, so this is "how often could the camera not read a board it
+  /// was pointed at" rather than "how often was there no answer".
   static const readabilityRedRate = 'readability_red_rate';
 
   /// Whether the calibration attempt produced a usable board.

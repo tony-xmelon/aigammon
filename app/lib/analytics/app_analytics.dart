@@ -135,8 +135,10 @@ extension AppAnalyticsEvents on AppAnalytics {
     });
   }
 
-  /// A Buddy match ended. [readabilityRedRate] is 0..1 over the frames the
-  /// session actually assessed; [micState] is one of [BuddyMicStates].
+  /// A Buddy match ended. [readabilityRedRate] is 0..1 over readability
+  /// assessments sampled at the frame gate's ordinary cadence, so the
+  /// attention nudge cannot move it (see [AnalyticsParams.readabilityRedRate]);
+  /// [micState] is one of [BuddyMicStates].
   void logBuddySessionEnded({
     required bool completed,
     required double readabilityRedRate,

@@ -533,6 +533,50 @@ void main() {
       expect(h.session.readabilityRedRate, parked);
     });
 
+    test('an attention burst cannot move the red rate', () async {
+      // The metric only means anything if a session that had the microphone
+      // and one that did not are comparable, and the nudge is what threatens
+      // that: `FrameGate.attend` publishes at three times the ordinary cadence
+      // for 1.5s after a throw, which is exactly the stretch a hand spends
+      // withdrawing over the board — the reddest part of a turn. A denominator
+      // of PUBLISHED frames would therefore report a higher red rate for a
+      // listening session than for an identical silent one, and the difference
+      // would be the throttle rather than the room.
+      Future<double> redRate({required bool nudged}) async {
+        final h = Harness();
+        h.start();
+        await h.stableFrame();
+        h.vision.willSee([tooDarkReading]);
+        await h.stableFrame();
+        if (nudged) {
+          // The frames a nudge buys, and every one of them is red.
+          await h.attentionFrame();
+          await h.attentionFrame();
+        }
+        h.vision.willSee([greenReading]);
+        await h.stableFrame();
+        await h.stableFrame();
+        return h.session.readabilityRedRate;
+      }
+
+      final silent = await redRate(nudged: false);
+      expect(silent, 0.25, reason: 'one red look out of four');
+      expect(await redRate(nudged: true), silent,
+          reason: 'a nudge changes which frames are published, never how much '
+              'of the session the light was out for');
+    });
+
+    test("the metric samples at the frame gate's own base cadence", () {
+      // `kReadabilitySampleInterval` is `kObservationInterval` restated, because
+      // the session may not import the file the gate's constants live in — that
+      // one owns `package:camera` and `package:sensors_plus`, which is what
+      // `observed_frame.dart` exists to keep off the session's import graph.
+      // This suite imports both, so the restatement is pinned rather than
+      // trusted: let them drift and the sampler stops thinning anything, which
+      // is a confounded metric that still passes every other test here.
+      expect(kReadabilitySampleInterval, kObservationInterval);
+    });
+
     test('a stale calibration parks the session without touching the game',
         () async {
       final h = Harness();
@@ -1299,17 +1343,47 @@ class Harness {
     }
   }
 
+  /// When the next ordinary frame lands, on the frame clock.
+  ///
+  /// The gate publishes at [kObservationInterval] and a real clock is the
+  /// camera source's own `Stopwatch`, so it is monotonic across a session.
+  /// This harness used to stamp every frame `Duration.zero` — a clock that
+  /// never moved, which nothing read until [BuddySession.readabilityRedRate]
+  /// started sampling on it.
+  Duration _at = Duration.zero;
+
+  /// When the last frame landed. Not [_at] minus an interval, because
+  /// [attentionFrame] puts frames BETWEEN two ordinary ones.
+  Duration _lastPush = Duration.zero;
+
   /// Pushes one settled frame and lets everything it set off finish.
   Future<void> stableFrame([Frame? frame]) async {
-    frames.add(ObservedFrame(
-      frame: frame ?? blankFrame(),
-      motion: MotionHint.still,
-      isStable: true,
-      sceneChange: 0,
-      at: Duration.zero,
-    ));
+    _lastPush = _at;
+    _at += kObservationInterval;
+    _push(frame, _lastPush);
     await settle();
   }
+
+  /// One EXTRA settled frame, an attention interval after the last one instead
+  /// of an observation interval — a frame the session sees only because
+  /// something nudged the gate. See `FrameGate.attend`.
+  Future<void> attentionFrame([Frame? frame]) async {
+    _lastPush += kAttentionInterval;
+    if (_lastPush >= _at) {
+      fail('a burst this long would push a frame past the next ordinary one, '
+          'and the frame clock has to run forwards');
+    }
+    _push(frame, _lastPush);
+    await settle();
+  }
+
+  void _push(Frame? frame, Duration at) => frames.add(ObservedFrame(
+        frame: frame ?? blankFrame(),
+        motion: MotionHint.still,
+        isStable: true,
+        sceneChange: 0,
+        at: at,
+      ));
 
   /// Drains the microtask queue enough times for a controller step, an agent
   /// future and a persistence hook to have run.
