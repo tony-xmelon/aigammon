@@ -3,6 +3,7 @@ import 'package:engine_bindings/engine_bindings.dart' show Difficulty;
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../buddy/phrasing.dart' show BuddyPhrasing;
 import '../diagnostics/crash_log.dart';
 import 'app_settings.dart';
 import 'database.dart';
@@ -37,6 +38,23 @@ class SettingsRepository {
   /// the settings screen. A full-row upsert would carry the stale snapshot's
   /// values back over those, silently reverting them; a single-column write
   /// cannot.
+  /// Latches the microphone hint OFF because the operating system refused it,
+  /// touching that column only.
+  ///
+  /// A single-column write for [markDragHintShown]'s reason, and the gap here
+  /// is wider still: the snapshot a Buddy session is holding was read when the
+  /// match STARTED, and this fires the first time a throw is waited for, which
+  /// may be several minutes and a settings edit later.
+  ///
+  /// It writes the same column the Settings switch does, deliberately. A
+  /// refusal and a user turning the hint off are the same fact — Buddy is not
+  /// listening — and the one place that says so is also the one place a user
+  /// can say otherwise once they have granted the permission elsewhere.
+  Future<void> markBuddyMicRefused() async {
+    await (db.update(db.settings)..where((t) => t.id.equals(1)))
+        .write(const SettingsCompanion(buddyMicHint: Value(false)));
+  }
+
   Future<void> markDragHintShown() async {
     await (db.update(db.settings)..where((t) => t.id.equals(1)))
         .write(const SettingsCompanion(dragHintShown: Value(true)));
@@ -60,6 +78,8 @@ class SettingsRepository {
         showPassDevice: row.showPassDevice,
         rotateBoardHotSeat: row.rotateBoardHotSeat,
         dragHintShown: row.dragHintShown,
+        buddyPhrasing: _phrasingFromName(row.buddyPhrasing),
+        buddyMicHint: row.buddyMicHint,
       );
 
   static SettingsCompanion _toCompanion(AppSettings s) => SettingsCompanion(
@@ -77,6 +97,8 @@ class SettingsRepository {
         showPassDevice: Value(s.showPassDevice),
         rotateBoardHotSeat: Value(s.rotateBoardHotSeat),
         dragHintShown: Value(s.dragHintShown),
+        buddyPhrasing: Value(s.buddyPhrasing.name),
+        buddyMicHint: Value(s.buddyMicHint),
       );
 
   // --- Enum <-> string codecs (tolerant of unknown values) -------------------
@@ -90,6 +112,9 @@ class SettingsRepository {
 
   static Difficulty _difficultyFromName(String name) => Difficulty.values
       .firstWhere((d) => d.name == name, orElse: () => Difficulty.medium);
+
+  static BuddyPhrasing _phrasingFromName(String name) => BuddyPhrasing.values
+      .firstWhere((p) => p.name == name, orElse: () => BuddyPhrasing.terse);
 
   static bool? _tutorFromText(String? text) => switch (text) {
         'on' => true,

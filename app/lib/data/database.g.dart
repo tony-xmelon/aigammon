@@ -1402,6 +1402,33 @@ class $SettingsTable extends Settings
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _buddyPhrasingMeta = const VerificationMeta(
+    'buddyPhrasing',
+  );
+  @override
+  late final GeneratedColumn<String> buddyPhrasing = GeneratedColumn<String>(
+    'buddy_phrasing',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('terse'),
+  );
+  static const VerificationMeta _buddyMicHintMeta = const VerificationMeta(
+    'buddyMicHint',
+  );
+  @override
+  late final GeneratedColumn<bool> buddyMicHint = GeneratedColumn<bool>(
+    'buddy_mic_hint',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("buddy_mic_hint" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1418,6 +1445,8 @@ class $SettingsTable extends Settings
     showPassDevice,
     rotateBoardHotSeat,
     dragHintShown,
+    buddyPhrasing,
+    buddyMicHint,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1545,6 +1574,24 @@ class $SettingsTable extends Settings
         ),
       );
     }
+    if (data.containsKey('buddy_phrasing')) {
+      context.handle(
+        _buddyPhrasingMeta,
+        buddyPhrasing.isAcceptableOrUnknown(
+          data['buddy_phrasing']!,
+          _buddyPhrasingMeta,
+        ),
+      );
+    }
+    if (data.containsKey('buddy_mic_hint')) {
+      context.handle(
+        _buddyMicHintMeta,
+        buddyMicHint.isAcceptableOrUnknown(
+          data['buddy_mic_hint']!,
+          _buddyMicHintMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1609,6 +1656,14 @@ class $SettingsTable extends Settings
       dragHintShown: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}drag_hint_shown'],
+      )!,
+      buddyPhrasing: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}buddy_phrasing'],
+      )!,
+      buddyMicHint: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}buddy_mic_hint'],
       )!,
     );
   }
@@ -1679,6 +1734,32 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
   /// has already been surfaced (schema v4). Flipped true the first time the hint
   /// shows, so it never appears twice. Starts false on a fresh install.
   final bool dragHintShown;
+
+  /// How Buddy words a play out loud (schema v9): a `BuddyPhrasing.name`,
+  /// 'terse' or 'friendly'. Stored by name like [themeMode] and friends, and
+  /// read tolerantly, so an unknown string falls back to the default rather
+  /// than throwing.
+  ///
+  /// The DEFAULT for a Buddy session rather than the session's own setting: the
+  /// setup screen seeds its per-match choice from this and does not write back,
+  /// exactly as it does for [defaultMatchLength] and [defaultDifficulty].
+  final String buddyPhrasing;
+
+  /// Whether Buddy may listen for the dice landing (schema v9). ON by default,
+  /// and it is both halves of one thing: the user's preference, and the
+  /// REMEMBERED REFUSAL.
+  ///
+  /// Buddy asks the operating system for the microphone in context — the first
+  /// time a throw is actually being waited for — and a refusal latches this
+  /// false, which is what stops the mode asking again every match. A single
+  /// flag rather than a preference plus a hidden "already refused" bit, because
+  /// two flags would leave a user who refused once and later granted the
+  /// permission in system settings with no way back: there would be nothing on
+  /// screen to turn on. This there is.
+  ///
+  /// Off changes nothing about how a match plays. The hint only ever tells the
+  /// frame gate to look sooner — see `lib/buddy/dice_sound_trigger.dart`.
+  final bool buddyMicHint;
   const SettingsRow({
     required this.id,
     required this.themeMode,
@@ -1694,6 +1775,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     required this.showPassDevice,
     required this.rotateBoardHotSeat,
     required this.dragHintShown,
+    required this.buddyPhrasing,
+    required this.buddyMicHint,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1714,6 +1797,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     map['show_pass_device'] = Variable<bool>(showPassDevice);
     map['rotate_board_hot_seat'] = Variable<bool>(rotateBoardHotSeat);
     map['drag_hint_shown'] = Variable<bool>(dragHintShown);
+    map['buddy_phrasing'] = Variable<String>(buddyPhrasing);
+    map['buddy_mic_hint'] = Variable<bool>(buddyMicHint);
     return map;
   }
 
@@ -1735,6 +1820,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       showPassDevice: Value(showPassDevice),
       rotateBoardHotSeat: Value(rotateBoardHotSeat),
       dragHintShown: Value(dragHintShown),
+      buddyPhrasing: Value(buddyPhrasing),
+      buddyMicHint: Value(buddyMicHint),
     );
   }
 
@@ -1758,6 +1845,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       showPassDevice: serializer.fromJson<bool>(json['showPassDevice']),
       rotateBoardHotSeat: serializer.fromJson<bool>(json['rotateBoardHotSeat']),
       dragHintShown: serializer.fromJson<bool>(json['dragHintShown']),
+      buddyPhrasing: serializer.fromJson<String>(json['buddyPhrasing']),
+      buddyMicHint: serializer.fromJson<bool>(json['buddyMicHint']),
     );
   }
   @override
@@ -1778,6 +1867,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       'showPassDevice': serializer.toJson<bool>(showPassDevice),
       'rotateBoardHotSeat': serializer.toJson<bool>(rotateBoardHotSeat),
       'dragHintShown': serializer.toJson<bool>(dragHintShown),
+      'buddyPhrasing': serializer.toJson<String>(buddyPhrasing),
+      'buddyMicHint': serializer.toJson<bool>(buddyMicHint),
     };
   }
 
@@ -1796,6 +1887,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     bool? showPassDevice,
     bool? rotateBoardHotSeat,
     bool? dragHintShown,
+    String? buddyPhrasing,
+    bool? buddyMicHint,
   }) => SettingsRow(
     id: id ?? this.id,
     themeMode: themeMode ?? this.themeMode,
@@ -1813,6 +1906,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     showPassDevice: showPassDevice ?? this.showPassDevice,
     rotateBoardHotSeat: rotateBoardHotSeat ?? this.rotateBoardHotSeat,
     dragHintShown: dragHintShown ?? this.dragHintShown,
+    buddyPhrasing: buddyPhrasing ?? this.buddyPhrasing,
+    buddyMicHint: buddyMicHint ?? this.buddyMicHint,
   );
   SettingsRow copyWithCompanion(SettingsCompanion data) {
     return SettingsRow(
@@ -1854,6 +1949,12 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
       dragHintShown: data.dragHintShown.present
           ? data.dragHintShown.value
           : this.dragHintShown,
+      buddyPhrasing: data.buddyPhrasing.present
+          ? data.buddyPhrasing.value
+          : this.buddyPhrasing,
+      buddyMicHint: data.buddyMicHint.present
+          ? data.buddyMicHint.value
+          : this.buddyMicHint,
     );
   }
 
@@ -1873,7 +1974,9 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           ..write('diceRollAnimation: $diceRollAnimation, ')
           ..write('showPassDevice: $showPassDevice, ')
           ..write('rotateBoardHotSeat: $rotateBoardHotSeat, ')
-          ..write('dragHintShown: $dragHintShown')
+          ..write('dragHintShown: $dragHintShown, ')
+          ..write('buddyPhrasing: $buddyPhrasing, ')
+          ..write('buddyMicHint: $buddyMicHint')
           ..write(')'))
         .toString();
   }
@@ -1894,6 +1997,8 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
     showPassDevice,
     rotateBoardHotSeat,
     dragHintShown,
+    buddyPhrasing,
+    buddyMicHint,
   );
   @override
   bool operator ==(Object other) =>
@@ -1912,7 +2017,9 @@ class SettingsRow extends DataClass implements Insertable<SettingsRow> {
           other.diceRollAnimation == this.diceRollAnimation &&
           other.showPassDevice == this.showPassDevice &&
           other.rotateBoardHotSeat == this.rotateBoardHotSeat &&
-          other.dragHintShown == this.dragHintShown);
+          other.dragHintShown == this.dragHintShown &&
+          other.buddyPhrasing == this.buddyPhrasing &&
+          other.buddyMicHint == this.buddyMicHint);
 }
 
 class SettingsCompanion extends UpdateCompanion<SettingsRow> {
@@ -1930,6 +2037,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
   final Value<bool> showPassDevice;
   final Value<bool> rotateBoardHotSeat;
   final Value<bool> dragHintShown;
+  final Value<String> buddyPhrasing;
+  final Value<bool> buddyMicHint;
   const SettingsCompanion({
     this.id = const Value.absent(),
     this.themeMode = const Value.absent(),
@@ -1945,6 +2054,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.showPassDevice = const Value.absent(),
     this.rotateBoardHotSeat = const Value.absent(),
     this.dragHintShown = const Value.absent(),
+    this.buddyPhrasing = const Value.absent(),
+    this.buddyMicHint = const Value.absent(),
   });
   SettingsCompanion.insert({
     this.id = const Value.absent(),
@@ -1961,6 +2072,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     this.showPassDevice = const Value.absent(),
     this.rotateBoardHotSeat = const Value.absent(),
     this.dragHintShown = const Value.absent(),
+    this.buddyPhrasing = const Value.absent(),
+    this.buddyMicHint = const Value.absent(),
   });
   static Insertable<SettingsRow> custom({
     Expression<int>? id,
@@ -1977,6 +2090,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Expression<bool>? showPassDevice,
     Expression<bool>? rotateBoardHotSeat,
     Expression<bool>? dragHintShown,
+    Expression<String>? buddyPhrasing,
+    Expression<bool>? buddyMicHint,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1996,6 +2111,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
       if (rotateBoardHotSeat != null)
         'rotate_board_hot_seat': rotateBoardHotSeat,
       if (dragHintShown != null) 'drag_hint_shown': dragHintShown,
+      if (buddyPhrasing != null) 'buddy_phrasing': buddyPhrasing,
+      if (buddyMicHint != null) 'buddy_mic_hint': buddyMicHint,
     });
   }
 
@@ -2014,6 +2131,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     Value<bool>? showPassDevice,
     Value<bool>? rotateBoardHotSeat,
     Value<bool>? dragHintShown,
+    Value<String>? buddyPhrasing,
+    Value<bool>? buddyMicHint,
   }) {
     return SettingsCompanion(
       id: id ?? this.id,
@@ -2030,6 +2149,8 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
       showPassDevice: showPassDevice ?? this.showPassDevice,
       rotateBoardHotSeat: rotateBoardHotSeat ?? this.rotateBoardHotSeat,
       dragHintShown: dragHintShown ?? this.dragHintShown,
+      buddyPhrasing: buddyPhrasing ?? this.buddyPhrasing,
+      buddyMicHint: buddyMicHint ?? this.buddyMicHint,
     );
   }
 
@@ -2078,6 +2199,12 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
     if (dragHintShown.present) {
       map['drag_hint_shown'] = Variable<bool>(dragHintShown.value);
     }
+    if (buddyPhrasing.present) {
+      map['buddy_phrasing'] = Variable<String>(buddyPhrasing.value);
+    }
+    if (buddyMicHint.present) {
+      map['buddy_mic_hint'] = Variable<bool>(buddyMicHint.value);
+    }
     return map;
   }
 
@@ -2097,7 +2224,9 @@ class SettingsCompanion extends UpdateCompanion<SettingsRow> {
           ..write('diceRollAnimation: $diceRollAnimation, ')
           ..write('showPassDevice: $showPassDevice, ')
           ..write('rotateBoardHotSeat: $rotateBoardHotSeat, ')
-          ..write('dragHintShown: $dragHintShown')
+          ..write('dragHintShown: $dragHintShown, ')
+          ..write('buddyPhrasing: $buddyPhrasing, ')
+          ..write('buddyMicHint: $buddyMicHint')
           ..write(')'))
         .toString();
   }
@@ -3247,6 +3376,8 @@ typedef $$SettingsTableCreateCompanionBuilder =
       Value<bool> showPassDevice,
       Value<bool> rotateBoardHotSeat,
       Value<bool> dragHintShown,
+      Value<String> buddyPhrasing,
+      Value<bool> buddyMicHint,
     });
 typedef $$SettingsTableUpdateCompanionBuilder =
     SettingsCompanion Function({
@@ -3264,6 +3395,8 @@ typedef $$SettingsTableUpdateCompanionBuilder =
       Value<bool> showPassDevice,
       Value<bool> rotateBoardHotSeat,
       Value<bool> dragHintShown,
+      Value<String> buddyPhrasing,
+      Value<bool> buddyMicHint,
     });
 
 class $$SettingsTableFilterComposer
@@ -3342,6 +3475,16 @@ class $$SettingsTableFilterComposer
 
   ColumnFilters<bool> get dragHintShown => $composableBuilder(
     column: $table.dragHintShown,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get buddyPhrasing => $composableBuilder(
+    column: $table.buddyPhrasing,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get buddyMicHint => $composableBuilder(
+    column: $table.buddyMicHint,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3424,6 +3567,16 @@ class $$SettingsTableOrderingComposer
     column: $table.dragHintShown,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get buddyPhrasing => $composableBuilder(
+    column: $table.buddyPhrasing,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get buddyMicHint => $composableBuilder(
+    column: $table.buddyMicHint,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$SettingsTableAnnotationComposer
@@ -3500,6 +3653,16 @@ class $$SettingsTableAnnotationComposer
     column: $table.dragHintShown,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get buddyPhrasing => $composableBuilder(
+    column: $table.buddyPhrasing,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get buddyMicHint => $composableBuilder(
+    column: $table.buddyMicHint,
+    builder: (column) => column,
+  );
 }
 
 class $$SettingsTableTableManager
@@ -3547,6 +3710,8 @@ class $$SettingsTableTableManager
                 Value<bool> showPassDevice = const Value.absent(),
                 Value<bool> rotateBoardHotSeat = const Value.absent(),
                 Value<bool> dragHintShown = const Value.absent(),
+                Value<String> buddyPhrasing = const Value.absent(),
+                Value<bool> buddyMicHint = const Value.absent(),
               }) => SettingsCompanion(
                 id: id,
                 themeMode: themeMode,
@@ -3562,6 +3727,8 @@ class $$SettingsTableTableManager
                 showPassDevice: showPassDevice,
                 rotateBoardHotSeat: rotateBoardHotSeat,
                 dragHintShown: dragHintShown,
+                buddyPhrasing: buddyPhrasing,
+                buddyMicHint: buddyMicHint,
               ),
           createCompanionCallback:
               ({
@@ -3579,6 +3746,8 @@ class $$SettingsTableTableManager
                 Value<bool> showPassDevice = const Value.absent(),
                 Value<bool> rotateBoardHotSeat = const Value.absent(),
                 Value<bool> dragHintShown = const Value.absent(),
+                Value<String> buddyPhrasing = const Value.absent(),
+                Value<bool> buddyMicHint = const Value.absent(),
               }) => SettingsCompanion.insert(
                 id: id,
                 themeMode: themeMode,
@@ -3594,6 +3763,8 @@ class $$SettingsTableTableManager
                 showPassDevice: showPassDevice,
                 rotateBoardHotSeat: rotateBoardHotSeat,
                 dragHintShown: dragHintShown,
+                buddyPhrasing: buddyPhrasing,
+                buddyMicHint: buddyMicHint,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

@@ -70,6 +70,30 @@ void main() {
       expect(_selected<Difficulty>(t, Difficulty.hard), isTrue);
     });
 
+    testWidgets('takes the Buddy voice from Settings, not from a literal',
+        (t) async {
+      // The reconciliation this task owed: the per-match control was a
+      // hard-coded `terse` while Settings had nothing to say about Buddy at
+      // all, so a stored preference would have been a preference the screen it
+      // applies to ignored. Seeded, not written back — per-match, exactly like
+      // the match length and the difficulty above it.
+      final h = _Harness(
+        settings: _settings.copyWith(buddyPhrasing: BuddyPhrasing.friendly),
+      );
+      await h.pump(t);
+
+      expect(_selected<BuddyPhrasing>(t, BuddyPhrasing.friendly), isTrue);
+      expect(
+          find.textContaining('Move one checker from 13 to 8'), findsOneWidget,
+          reason: 'the example under the control follows the selection');
+
+      await _tap(t, find.text('Terse'));
+      await _tap(t, find.text('Calibrate the board'));
+      await h.calibrate(t);
+      expect(h.launched!.$1.phrasing, BuddyPhrasing.terse,
+          reason: 'a per-match change wins for this match');
+    });
+
     testWidgets('adds the two choices only Buddy Mode has', (t) async {
       final h = _Harness();
       await h.pump(t);
@@ -147,6 +171,11 @@ bool _selected<T>(WidgetTester t, T value) => t
     .contains(value);
 
 class _Harness {
+  _Harness({this.settings = _settings});
+
+  /// What the persisted preferences say when this screen opens.
+  final AppSettings settings;
+
   final FakeVision vision = FakeVision(calibration: fakeCalibration());
   late final FakeBoardLearner learner = FakeBoardLearner(vision);
   final FakeBuddyCamera camera = FakeBuddyCamera();
@@ -154,7 +183,7 @@ class _Harness {
 
   Future<void> pump(WidgetTester t) async {
     final container = ProviderContainer(overrides: <Override>[
-      settingsProvider.overrideWith((ref) => Stream.value(_settings)),
+      settingsProvider.overrideWith((ref) => Stream.value(settings)),
       buddyCameraProvider.overrideWithValue(camera),
       boardLearnerProvider.overrideWithValue(learner),
     ]);

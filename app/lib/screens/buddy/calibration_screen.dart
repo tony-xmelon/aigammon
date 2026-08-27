@@ -10,6 +10,9 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../analytics/analytics_events.dart';
+import '../../analytics/analytics_screen_view.dart';
+import '../../analytics/app_analytics.dart';
 import '../../buddy/buddy_session.dart';
 import '../../buddy/camera_frame_source.dart';
 import '../game/tap_when_disabled.dart';
@@ -45,6 +48,17 @@ abstract interface class BuddyCamera {
 
   /// What to draw under the corner handles.
   Widget preview(BuildContext context);
+
+  /// "Look now." Something outside the camera thinks the board is worth a
+  /// glance sooner than the frame gate's own throttle was going to give it one.
+  ///
+  /// The only caller is the game screen's dice-sound hint, and the only thing
+  /// it does is shorten a WAIT — see `FrameGate.attend`, which holds the
+  /// argument for why this cannot make the camera claim anything it would not
+  /// have claimed anyway. Safe to call at any time and from any screen, and a
+  /// camera nobody calls it on behaves exactly as it did before the method
+  /// existed.
+  void attend();
 
   /// Gives up one hold. The LAST one out turns the camera off.
   ///
@@ -541,6 +555,16 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     }
   }
 
+  /// Whether this run is a mid-match rescue rather than the calibration that
+  /// starts a session.
+  ///
+  /// Read off the seeded handles because that IS the difference: only the game
+  /// screen's recalibration route has a previous outline to hand back. Reported
+  /// with every attempt, because the two have very different success rates to
+  /// expect — one is a user aiming carefully at a set-up board, the other is a
+  /// user rescuing a match with checkers all over it.
+  bool get _isRecalibration => widget.request.seededHandles != null;
+
   /// One attempt, on one settled frame.
   void _learn(ObservedFrame f) {
     final result = ref.read(boardLearnerProvider).learn(
@@ -550,6 +574,12 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
           dieSide: widget.request.dieSide,
         );
     final calibration = result.calibration;
+    // Reported before the branch, so a refusal and a success are one event with
+    // one outcome parameter rather than two events that could drift apart.
+    ref.read(appAnalyticsProvider).logBuddyCalibration(
+          ok: calibration != null,
+          recalibration: _isRecalibration,
+        );
     if (calibration == null) {
       // Every refusal names something the user can act on, and the sentence is
       // written to be shown as it stands. Back to the handles with them where
@@ -595,7 +625,13 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.buddyCalibration,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     final opening = _opening;
     return Scaffold(
       appBar: AppBar(title: const Text('Show Buddy the board')),
@@ -1493,6 +1529,9 @@ class PhoneBuddyCamera implements BuddyCamera {
 
   @override
   Stream<ObservedFrame> get frames => _source.frames;
+
+  @override
+  void attend() => _source.gate.attend();
 
   @override
   Future<CameraOpening> open() async {

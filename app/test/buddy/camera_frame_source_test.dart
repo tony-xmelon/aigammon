@@ -2,10 +2,13 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:aigammon_app/buddy/camera_frame_source.dart';
+import 'package:aigammon_app/buddy/dice_sound_trigger.dart';
 import 'package:board_vision/board_vision.dart';
 import 'package:camera/camera.dart';
 import 'package:camera_platform_interface/camera_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'fake_mic.dart';
 
 /// A synthetic YUV420 frame whose luma is whatever [luma] says.
 ///
@@ -467,6 +470,164 @@ void main() {
       expect(seen.length, before + 1);
       expect(seen.last.isStable, isFalse,
           reason: 'the run was broken by a frame nobody converted');
+    });
+  });
+
+  group('the attention nudge', () {
+    Future<Frame> tinyConvert(YuvFrame planes) async {
+      final level = planes.y[0];
+      return Frame(Uint8List.fromList([level, level, level]), 1, 1);
+    }
+
+    /// Every frame a gate published for [script], as (when, stable, change).
+    Future<List<(Duration, bool, double)>> publishedFor(
+      FrameGate gate,
+      List<(YuvFrame, Duration)> script,
+    ) async {
+      final seen = <(Duration, bool, double)>[];
+      gate.frames.listen((f) => seen.add((f.at, f.isStable, f.sceneChange)));
+      for (final (planes, at) in script) {
+        gate.offer(planes, at);
+        await pumpEventQueue();
+      }
+      return seen;
+    }
+
+    test('a nudge converts the very next frame, whatever the throttle says',
+        () async {
+      final gate = FrameGate(converter: tinyConvert);
+      addTearDown(gate.dispose);
+      final seen = <ObservedFrame>[];
+      gate.frames.listen(seen.add);
+
+      gate.offer(flat(120), Duration.zero);
+      await pumpEventQueue();
+      expect(seen, hasLength(1));
+
+      // A tenth of an observation interval later: thinned away, ordinarily.
+      gate.attend();
+      gate.offer(flat(120), kObservationInterval ~/ 10);
+      await pumpEventQueue();
+
+      expect(seen, hasLength(2),
+          reason: 'the whole point of the hint is not waiting for the throttle');
+      expect(seen.last.at, kObservationInterval ~/ 10);
+    });
+
+    test('a nudge looks more often for a bounded window, then stops', () async {
+      final gate = FrameGate(converter: tinyConvert);
+      addTearDown(gate.dispose);
+      final seen = <ObservedFrame>[];
+      gate.frames.listen(seen.add);
+
+      gate.attend();
+      var t = Duration.zero;
+      // Inside the window, frames an attention-interval apart all publish.
+      while (t < kAttentionWindow) {
+        gate.offer(flat(120), t);
+        await pumpEventQueue();
+        t += kAttentionInterval;
+      }
+      final inside = seen.length;
+      expect(inside, greaterThan(kAttentionWindow.inMilliseconds ~/
+          kObservationInterval.inMilliseconds),
+          reason: 'more looks than the ordinary cadence would have taken');
+
+      // Past it, the gate is back to its own cadence: two frames an
+      // attention-interval apart now yield one publication, not two.
+      gate.offer(flat(120), t + kAttentionInterval);
+      await pumpEventQueue();
+      final firstAfter = seen.length;
+      gate.offer(flat(120), t + kAttentionInterval * 2);
+      await pumpEventQueue();
+      expect(seen.length, firstAfter,
+          reason: 'attention is a window, not a mode the gate stays in');
+    });
+
+    test('a nudge never makes an unstable frame stable', () async {
+      // The invariant the whole seam rests on. Attention changes WHICH frames
+      // are published and never what any of them says: a board mid-move stays
+      // a board mid-move, however loud the room was.
+      final gate = FrameGate(converter: tinyConvert);
+      addTearDown(gate.dispose);
+      final seen = <ObservedFrame>[];
+      gate.frames.listen(seen.add);
+
+      gate.attend();
+      var t = Duration.zero;
+      for (var i = 0; i < 8; i++) {
+        // A hand moving over the board: every frame differs from the last.
+        gate.offer(withBlock(120, 20 + i * 10, 32), t);
+        await pumpEventQueue();
+        t += kAttentionInterval;
+      }
+
+      expect(seen, isNotEmpty);
+      expect(seen.every((f) => !f.isStable), isTrue,
+          reason: 'a nudge is permission to LOOK, never permission to believe');
+    });
+
+    test('a nudge while attention is already live does not extend it forever',
+        () async {
+      final gate = FrameGate(converter: tinyConvert);
+      addTearDown(gate.dispose);
+      final seen = <ObservedFrame>[];
+      gate.frames.listen(seen.add);
+
+      // Two hints in a row: the second re-arms the window from where it lands,
+      // which is a bounded thing to do. What must not happen is the gate
+      // staying fast after the second window has passed too.
+      gate.attend();
+      gate.offer(flat(120), Duration.zero);
+      await pumpEventQueue();
+      gate.attend();
+      gate.offer(flat(120), kAttentionInterval);
+      await pumpEventQueue();
+
+      final t = kAttentionInterval + kAttentionWindow + kAttentionInterval;
+      gate.offer(flat(120), t);
+      await pumpEventQueue();
+      final after = seen.length;
+      gate.offer(flat(120), t + kAttentionInterval);
+      await pumpEventQueue();
+      expect(seen.length, after);
+    });
+
+    test('a gate nobody nudges is the gate that existed before the microphone',
+        () async {
+      // The inertness proof. One script, two gates: one wired to a live
+      // DiceSoundListener over a microphone that only ever hears a quiet room,
+      // and one with nothing attached at all. If the wiring can be told apart
+      // from its own absence, the feature is not the hint it claims to be.
+      final script = <(YuvFrame, Duration)>[
+        for (var i = 0; i < 40; i++)
+          (
+            // A hand appears for a few frames in the middle, so the script
+            // exercises stability and instability alike.
+            i >= 12 && i < 16 ? withBlock(120, 20 + i, 32) : flat(120),
+            kObservationInterval ~/ 3 * i,
+          ),
+      ];
+
+      final bare = FrameGate(converter: tinyConvert);
+      addTearDown(bare.dispose);
+      final withoutMic = await publishedFor(bare, script);
+
+      final wired = FrameGate(converter: tinyConvert);
+      addTearDown(wired.dispose);
+      final mic = FakeMicSource();
+      final listener =
+          DiceSoundListener(source: mic, onLookNow: wired.attend);
+      expect(await listener.start(), MicOpening.listening);
+      // Six seconds of a room with nothing in it, delivered before and during.
+      await mic.play(quietRoom(count: 400));
+      await pumpEventQueue();
+      final withMic = await publishedFor(wired, script);
+      await listener.stop();
+
+      expect(listener.hintsFired, 0, reason: 'a quiet room is not a throw');
+      expect(withMic, withoutMic,
+          reason: 'identical frames in, identical frames out');
     });
   });
 

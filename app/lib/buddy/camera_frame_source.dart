@@ -120,6 +120,26 @@ const int kConversionFailureLimit = 5;
 /// updating four times a second feels twitchy.
 const Duration kObservationInterval = Duration(milliseconds: 250);
 
+/// How often frames are converted while the gate has been told to pay
+/// attention. See [FrameGate.attend].
+///
+/// **A budget, not a measurement.** A third of [kObservationInterval], so the
+/// gate looks around twelve times a second rather than four for as long as
+/// something has just happened. It cannot run away with the device: the
+/// pipeline underneath drops rather than queues (see [LatestOnlyPipeline]), so
+/// offering faster than conversions complete costs dropped arrivals rather than
+/// a growing backlog, and [kAttentionWindow] bounds the whole episode anyway.
+const Duration kAttentionInterval = Duration(milliseconds: 80);
+
+/// How long one nudge keeps the gate at [kAttentionInterval].
+///
+/// **A budget, not a measurement**, derived from what a hand does after a
+/// throw: the dice have landed, and what stands between the gate and a settled
+/// frame is the arm withdrawing from over the board. A second and a half covers
+/// an unhurried withdrawal and stops well short of the user's thinking time,
+/// which is the part of a turn there is nothing to watch for.
+const Duration kAttentionWindow = Duration(milliseconds: 1500);
+
 // -----------------------------------------------------------------------------
 // Pure: everything below here runs in `flutter test` with no device attached.
 // -----------------------------------------------------------------------------
@@ -500,6 +520,10 @@ Future<Frame> convertFrameInIsolate(YuvFrame planes) =>
 /// 3. Survivors are converted (off-thread) and published on [frames], carrying
 ///    a [MotionHint] from the gyro and an `isStable` bit that is gyro-still AND
 ///    scene-quiet.
+///
+/// Rule 2 is the only one [attend] touches, and that is the whole safety
+/// argument for the microphone: a nudge can make the gate look SOONER and never
+/// make it believe more.
 class FrameGate {
   FrameGate({
     FrameConverter? converter,
@@ -507,6 +531,8 @@ class FrameGate {
     this.quietThreshold = kSceneQuietThreshold,
     this.quietFramesRequired = kQuietFramesRequired,
     this.observationInterval = kObservationInterval,
+    this.attentionInterval = kAttentionInterval,
+    this.attentionWindow = kAttentionWindow,
   })  : _motion = motion ?? MotionTracker(),
         _pipeline = LatestOnlyPipeline<_Pending, ObservedFrame>(
           (pending) async => ObservedFrame(
@@ -521,6 +547,8 @@ class FrameGate {
   final double quietThreshold;
   final int quietFramesRequired;
   final Duration observationInterval;
+  final Duration attentionInterval;
+  final Duration attentionWindow;
 
   final MotionTracker _motion;
   final LatestOnlyPipeline<_Pending, ObservedFrame> _pipeline;
@@ -528,6 +556,12 @@ class FrameGate {
   FrameSignature? _previous;
   int _quietRun = 0;
   Duration? _lastConverted;
+
+  /// A nudge that has arrived and not yet met a frame. See [attend].
+  bool _attentionPending = false;
+
+  /// When the current attention window runs out, on the frame clock.
+  Duration? _attentionUntil;
 
   /// Every published frame, stable or not. The readability light wants the
   /// unstable ones — they are what it has to explain.
@@ -550,6 +584,29 @@ class FrameGate {
   /// Feeds one gyroscope reading. Magnitude in rad/s.
   void onGyro(double magnitude, Duration at) => _motion.sample(magnitude, at);
 
+  /// "Look now." Something outside the camera thinks the board is worth a
+  /// glance sooner than the throttle was going to give it one.
+  ///
+  /// **It shortens a WAIT and changes nothing else.** The next frame offered is
+  /// converted whatever [observationInterval] would have said, and for
+  /// [attentionWindow] after it the gate converts at [attentionInterval]
+  /// instead. What a frame SAYS is untouched: the signature, the quiet run and
+  /// the gyro all run on every frame regardless (rule 1 above), so `isStable`
+  /// is computed exactly as it would have been and a nudge can only publish a
+  /// verdict the gate had already reached — never manufacture one. That is the
+  /// invariant that lets the microphone be wrong for free, and
+  /// `camera_frame_source_test.dart` pins it.
+  ///
+  /// Deliberately clock-free. The gate has no clock of its own — every time it
+  /// knows comes in on a frame — so a nudge is a flag the next [offer] picks
+  /// up rather than a timestamp a caller has to be able to produce.
+  ///
+  /// Safe from anywhere and safe to call at any rate: the only caller today is
+  /// the dice-sound trigger, whose refractory bounds how often it can, and a
+  /// gate nobody calls this on behaves exactly as it did before the method
+  /// existed.
+  void attend() => _attentionPending = true;
+
   /// Feeds one camera frame. Cheap, and safe to call at the camera's full rate.
   void offer(YuvFrame planes, Duration at) {
     // The signature and the quiet run are updated on EVERY frame, BEFORE the
@@ -564,8 +621,20 @@ class FrameGate {
     _previous = signature;
     _quietRun = change <= quietThreshold ? _quietRun + 1 : 0;
 
+    // A nudge that has been waiting takes effect HERE, after the signature and
+    // the quiet run and before the throttle — the one rule it is allowed to
+    // touch. See [attend].
+    if (_attentionPending) {
+      _attentionPending = false;
+      _attentionUntil = at + attentionWindow;
+      _lastConverted = null;
+    }
+    final until = _attentionUntil;
+    if (until != null && at > until) _attentionUntil = null;
+    final interval = _attentionUntil == null ? observationInterval : attentionInterval;
+
     final last = _lastConverted;
-    if (last != null && at - last < observationInterval) return;
+    if (last != null && at - last < interval) return;
     _lastConverted = at;
 
     _pipeline.submit(_Pending(

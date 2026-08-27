@@ -140,6 +140,32 @@ class Settings extends Table {
   BoolColumn get dragHintShown =>
       boolean().withDefault(const Constant(false))();
 
+  /// How Buddy words a play out loud (schema v9): a `BuddyPhrasing.name`,
+  /// 'terse' or 'friendly'. Stored by name like [themeMode] and friends, and
+  /// read tolerantly, so an unknown string falls back to the default rather
+  /// than throwing.
+  ///
+  /// The DEFAULT for a Buddy session rather than the session's own setting: the
+  /// setup screen seeds its per-match choice from this and does not write back,
+  /// exactly as it does for [defaultMatchLength] and [defaultDifficulty].
+  TextColumn get buddyPhrasing => text().withDefault(const Constant('terse'))();
+
+  /// Whether Buddy may listen for the dice landing (schema v9). ON by default,
+  /// and it is both halves of one thing: the user's preference, and the
+  /// REMEMBERED REFUSAL.
+  ///
+  /// Buddy asks the operating system for the microphone in context — the first
+  /// time a throw is actually being waited for — and a refusal latches this
+  /// false, which is what stops the mode asking again every match. A single
+  /// flag rather than a preference plus a hidden "already refused" bit, because
+  /// two flags would leave a user who refused once and later granted the
+  /// permission in system settings with no way back: there would be nothing on
+  /// screen to turn on. This there is.
+  ///
+  /// Off changes nothing about how a match plays. The hint only ever tells the
+  /// frame gate to look sooner — see `lib/buddy/dice_sound_trigger.dart`.
+  BoolColumn get buddyMicHint => boolean().withDefault(const Constant(true))();
+
   @override
   Set<Column> get primaryKey => {id};
 
@@ -186,7 +212,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   // Games.matchId is a SQL-level foreign key with ON DELETE CASCADE, but SQLite
   // only ENFORCES foreign keys when the per-connection `foreign_keys` pragma is
@@ -205,10 +231,10 @@ class AppDatabase extends _$AppDatabase {
           // same upsert-if-absent covers both fresh creates and upgrades.
           if (from < 2) {
             // Fresh create of the settings table. `createTable` uses the CURRENT
-            // (v7) table definition, so it already includes every gameplay
+            // (v9) table definition, so it already includes every gameplay
             // column, `drag_hint_shown`, `dice_roll_animation`,
-            // `show_pass_device` AND `rotate_board_hot_seat` — the
-            // version-gated `addColumn` blocks below
+            // `show_pass_device`, `rotate_board_hot_seat` AND the two v9 Buddy
+            // columns — the version-gated `addColumn` blocks below
             // must NOT re-add them (hence each is gated on an explicit range of
             // `from`, never `from < N+1`).
             await m.createTable(settings);
@@ -282,6 +308,20 @@ class AppDatabase extends _$AppDatabase {
           // every upgrade that predates it; `onCreate` covers fresh installs.
           if (from < 8) {
             await m.createTable(onlineSession);
+          }
+          // v8 -> v9: add the two Buddy Mode columns, absent from every pre-v9
+          // settings shape (v2..v8 alike), so add them for any upgrade from
+          // 2..8. Gated on the RANGE rather than on `from < 9` for the reason
+          // the v2 branch above states: a v0/v1 database had its settings table
+          // created whole from the current definition and already has both, and
+          // `addColumn` on a column that is there is an error, not a no-op.
+          //
+          // Both column defaults are the shipping behaviour — Buddy talks in
+          // notation, and the microphone hint is available to be asked for —
+          // so an upgrading user and a fresh install land in the same place.
+          if (from >= 2 && from <= 8) {
+            await m.addColumn(settings, settings.buddyPhrasing);
+            await m.addColumn(settings, settings.buddyMicHint);
           }
         },
         beforeOpen: (details) async {

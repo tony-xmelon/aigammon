@@ -3,6 +3,8 @@ import 'package:engine_bindings/engine_bindings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../analytics/analytics_events.dart';
+import '../../analytics/analytics_screen_view.dart';
 import '../../buddy/buddy_session.dart';
 import '../../buddy/speaker.dart';
 import '../../data/app_settings.dart';
@@ -93,16 +95,19 @@ class BuddySetupScreen extends ConsumerStatefulWidget {
 }
 
 class _BuddySetupScreenState extends ConsumerState<BuddySetupScreen> {
-  /// The two shared with the digital game start from the same persisted
-  /// defaults it starts from; edits here are per-match and are not written
-  /// back, exactly as on `NewMatchScreen`.
+  /// The three that have a persisted default start from it; edits here are
+  /// per-match and are not written back, exactly as on `NewMatchScreen`.
+  ///
+  /// [_phrasing] joined them at schema v9. It was a hard-coded `terse` here
+  /// while Settings had nothing to say about Buddy at all, and the two would
+  /// otherwise be a preference that the screen it applies to ignores.
   late int _matchLength;
   late Difficulty _difficulty;
+  late BuddyPhrasing _phrasing;
 
   bool _cubeless = false;
   Player _buddySide = Player.black;
   BuddySeat _seat = BuddySeat.near;
-  BuddyPhrasing _phrasing = BuddyPhrasing.terse;
 
   @override
   void initState() {
@@ -111,6 +116,7 @@ class _BuddySetupScreenState extends ConsumerState<BuddySetupScreen> {
         ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults;
     _matchLength = settings.defaultMatchLength;
     _difficulty = settings.defaultDifficulty;
+    _phrasing = settings.buddyPhrasing;
   }
 
   BuddySetup get _setup => BuddySetup(
@@ -123,7 +129,13 @@ class _BuddySetupScreenState extends ConsumerState<BuddySetupScreen> {
       );
 
   @override
-  Widget build(BuildContext context) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.buddySetup,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Play with Buddy')),
       body: SafeArea(

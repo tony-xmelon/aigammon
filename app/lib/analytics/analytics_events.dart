@@ -56,6 +56,50 @@ abstract final class AnalyticsEvents {
 
   /// The GitHub-issue feedback link was opened.
   static const feedbackOpened = 'feedback_opened';
+
+  // --- Buddy Mode ------------------------------------------------------------
+  //
+  // The spec's field-tuning metrics, and they are field-tuning metrics rather
+  // than usage counts: Buddy Mode ships with a dozen constants that could not
+  // be measured on a development machine (see the "Provisional" blocks in
+  // `lib/buddy/camera_frame_source.dart` and `dice_sound_trigger.dart`), and
+  // these five events are what turns a phone in somebody's kitchen into
+  // evidence about them.
+  //
+  // Two of them fire once a session and three fire per occurrence. Nothing
+  // fires per FRAME: readability is assessed four times a second, and the one
+  // number worth having about it — how much of a session the light was red for
+  // — travels as a rate on [buddySessionEnded] rather than as a stream of
+  // events nobody could afford to send.
+
+  /// A Buddy match began — the camera is open and a calibration is installed.
+  /// Params: [AnalyticsParams.mode], [AnalyticsParams.matchLength],
+  /// [AnalyticsParams.difficulty], [AnalyticsParams.cubeless],
+  /// [AnalyticsParams.buddySeat], [AnalyticsParams.buddyPhrasing],
+  /// [AnalyticsParams.micHint].
+  static const buddySessionStarted = 'buddy_session_started';
+
+  /// A Buddy match ended, whether it was decided or merely left.
+  /// Params: [AnalyticsParams.mode], [AnalyticsParams.buddyCompleted],
+  /// [AnalyticsParams.readabilityRedRate], [AnalyticsParams.micState],
+  /// [AnalyticsParams.micHints].
+  static const buddySessionEnded = 'buddy_session_ended';
+
+  /// The guided corner flow tried to learn a board — the single most important
+  /// number in the mode, because a calibration that fails is a mode that does
+  /// not start. Params: [AnalyticsParams.calibrationOk],
+  /// [AnalyticsParams.recalibration].
+  static const buddyCalibrationAttempted = 'buddy_calibration_attempted';
+
+  /// The aim is being fixed mid-match: either the user asked, or the light said
+  /// the calibration was gone. Params: [AnalyticsParams.calibrationLost].
+  static const buddyRecalibrationEntered = 'buddy_recalibration_entered';
+
+  /// A perceptual input was answered by hand instead. Not a failure event —
+  /// tapping a roll in is a shipping path, not a fallback from one — but the
+  /// RATE is what says how much of the mode perception is actually carrying.
+  /// Params: [AnalyticsParams.buddyFallback].
+  static const buddyFallbackUsed = 'buddy_fallback_used';
 }
 
 /// Custom parameter names.
@@ -94,6 +138,94 @@ abstract final class AnalyticsParams {
 
   /// `take` | `drop`.
   static const cubeAction = 'cube_action';
+
+  // --- Buddy Mode ------------------------------------------------------------
+
+  /// `near` | `far` — which side of the board the user sat at, as the camera
+  /// saw it. A `BuddySeat.name`.
+  static const buddySeat = 'buddy_seat';
+
+  /// `terse` | `friendly` — how Buddy worded plays for this match. A
+  /// `BuddyPhrasing.name`.
+  static const buddyPhrasing = 'buddy_phrasing';
+
+  /// Whether the dice-sound attention hint was ENABLED for this session (the
+  /// v9 setting). Not whether it ever ran — see [micState].
+  static const micHint = 'mic_hint';
+
+  /// One of [BuddyMicStates]: what actually became of the microphone.
+  static const micState = 'mic_state';
+
+  /// How many attention hints the microphone raised over the session. Read
+  /// against [micState]: `listening` with a count of zero is a detector that
+  /// heard nothing, which is a different finding from one that never ran.
+  static const micHints = 'mic_hints';
+
+  /// Whether the match was DECIDED, as opposed to left part-played. The
+  /// denominator for every "did the mode survive a whole match" question.
+  static const buddyCompleted = 'buddy_completed';
+
+  /// The fraction of assessed frames whose readability was red, 0..1.
+  ///
+  /// Aggregated over the session and sent once. Frames the session never
+  /// assessed (there was no calibration) are outside the denominator, so this
+  /// is "how often could the camera not read a board it was pointed at" rather
+  /// than "how often was there no answer".
+  static const readabilityRedRate = 'readability_red_rate';
+
+  /// Whether the calibration attempt produced a usable board.
+  static const calibrationOk = 'calibration_ok';
+
+  /// Whether this attempt was a RE-calibration (mid-match) rather than the one
+  /// that starts a session. The two have very different success rates to
+  /// expect: one is a user aiming carefully at a set-up board, the other is a
+  /// user rescuing a match with checkers all over it.
+  static const recalibration = 'recalibration';
+
+  /// Whether the calibration was ALREADY dead when the flow was entered (the
+  /// light demanded it) rather than the user choosing to re-aim a working one.
+  static const calibrationLost = 'calibration_lost';
+
+  /// One of [BuddyFallbacks].
+  static const buddyFallback = 'buddy_fallback';
+}
+
+/// The values [AnalyticsParams.buddyFallback] may take.
+///
+/// Snake_case constants rather than an enum's `.name`, because these are wire
+/// strings and `dicePad` is not the spelling the console should carry — see
+/// this file's header on why a name that lands wrong lands wrong forever.
+abstract final class BuddyFallbacks {
+  /// A roll was typed on the pad instead of read off the felt.
+  static const dicePad = 'dice_pad';
+
+  /// Two legal plays left the same position and the user chose between them.
+  static const candidatePicker = 'candidate_picker';
+
+  /// A play was tapped out on the belief mirror because the camera did not see
+  /// it happen.
+  static const tapCorrect = 'tap_correct';
+}
+
+/// The values [AnalyticsParams.micState] may take.
+abstract final class BuddyMicStates {
+  /// The v9 setting was off — either the user turned it off, or a past refusal
+  /// latched it. Nothing was asked for.
+  static const off = 'off';
+
+  /// Enabled, but the session never got as far as needing it (it ends before
+  /// the first throw is waited for).
+  static const unused = 'unused';
+
+  /// Asked for, and the platform had nothing to give: no microphone, no
+  /// plugin, or a flat refusal from the OS layer.
+  static const unavailable = 'unavailable';
+
+  /// Asked for, and the user said no. This is the one that latches the setting.
+  static const refused = 'refused';
+
+  /// It ran. [AnalyticsParams.micHints] says how much it had to say.
+  static const listening = 'listening';
 }
 
 /// The values [AnalyticsParams.mode] may take.
@@ -107,6 +239,12 @@ abstract final class AnalyticsModes {
   static const hotSeat = 'hotSeat';
   static const lan = 'lan';
   static const online = 'online';
+
+  /// A match played on a real board through the camera. Mirrors the literal
+  /// `BuddyGameScreen` passes to `MatchRepository.startMatch`, so the mode
+  /// carried by the Buddy events answers to the same word the history database
+  /// files those matches under.
+  static const buddy = 'buddy';
 }
 
 /// Screen names for [AnalyticsEvents.screenView].
@@ -120,6 +258,14 @@ abstract final class AnalyticsScreens {
   static const lan = 'lan';
   static const online = 'online';
   static const diagnostics = 'diagnostics';
+
+  /// The three Buddy Mode screens. Separate entries rather than one `buddy`,
+  /// because the funnel between them is the question worth asking: how many
+  /// people who open the setup screen reach a calibration, and how many of
+  /// those reach a match.
+  static const buddySetup = 'buddy_setup';
+  static const buddyCalibration = 'buddy_calibration';
+  static const buddyGame = 'buddy_game';
 }
 
 /// Custom performance-trace names.

@@ -76,6 +76,31 @@ dependencies:
   # costs nothing extra). Tiny plugin, event channels only, and its answer is
   # injected into board_vision as a single bool — see `MotionHint`.
   sensors_plus: ^7.1.0
+  # The microphone Buddy listens for a throw with — an ATTENTION HINT and
+  # nothing else. The mode works identically with it absent, refused or turned
+  # off; all it ever does is tell the frame gate to look sooner (see
+  # lib/buddy/dice_sound_trigger.dart and `FrameGate.attend`).
+  #
+  # Chosen over the alternatives because it is the smallest thing that can hand
+  # over LIVE audio: `startStream` yields raw PCM in memory, so nothing is ever
+  # written to disk and each chunk is reduced to one number and dropped. (The
+  # packages that record to a file would have Buddy keeping a recording of the
+  # room for the length of a match, which is not a trade this feature is worth.)
+  # It is also the only maintained recorder whose amplitude path needs no
+  # platform-specific units: we compute RMS from the samples ourselves, so the
+  # detector's thresholds mean the same thing on both OSes.
+  #
+  # Guarded to Android/iOS the way flutter_tts is, because Buddy Mode is
+  # mobile-only; RECORD_AUDIO and NSMicrophoneUsageDescription were declared in
+  # Task 10 and are asserted by test/android_manifest_test.dart and
+  # test/ios_info_plist_test.dart.
+  #
+  # NO WINDOWS BUILD PREREQUISITE, unlike flutter_tts above: `record_windows`
+  # builds against the Windows SDK's own Media Foundation headers and calls no
+  # `find_program`, so `flutter run -d windows` needs nothing installed for it.
+  # Verified by reading the plugin's CMakeLists rather than assumed — see the
+  # toolchain section of README.md, which now says so alongside the nuget note.
+  record: ^7.1.1
 
 dev_dependencies:
   flutter_test:

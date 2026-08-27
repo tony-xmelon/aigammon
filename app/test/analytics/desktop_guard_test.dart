@@ -1,3 +1,4 @@
+import 'package:aigammon_app/analytics/analytics_events.dart';
 import 'package:aigammon_app/analytics/app_analytics.dart';
 import 'package:aigammon_app/analytics/firebase_config.dart';
 import 'package:aigammon_app/analytics/firebase_observability.dart';
@@ -81,6 +82,27 @@ void main() {
       o.analytics.logScreenView('home');
       o.analytics.logMatchStarted(mode: 'vsComputer', matchLength: 3);
       o.analytics.logCubeAnswered(mode: 'lan', action: 'take', cubeValue: 2);
+      // Buddy Mode never runs on a desktop, but its sink calls have to be as
+      // safe as everything else's: the guard is what keeps them quiet, and a
+      // guard that only works because nobody calls it is not one.
+      o.analytics
+        ..logBuddySessionStarted(
+          matchLength: 5,
+          difficulty: 'medium',
+          cubeless: false,
+          seat: 'near',
+          phrasing: 'terse',
+          micHint: true,
+        )
+        ..logBuddySessionEnded(
+          completed: true,
+          readabilityRedRate: 0,
+          micState: BuddyMicStates.unavailable,
+          micHints: 0,
+        )
+        ..logBuddyCalibration(ok: true, recalibration: false)
+        ..logBuddyRecalibrationEntered(calibrationLost: false)
+        ..logBuddyFallbackUsed(BuddyFallbacks.dicePad);
       o.performance.recordDuration('cold_start', const Duration(seconds: 1));
       expect(await o.performance.trace('t', () async => 42), 42);
       final trace = await o.performance.startTrace('t');

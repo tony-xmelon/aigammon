@@ -98,6 +98,13 @@ git submodule update --init --recursive
   Buddy Mode is mobile-only and `lib/buddy/speaker.dart` guards it — but
   Flutter offers no way to exclude a plugin from one platform's build, so the
   Windows toolchain has to satisfy it.
+  - Buddy Mode's **`record`** dependency (the dice-sound attention hint) is the
+    same shape of dependency and needs **nothing extra**: `record_windows`
+    builds against the Windows SDK's own Media Foundation headers and calls no
+    `find_program`. It does ask for CMake ≥ 3.23, which the CMake bundled with
+    Visual Studio 2022 satisfies. Like the voice, the microphone is never
+    reached on Windows — `lib/buddy/dice_sound_trigger.dart` guards it — but
+    the plugin is still registered and compiled into a desktop build.
 - **Rust**, `stable-x86_64-pc-windows-gnu` toolchain.
 - A **full MinGW-w64** on `PATH` — Rust's self-contained MinGW ships no GNU
   assembler (`as.exe`), so `dlltool` fails when building the engine. This

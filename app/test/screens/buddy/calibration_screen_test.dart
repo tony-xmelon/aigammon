@@ -1,3 +1,4 @@
+import 'package:aigammon_app/analytics/app_analytics.dart';
 import 'package:aigammon_app/buddy/buddy_session.dart';
 import 'package:aigammon_app/screens/buddy/calibration_screen.dart';
 import 'package:backgammon_core/backgammon_core.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../buddy/fake_calibration_seams.dart';
 import '../../buddy/fake_vision.dart';
+import '../../helpers/fake_observability.dart';
 
 void main() {
   setUp(TestWidgetsFlutterBinding.ensureInitialized);
@@ -294,6 +296,72 @@ void main() {
       expect(find.byKey(const Key('buddy-handle-0')), findsOneWidget,
           reason: 'a refusal lands back on the corners with them intact');
       expect(h.outcome, isNull);
+    });
+  });
+
+  group('what the flow reports', () {
+    testWidgets('a calibration that worked, named as a first one', (t) async {
+      final h = _Harness();
+      await h.pump(t);
+      await h.capture(t);
+
+      expect(h.analytics.paramsOf('screen_view'),
+          {'screen_name': 'buddy_calibration'});
+      expect(h.analytics.paramsOf('buddy_calibration_attempted'), {
+        'calibration_ok': true,
+        'recalibration': false,
+      });
+    });
+
+    testWidgets('a refusal is the same event with the other answer', (t) async {
+      // One event with an outcome parameter rather than two events, so the
+      // success RATE — the single most important number in the mode — is a
+      // ratio the console can compute rather than two counters that could
+      // drift apart.
+      final h = _Harness();
+      h.learner.willAnswer(<CalibrationResult>[
+        CalibrationResult.failure(
+          CalibrationProblem.regionUnreadable,
+          'I cannot make out the 6-point.',
+          const <RoiId>[RoiId.point5],
+        ),
+      ]);
+      await h.pump(t);
+      await h.capture(t);
+
+      expect(h.analytics.paramsOf('buddy_calibration_attempted'), {
+        'calibration_ok': false,
+        'recalibration': false,
+      });
+    });
+
+    testWidgets('a mid-match rescue is told apart by its seeded corners',
+        (t) async {
+      // The two have very different success rates to expect: one is a user
+      // aiming carefully at a set-up board, the other is a user rescuing a
+      // match with checkers all over it. Only the recalibration route has a
+      // previous outline to hand back, which is what separates them.
+      final h = _Harness(
+        request: CalibrationRequest(
+          userSide: Player.white,
+          seat: BuddySeat.near,
+          seededHandles: BoardHandles.seed(folding: false),
+        ),
+      );
+      await h.pump(t);
+      // A recalibration opens ON the corners rather than on the checklist, so
+      // it is one step shorter than [capture]'s route.
+      await t.tap(find.text('Next'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Capture'));
+      await t.pumpAndSettle();
+      h.camera.push(_frame());
+      await t.pumpAndSettle();
+
+      expect(h.analytics.paramsOf('buddy_calibration_attempted'), {
+        'calibration_ok': true,
+        'recalibration': true,
+      });
     });
   });
 
@@ -692,12 +760,14 @@ class _Harness {
   late final FakeBuddyCamera camera = FakeBuddyCamera(opening: opening);
   final FakeVision vision = FakeVision(calibration: fakeCalibration());
   late final FakeBoardLearner learner = FakeBoardLearner(vision);
+  final RecordingAnalytics analytics = RecordingAnalytics();
   CalibrationOutcome? outcome;
 
   Future<void> pump(WidgetTester t) async {
     final container = ProviderContainer(overrides: <Override>[
       buddyCameraProvider.overrideWithValue(camera),
       boardLearnerProvider.overrideWithValue(learner),
+      appAnalyticsProvider.overrideWithValue(analytics),
     ]);
     addTearDown(container.dispose);
     addTearDown(camera.close);

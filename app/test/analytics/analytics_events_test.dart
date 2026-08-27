@@ -107,6 +107,108 @@ void main() {
     });
   });
 
+  group('the Buddy vocabulary', () {
+    // Literal wire names here, as everywhere in this file: the constants exist
+    // so the spellings never move, and a test written in terms of them would
+    // follow a rename straight into a split history.
+
+    test('a session start carries every dimension the field tuning needs', () {
+      analytics.logBuddySessionStarted(
+        matchLength: 5,
+        difficulty: 'expert',
+        cubeless: false,
+        seat: 'near',
+        phrasing: 'friendly',
+        micHint: true,
+      );
+
+      expect(analytics.names, ['buddy_session_started']);
+      expect(analytics.paramsOf('buddy_session_started'), {
+        'mode': 'buddy',
+        'match_length': 5,
+        'difficulty': 'expert',
+        'cubeless': false,
+        'buddy_seat': 'near',
+        'buddy_phrasing': 'friendly',
+        'mic_hint': true,
+      });
+    });
+
+    test('the mode says buddy, so the console can ask one question of five',
+        () {
+      // The vocabulary rule: these strings mirror what MatchRepository already
+      // files a Buddy match under, so "matches by mode" answered against the
+      // history database and against Firebase agree.
+      expect(AnalyticsModes.buddy, 'buddy');
+    });
+
+    test('a session end carries the aggregate, not a stream of frames', () {
+      analytics.logBuddySessionEnded(
+        completed: false,
+        readabilityRedRate: 0.125,
+        micState: BuddyMicStates.refused,
+        micHints: 0,
+      );
+
+      expect(analytics.paramsOf('buddy_session_ended'), {
+        'mode': 'buddy',
+        'buddy_completed': false,
+        'readability_red_rate': 0.125,
+        'mic_state': 'refused',
+        'mic_hints': 0,
+      });
+    });
+
+    test('calibrations, recalibrations and fallbacks', () {
+      analytics
+        ..logBuddyCalibration(ok: false, recalibration: false)
+        ..logBuddyCalibration(ok: true, recalibration: true)
+        ..logBuddyRecalibrationEntered(calibrationLost: true)
+        ..logBuddyFallbackUsed(BuddyFallbacks.dicePad)
+        ..logBuddyFallbackUsed(BuddyFallbacks.candidatePicker)
+        ..logBuddyFallbackUsed(BuddyFallbacks.tapCorrect);
+
+      expect(analytics.names, [
+        'buddy_calibration_attempted',
+        'buddy_calibration_attempted',
+        'buddy_recalibration_entered',
+        'buddy_fallback_used',
+        'buddy_fallback_used',
+        'buddy_fallback_used',
+      ]);
+      expect(analytics.countOf('buddy_calibration_attempted'), 2);
+      expect(analytics.paramsOf('buddy_recalibration_entered'),
+          {'calibration_lost': true});
+      expect(
+        [
+          for (final e in analytics.events)
+            if (e.name == 'buddy_fallback_used') e.parameters['buddy_fallback']
+        ],
+        ['dice_pad', 'candidate_picker', 'tap_correct'],
+      );
+    });
+
+    test('every Buddy vocabulary value is snake_case and distinct', () {
+      // These are wire strings that end up as console dimensions, so `dicePad`
+      // would be wrong in a way nothing else would ever catch.
+      const values = [
+        BuddyFallbacks.dicePad,
+        BuddyFallbacks.candidatePicker,
+        BuddyFallbacks.tapCorrect,
+        BuddyMicStates.off,
+        BuddyMicStates.unused,
+        BuddyMicStates.unavailable,
+        BuddyMicStates.refused,
+        BuddyMicStates.listening,
+      ];
+      expect(values.toSet().length, values.length);
+      for (final value in values) {
+        expect(RegExp(r'^[a-z][a-z_]*$').hasMatch(value), isTrue,
+            reason: 'not a wire string: "$value"');
+      }
+    });
+  });
+
   group('names stay inside Firebase limits', () {
     // Firebase rejects an event or parameter whose name is over 40 chars,
     // starts with a digit or underscore, or contains anything but
@@ -138,6 +240,22 @@ void main() {
         AnalyticsParams.resignValue,
         AnalyticsParams.cubeValue,
         AnalyticsParams.cubeAction,
+        AnalyticsEvents.buddySessionStarted,
+        AnalyticsEvents.buddySessionEnded,
+        AnalyticsEvents.buddyCalibrationAttempted,
+        AnalyticsEvents.buddyRecalibrationEntered,
+        AnalyticsEvents.buddyFallbackUsed,
+        AnalyticsParams.buddySeat,
+        AnalyticsParams.buddyPhrasing,
+        AnalyticsParams.micHint,
+        AnalyticsParams.micState,
+        AnalyticsParams.micHints,
+        AnalyticsParams.buddyCompleted,
+        AnalyticsParams.readabilityRedRate,
+        AnalyticsParams.calibrationOk,
+        AnalyticsParams.recalibration,
+        AnalyticsParams.calibrationLost,
+        AnalyticsParams.buddyFallback,
       ];
       for (final name in names) {
         expect(valid.hasMatch(name), isTrue, reason: 'illegal name "$name"');
@@ -171,6 +289,9 @@ void main() {
         AnalyticsScreens.lan,
         AnalyticsScreens.online,
         AnalyticsScreens.diagnostics,
+        AnalyticsScreens.buddySetup,
+        AnalyticsScreens.buddyCalibration,
+        AnalyticsScreens.buddyGame,
       ];
       expect(screens.toSet().length, screens.length);
       for (final name in screens) {

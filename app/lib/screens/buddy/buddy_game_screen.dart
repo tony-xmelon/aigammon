@@ -6,13 +6,20 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../analytics/analytics_events.dart';
+import '../../analytics/analytics_screen_view.dart';
+import '../../analytics/app_analytics.dart';
 import '../../board/board_view.dart';
 import '../../buddy/buddy_policy.dart';
 import '../../buddy/buddy_session.dart';
 import '../../buddy/camera_frame_source.dart';
+import '../../buddy/dice_sound_trigger.dart';
 import '../../buddy/speaker.dart';
+import '../../data/app_settings.dart';
 import '../../data/match_repository.dart';
 import '../../data/persistence_hooks.dart';
+import '../../data/settings_repository.dart';
+import '../../diagnostics/crash_log.dart';
 import '../../engine/engine_provider.dart';
 import '../../game/game_controller.dart';
 import '../../game/game_record.dart';
@@ -51,6 +58,19 @@ final buddyTtsProvider = Provider<BuddyTts>(
   (ref) => isBuddySpeechSupportedPlatform
       ? FlutterTtsBuddyTts()
       : const SilentBuddyTts(),
+);
+
+/// How this screen gets a microphone, behind a provider for the reasons the
+/// camera and the voice are behind one.
+///
+/// **A factory rather than an instance.** A source is CLOSED by the session
+/// that opened it, so a shared instance would hand the next match a microphone
+/// that had already been shut; and a session that never waits for a throw never
+/// calls this at all, which is what keeps the ask in context.
+final buddyMicProvider = Provider<MicAmplitudeSource Function()>(
+  (ref) => isBuddyMicSupportedPlatform
+      ? RecordMicAmplitudeSource.new
+      : SilentMicSource.new,
 );
 
 /// Opens a Buddy match — the [BuddyLaunch] the setup screen is built around.
@@ -174,9 +194,28 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   late final BuddySession _session;
   final BoardEntryController _entry = BoardEntryController();
 
+  /// Read once in [initState] rather than through `ref` at the call site,
+  /// because two of the three uses are in [dispose], where reading a provider
+  /// is reaching into a scope that may already be tearing down.
+  late final AppAnalytics _analytics = ref.read(appAnalyticsProvider);
+  late final SettingsRepository _settings =
+      ref.read(settingsRepositoryProvider);
+
   StreamSubscription<BuddyLine>? _transcript;
   StreamSubscription<ObservedFrame>? _frames;
   final List<BuddyLine> _lines = <BuddyLine>[];
+
+  /// Whether the dice-sound hint is enabled for this session — the v9 setting,
+  /// snapshotted at start like every other per-match choice.
+  late final bool _micHintEnabled;
+
+  /// The microphone, once a throw has actually been waited for. Null until
+  /// then, and that is what "asked in context" means here: the operating
+  /// system's dialog appears at the moment the screen is asking for a throw,
+  /// not when the match opens.
+  DiceSoundListener? _mic;
+  bool _micStarting = false;
+  bool _micStopped = false;
 
   CameraOpening? _opening;
   Size? _frameSize;
@@ -193,6 +232,9 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   @override
   void initState() {
     super.initState();
+    _micHintEnabled =
+        (ref.read(settingsProvider).valueOrNull ?? AppSettings.defaults)
+            .buddyMicHint;
     _speaker = BuddySpeaker(
       engine: ref.read(buddyTtsProvider),
       phrasing: widget.setup.phrasing,
@@ -225,6 +267,18 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
     _entry.addListener(_onChange);
     _transcript = _speaker.transcript.listen(_onLine);
     _frames = _camera.frames.listen(_onFrame);
+    _analytics.logBuddySessionStarted(
+      matchLength: widget.setup.matchLength,
+      difficulty: widget.setup.difficulty.name,
+      cubeless: widget.setup.cubeless,
+      seat: _seat.name,
+      phrasing: widget.setup.phrasing.name,
+      micHint: _micHintEnabled,
+    );
+    // The opening throw is already being waited for by the time this screen
+    // mounts, so the ask is in context from the first frame: the prompt says
+    // "Throw the opening dice" behind the operating system's dialog.
+    _syncMic();
     unawaited(_open());
   }
 
@@ -240,6 +294,18 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
     unawaited(_transcript?.cancel());
     _session.removeListener(_onChange);
     _entry.removeListener(_onChange);
+    // Read BEFORE the session is disposed, and reported before the microphone
+    // is closed: both of them are what the numbers are about.
+    _analytics.logBuddySessionEnded(
+      completed: _controller?.matchOver ?? false,
+      readabilityRedRate: _session.readabilityRedRate,
+      micState: _micState,
+      micHints: _mic?.hintsFired ?? 0,
+    );
+    if (!_micStopped) {
+      _micStopped = true;
+      unawaited(_mic?.stop());
+    }
     _session.dispose();
     _entry.dispose();
     unawaited(_speaker.dispose());
@@ -249,6 +315,85 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
 
   void _onChange() {
     if (mounted) setState(() {});
+    _syncMic();
+  }
+
+  // --- the microphone ------------------------------------------------------
+
+  /// What became of the microphone, as one of [BuddyMicStates].
+  ///
+  /// Reported at the END of a session rather than the start, because at the
+  /// start there is nothing to report: the ask happens the first time a throw
+  /// is waited for, which may be a minute in and may never happen at all.
+  String get _micState {
+    if (!_micHintEnabled) return BuddyMicStates.off;
+    return switch (_mic?.state) {
+      null => BuddyMicStates.unused,
+      MicOpening.listening => BuddyMicStates.listening,
+      MicOpening.refused => BuddyMicStates.refused,
+      MicOpening.unavailable => BuddyMicStates.unavailable,
+    };
+  }
+
+  /// Opens the microphone the first time a throw is actually being waited for.
+  ///
+  /// **This is the in-context ask**, and the context is the point: the screen
+  /// is showing "Throw your dice" when the operating system's dialog appears,
+  /// so the permission is asked for beside the thing it is for.
+  ///
+  /// It opens ONCE and stays open for the rest of the session rather than
+  /// following each turn. Two reasons, and the first is that the other way does
+  /// not work: starting a PCM stream is an asynchronous platform call, so a
+  /// microphone that opened at the start of each throw would routinely still be
+  /// opening while the dice were landing — it would miss exactly the sound it
+  /// exists for. The second is that a system microphone indicator that blinks
+  /// on and off forty times a match tells a user less about what is happening
+  /// than one that is simply on.
+  ///
+  /// Nothing is recorded either way. See [RecordMicAmplitudeSource]: the audio
+  /// never leaves the device, never reaches a file, and is reduced to one
+  /// number per 16 milliseconds and dropped.
+  void _syncMic() {
+    if (!_micHintEnabled) return;
+    // The match is decided: there is no throw left to hear, so the device goes
+    // back before the user has finished reading the score. The listener object
+    // stays — [DiceSoundListener.hintsFired] is still owed to the end-of-session
+    // event, and stopping is not forgetting.
+    if (_session.phase == BuddyPhase.over) {
+      if (_mic != null && !_micStopped) {
+        _micStopped = true;
+        unawaited(_mic!.stop());
+      }
+      return;
+    }
+    if (_mic != null || _micStarting) return;
+    if (!_session.awaitingRoll) return;
+    _micStarting = true;
+    unawaited(_startMic());
+  }
+
+  Future<void> _startMic() async {
+    final listener = DiceSoundListener(
+      source: ref.read(buddyMicProvider)(),
+      // The whole of what a hint does. See `FrameGate.attend`.
+      onLookNow: _camera.attend,
+    );
+    final opening = await listener.start();
+    if (!mounted) {
+      await listener.stop();
+      return;
+    }
+    _mic = listener;
+    _micStarting = false;
+    if (opening == MicOpening.refused) {
+      // The user's answer, remembered — so the next match does not ask again.
+      // A single-column write, and the same column the Settings switch reads:
+      // see SettingsRepository.markBuddyMicRefused for both reasons.
+      unawaited(_settings.markBuddyMicRefused().catchError(
+            (Object error, StackTrace stack) => CrashLog.instance
+                .record(error, stack: stack, source: 'buddy-mic-refused'),
+          ));
+    }
   }
 
   void _onLine(BuddyLine line) {
@@ -291,7 +436,18 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   /// folds it as the user's, and the policy acknowledges it the same way.
   void _onMirrorMove(Move move) {
     if (!_session.awaitingPlay) return;
+    _analytics.logBuddyFallbackUsed(BuddyFallbacks.tapCorrect);
     _session.enterPlayManually(move);
+  }
+
+  /// The user separated two legal plays the picture could not.
+  ///
+  /// Through the session's verb like the other two fallbacks, and counted like
+  /// them: the RATE of these is what says how often the camera can see a play
+  /// but not identify it, which is a different failure from not seeing one.
+  void _pickCandidate(Move move) {
+    _analytics.logBuddyFallbackUsed(BuddyFallbacks.candidatePicker);
+    _session.pickCandidate(move);
   }
 
   /// Whether the throw being waited for is the one that starts a game.
@@ -328,6 +484,7 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
     // Re-checked after the sheet, as every gated verb in the app is: a settled
     // frame may have read the roll off the felt while the sheet was open.
     if (!_session.awaitingRoll) return;
+    _analytics.logBuddyFallbackUsed(BuddyFallbacks.dicePad);
     _session.enterDiceManually(dice);
   }
 
@@ -347,6 +504,12 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   Future<void> _recalibrate() async {
     if (_recalibrating) return;
     _recalibrating = true;
+    // Read BEFORE the verb, which sets `needsRecalibration` itself: what this
+    // separates is a user re-aiming a working camera from a user rescuing a
+    // match the light has already declared unreadable.
+    _analytics.logBuddyRecalibrationEntered(
+      calibrationLost: _session.needsRecalibration,
+    );
     _session.recalibrate();
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -430,7 +593,13 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   // --- the screen ----------------------------------------------------------
 
   @override
-  Widget build(BuildContext context) {
+  // See [HomeScreen] for why every screen splits build/_build.
+  Widget build(BuildContext context) => AnalyticsScreenView(
+        name: AnalyticsScreens.buddyGame,
+        child: _build(context),
+      );
+
+  Widget _build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(_contextLine()),
@@ -739,7 +908,7 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
         children: <Widget>[
           for (final move in _session.candidates) ...<Widget>[
             OutlinedButton(
-              onPressed: () => _session.pickCandidate(move),
+              onPressed: () => _pickCandidate(move),
               child: Text(_speaker.phrasing.describePlay(move).text),
             ),
             const SizedBox(width: 8),

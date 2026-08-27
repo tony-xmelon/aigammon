@@ -109,6 +109,77 @@ extension AppAnalyticsEvents on AppAnalytics {
 
   /// The feedback link was opened.
   void logFeedbackOpened() => logEvent(AnalyticsEvents.feedbackOpened);
+
+  // --- Buddy Mode ------------------------------------------------------------
+
+  /// A Buddy match began. [seat] is a `BuddySeat.name`, [phrasing] a
+  /// `BuddyPhrasing.name`, and [micHint] whether the attention hint is enabled
+  /// in Settings — not whether it ever ran, which is
+  /// [logBuddySessionEnded]'s `micState`.
+  void logBuddySessionStarted({
+    required int matchLength,
+    required String difficulty,
+    required bool cubeless,
+    required String seat,
+    required String phrasing,
+    required bool micHint,
+  }) {
+    logEvent(AnalyticsEvents.buddySessionStarted, parameters: {
+      AnalyticsParams.mode: AnalyticsModes.buddy,
+      AnalyticsParams.matchLength: matchLength,
+      AnalyticsParams.difficulty: difficulty,
+      AnalyticsParams.cubeless: cubeless,
+      AnalyticsParams.buddySeat: seat,
+      AnalyticsParams.buddyPhrasing: phrasing,
+      AnalyticsParams.micHint: micHint,
+    });
+  }
+
+  /// A Buddy match ended. [readabilityRedRate] is 0..1 over the frames the
+  /// session actually assessed; [micState] is one of [BuddyMicStates].
+  void logBuddySessionEnded({
+    required bool completed,
+    required double readabilityRedRate,
+    required String micState,
+    required int micHints,
+  }) {
+    logEvent(AnalyticsEvents.buddySessionEnded, parameters: {
+      AnalyticsParams.mode: AnalyticsModes.buddy,
+      AnalyticsParams.buddyCompleted: completed,
+      AnalyticsParams.readabilityRedRate: readabilityRedRate,
+      AnalyticsParams.micState: micState,
+      AnalyticsParams.micHints: micHints,
+    });
+  }
+
+  /// One run of the guided corner flow. [recalibration] separates a mid-match
+  /// rescue from the calibration that starts a session.
+  void logBuddyCalibration({
+    required bool ok,
+    required bool recalibration,
+  }) {
+    logEvent(AnalyticsEvents.buddyCalibrationAttempted, parameters: {
+      AnalyticsParams.calibrationOk: ok,
+      AnalyticsParams.recalibration: recalibration,
+    });
+  }
+
+  /// The aim is being fixed mid-match. [calibrationLost] is whether the light
+  /// had already declared the calibration dead, as opposed to the user choosing
+  /// to re-aim a working one.
+  void logBuddyRecalibrationEntered({required bool calibrationLost}) {
+    logEvent(AnalyticsEvents.buddyRecalibrationEntered, parameters: {
+      AnalyticsParams.calibrationLost: calibrationLost,
+    });
+  }
+
+  /// A perceptual input was answered by hand. [fallback] is one of
+  /// [BuddyFallbacks].
+  void logBuddyFallbackUsed(String fallback) {
+    logEvent(AnalyticsEvents.buddyFallbackUsed, parameters: {
+      AnalyticsParams.buddyFallback: fallback,
+    });
+  }
 }
 
 /// Does nothing, always. The implementation on every non-mobile platform, the

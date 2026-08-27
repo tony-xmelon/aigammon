@@ -8,6 +8,7 @@ import '../analytics/analytics_events.dart';
 import '../analytics/analytics_screen_view.dart';
 import '../analytics/app_analytics.dart';
 import '../branding/app_version.dart';
+import '../buddy/phrasing.dart';
 import '../data/app_settings.dart';
 import '../data/settings_repository.dart';
 import '../feedback/feedback_link.dart';
@@ -248,6 +249,72 @@ class SettingsScreen extends ConsumerWidget {
                             value: settings.showScoring,
                             onChanged: (v) =>
                                 save(settings.copyWith(showScoring: v)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    // Buddy Mode's two persisted preferences. Shown on every
+                    // platform, including the desktops the mode itself is
+                    // hidden on: these are stored defaults rather than live
+                    // controls, and a setting that appears and disappears with
+                    // the hardware is a setting nobody can find twice.
+                    _Section(
+                      label: 'Buddy Mode',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // The DEFAULT for a session. The setup screen seeds
+                          // its per-match choice from this and does not write
+                          // back, exactly as it does for match length and
+                          // difficulty — so a user can change their mind for
+                          // one match without changing their mind for good.
+                          SegmentedButton<BuddyPhrasing>(
+                            showSelectedIcon: false,
+                            segments: const [
+                              ButtonSegment(
+                                  value: BuddyPhrasing.terse,
+                                  label: Text('Terse')),
+                              ButtonSegment(
+                                  value: BuddyPhrasing.friendly,
+                                  label: Text('Friendly')),
+                            ],
+                            selected: {settings.buddyPhrasing},
+                            onSelectionChanged: (s) => save(
+                                settings.copyWith(buddyPhrasing: s.first)),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            settings.buddyPhrasing == BuddyPhrasing.terse
+                                ? 'How Buddy words a play out loud: "13/8, '
+                                    '24/22" — notation, the way two players at '
+                                    'a board actually talk.'
+                                : 'How Buddy words a play out loud: "Move one '
+                                    'checker from 13 to 8, and one from 24 to '
+                                    '22."',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant),
+                          ),
+                          // The microphone hint, and the way back from a
+                          // refusal. Buddy asks for the microphone in context —
+                          // the first time a throw is being waited for — and a
+                          // refusal turns this off so the mode never asks
+                          // again. This switch is what a user who has since
+                          // granted the permission elsewhere turns back on.
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Listen for the dice'),
+                            subtitle: const Text(
+                                'Buddy looks at the board sooner when it hears '
+                                'a throw. Off changes nothing else.'),
+                            value: settings.buddyMicHint,
+                            onChanged: (v) =>
+                                save(settings.copyWith(buddyMicHint: v)),
                           ),
                         ],
                       ),

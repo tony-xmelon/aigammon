@@ -1,3 +1,4 @@
+import 'package:aigammon_app/buddy/phrasing.dart';
 import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
@@ -168,6 +169,82 @@ void main() {
       await repo.markDragHintShown();
       await repo.markDragHintShown();
       expect((await repo.load()).dragHintShown, isTrue);
+    });
+  });
+
+  group('the Buddy settings', () {
+    test('a fresh database talks in notation and may ask for the microphone',
+        () async {
+      final settings = await repo.load();
+      expect(settings.buddyPhrasing, BuddyPhrasing.terse);
+      expect(settings.buddyMicHint, isTrue,
+          reason: 'the hint is available until somebody refuses it');
+      expect(AppSettings.defaults.buddyPhrasing, BuddyPhrasing.terse,
+          reason: 'the Dart-side defaults mirror the seeded row');
+      expect(AppSettings.defaults.buddyMicHint, isTrue);
+    });
+
+    test('save + load round-trips both, independently', () async {
+      final base = await repo.load();
+      await repo.save(base.copyWith(
+        buddyPhrasing: BuddyPhrasing.friendly,
+        buddyMicHint: false,
+      ));
+      final saved = await repo.load();
+      expect(saved.buddyPhrasing, BuddyPhrasing.friendly);
+      expect(saved.buddyMicHint, isFalse);
+
+      await repo.save(saved.copyWith(buddyMicHint: true));
+      final again = await repo.load();
+      expect(again.buddyMicHint, isTrue);
+      expect(again.buddyPhrasing, BuddyPhrasing.friendly,
+          reason: 'each field persists independently');
+    });
+
+    test('an unknown phrasing on disk reads as the default, never throws',
+        () async {
+      // The tolerant codec every enum column in this table uses: a row written
+      // by a future build, or corrupted, must not make the app unlaunchable.
+      await db.customStatement(
+          "UPDATE settings SET buddy_phrasing = 'shakespearean'");
+      expect((await repo.load()).buddyPhrasing, BuddyPhrasing.terse);
+    });
+
+    test('markBuddyMicRefused latches the hint off', () async {
+      expect((await repo.load()).buddyMicHint, isTrue);
+      await repo.markBuddyMicRefused();
+      expect((await repo.load()).buddyMicHint, isFalse);
+      await repo.markBuddyMicRefused();
+      expect((await repo.load()).buddyMicHint, isFalse, reason: 'idempotent');
+    });
+
+    test('markBuddyMicRefused does not clobber a concurrent settings edit',
+        () async {
+      // The session's snapshot was read when the match started; the refusal
+      // arrives at the first throw, which may be a settings visit later.
+      final snapshot = await repo.load();
+      await repo.save(snapshot.copyWith(
+        themeMode: ThemeMode.dark,
+        buddyPhrasing: BuddyPhrasing.friendly,
+      ));
+
+      await repo.markBuddyMicRefused();
+
+      final after = await repo.load();
+      expect(after.buddyMicHint, isFalse, reason: 'the latch still landed');
+      expect(after.themeMode, ThemeMode.dark);
+      expect(after.buddyPhrasing, BuddyPhrasing.friendly,
+          reason: 'the concurrent change survived the latch');
+    });
+
+    test('turning the hint back on is a plain save, so a refusal is not final',
+        () async {
+      // The reason a refusal and the preference are ONE column: a user who
+      // granted the permission in system settings needs something to switch.
+      await repo.markBuddyMicRefused();
+      final settings = await repo.load();
+      await repo.save(settings.copyWith(buddyMicHint: true));
+      expect((await repo.load()).buddyMicHint, isTrue);
     });
   });
 

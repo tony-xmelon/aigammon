@@ -1,4 +1,6 @@
+import 'package:aigammon_app/analytics/app_analytics.dart';
 import 'package:aigammon_app/buddy/buddy_session.dart';
+import 'package:aigammon_app/buddy/dice_sound_trigger.dart';
 import 'package:aigammon_app/buddy/speaker.dart';
 import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
@@ -16,8 +18,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../buddy/fake_calibration_seams.dart';
+import '../../buddy/fake_mic.dart';
 import '../../buddy/fake_vision.dart';
 import '../../data/test_database.dart';
+import '../../helpers/fake_observability.dart';
 import '../../helpers/board_driving.dart';
 
 /// A no-native [EngineFacade] that ranks the real legal moves with flat
@@ -527,6 +531,186 @@ void main() {
     });
   });
 
+  group('the microphone attention hint', () {
+    testWidgets('is opened where the screen is already asking for a throw',
+        (t) async {
+      // In context, and this is what "in context" means: the opening throw is
+      // outstanding from the moment the screen mounts, so the operating
+      // system's dialog arrives over a prompt that says what it is for.
+      final h = _Harness();
+      await h.pump(t);
+
+      expect(h.mic.opens, 1);
+      expect(_prompt(t), contains('Throw the opening dice'));
+    });
+
+    testWidgets('is never opened when the setting is off', (t) async {
+      final h = _Harness(micHint: false);
+      await h.pump(t);
+      await h.frame(t);
+
+      expect(h.mic.opens, 0,
+          reason: 'a refusal remembered is a microphone never asked for again');
+      expect(h.camera.attends, 0);
+    });
+
+    testWidgets('a throw it hears asks the camera to look, and nothing else',
+        (t) async {
+      final h = _Harness();
+      await h.pump(t);
+
+      final before = h.camera.attends;
+      await t.runAsync(() => h.mic.play(diceClatter()));
+      await h.settle(t);
+
+      expect(h.camera.attends, before + 1,
+          reason: 'the whole of what a hint does');
+      // And it did NOT answer anything: the same throw is still outstanding,
+      // and the pad that answers it is still the live control.
+      expect(_prompt(t), contains('Throw the opening dice'));
+      expect(
+          t
+              .widget<FilledButton>(find.byKey(const Key('buddy-dice-button')))
+              .onPressed,
+          isNotNull);
+    });
+
+    testWidgets('a room with nothing in it never asks the camera for anything',
+        (t) async {
+      final h = _Harness();
+      await h.pump(t);
+
+      await t.runAsync(() => h.mic.play(quietRoom(count: 400)));
+      await h.settle(t);
+
+      expect(h.camera.attends, 0);
+    });
+
+    testWidgets('a refusal is remembered, and only a refusal is', (t) async {
+      final h = _Harness(micOpening: MicOpening.refused);
+      await h.pump(t);
+      // The write is real sqlite I/O, so it needs a real clock to complete.
+      final saved =
+          (await t.runAsync(() => SettingsRepository(h.db).load()))!;
+      expect(saved.buddyMicHint, isFalse,
+          reason: 'the mode must not ask again every match');
+    });
+
+    testWidgets('a microphone that simply is not there is not a refusal',
+        (t) async {
+      // The distinction the settings column turns on: "the user said no" is
+      // worth remembering and "this device has no microphone" is not — it will
+      // be just as true next time without anybody being asked twice.
+      final h = _Harness(micOpening: MicOpening.unavailable);
+      await h.pump(t);
+      final saved =
+          (await t.runAsync(() => SettingsRepository(h.db).load()))!;
+      expect(saved.buddyMicHint, isTrue);
+    });
+
+    testWidgets('the match plays out identically with no microphone at all',
+        (t) async {
+      // The inertness claim at the level a user would feel it. The same
+      // scripted match, twice: once with a microphone that refuses, once with
+      // one that hears a throw on every frame. Same transcript, same prompt.
+      Future<(String, String)> play(MicOpening opening,
+          {bool clatter = false}) async {
+        final h = _Harness(micOpening: opening);
+        h.vision
+          ..willReadDice([diceShowing(6, 3)])
+          ..willMatchPlay([matchesPlay(0)])
+          ..willVerify([boardAgrees]);
+        await h.pump(t);
+        if (clatter) {
+          await t.runAsync(() => h.mic.play(diceClatter()));
+          await h.settle(t);
+        }
+        await h.frame(t);
+        await h.frame(t);
+        return (_transcript(t), _prompt(t));
+      }
+
+      final without = await play(MicOpening.refused);
+      final with_ = await play(MicOpening.listening, clatter: true);
+      expect(with_, without,
+          reason: 'the hint shortens a wait; it decides nothing');
+    });
+  });
+
+  group('what the screen reports', () {
+    testWidgets('a session start names every dimension of the setup',
+        (t) async {
+      final h = _Harness(matchLength: 3);
+      await h.pump(t);
+
+      expect(h.analytics.countOf('buddy_session_started'), 1);
+      expect(h.analytics.paramsOf('buddy_session_started'), {
+        'mode': 'buddy',
+        'match_length': 3,
+        'difficulty': 'expert',
+        'cubeless': false,
+        'buddy_seat': 'near',
+        'buddy_phrasing': 'terse',
+        'mic_hint': true,
+      });
+      expect(h.analytics.paramsOf('screen_view'),
+          {'screen_name': 'buddy_game'});
+    });
+
+    testWidgets('each fallback is reported by name, once per use', (t) async {
+      final h = _Harness();
+      await h.pump(t);
+
+      await h.enterRoll(t, 6, 3);
+      expect(
+        [
+          for (final e in h.analytics.events)
+            if (e.name == 'buddy_fallback_used') e.parameters['buddy_fallback']
+        ],
+        ['dice_pad'],
+      );
+    });
+
+    testWidgets('entering the corner flow says whether the board was lost',
+        (t) async {
+      final h = _Harness();
+      await h.pump(t);
+
+      // The user chose to re-aim a camera that was working.
+      await t.tap(find.byTooltip('Fix the aim'));
+      await t.pumpAndSettle();
+      expect(h.analytics.paramsOf('buddy_recalibration_entered'),
+          {'calibration_lost': false});
+    });
+
+    testWidgets('the end of a session carries the aggregate metrics',
+        (t) async {
+      final h = _Harness(micOpening: MicOpening.refused);
+      await h.pump(t);
+      await h.frame(t);
+
+      // Popping the screen is what ends a session — decided or not.
+      await t.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+      await t.pumpAndSettle();
+
+      final params = h.analytics.paramsOf('buddy_session_ended');
+      expect(params['mode'], 'buddy');
+      expect(params['buddy_completed'], isFalse,
+          reason: 'the match was abandoned, and that is the honest word');
+      expect(params['mic_state'], 'refused');
+      expect(params['mic_hints'], 0);
+      expect(params['readability_red_rate'], isA<double>());
+    });
+
+    testWidgets('a session that never opened the microphone says so', (t) async {
+      final h = _Harness(micHint: false);
+      await h.pump(t);
+      await t.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+      await t.pumpAndSettle();
+      expect(h.analytics.paramsOf('buddy_session_ended')['mic_state'], 'off');
+    });
+  });
+
   group('the camera two screens share', () {
     testWidgets('survives the handover from calibration into the match',
         (t) async {
@@ -685,7 +869,19 @@ class _Harness {
     this.matchLength = 1,
     this.buddyDoubles = false,
     FakeBuddyCamera? camera,
-  }) : camera = camera ?? FakeBuddyCamera();
+    MicOpening micOpening = MicOpening.listening,
+    this.micHint = true,
+  })  : camera = camera ?? FakeBuddyCamera(),
+        mic = FakeMicSource(opening: micOpening);
+
+  /// The v9 setting, as the screen will read it at start.
+  final bool micHint;
+
+  /// The microphone the screen opens, if it opens one.
+  final FakeMicSource mic;
+
+  /// Every event the screen sent.
+  final RecordingAnalytics analytics = RecordingAnalytics();
 
   final int matchLength;
 
@@ -715,15 +911,31 @@ class _Harness {
     addTearDown(db.close);
     addTearDown(camera.close);
 
-    await t.pumpWidget(ProviderScope(
-      overrides: <Override>[
-        databaseProvider.overrideWithValue(db),
-        engineFacadeProvider.overrideWithValue(
-            buddyDoubles ? const _AlwaysDoubles() : const _FlatFacade()),
-        buddyCameraProvider.overrideWithValue(camera),
-        boardLearnerProvider.overrideWithValue(learner),
-        buddyTtsProvider.overrideWithValue(const SilentBuddyTts()),
-      ],
+    // A container rather than a bare ProviderScope, and awaited before the
+    // pump, because the screen reads the SETTINGS synchronously in initState:
+    // a stream provider that has not emitted yet answers null, and the screen
+    // would fall back to the defaults instead of the settings under test.
+    // (`_HandoverHarness` below does the same, for the same reason.)
+    final container = ProviderContainer(overrides: <Override>[
+      databaseProvider.overrideWithValue(db),
+      engineFacadeProvider.overrideWithValue(
+          buddyDoubles ? const _AlwaysDoubles() : const _FlatFacade()),
+      buddyCameraProvider.overrideWithValue(camera),
+      boardLearnerProvider.overrideWithValue(learner),
+      buddyTtsProvider.overrideWithValue(const SilentBuddyTts()),
+      // Without these two the screen would reach a real `AudioRecorder` and a
+      // real analytics sink: `flutter_test` reports android, so every platform
+      // guard in the app answers "yes, this is a phone".
+      buddyMicProvider.overrideWithValue(() => mic),
+      appAnalyticsProvider.overrideWithValue(analytics),
+      settingsProvider.overrideWith(
+          (ref) => Stream.value(_kSettings.copyWith(buddyMicHint: micHint))),
+    ]);
+    addTearDown(container.dispose);
+    await container.read(settingsProvider.future);
+
+    await t.pumpWidget(UncontrolledProviderScope(
+      container: container,
       child: MaterialApp(
         home: MediaQuery(
           data: MediaQueryData(textScaler: TextScaler.linear(textScale)),
@@ -817,6 +1029,10 @@ class _HandoverHarness {
       buddyCameraProvider.overrideWithValue(camera),
       boardLearnerProvider.overrideWithValue(learner),
       buddyTtsProvider.overrideWithValue(const SilentBuddyTts()),
+      // As in [_Harness]: `flutter_test` reports android, so an un-overridden
+      // microphone would be a real `AudioRecorder` on a channel with nothing
+      // behind it.
+      buddyMicProvider.overrideWithValue(FakeMicSource.new),
     ]);
     addTearDown(container.dispose);
     await container.read(settingsProvider.future);

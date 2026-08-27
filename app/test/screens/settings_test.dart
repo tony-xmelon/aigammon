@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:aigammon_app/buddy/phrasing.dart';
 import 'package:aigammon_app/data/app_settings.dart';
 import 'package:aigammon_app/data/database.dart';
 import 'package:aigammon_app/data/settings_repository.dart';
@@ -72,6 +73,62 @@ void main() {
     expect(
         find.widgetWithText(SwitchListTile, 'Combined moves'), findsOneWidget);
     expect(find.widgetWithText(SwitchListTile, 'Show score'), findsOneWidget);
+
+    // The Buddy Mode section: how Buddy talks, and whether it listens.
+    expect(find.text('Buddy Mode'), findsOneWidget);
+    expect(find.widgetWithText(SwitchListTile, 'Listen for the dice'),
+        findsOneWidget);
+  });
+
+  testWidgets('the Buddy phrasing default is terse and autosaves', (t) async {
+    await t.binding.setSurfaceSize(const Size(600, 2400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(_app());
+    _feed.add(AppSettings.defaults);
+    await t.pumpAndSettle();
+
+    // The example sentence under the control is the control's explanation, and
+    // it has to follow the selection rather than describe a fixed one.
+    expect(find.textContaining('13/8, 24/22'), findsOneWidget);
+    expect(find.textContaining('Move one checker from 13 to 8'), findsNothing);
+
+    final friendly = find.text('Friendly');
+    await t.ensureVisible(friendly);
+    await t.tap(friendly);
+    await _refresh(t);
+
+    final saved = await _persisted(t);
+    expect(saved.buddyPhrasing, BuddyPhrasing.friendly);
+    expect(saved.buddyMicHint, isTrue,
+        reason: 'the two Buddy settings are independent');
+    expect(find.textContaining('Move one checker from 13 to 8'), findsOneWidget);
+  });
+
+  testWidgets('the dice-listening switch is ON by default and autosaves',
+      (t) async {
+    // It is ON because it is also the remembered refusal: it goes off when the
+    // operating system says no, and this switch is the way back.
+    await t.binding.setSurfaceSize(const Size(600, 2400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(_app());
+    _feed.add(AppSettings.defaults);
+    await t.pumpAndSettle();
+
+    final toggle =
+        find.widgetWithText(SwitchListTile, 'Listen for the dice');
+    expect(t.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(find.textContaining('Off changes nothing else.'), findsOneWidget,
+        reason: 'the subtitle has to say that the hint is only a hint');
+
+    await t.ensureVisible(toggle);
+    await t.tap(toggle);
+    await _refresh(t);
+
+    final saved = await _persisted(t);
+    expect(saved.buddyMicHint, isFalse);
+    expect(saved.buddyPhrasing, BuddyPhrasing.terse,
+        reason: 'the two Buddy settings are independent');
+    expect(t.widget<SwitchListTile>(toggle).value, isFalse);
   });
 
   testWidgets('gameplay toggles reflect settings and autosave on change',

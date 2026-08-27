@@ -1,6 +1,8 @@
 import 'package:engine_bindings/engine_bindings.dart' show Difficulty;
 import 'package:flutter/material.dart' show ThemeMode;
 
+import '../buddy/phrasing.dart' show BuddyPhrasing;
+
 /// Checker + dice animation speed. Maps to an [AnimationTimings] preset via
 /// [timings].
 enum AnimationSpeed {
@@ -159,6 +161,8 @@ class AppSettings {
     this.showPassDevice = false,
     this.rotateBoardHotSeat = false,
     this.dragHintShown = false,
+    this.buddyPhrasing = BuddyPhrasing.terse,
+    this.buddyMicHint = true,
   });
 
   /// The out-of-the-box defaults, matching the `Settings` table's column
@@ -236,6 +240,20 @@ class AppSettings {
   /// Whether the one-time drag/tap discoverability hint has already been shown.
   final bool dragHintShown;
 
+  /// How Buddy words a play out loud (schema v9). The DEFAULT for a Buddy
+  /// session, not the session's own setting: `BuddySetupScreen` seeds its
+  /// per-match choice from this and does not write back, exactly as it does for
+  /// [defaultMatchLength] and [defaultDifficulty].
+  final BuddyPhrasing buddyPhrasing;
+
+  /// Whether Buddy may listen for the dice landing (schema v9, ON by default).
+  ///
+  /// The preference AND the remembered refusal in one flag — see the column's
+  /// own doc in `database.dart` for why they are not two. Off changes nothing
+  /// about how a match plays: the hint only ever asks the frame gate to look
+  /// sooner.
+  final bool buddyMicHint;
+
   /// Whether a NETWORKED match (LAN or online) starts with live tutor mode.
   ///
   /// [tutorOverride] rules when the user set it explicitly; Auto (null) keeps
@@ -276,6 +294,8 @@ class AppSettings {
     bool? showPassDevice,
     bool? rotateBoardHotSeat,
     bool? dragHintShown,
+    BuddyPhrasing? buddyPhrasing,
+    bool? buddyMicHint,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -293,6 +313,8 @@ class AppSettings {
       showPassDevice: showPassDevice ?? this.showPassDevice,
       rotateBoardHotSeat: rotateBoardHotSeat ?? this.rotateBoardHotSeat,
       dragHintShown: dragHintShown ?? this.dragHintShown,
+      buddyPhrasing: buddyPhrasing ?? this.buddyPhrasing,
+      buddyMicHint: buddyMicHint ?? this.buddyMicHint,
     );
   }
 
@@ -311,7 +333,9 @@ class AppSettings {
       other.diceRollAnimation == diceRollAnimation &&
       other.showPassDevice == showPassDevice &&
       other.rotateBoardHotSeat == rotateBoardHotSeat &&
-      other.dragHintShown == dragHintShown;
+      other.dragHintShown == dragHintShown &&
+      other.buddyPhrasing == buddyPhrasing &&
+      other.buddyMicHint == buddyMicHint;
 
   @override
   int get hashCode => Object.hash(
@@ -327,7 +351,9 @@ class AppSettings {
       diceRollAnimation,
       showPassDevice,
       rotateBoardHotSeat,
-      dragHintShown);
+      dragHintShown,
+      buddyPhrasing,
+      buddyMicHint);
 
   @override
   String toString() => 'AppSettings(themeMode: $themeMode, '
@@ -342,7 +368,9 @@ class AppSettings {
       'diceRollAnimation: $diceRollAnimation, '
       'showPassDevice: $showPassDevice, '
       'rotateBoardHotSeat: $rotateBoardHotSeat, '
-      'dragHintShown: $dragHintShown)';
+      'dragHintShown: $dragHintShown, '
+      'buddyPhrasing: $buddyPhrasing, '
+      'buddyMicHint: $buddyMicHint)';
 }
 
 /// Sentinel marking an un-passed [AppSettings.copyWith] argument (so a caller

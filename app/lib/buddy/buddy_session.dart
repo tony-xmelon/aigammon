@@ -251,6 +251,9 @@ class BuddySession extends ChangeNotifier {
   bool _rollInFlight = false;
   final Map<Player, Dice> _lastDice = <Player, Dice>{};
 
+  int _framesAssessed = 0;
+  int _framesRed = 0;
+
   int? _cubeConsideredAtEvent;
   int? _announcedGame;
   bool _announcedMatch = false;
@@ -270,6 +273,25 @@ class BuddySession extends ChangeNotifier {
 
   /// The most recent verdict, or null before the first frame.
   Readability? get readability => _readability;
+
+  /// How many frames this session actually put a readability question to.
+  ///
+  /// Not the same as how many arrived: a frame that lands with no calibration
+  /// installed is never assessed, because a dead calibration cannot judge its
+  /// own readability. Those are outside this count, and therefore outside
+  /// [readabilityRedRate]'s denominator.
+  int get framesAssessed => _framesAssessed;
+
+  /// The fraction of [framesAssessed] that came back red, 0..1 — the spec's
+  /// field-tuning metric, aggregated here rather than emitted per frame.
+  ///
+  /// The reason it lives on the session at all: readability is assessed four
+  /// times a second, so the only affordable way to learn anything about it from
+  /// a real kitchen is one number at the end. A session that never assessed a
+  /// frame reports 0 rather than a NaN, which is the honest reading of "the
+  /// light was never red" for a session that never had a light.
+  double get readabilityRedRate =>
+      _framesAssessed == 0 ? 0 : _framesRed / _framesAssessed;
 
   /// The calibration is dead and the guided corner flow has to run.
   bool get needsRecalibration => _needsRecalibration;
@@ -489,6 +511,11 @@ class BuddySession extends ChangeNotifier {
     if (vision == null) return;
 
     final reading = vision.assessReadability(f.frame, f.motion);
+    // Counted on EVERY assessed frame, not only on the ones that change the
+    // verdict: the metric is how much of a session the light was out for, and a
+    // light that stays red for a minute is one notification and 240 frames.
+    _framesAssessed++;
+    if (reading.level == ReadabilityLevel.red) _framesRed++;
     if (_readability == null || _differs(_readability!, reading)) {
       _readability = reading;
       policy.onReadability(reading);

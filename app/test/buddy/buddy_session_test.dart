@@ -495,6 +495,44 @@ void main() {
       expect(h.controller.game.events.whereType<MoveEvent>(), hasLength(1));
     });
 
+    test('the red rate is aggregated over the session, not sampled', () async {
+      // The spec's field-tuning metric, and the reason it lives here: the light
+      // is assessed four times a second and only ONE number about it is worth
+      // sending. See BuddySession.readabilityRedRate.
+      final h = Harness();
+      h.vision.willReadDice([diceShowing(6, 3)]);
+
+      h.start();
+      expect(h.session.framesAssessed, 0);
+      expect(h.session.readabilityRedRate, 0,
+          reason: 'a session that never looked at anything was never red');
+
+      await h.stableFrame();
+      expect(h.session.framesAssessed, 1);
+      expect(h.session.readabilityRedRate, 0);
+
+      // Three red frames out of four assessed.
+      h.vision.willSee([tooDarkReading]);
+      for (var i = 0; i < 3; i++) {
+        await h.stableFrame();
+      }
+      expect(h.session.framesAssessed, 4);
+      expect(h.session.readabilityRedRate, 0.75);
+
+      // A frame that arrives with no calibration is never assessed, so it
+      // changes neither the numerator nor the denominator — the rate is about
+      // pictures Buddy could not READ, not about moments it had no camera.
+      h.vision.willSee([staleCalibrationReading]);
+      await h.stableFrame();
+      expect(h.session.framesAssessed, 5);
+      final parked = h.session.readabilityRedRate;
+      await h.stableFrame();
+      await h.stableFrame();
+      expect(h.session.framesAssessed, 5,
+          reason: 'a dead calibration cannot judge its own readability');
+      expect(h.session.readabilityRedRate, parked);
+    });
+
     test('a stale calibration parks the session without touching the game',
         () async {
       final h = Harness();

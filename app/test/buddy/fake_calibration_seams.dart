@@ -50,6 +50,14 @@ class FakeBuddyCamera implements BuddyCamera {
   Widget preview(BuildContext context) =>
       const ColoredBox(color: Color(0xFF202020));
 
+  /// Counted rather than acted on. The nudge's EFFECT is `FrameGate`'s and is
+  /// pinned in `camera_frame_source_test.dart`; what a widget test needs to
+  /// know is whether the screen asked for it, and when.
+  int attends = 0;
+
+  @override
+  void attend() => attends++;
+
   @override
   Future<void> close() async {
     if (_users > 0) _users--;
