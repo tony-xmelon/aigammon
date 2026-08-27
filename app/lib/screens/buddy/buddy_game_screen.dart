@@ -188,8 +188,12 @@ const double _kControlHeight = 64;
 /// the permanent record of the match is the game log in History.
 const int _kTranscriptLines = 40;
 
-class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
+class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen>
+    with WidgetsBindingObserver, BuddyCameraLifecycle<BuddyGameScreen> {
   late final BuddyCamera _camera = ref.read(buddyCameraProvider);
+
+  @override
+  BuddyCamera get lifecycleCamera => _camera;
   late final BuddySpeaker _speaker;
   late final BuddySession _session;
   final BoardEntryController _entry = BoardEntryController();
@@ -279,17 +283,24 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
     // mounts, so the ask is in context from the first frame: the prompt says
     // "Throw the opening dice" behind the operating system's dialog.
     _syncMic();
-    unawaited(_open());
+    startCamera();
   }
 
-  Future<void> _open() async {
-    final opening = await _camera.open();
-    if (!mounted) return;
-    setState(() => _opening = opening);
-  }
+  /// The camera opened, or was given up because the app went away.
+  ///
+  /// **Nothing about the match moves either way**, and that is the whole of
+  /// what backgrounding costs here: the session is a state machine over frames,
+  /// so a stretch with no frames in it is a readability outage seen from the
+  /// inside — no query is answered, no phase is derived, and the position, the
+  /// score and the cube are exactly where they were. What the user comes back
+  /// to is the board they left and a camera that has re-opened onto it.
+  @override
+  void onCameraOpening(CameraOpening? opening) =>
+      setState(() => _opening = opening);
 
   @override
   void dispose() {
+    stopCamera();
     unawaited(_frames?.cancel());
     unawaited(_transcript?.cancel());
     _session.removeListener(_onChange);
@@ -309,7 +320,11 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
     _session.dispose();
     _entry.dispose();
     unawaited(_speaker.dispose());
-    unawaited(_camera.close());
+    // The camera's hold went back at the top of this method, through
+    // [BuddyCameraLifecycle.stopCamera] — which knows whether this screen still
+    // had one to give. A bare `close()` here would be an unbalanced close on a
+    // screen disposed while the app was in the background, and an unbalanced
+    // close releases somebody else's hold.
     super.dispose();
   }
 
@@ -448,6 +463,29 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   void _pickCandidate(Move move) {
     _analytics.logBuddyFallbackUsed(BuddyFallbacks.candidatePicker);
     _session.pickCandidate(move);
+  }
+
+  /// The user says the board is right now.
+  ///
+  /// Not counted as a fallback, because nothing has been fallen back to: the
+  /// camera keeps the question and answers it on the next settled frame. The
+  /// escalation simply comes down while it does.
+  void _retryPlacement() {
+    if (!_session.needsBeliefMirror) return;
+    _session.retryPlacement();
+  }
+
+  /// The user says the board was right all along, and Buddy could not see it.
+  ///
+  /// Counted, and counted separately from the other three fallbacks, because it
+  /// is the only one that is a verdict on PERCEPTION rather than a substitute
+  /// for it — see [BuddyFallbacks.placementSkipped]. Re-checked at invocation
+  /// like every gated verb in the app: a settled frame can have verified the
+  /// placement between the build that enabled this button and the tap on it.
+  void _skipPlacement() {
+    if (!_session.needsBeliefMirror) return;
+    _analytics.logBuddyFallbackUsed(BuddyFallbacks.placementSkipped);
+    _session.acceptPlacementUnverified();
   }
 
   /// Whether the throw being waited for is the one that starts a game.
@@ -615,8 +653,23 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
         child: Column(
           children: <Widget>[
             _light(context),
-            Expanded(flex: 5, child: _preview(context)),
-            Expanded(flex: 4, child: _mirror(context)),
+            // **The one time the two pictures change places.** Ordinarily the
+            // camera preview is the bigger of them: what a user needs to see
+            // most is what Buddy is looking at. During the belief-mirror
+            // escalation the question has changed — it is no longer "is the
+            // phone aimed at the board" but "here is the position Buddy holds,
+            // and here is the region it cannot reconcile" — so the mirror takes
+            // the room. The preview stays on screen rather than disappearing,
+            // because a board somebody has just walked in front of is still one
+            // of the explanations.
+            Expanded(
+              flex: _session.needsBeliefMirror ? 2 : 5,
+              child: _preview(context),
+            ),
+            Expanded(
+              flex: _session.needsBeliefMirror ? 7 : 4,
+              child: _mirror(context),
+            ),
             _prompt(context),
             _transcriptBand(context),
             _controls(context),
@@ -757,8 +810,57 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
         blackDice: blackDice,
         activeDiceSide: c.state.turn,
         showCube: !_session.cubeless,
+        strongHighlightSources: _discrepantLocations,
+        highlightMovingPlayer: _discrepantSide,
       ),
     );
+  }
+
+  /// Where the last placement check and the board disagree, as board locations
+  /// the painter can ring.
+  ///
+  /// **The analysis screen's own overlay, pointed at a different question.**
+  /// `strongHighlightSources` puts the bright selection ring on each named
+  /// location's top checker; there it marks the checkers a recorded play moves,
+  /// and here it marks the regions Buddy is asking about. Empty except during
+  /// the escalation, so the mirror is byte-identical to what it painted before
+  /// for the whole of an ordinary match — and ignored outright while the board
+  /// is interactive, which the escalation never is (there is no play to tap out
+  /// during a placement; see [BoardView.strongHighlightSources]).
+  ///
+  /// **A region the game says is BARE cannot be ringed**, and that is a
+  /// property of the affordance rather than an oversight: the ring is anchored
+  /// to a top checker, and the mirror draws the position Buddy believes in, in
+  /// which nothing is standing there. So an `unexpectedlyOccupied` discrepancy
+  /// — the game says empty and something is on it — is named by the prompt and
+  /// not drawn. Left that way deliberately: the alternative is a new painter
+  /// affordance for one of four discrepancy kinds, and the sentence already
+  /// says which region it is.
+  Set<int> get _discrepantLocations {
+    if (!_session.needsBeliefMirror) return const <int>{};
+    return <int>{
+      for (final d in _session.placementDiscrepancies)
+        if (d.region == RoiId.bar)
+          CheckerMove.bar
+        else if (d.region.pointIndex >= 0)
+          d.region.pointIndex,
+    };
+  }
+
+  /// Which half of the bar a ringed bar location means.
+  ///
+  /// The painter needs this to resolve `CheckerMove.bar` at all — both players
+  /// may have men there at once — and it can carry only one side, so it is the
+  /// STRONGEST discrepancy's, which is the one the prompt is naming. Null
+  /// outside the escalation, where nothing static is highlighted anyway.
+  Player? get _discrepantSide {
+    if (!_session.needsBeliefMirror) return null;
+    final first = _session.placementDiscrepancies.firstOrNull;
+    return switch (first?.side) {
+      CheckerColor.white => Player.white,
+      CheckerColor.black => Player.black,
+      _ => _session.buddySide,
+    };
   }
 
   /// One sentence saying what Buddy is waiting for, and the buttons that answer
@@ -813,8 +915,11 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
       BuddyPhase.awaitingPlay => _kPlayLine,
       BuddyPhase.objecting => _objectionLine,
       BuddyPhase.disambiguating => _kCandidateLine,
-      BuddyPhase.verifyingPlacement =>
-        "Make Buddy's move on the board, then Buddy will carry on.",
+      // Falls through to the user's own question for the same reason the
+      // paused case does: once the escalation is up, the thing outstanding is
+      // something only the person at the board can answer.
+      BuddyPhase.verifyingPlacement => _userQuestionLine() ??
+          "Make Buddy's move on the board, then Buddy will carry on.",
       BuddyPhase.awaitingCubeAnswer => _kCubeLine,
       BuddyPhase.thinking => 'Buddy is thinking.',
       BuddyPhase.over => _outcomeLine(),
@@ -829,6 +934,7 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   /// is what lets the paused line fall through to it. The order is the
   /// scheduler's own priority in `BuddySession._derive`.
   String? _userQuestionLine() {
+    if (_session.needsBeliefMirror) return _mirrorLine;
     if (_session.awaitingCubeAnswer) return _kCubeLine;
     if (_session.candidates.isNotEmpty) return _kCandidateLine;
     if (_session.awaitingPlay) {
@@ -841,6 +947,29 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
       'Make your play on the board. Tap it out here if Buddy does not see it.';
   static const String _kCandidateLine = 'Which play was it?';
   static const String _kCubeLine = 'Buddy doubles. Take or drop?';
+
+  /// What Buddy expects against what it sees, in the words of the region that
+  /// disagrees.
+  ///
+  /// [RegionVerification.message] is written to be shown as it stands, exactly
+  /// as `Readability.message` and `ConfirmResult.message` are, and it always
+  /// names the camera's reading before the game's — "the 8-point: the camera
+  /// sees nothing, the game says White 2" — because that is the comparison the
+  /// user is being asked to arbitrate. Buddy has already SAID this once,
+  /// through `onPlacementVerified`; the escalation is the screen repeating
+  /// itself, not the voice.
+  ///
+  /// Short on purpose. The two buttons under it are labelled with the two
+  /// answers, so a sentence that restated them would cost the band's third line
+  /// and buy nothing — and this slot has a fixed height, as every band but the
+  /// two pictures does.
+  String get _mirrorLine {
+    final first = _session.placementDiscrepancies.firstOrNull;
+    return first == null
+        ? 'Buddy still cannot see its move. The board below is the position it '
+            'is holding.'
+        : 'Buddy still cannot see its move — ${first.message}.';
+  }
 
   /// Word for word what Buddy just said out loud. The transcript and the
   /// prompt are two channels for one sentence, not two sentences.
@@ -879,6 +1008,29 @@ class _BuddyGameScreenState extends ConsumerState<BuddyGameScreen> {
   /// The order is the scheduler's own priority in `BuddySession._derive`, so
   /// the slot can never show an answer to a question that has been overtaken.
   Widget _promptActions(BuildContext context) {
+    // First, because it is first in `_derive` too: a pending placement outranks
+    // everything the controller wants next, and while the escalation is up
+    // these two are the ONLY forward paths — the dice are not being asked for,
+    // the mirror is not interactive, and Double is refused at the same gate.
+    if (_session.needsBeliefMirror) {
+      return Row(
+        children: <Widget>[
+          Expanded(
+            child: OutlinedButton(
+              onPressed: _skipPlacement,
+              child: const Text('Skip this check'),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: FilledButton(
+              onPressed: _retryPlacement,
+              child: const Text("I've fixed it"),
+            ),
+          ),
+        ],
+      );
+    }
     if (_session.awaitingCubeAnswer) {
       // Take and DROP, not the digital dialog's Take and Pass: Buddy has just
       // said "take or drop?" out loud, and the buttons under a spoken question

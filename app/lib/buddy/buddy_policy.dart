@@ -56,6 +56,16 @@ abstract interface class BuddyPolicy {
   /// discrepancy when it does not.
   void onPlacementVerified(bool correct, String? fix);
 
+  /// The user has told Buddy the board is right after it failed to see so, and
+  /// the session has taken their word for it.
+  ///
+  /// Separate from `onPlacementVerified(true, null)` — which is silent, because
+  /// a board that came out right is the ordinary case — precisely because this
+  /// one is NOT that. Nothing was verified; a person overruled a camera that
+  /// could not see their felt, and the transcript is the user's record of the
+  /// match, so it should say which of the two happened.
+  void onPlacementSkipped();
+
   void onCubeAction(Player actor, BuddyCubeAction action);
 
   /// Every distinct verdict, as it changes — never once per frame.
@@ -185,6 +195,18 @@ class OpponentPolicy implements BuddyPolicy {
     if (correct) return;
     speaker.say(BuddyLine("That isn't quite it. ${fix ?? ''}".trim()));
   }
+
+  /// **A caveat, not an acknowledgement**, and the difference is the whole
+  /// reason this line exists. Buddy has just been told something it could not
+  /// check, so it says so and says what the consequence would be if the user is
+  /// wrong — which is the honest version of accepting a claim on trust, and is
+  /// also true: a board that has genuinely come apart from the game shows up at
+  /// the next play, as a difference no legal move accounts for.
+  @override
+  void onPlacementSkipped() => speaker.say(const BuddyLine(
+        "I'll take your word for it. I could not see that one land, so if we "
+        'have come apart it will show up as a play I cannot read.',
+      ));
 
   @override
   void onCubeAction(Player actor, BuddyCubeAction action) {

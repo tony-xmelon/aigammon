@@ -280,6 +280,119 @@ void main() {
           reason: 'the board caught up, so the mirror comes down with it');
       expect(h.session.phase, BuddyPhase.awaitingDice);
     });
+
+    test('carries the regions the play touched, and nothing wider', () async {
+      // What the mirror highlights, and the reason it is narrow: the session
+      // claimed that a hand went to these regions, so those are the regions it
+      // may ask about. The fake contradicts EVERY region on the board, so a
+      // session that handed the screen the raw sweep would ring twenty-six of
+      // them and say nothing about the move it dictated.
+      final h = await _atTheMirror();
+
+      final touched = regionsTouchedBy(
+        h.policy.buddyMoves.single.$2,
+        h.session.buddySide,
+      );
+      expect(touched, isNotEmpty);
+      expect(
+        h.session.placementDiscrepancies.map((d) => d.region).toSet(),
+        touched.map((r) => r.region).toSet(),
+        reason: 'exactly the regions `regionsTouchedBy` names — the denominator '
+            'the user set at the gate follow-up',
+      );
+      expect(h.session.placementDiscrepancies.first.message,
+          contains('the camera sees'),
+          reason: 'and each carries the sentence the screen shows as it '
+              'stands: what the camera read against what the game holds');
+    });
+
+    test('"I have fixed it" lowers it and re-arms the corrective loop',
+        () async {
+      final h = await _atTheMirror();
+      final saidBefore = h.policy.placements.length;
+
+      h.session.retryPlacement();
+      expect(h.session.needsBeliefMirror, isFalse);
+      expect(h.session.placementDiscrepancies, isEmpty);
+      expect(h.session.phase, BuddyPhase.verifyingPlacement,
+          reason: 'nothing was accepted — the camera still has the question');
+      expect(h.controller.game.events.whereType<MoveEvent>(), hasLength(2),
+          reason: 'and the authoritative state did not move');
+
+      // Still wrong: the escalation comes back on the same count, and the
+      // correction is spoken again rather than deduplicated against the one
+      // the user has just acted on.
+      for (var i = 0; i < kPlacementAttemptsBeforeMirror; i++) {
+        await h.stableFrame();
+      }
+      expect(h.session.needsBeliefMirror, isTrue);
+      expect(h.policy.placements.length, greaterThan(saidBefore));
+
+      // Or right, in which case the ordinary path finishes it.
+      h.session.retryPlacement();
+      h.vision.willVerify([boardAgrees]);
+      await h.stableFrame();
+      expect(h.session.phase, BuddyPhase.awaitingDice);
+      expect(h.policy.placementsSkipped, 0,
+          reason: 'nothing was taken on trust: the camera answered in the end');
+    });
+
+    test('"Skip this check" is the user overruling the camera, and play goes '
+        'on', () async {
+      final h = await _atTheMirror();
+      final verifiesBefore = h.vision.verifyCalls;
+      final queriesBefore = h.vision.playQueries.length;
+      // The board as the user left it — the last settled picture, and the one
+      // a clean verification would have kept.
+      final anchor = h.lastFrame;
+
+      h.session.acceptPlacementUnverified();
+
+      expect(h.session.needsBeliefMirror, isFalse);
+      expect(h.session.placementDiscrepancies, isEmpty);
+      expect(h.session.phase, BuddyPhase.awaitingDice,
+          reason: 'the session proceeds to the next turn — the dictated move '
+              'was folded into the authoritative state when the engine chose '
+              'it, and verification was only ever about the felt catching up');
+      expect(h.controller.game.events.whereType<MoveEvent>(), hasLength(2),
+          reason: 'so nothing about the game moved through any of this');
+      expect(h.policy.placementsSkipped, 1,
+          reason: 'and the policy says so out loud, because Buddy has been '
+              'told something it could not check');
+
+      // **What a skipped placement has to get right, and the only thing it
+      // has to get right.** A play is identified by DIFFERENCING two frames of
+      // one calibration epoch, so the session has to hold a picture of the
+      // board as it now stands. A clean verification keeps the frame that
+      // verified; a skip keeps the last settled one, which is the same board.
+      // The failure it avoids is not a missing anchor — `_tryMatchPlay`
+      // re-anchors on the next frame and loses a turn's worth of a query — it
+      // is a STALE one: a frame from before the dictated move, differenced
+      // against a frame after it, offers the matcher Buddy's move and the
+      // user's as one change.
+      //
+      // The roll is typed rather than read, because a roll READ off a frame
+      // sets the anchor itself and would hide the thing being asserted.
+      h.vision.willReadDice([null]);
+      h.session.enterDiceManually(Dice(6, 3));
+      await h.settle();
+
+      await h.stableFrame(); // the user's own play, at last
+      expect(h.vision.playQueries, hasLength(queriesBefore + 1));
+      expect(h.vision.playQueries.last.beforeFrame, same(anchor),
+          reason: 'the anchor is the board the user left, not a frame from '
+              'before the move Buddy dictated');
+      expect(h.vision.verifyCalls, verifiesBefore,
+          reason: 'and the placement question is gone rather than merely '
+              'hidden — no frame since has been asked it');
+    });
+
+    test('and neither verb exists when no placement is outstanding', () async {
+      final h = Harness();
+      h.start();
+      expect(h.session.retryPlacement, throwsStateError);
+      expect(h.session.acceptPlacementUnverified, throwsStateError);
+    });
   });
 
   // The transcript is the user's whole record of the match — it is the channel
@@ -1257,6 +1370,31 @@ bool controllerTakesDouble(GameController c) {
 }
 
 /// One session, its fakes, and a frame pump.
+/// A session parked at the belief-mirror escalation: a move dictated, and a
+/// board that will not confirm it however many times it is asked.
+///
+/// Spelled out frame by frame rather than pumped, because which frame does
+/// what is the scenario. The last loop is the escalation's own count, so a
+/// change to [kPlacementAttemptsBeforeMirror] moves this with it rather than
+/// leaving a helper that silently stops reaching the state it is named after.
+Future<Harness> _atTheMirror() async {
+  final h = Harness();
+  h.vision
+    ..willReadDice([diceShowing(6, 3)])
+    ..willMatchPlay([matchesPlay(0)])
+    ..willVerify([boardDisagrees]);
+  h.start();
+  await h.stableFrame(); // the opening roll
+  await h.stableFrame(); // the user's play, matched uniquely
+  await h.stableFrame(); // Buddy's dice, and the move it dictates
+  for (var i = 0; i < kPlacementAttemptsBeforeMirror; i++) {
+    await h.stableFrame();
+  }
+  expect(h.session.needsBeliefMirror, isTrue,
+      reason: 'the helper is named after a state it must actually reach');
+  return h;
+}
+
 class Harness {
   Harness({
     this.matchLength = 1,
@@ -1383,13 +1521,21 @@ class Harness {
     await settle();
   }
 
-  void _push(Frame? frame, Duration at) => frames.add(ObservedFrame(
-        frame: frame ?? blankFrame(),
-        motion: MotionHint.still,
-        isStable: true,
-        sceneChange: 0,
-        at: at,
-      ));
+  /// The frame the last push carried. Identity is what the session's
+  /// before-frame handling is asserted by, so a test that wants to say "the
+  /// board as it stood then" needs the instance rather than a copy of it.
+  Frame? lastFrame;
+
+  void _push(Frame? frame, Duration at) {
+    lastFrame = frame ?? blankFrame();
+    frames.add(ObservedFrame(
+      frame: lastFrame!,
+      motion: MotionHint.still,
+      isStable: true,
+      sceneChange: 0,
+      at: at,
+    ));
+  }
 
   /// Drains the microtask queue enough times for a controller step, an agent
   /// future and a persistence hook to have run.
@@ -1455,6 +1601,7 @@ class RecordingPolicy implements BuddyPolicy {
   final List<String> objections = [];
   final List<(Dice, Move)> buddyMoves = [];
   final List<(bool, String?)> placements = [];
+  int placementsSkipped = 0;
   final List<(Player, BuddyCubeAction)> cubeActions = [];
   final List<Readability> readings = [];
   final List<GameResult> gameEnds = [];
@@ -1488,6 +1635,12 @@ class RecordingPolicy implements BuddyPolicy {
   void onPlacementVerified(bool correct, String? fix) {
     placements.add((correct, fix));
     inner.onPlacementVerified(correct, fix);
+  }
+
+  @override
+  void onPlacementSkipped() {
+    placementsSkipped++;
+    inner.onPlacementSkipped();
   }
 
   @override

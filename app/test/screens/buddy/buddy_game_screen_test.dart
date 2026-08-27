@@ -372,6 +372,109 @@ void main() {
     });
   });
 
+  group('the belief mirror escalation', () {
+    testWidgets('three failed placements put the discrepancy on the mirror '
+        'and offer a way out', (t) async {
+      final h = _Harness();
+      await h.reachTheMirror(t);
+
+      // The mirror is the focus, the regions the play touched are ringed, and
+      // the prompt names the strongest contradiction in the camera's own
+      // words.
+      final painter = boardPainterOf(t);
+      expect(painter.strongHighlightLocations, isNotEmpty,
+          reason: "the spec's \"shown the board Buddy believes in, with the "
+              'discrepancy highlighted"');
+      expect(painter.strongHighlightLocations.length, lessThan(24),
+          reason: 'the fake contradicts every region on the board; what the '
+              'session CLAIMED is the regions the dictated play touched, and '
+              'that is what may be ringed');
+      expect(_prompt(t), contains('the camera sees'),
+          reason: 'what Buddy expects against what it sees, verbatim from the '
+              'region that disagrees');
+
+      // And the two ways out, which are the whole point: without them a
+      // placement that cannot verify closes every forward path at once.
+      expect(find.text("I've fixed it"), findsOneWidget);
+      expect(find.text('Skip this check'), findsOneWidget);
+    });
+
+    // The escalation is the one state that puts a MEASURED sentence in the
+    // prompt — every other line in that slot is a constant somebody read, and
+    // this one is `RegionVerification.message`, whose length depends on which
+    // region disagreed. It shares the band with two buttons, and the band has
+    // a fixed height. Same scales as the placeholder group below, and a test
+    // per scale for the reason stated there.
+    for (final scale in <double>[1.0, 1.3, 2.0]) {
+      testWidgets('and the whole thing fits at text scale $scale', (t) async {
+        final h = _Harness();
+        await h.reachTheMirror(t, textScale: scale);
+        expect(t.takeException(), isNull);
+        expect(find.text("I've fixed it"), findsOneWidget);
+      });
+    }
+
+    testWidgets('"I\'ve fixed it" hands the loop back to the camera',
+        (t) async {
+      final h = _Harness();
+      await h.reachTheMirror(t);
+
+      h.vision.willVerify([boardAgrees]);
+      await t.tap(find.text("I've fixed it"));
+      await h.settle(t);
+      expect(find.text('Skip this check'), findsNothing,
+          reason: 'the escalation is lowered the moment the user says they '
+              'have dealt with it — it is not a modal the camera has to argue '
+              'its way out of');
+
+      await h.frame(t);
+      expect(_prompt(t).toLowerCase(), contains('throw'),
+          reason: 'a clean frame completes the verification and the next roll '
+              'is asked for, exactly as it would have been without the '
+              'escalation');
+      expect(
+        [
+          for (final e in h.analytics.events)
+            if (e.name == 'buddy_fallback_used') e.parameters['buddy_fallback']
+        ],
+        isEmpty,
+        reason: 'nothing was fallen back to: the camera answered in the end',
+      );
+    });
+
+    testWidgets('"Skip this check" is the user overruling the camera, and it '
+        'is counted and caveated', (t) async {
+      final h = _Harness();
+      await h.reachTheMirror(t);
+
+      // The felt is right and the camera cannot see it — a case measured on
+      // the real corpus (a man at the base of a near-half point, hidden by
+      // the rim of a folding case). The user is the authority on their own
+      // board.
+      await t.tap(find.text('Skip this check'));
+      await h.settle(t);
+
+      expect(_prompt(t).toLowerCase(), contains('throw'),
+          reason: 'the session proceeds to the next turn — the game had '
+              'already advanced, and verification is only about the felt '
+              'catching up');
+      expect(find.text('Skip this check'), findsNothing);
+      expect(_transcript(t), contains("I'll take your word for it"),
+          reason: 'a caveat, because Buddy has just been told something it '
+              'could not check');
+      expect(
+        [
+          for (final e in h.analytics.events)
+            if (e.name == 'buddy_fallback_used') e.parameters['buddy_fallback']
+        ],
+        ['placement_skipped'],
+        reason: 'the RATE of these is how often the camera cannot see a '
+            'placement a user says is right — a different failure from every '
+            'other fallback, and the one this branch could not measure',
+      );
+    });
+  });
+
   group('an outage suppresses perception, never the user', () {
     // The decision the dice pad already ships — see [BuddySession.awaitingRoll]
     // — applied to every other user verb. A readability outage suspends what
@@ -745,6 +848,95 @@ void main() {
     });
   });
 
+  group('the app goes away and comes back', () {
+    testWidgets('the camera is given up and taken back, and the match is '
+        'exactly where it was', (t) async {
+      // **A phone propped over a board for a whole match WILL be
+      // backgrounded** — a notification, a call, the screen locking — and
+      // Android takes the camera back when it happens. Before this branch had
+      // a `WidgetsBindingObserver` anywhere, the controller left behind was an
+      // object referring to nothing: black preview, no frames ever again, and
+      // "Fix the aim" went straight back through an `open()` that answered
+      // CameraReady on the strength of a non-null controller. Permanent, for
+      // the rest of the match.
+      final h = _Harness();
+      h.vision
+        ..willReadDice([diceShowing(6, 3)])
+        ..willMatchPlay([matchesPlay(0)])
+        ..willVerify([boardAgrees]);
+      await h.pump(t);
+      await h.frame(t); // the opening roll
+      await h.frame(t); // the user's play
+
+      final board = boardPainterOf(t).board;
+      final said = _lines(t);
+      final opensBefore = h.camera.opens;
+      final closesBefore = h.camera.closes;
+
+      // Android's onPause, which is what Flutter reports as `inactive`.
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await h.settle(t);
+      expect(h.camera.closes, closesBefore + 1);
+      expect(h.camera.users, 0,
+          reason: 'the hold went back, so the last screen out turned the '
+              'camera off rather than leaving a dead controller in hand');
+
+      final readsBefore = h.vision.readabilityCalls;
+      await h.frame(t);
+      expect(h.vision.readabilityCalls, readsBefore,
+          reason: 'and nothing is publishing frames while the app is away');
+
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await h.settle(t);
+      expect(h.camera.opens, opensBefore + 1,
+          reason: 'one hold back, matching the one that was given up');
+      expect(h.camera.users, 1);
+
+      // **Nothing about the match moved**, which is the whole claim: from the
+      // session's side an outage is a stretch with no frames in it, and it
+      // holds the position, the score and the transcript across one exactly as
+      // it holds them across a red light.
+      expect(boardPainterOf(t).board, board);
+      expect(_lines(t), said);
+
+      // And play carries on: the next settled frame is answered as though
+      // nothing had happened.
+      await h.frame(t);
+      expect(_prompt(t).toLowerCase(), contains("buddy's move"),
+          reason: 'the turn resumed where it was — Buddy rolled and dictated, '
+              'which is what the frame before the interruption was owed');
+    });
+
+    testWidgets('a screen disposed while the app is away does not close '
+        'somebody else\'s hold', (t) async {
+      // The unbalanced-close bug in its new disguise. Holds are COUNTED and
+      // two screens share this camera, so a `dispose` that closes
+      // unconditionally after a background has ALREADY released takes the
+      // camera away from whichever screen resumed first — a preview that goes
+      // black under a screen still using it, with nothing logged anywhere.
+      final h = _Harness();
+      await h.pump(t);
+      expect(h.camera.users, 1);
+
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await h.settle(t);
+      expect(h.camera.users, 0);
+
+      // A second screen picks the camera up while this one is still mounted
+      // and still backgrounded — the calibration route's position exactly.
+      await h.camera.open();
+      final closesBefore = h.camera.closes;
+
+      await t.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+      await t.pumpAndSettle();
+
+      expect(h.camera.closes, closesBefore,
+          reason: 'the screen had no hold left to give up, so it gave none');
+      expect(h.camera.users, 1,
+          reason: "and the other screen's hold is untouched");
+    });
+  });
+
   group('the screen holds together at a large text size', () {
     // The digital game screen ships this regression for its header, and this
     // one needs it more: two of the six bands are SENTENCES in flexible slots,
@@ -909,7 +1101,7 @@ class _Harness {
     addTearDown(() => t.binding.setSurfaceSize(null));
     db = newTestDatabase();
     addTearDown(db.close);
-    addTearDown(camera.close);
+    addTearDown(camera.shutDown);
 
     // A container rather than a bare ProviderScope, and awaited before the
     // pump, because the screen reads the SETTINGS synchronously in initState:
@@ -957,6 +1149,28 @@ class _Harness {
   Future<void> frame(WidgetTester t) async {
     camera.push(blankFrame(width: 64, height: 48));
     await settle(t);
+  }
+
+  /// Plays as far as a dictated move the board will not confirm, and fails the
+  /// check [kPlacementAttemptsBeforeMirror] times — the escalation the spec
+  /// asks for.
+  ///
+  /// Spelled out frame by frame rather than looped, because which frame does
+  /// what is the scenario: the opening throw, the user's play, Buddy's roll
+  /// and the move it dictates, and then the hand that keeps putting the man
+  /// somewhere the camera does not expect.
+  Future<void> reachTheMirror(WidgetTester t, {double textScale = 1.0}) async {
+    vision
+      ..willReadDice([diceShowing(6, 3)])
+      ..willMatchPlay([matchesPlay(0)])
+      ..willVerify([boardDisagrees]);
+    await pump(t, textScale: textScale);
+    await frame(t); // the opening roll
+    await frame(t); // the user's play
+    await frame(t); // Buddy's dice, and the move it dictates
+    for (var i = 0; i < kPlacementAttemptsBeforeMirror; i++) {
+      await frame(t);
+    }
   }
 
   /// Drains the microtask chains a controller step, an agent future and a
@@ -1020,7 +1234,7 @@ class _HandoverHarness {
     addTearDown(() => t.binding.setSurfaceSize(null));
     db = newTestDatabase();
     addTearDown(db.close);
-    addTearDown(camera.close);
+    addTearDown(camera.shutDown);
 
     final container = ProviderContainer(overrides: <Override>[
       databaseProvider.overrideWithValue(db),

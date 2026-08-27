@@ -263,6 +263,8 @@ class BuddySession extends ChangeNotifier {
   List<TouchedRegion>? _placementTouched;
   int _placementAttempts = 0;
   String? _lastFix;
+  List<RegionVerification> _placementDiscrepancies =
+      const <RegionVerification>[];
 
   int _diceAttempts = 0;
   double? _lastConfidence;
@@ -327,7 +329,33 @@ class BuddySession extends ChangeNotifier {
 
   /// A dictated move has failed verification often enough that the user should
   /// be shown the board Buddy believes in, with the discrepancy on it.
+  ///
+  /// **It is an open question put to the USER**, and a screen gates on it the
+  /// way it gates on [awaitingCubeAnswer] rather than on a phase: a readability
+  /// outage parks [phase] in [BuddyPhase.paused], and the two answers below —
+  /// [retryPlacement] and [acceptPlacementUnverified] — must not go away with
+  /// the light. They are the only forward paths out of a placement that cannot
+  /// verify, and a placement that cannot verify is not hypothetical: the real
+  /// corpus measures it at 1 in 6, on a folding case whose rim hides a man at
+  /// the base of a near-half point from the camera and from nobody else.
   bool get needsBeliefMirror => _needsBeliefMirror;
+
+  /// What the last placement check found wrong, **on the regions the dictated
+  /// play touched**, strongest contradiction first.
+  ///
+  /// The mirror's highlight layer and the sentence over it, and nothing more:
+  /// each [RegionVerification] already carries the region, the count the game
+  /// expects and the one the camera read, and its `message` is written to be
+  /// shown as it stands. Narrowed by `discrepanciesOn` rather than the whole
+  /// sweep, because the regions the play touched are the whole of what the
+  /// session claimed — see `regionsTouchedBy`, and `PerceptionTargets`
+  /// `placementVerification` for the user decision that made that the
+  /// denominator.
+  ///
+  /// Empty whenever no placement is outstanding, and empty again the moment one
+  /// verifies.
+  List<RegionVerification> get placementDiscrepancies =>
+      _placementDiscrepancies;
 
   /// The legal plays a settled frame could not choose between.
   List<Move> get candidates => _candidates;
@@ -467,6 +495,65 @@ class BuddySession extends ChangeNotifier {
       throw StateError('no play is being waited for');
     }
     _foldPlay(c.state.turn, move, _lastStableFrame);
+    notifyListeners();
+  }
+
+  /// The user says they have put the board right.
+  ///
+  /// Cheap, and deliberately so: the corrective loop never stopped — a settled
+  /// frame is asked the placement question whether or not the mirror is up —
+  /// so all this does is lower the escalation and re-arm the count that raised
+  /// it. If the board really is right, the next settled frame finishes the
+  /// verification and nothing else happens; if it is not, the mirror comes back
+  /// [kPlacementAttemptsBeforeMirror] frames later with the discrepancy
+  /// restated. Nothing about the game moves either way.
+  ///
+  /// [_lastFix] is cleared with it, so the correction is SAID again rather than
+  /// silently deduplicated against the one the user has just acted on.
+  void retryPlacement() {
+    if (_placementExpected == null) {
+      throw StateError('no placement is being waited for');
+    }
+    _placementAttempts = 0;
+    _lastFix = null;
+    _needsBeliefMirror = false;
+    _placementDiscrepancies = const <RegionVerification>[];
+    notifyListeners();
+  }
+
+  /// The user overrules the camera: the board is right, and Buddy cannot see
+  /// it.
+  ///
+  /// **This cannot corrupt the game, and that is why it is offered.** The
+  /// dictated move was applied to the authoritative state the moment the engine
+  /// returned it; verification is the separate question of whether the FELT has
+  /// caught up with a state that already moved. So accepting an unverified
+  /// placement discards a perceptual question, not a game decision — and the
+  /// person holding the checkers is the authority on where they are.
+  ///
+  /// It is a real case rather than a courtesy. The real corpus scores placement
+  /// verification at 1 in 6, and four of the five misses are one mechanism: a
+  /// folding case whose rim stands proud of the felt hides a man at the base of
+  /// a near-half point, so the reader returns *nothing* there rather than a
+  /// short count. On a board like that, a user who has placed the man correctly
+  /// has no other way forward — the dice are not asked for, the mirror is not
+  /// interactive, Double is refused, and a recalibration lands straight back
+  /// here.
+  ///
+  /// The board as it now stands becomes the anchor for the next play, because
+  /// that is what a difference has to be taken against. [_lastStableFrame] is
+  /// the most recent settled picture, which is exactly the frame a clean
+  /// verification would have kept. A session with none yet (nothing settled
+  /// since the epoch began) leaves it null and [_tryMatchPlay] re-anchors on
+  /// the next one, which is the same path an outage takes.
+  void acceptPlacementUnverified() {
+    if (_placementExpected == null) {
+      throw StateError('no placement is being waited for');
+    }
+    _beforeFrame = _lastStableFrame;
+    _clearPlacement();
+    policy.onPlacementSkipped();
+    _advance();
     notifyListeners();
   }
 
@@ -735,11 +822,7 @@ class BuddySession extends ChangeNotifier {
 
     if (result.agreesOn(touched)) {
       _beforeFrame = f.frame;
-      _placementExpected = null;
-      _placementTouched = null;
-      _placementAttempts = 0;
-      _lastFix = null;
-      _needsBeliefMirror = false;
+      _clearPlacement();
       policy.onPlacementVerified(true, null);
       _advance();
       notifyListeners();
@@ -747,7 +830,8 @@ class BuddySession extends ChangeNotifier {
     }
 
     _placementAttempts++;
-    final fix = result.discrepanciesOn(touched).first.message;
+    _placementDiscrepancies = result.discrepanciesOn(touched);
+    final fix = _placementDiscrepancies.first.message;
     if (fix != _lastFix) {
       _lastFix = fix;
       policy.onPlacementVerified(false, fix);
@@ -756,6 +840,21 @@ class BuddySession extends ChangeNotifier {
       _needsBeliefMirror = true;
     }
     notifyListeners();
+  }
+
+  /// Forgets the outstanding placement and everything raised on its behalf.
+  ///
+  /// The three ways out of [BuddyPhase.verifyingPlacement] all come through
+  /// here — a clean verification, and the mirror's two answers — so a fourth
+  /// cannot be written that clears four of the five fields and leaves a stale
+  /// mirror up over a session that has moved on.
+  void _clearPlacement() {
+    _placementExpected = null;
+    _placementTouched = null;
+    _placementAttempts = 0;
+    _lastFix = null;
+    _needsBeliefMirror = false;
+    _placementDiscrepancies = const <RegionVerification>[];
   }
 
   void _foldPlay(Player mover, Move play, Frame? settledOn) {

@@ -225,6 +225,19 @@ abstract final class BuddyFallbacks {
   /// A play was tapped out on the belief mirror because the camera did not see
   /// it happen.
   static const tapCorrect = 'tap_correct';
+
+  /// The user overruled the camera on a placement it would not confirm: the
+  /// board is right, Buddy could not see that it was, and play went on.
+  ///
+  /// **The one fallback that measures perception rather than the user**, which
+  /// is why it is worth its own name rather than being folded into
+  /// [tapCorrect]. The other three are all "the camera could not answer, so a
+  /// person did"; this one is "the camera answered, WRONGLY, and a person said
+  /// so". Its rate against dictated turns is the field reading of
+  /// `PerceptionTargets.placementVerification`, which the real corpus scores at
+  /// 1 in 6 — with a known mechanism (a rim that hides a man at the base of a
+  /// near-half point) and no fix yet.
+  static const placementSkipped = 'placement_skipped';
 }
 
 /// The values [AnalyticsParams.micState] may take.
