@@ -542,7 +542,7 @@ void main() {
       // of PUBLISHED frames would therefore report a higher red rate for a
       // listening session than for an identical silent one, and the difference
       // would be the throttle rather than the room.
-      Future<double> redRate({required bool nudged}) async {
+      Future<BuddySession> sessionThatSaw({required bool nudged}) async {
         final h = Harness();
         h.start();
         await h.stableFrame();
@@ -556,12 +556,18 @@ void main() {
         h.vision.willSee([greenReading]);
         await h.stableFrame();
         await h.stableFrame();
-        return h.session.readabilityRedRate;
+        return h.session;
       }
 
-      final silent = await redRate(nudged: false);
-      expect(silent, 0.25, reason: 'one red look out of four');
-      expect(await redRate(nudged: true), silent,
+      final silent = await sessionThatSaw(nudged: false);
+      final nudged = await sessionThatSaw(nudged: true);
+
+      expect(silent.readabilityRedRate, 0.25,
+          reason: 'one red look out of four');
+      expect(nudged.framesAssessed, greaterThan(silent.framesAssessed),
+          reason: 'the burst has to have put extra red frames in front of the '
+              'session, or the equality below proves nothing');
+      expect(nudged.readabilityRedRate, silent.readabilityRedRate,
           reason: 'a nudge changes which frames are published, never how much '
               'of the session the light was out for');
     });
