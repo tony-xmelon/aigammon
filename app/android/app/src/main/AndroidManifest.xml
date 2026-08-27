@@ -1,4 +1,9 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<!-- The `tools` namespace is load-bearing, not decorative: the
+     `android.hardware.camera.any` entry below is the one line in this file that
+     has to BEAT a plugin's contribution rather than merely add to it, and
+     `tools:replace` is the only thing that does. See that entry. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Required by every networked mode: Play Online (Firestore) and Play
          Nearby (the LAN WebSocket server/client plus the UDP discovery beacon).
 
@@ -40,6 +45,60 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+    <!-- THE ONE ENTRY THAT HAS TO OVERRIDE A PLUGIN, AND WHY.
+
+         Buddy Mode brought `camera` in, and its Android implementation
+         (`camera_android_camerax`) contributes this to the merge:
+
+             <uses-feature android:name="android.hardware.camera.any" />
+
+         with no `android:required` — which DEFAULTS TO TRUE. That is a
+         different feature name from the three above, so none of them cancels
+         it, and the merged release manifest of this app would require a camera:
+         Play filters the listing, and every camera-less device loses install
+         eligibility for an app whose camera is optional in both modes that use
+         it. It is a regression against master, where the only camera plugin
+         (mobile_scanner) declares its own feature optional.
+
+         `android:required="false"` on its own is NOT enough. The manifest
+         merger combines two `uses-feature` nodes of the same name by OR-ing
+         their `required` flags, so a plain false loses to the plugin's implicit
+         true and nothing is logged. `tools:replace="android:required"` is what
+         makes this node's value win instead of merge.
+
+         **The true verification is the MERGED manifest, which no test in this
+         repository can see.** `android_manifest_test.dart` pins the source line
+         including the `tools:replace`, because that attribute is the whole
+         mechanism and dropping it would look like a tidy-up. What the pin
+         cannot do is prove the merger honoured it: that is `aapt dump badging`
+         on the APK `android.yml` builds (expect
+         `uses-feature-not-required:'android.hardware.camera.any'`, and NO bare
+         `uses-feature:'android.hardware.camera.any'`), or the Play Console's
+         device catalogue on the uploaded artifact. It is item 4 of the
+         on-device protocol. -->
+    <uses-feature android:name="android.hardware.camera.any"
+        android:required="false"
+        tools:replace="android:required"/>
+    <!-- Also merged in from `camera_android_camerax`, and left alone
+         deliberately:
+
+             <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+               android:maxSdkVersion="28" />
+
+         The plugin declares it for its own picture/video capture-to-file paths,
+         which Buddy Mode never calls — it takes an image STREAM and converts
+         frames in an isolate; nothing in this app writes a camera file. It is
+         capped at API 28, so on every device this app's `minSdk` targets that
+         is not the newest platform it is simply absent, and on the ones where
+         it does apply it is a normal runtime permission nothing ever requests.
+
+         It appears in the merged manifest regardless and there is no way to
+         remove it that is worth the cost: `tools:node="remove"` would delete a
+         declaration the plugin may start relying on in a future version, and
+         the failure would be at runtime inside somebody else's code. Recorded
+         here so that "why does the release manifest ask for external storage?"
+         has an answer that does not require reading the pub cache. -->
+
     <!-- Deliberately NO usesCleartextTraffic and no network_security_config, even
          though Play Nearby dials a plain `ws://` LAN address and API 28+ blocks
          cleartext by default.

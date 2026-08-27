@@ -77,6 +77,58 @@ void main() {
     );
   });
 
+  test('the merged camera.any feature is beaten back to OPTIONAL', () {
+    // **The one entry in this manifest that has to override a plugin rather
+    // than merely add to it.** `camera_android_camerax` — the Android
+    // implementation `camera` pulls in for Buddy Mode — contributes
+    // `<uses-feature android:name="android.hardware.camera.any" />` with no
+    // `required` attribute, and the attribute DEFAULTS TO TRUE. It is a
+    // different feature name from `android.hardware.camera`, so the optional
+    // declaration pinned above does not cancel it, and the merged release
+    // manifest would make a camera a hard install requirement for an app whose
+    // camera is optional in both modes that use one. That is a regression
+    // against master, whose only camera plugin declares its own feature
+    // optional.
+    //
+    // **`tools:replace` is pinned here because it is the mechanism.** The
+    // merger combines two same-named `uses-feature` nodes by OR-ing their
+    // `required` flags, so a plain `android:required="false"` loses to the
+    // plugin's implicit true — silently, with nothing logged. Only
+    // `tools:replace="android:required"` makes this node's value win. A future
+    // tidy-up that drops the attribute as noise would restore the bug and
+    // nothing else in this repository would notice, which is exactly what this
+    // assertion is for.
+    //
+    // **What this test canNOT do is verify the merge.** It reads the SOURCE
+    // manifest; the merger runs in Gradle, which needs an Android toolchain
+    // this environment does not have. The true verification is `aapt dump
+    // badging` on the APK `android.yml` builds — expect
+    // `uses-feature-not-required:'android.hardware.camera.any'` and no bare
+    // `uses-feature:'android.hardware.camera.any'` — or the Play Console's
+    // device catalogue on the uploaded artifact. It is item 4 of
+    // `docs/buddy-mode-test-protocol.md`.
+    final main = File(mainManifest).readAsStringSync();
+    expect(
+      main,
+      contains('xmlns:tools="http://schemas.android.com/tools"'),
+      reason: 'tools:replace below is inert without the namespace, and an '
+          'undeclared prefix fails the Gradle merge outright',
+    );
+    // The entry spans three lines and this file is CRLF on disk, so the match
+    // is made on whitespace-collapsed text: what is being pinned is the three
+    // attributes and their values, not the indentation somebody may reflow.
+    final flat = main.replaceAll(RegExp(r'\s+'), ' ');
+    expect(
+      flat,
+      contains('<uses-feature android:name="android.hardware.camera.any" '
+          'android:required="false" tools:replace="android:required"/>'),
+      reason: 'camera_android_camerax merges in android.hardware.camera.any '
+          'with required defaulting to TRUE; without this override — and '
+          'without tools:replace, which is what beats the OR-merge — '
+          'camera-less devices lose install eligibility',
+    );
+  });
+
   test('every build variant that exists still declares INTERNET', () {
     // The debug/profile copies are Flutter tooling defaults; keeping them is
     // harmless, but the point of the test above is that they are not LOAD
