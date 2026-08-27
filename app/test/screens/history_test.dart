@@ -31,6 +31,21 @@ MatchRow _matchRow(int id) => MatchRow(
       completed: true,
     );
 
+/// A finished row in [mode], with a score that makes each tile distinguishable
+/// from its neighbours in a list of five.
+MatchRow _modeRow(int id, String mode) => MatchRow(
+      id: id,
+      createdAt: DateTime(2026, 7, 24, 10, 30),
+      matchLength: 1,
+      mode: mode,
+      whiteType: 'human',
+      blackType: 'human',
+      whiteScore: 1,
+      blackScore: 0,
+      winner: 'white',
+      completed: true,
+    );
+
 /// An UNFINISHED match row (no winner, not completed) — the "Unfinished" badge.
 MatchRow _unfinishedRow(int id) => MatchRow(
       id: id,
@@ -134,6 +149,43 @@ void main() {
     expect(find.byType(MatchDetailScreen), findsOneWidget);
     expect(find.text('Game 1'), findsOneWidget);
     expect(find.textContaining('Black wins 1'), findsOneWidget);
+  });
+
+  testWidgets('every mode a match can be saved under has a name', (t) async {
+    // **The failure this catches is silent by construction.** `_modeLabel`
+    // falls through to the raw column value, so a mode with no case shows its
+    // database spelling in the subtitle beside four modes that read like
+    // English — which is exactly what "lan" and "buddy" were doing.
+    //
+    // The list is the set of strings `MatchRepository.startMatch` is actually
+    // called with: `mode:` in `game_screen.dart` (vsComputer/hotSeat),
+    // `lan_screen.dart` ('lan', twice), `online_screen.dart` ('online') and
+    // `buddy_game_screen.dart` ('buddy'). A new mode added without a label
+    // reddens here rather than shipping its column name.
+    await t.binding.setSurfaceSize(_surface);
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    const modes = <String, String>{
+      'vsComputer': 'vs Computer',
+      'hotSeat': 'Two players',
+      'online': 'Online',
+      'lan': 'Play Nearby',
+      'buddy': 'Buddy',
+    };
+    await t.pumpWidget(_app(
+      const HistoryScreen(),
+      matches: <MatchRow>[
+        for (final (i, mode) in modes.keys.indexed)
+          _modeRow(100 + i, mode),
+      ],
+    ));
+    await _settle(t);
+
+    for (final entry in modes.entries) {
+      expect(find.textContaining(entry.value), findsOneWidget,
+          reason: '"${entry.key}" is saved by a real screen and must not show '
+              'its column name in the list');
+    }
   });
 
   testWidgets('empty history shows a placeholder', (t) async {

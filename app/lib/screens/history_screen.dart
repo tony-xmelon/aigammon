@@ -312,10 +312,20 @@ class _GameTile extends StatelessWidget {
 String _scoreLine(MatchRow m) =>
     'White ${m.whiteScore} — ${m.blackScore} Black  (to ${m.matchLength})';
 
+/// The mode a saved match was played in, as a person would name it.
+///
+/// **The fallback is the raw column value**, which is why a missing case is a
+/// silent one: a Buddy match read "buddy" in the history list and a LAN match
+/// read "lan", in a subtitle where every other mode had a proper name. Every
+/// string `MatchRepository.startMatch` is called with has a case here — see
+/// `history_screen_test.dart`, which enumerates them against the call sites so
+/// that the next mode cannot ship with its column name showing.
 String _modeLabel(String mode) => switch (mode) {
       'vsComputer' => 'vs Computer',
       'hotSeat' => 'Two players',
       'online' => 'Online',
+      'lan' => 'Play Nearby',
+      'buddy' => 'Buddy',
       final other => other,
     };
 
