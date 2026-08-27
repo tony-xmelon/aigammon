@@ -268,13 +268,16 @@ Every release is a merge to `master` that bumps `version:` in `app/pubspec.yaml`
 — **and `appVersion` in `app/lib/branding/app_version.dart` with it**, since the
 home screen's footer reads the second one and `app_version_test.dart` fails the
 suite if the pair drifts — and adds a section to
-[`CHANGELOG.md`](CHANGELOG.md). From v0.13.0 onward it also gets an
-**annotated tag**:
+[`CHANGELOG.md`](CHANGELOG.md). Each release also gets an **annotated tag** —
+a convention this section has documented since v0.13.0 but which has never
+actually been run (`git tag` is empty as of the v0.14.0 branch; v0.13.0 was
+shipped untagged). Starting it, and whether to back-tag v0.13.0's merge
+commit, is a release-time decision:
 
 ```bash
 # on master, at the merge commit
-git tag -a v0.13.0 -m "AIGammon v0.13.0 — <one line, the same one the merge used>"
-git push origin v0.13.0
+git tag -a v0.14.0 -m "AIGammon v0.14.0 — <one line, the same one the merge used>"
+git push origin v0.14.0
 ```
 
 Annotated (`-a`), not lightweight: an annotated tag is a real object carrying a
