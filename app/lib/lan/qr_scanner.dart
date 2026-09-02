@@ -75,7 +75,7 @@ bool qrScanSupportedOn(TargetPlatform platform) => switch (platform) {
 /// It filters on this app's own payload — a foreign QR code (a poster, a Wi-Fi
 /// card, a receipt) is reported inline and the camera KEEPS RUNNING, so the
 /// user just moves the phone rather than starting over. The route pops on the
-/// first valid AIGammon code and only that.
+/// first valid AI Gammon code and only that.
 class MobileScannerQrScanner implements QrScanner {
   const MobileScannerQrScanner();
 
@@ -142,7 +142,7 @@ class _QrScanPageState extends State<QrScanPage> {
     }
     // Nothing in this frame was ours. Say so once, quietly, and keep scanning.
     if (_hint == null && capture.barcodes.isNotEmpty) {
-      setState(() => _hint = 'That is not an AIGammon game code. Point the '
+      setState(() => _hint = 'That is not an AI Gammon game code. Point the '
           'camera at the QR code on the other device\'s Host screen.');
     }
   }
@@ -234,7 +234,7 @@ QrScanOutcome backOutcomeFor(MobileScannerException? error) => error == null
 String cameraErrorText(MobileScannerException error) =>
     switch (error.errorCode) {
       MobileScannerErrorCode.permissionDenied =>
-        'AIGammon does not have permission to use the camera. Allow camera '
+        'AI Gammon does not have permission to use the camera. Allow camera '
             'access in your device settings, or enter the address shown on the '
             'other device by hand.',
       MobileScannerErrorCode.unsupported =>

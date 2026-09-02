@@ -993,10 +993,10 @@ void main() {
       await t.pump();
       await openJoinTab(t);
       await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
-      await pumpUntil(t, find.textContaining('not an AIGammon game'));
+      await pumpUntil(t, find.textContaining('not an AI Gammon game'));
 
       expect(transport.joins, isEmpty);
-      expect(find.textContaining('not an AIGammon game'), findsOneWidget);
+      expect(find.textContaining('not an AI Gammon game'), findsOneWidget);
       // Still on the browsing form, with every other way in intact.
       expect(find.text('Enter address'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Scan QR code'), findsOneWidget);
@@ -1007,7 +1007,7 @@ void main() {
       await t.binding.setSurfaceSize(surface);
       addTearDown(() => t.binding.setSurfaceSize(null));
       scanner.outcome = const QrScanUnavailable(
-          'AIGammon does not have permission to use the camera. Enter the '
+          'AI Gammon does not have permission to use the camera. Enter the '
           'address by hand.');
 
       await t.pumpWidget(app());
@@ -1058,8 +1058,8 @@ void main() {
       await t.pump();
       await openJoinTab(t);
       await t.tap(find.widgetWithText(FilledButton, 'Scan QR code'));
-      await pumpUntil(t, find.textContaining('not an AIGammon game'));
-      expect(find.textContaining('not an AIGammon game'), findsOneWidget);
+      await pumpUntil(t, find.textContaining('not an AI Gammon game'));
+      expect(find.textContaining('not an AI Gammon game'), findsOneWidget);
 
       // Second attempt, backed out of. The complaint about the FIRST scan is
       // about a scan that is over, and must not sit under the button.
@@ -1068,7 +1068,7 @@ void main() {
       await t.pump();
       await t.pump();
 
-      expect(find.textContaining('not an AIGammon game'), findsNothing);
+      expect(find.textContaining('not an AI Gammon game'), findsNothing);
       expect(transport.joins, isEmpty);
     });
 

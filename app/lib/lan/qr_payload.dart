@@ -6,7 +6,7 @@
 /// levels, so the parser is the interesting half of this file.
 library;
 
-/// The scheme every AIGammon join code starts with.
+/// The scheme every AI Gammon join code starts with.
 ///
 /// A custom scheme (rather than an `https://` deep link) keeps the payload
 /// short — a shorter string is a lower-density QR, which a cheap phone camera
@@ -23,7 +23,7 @@ const String qrJoinHost = 'join';
 /// Its own number, independent of the app version and of the match protocol's:
 /// it changes only when the FIELDS change. A code from a future version decodes
 /// to null rather than to a half-understood target, which surfaces as "not an
-/// AIGammon code" instead of a connection to nowhere.
+/// AI Gammon code" instead of a connection to nowhere.
 const String qrJoinVersion = '1';
 
 /// Longest string the parser will even look at.
@@ -91,7 +91,7 @@ String encodeQrJoin(QrJoinPayload payload) =>
 /// Read a scanned string back, or null if it is not one of ours.
 ///
 /// TOTAL: for any input — empty, a URL, a Wi-Fi config, a vCard, a megabyte of
-/// binary that happened to decode as text, a well-formed AIGammon URI with a
+/// binary that happened to decode as text, a well-formed AI Gammon URI with a
 /// port of 0 — this returns a payload or null, and never throws. That is the
 /// contract the scanner depends on: it points a camera at the world and feeds
 /// whatever comes back straight in here.

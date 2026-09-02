@@ -18,7 +18,7 @@ void main() {
       expect(
         uri.toString(),
         'https://github.com/tony-xmelon/aigammon/issues/new'
-        '?title=%5BFeedback%5D+AIGammon+0.12.0+%28android%29'
+        '?title=%5BFeedback%5D+AI+Gammon+0.12.0+%28android%29'
         '&body=%23%23%23+What+happened%3F%0A%0A%3C%21--+Describe+the+problem+'
         'or+the+idea.+--%3E%0A%0A%23%23%23+Details%0A%0A-+App+version%3A+0.12.0'
         '%0A-+Platform%3A+android%0A'
@@ -46,7 +46,7 @@ void main() {
       expect(body, contains('- App version: 9.9.9'));
       expect(body, contains('- Platform: windows'));
       expect(uri.queryParameters['title'],
-          '[Feedback] AIGammon 9.9.9 (windows)');
+          '[Feedback] AI Gammon 9.9.9 (windows)');
     });
 
     test('no diagnostics section when there is no excerpt', () {

@@ -146,7 +146,7 @@ class LiveNearbyTransport implements NearbyTransport {
       // Some platforms refuse the hostname; a generic label still identifies
       // the device well enough for a room with two phones in it.
     }
-    return 'AIGammon device';
+    return 'AI Gammon device';
   }
 
   @override
@@ -177,7 +177,7 @@ class LiveNearbyTransport implements NearbyTransport {
     try {
       beacon = await HostBeacon.start(name: name, matchPort: server.port);
     } catch (_) {
-      // The discovery port is already taken (another AIGammon on this device,
+      // The discovery port is already taken (another AI Gammon on this device,
       // or something else on 47777). Hosting still works — the guest types the
       // address in — so this is a degraded mode, not a failure.
       beacon = null;

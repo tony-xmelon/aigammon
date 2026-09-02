@@ -313,7 +313,7 @@ On a device where Buddy Mode has **never run** (or after clearing the app's
 permissions in system settings):
 
 1. Start a Buddy session and reach calibration. **Refuse** the camera.
-   → Expect: *"AIGammon does not have permission to use the camera. Allow camera
+   → Expect: *"AI Gammon does not have permission to use the camera. Allow camera
    access…"*, not a black rectangle.
 2. Grant it, and get to the opening throw. Watch **what is on screen behind the
    microphone dialog**.

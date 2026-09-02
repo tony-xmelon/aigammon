@@ -1,4 +1,4 @@
-// Rasterises the AIGammon brand mark ([AppMarkPainter]) to the launcher-icon
+// Rasterises the AI Gammon brand mark ([AppMarkPainter]) to the launcher-icon
 // source PNGs that `flutter_launcher_icons` consumes.
 //
 // It lives under `tool/` rather than `test/` deliberately: `flutter test` only

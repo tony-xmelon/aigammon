@@ -212,10 +212,10 @@ class CrashLog {
   /// A human-readable report, for the clipboard.
   String asText() {
     if (_entries.isEmpty) {
-      return 'AIGammon diagnostics\nNo errors recorded.';
+      return 'AI Gammon diagnostics\nNo errors recorded.';
     }
     final buffer = StringBuffer()
-      ..writeln('AIGammon diagnostics')
+      ..writeln('AI Gammon diagnostics')
       ..writeln('${_entries.length} error(s), oldest first. Times are UTC.')
       ..writeln();
     for (final e in _entries) {

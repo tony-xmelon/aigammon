@@ -15,6 +15,6 @@ void main() {
       ],
       child: const AiGammonApp(),
     ));
-    expect(find.text('AIGammon'), findsOneWidget);
+    expect(find.text('AI Gammon'), findsOneWidget);
   });
 }

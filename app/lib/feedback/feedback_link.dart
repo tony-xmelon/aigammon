@@ -52,7 +52,7 @@ Uri buildFeedbackIssueUri({
   }
 
   return Uri.https('github.com', '/$kFeedbackRepository/issues/new', {
-    'title': '[Feedback] AIGammon $appVersion ($platform)',
+    'title': '[Feedback] AI Gammon $appVersion ($platform)',
     'body': body.toString(),
     // Must name a label that EXISTS on the repository: GitHub applies the ones
     // it recognizes and silently drops the rest, so an invented label is a

@@ -96,7 +96,7 @@ class _AiGammonAppState extends ConsumerState<AiGammonApp> {
         ref.watch(settingsProvider).valueOrNull?.themeMode ??
             AppSettings.defaults.themeMode;
     return MaterialApp(
-      title: 'AIGammon',
+      title: 'AI Gammon',
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
       themeMode: themeMode,

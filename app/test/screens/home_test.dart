@@ -177,7 +177,7 @@ void main() {
       'two-players hides them', (t) async {
     await t.pumpWidget(_app());
 
-    expect(find.text('AIGammon'), findsOneWidget);
+    expect(find.text('AI Gammon'), findsOneWidget);
     expect(find.text('Play vs Computer'), findsOneWidget);
     expect(find.text('Two Players'), findsOneWidget);
     // The two remote modes sit below the local ones, nearby before online.
@@ -227,7 +227,7 @@ void main() {
       // The hero: the same painted mark as the launcher icon, above the title.
       expect(find.byType(AppMark), findsOneWidget);
       expect(t.getBottomLeft(find.byType(AppMark)).dy,
-          lessThan(t.getTopLeft(find.text('AIGammon')).dy));
+          lessThan(t.getTopLeft(find.text('AI Gammon')).dy));
 
       // The version sits in the bottom band, not in the content cluster.
       final footer = find.text('v$appVersion');

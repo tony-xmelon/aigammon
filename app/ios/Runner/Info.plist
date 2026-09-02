@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>AIGammon</string>
+	<string>AI Gammon</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>AIGammon</string>
+	<string>AI Gammon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -42,16 +42,16 @@
 	     end for either feature: the Join tab still finds hosts by discovery and
 	     takes a typed address, and Buddy Mode is one mode among several. -->
 	<key>NSCameraUsageDescription</key>
-	<string>AIGammon uses the camera to scan the QR code shown by another device, and — in Buddy Mode — to watch your physical board so it can follow the game.</string>
+	<string>AI Gammon uses the camera to scan the QR code shown by another device, and — in Buddy Mode — to watch your physical board so it can follow the game.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>AIGammon uses the local network to find and play against another device on the same Wi-Fi.</string>
+	<string>AI Gammon uses the local network to find and play against another device on the same Wi-Fi.</string>
 	<!-- Buddy Mode's dice-roll listener: a transient detector that tells
 	     perception when to look at the board. STRICTLY an attention hint — the
 	     mode works identically with this denied — so the string promises
 	     nothing more than listening for the dice, and the app asks in context
 	     at the first Buddy session rather than at launch. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>AIGammon can listen for the sound of your dice landing, so Buddy knows when to look at the board. Buddy Mode works without this.</string>
+	<string>AI Gammon can listen for the sound of your dice landing, so Buddy knows when to look at the board. Buddy Mode works without this.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

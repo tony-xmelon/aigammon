@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../board/board_theme.dart';
 
-/// The AIGammon brand mark: a top-down backgammon board viewport — a walnut
+/// The AI Gammon brand mark: a top-down backgammon board viewport — a walnut
 /// frame around tan felt, two OPPOSING rows of alternating crimson/cream points
 /// closing on a felt gap, the walnut bar down the middle, and a checker resting
 /// on a point in each half.

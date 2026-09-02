@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.xmelon" "\0"
-            VALUE "FileDescription", "AIGammon" "\0"
+            VALUE "FileDescription", "AI Gammon" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "aigammon_app" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.xmelon. All rights reserved." "\0"
             VALUE "OriginalFilename", "aigammon_app.exe" "\0"
-            VALUE "ProductName", "AIGammon" "\0"
+            VALUE "ProductName", "AI Gammon" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

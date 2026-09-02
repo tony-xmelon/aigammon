@@ -309,7 +309,7 @@ class _HostTabState extends ConsumerState<_HostTab> {
 
   String _hostErrorText(Object e) => e is SocketException
       ? 'Could not start hosting — the port is already in use. '
-          'Close any other copy of AIGammon and try again.'
+          'Close any other copy of AI Gammon and try again.'
       : 'Could not start hosting. Check your Wi-Fi connection and try again.';
 
   // --- build -----------------------------------------------------------------
@@ -699,7 +699,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       switch (outcome) {
         case QrScanCancelled():
           // Backed out on purpose. Nothing to report — and nothing left over
-          // either: a message about the LAST scan ("that was not an AIGammon
+          // either: a message about the LAST scan ("that was not an AI Gammon
           // code") is stale the moment a new scan is opened, and leaving it
           // under the button makes a deliberate cancellation look like a
           // failure.
@@ -711,7 +711,7 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
         case QrScanCode(:final raw):
           final payload = tryDecodeQrJoin(raw);
           if (payload == null) {
-            setState(() => _scanError = 'That QR code is not an AIGammon game. '
+            setState(() => _scanError = 'That QR code is not an AI Gammon game. '
                 'Scan the one on the other device\'s Host screen.');
             return;
           }
@@ -886,10 +886,10 @@ class _JoinTabState extends ConsumerState<_JoinTab> {
       return 'Wrong room code. Check the four digits on the other device.';
     }
     if (lower.contains('version') || lower.contains('protocol')) {
-      return 'The other device is running a different version of AIGammon.';
+      return 'The other device is running a different version of AI Gammon.';
     }
     if (lower.contains('handshake required')) {
-      return 'That device did not answer the way AIGammon does. Check the '
+      return 'That device did not answer the way AI Gammon does. Check the '
           'address and port.';
     }
     return 'Could not join: $reason';

@@ -116,7 +116,7 @@
          if a plugin or platform channel, rather than dart:io, ever needs http://. -->
 
     <application
-        android:label="AIGammon"
+        android:label="AI Gammon"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

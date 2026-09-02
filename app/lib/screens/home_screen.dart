@@ -70,12 +70,12 @@ class HomeScreen extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Semantics(
-                            label: 'AIGammon',
+                            label: 'AI Gammon',
                             child: const AppMark(size: 140),
                           ),
                           const SizedBox(height: 20),
                           Text(
-                            'AIGammon',
+                            'AI Gammon',
                             style: theme.textTheme.displaySmall,
                           ),
                           const SizedBox(height: 6),

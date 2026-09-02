@@ -1,4 +1,4 @@
-# AIGammon
+# AI Gammon
 
 Cross-platform backgammon built with **Flutter** and driven by a neural-net
 engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
@@ -276,7 +276,7 @@ commit, is a release-time decision:
 
 ```bash
 # on master, at the merge commit
-git tag -a v0.14.0 -m "AIGammon v0.14.0 — <one line, the same one the merge used>"
+git tag -a v0.14.0 -m "AI Gammon v0.14.0 — <one line, the same one the merge used>"
 git push origin v0.14.0
 ```
 

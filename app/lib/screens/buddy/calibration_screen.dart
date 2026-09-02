@@ -1788,7 +1788,7 @@ class PhoneBuddyCamera implements BuddyCamera {
         'CameraAccessDenied' ||
         'CameraAccessDeniedWithoutPrompt' ||
         'CameraAccessRestricted' =>
-          'AIGammon does not have permission to use the camera. Allow camera '
+          'AI Gammon does not have permission to use the camera. Allow camera '
               'access in your device settings and try again.',
         _ => 'The camera could not be started. ${error.description ?? ''}'.trim(),
       };

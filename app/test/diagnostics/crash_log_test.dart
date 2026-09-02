@@ -154,7 +154,7 @@ void main() {
       log.record(StateError('kaboom'),
           stack: StackTrace.fromString('#0 frameOne'), source: 'engine-isolate');
       final text = log.asText();
-      expect(text, contains('AIGammon'));
+      expect(text, contains('AI Gammon'));
       expect(text, contains('kaboom'));
       expect(text, contains('engine-isolate'));
       expect(text, contains('frameOne'));
