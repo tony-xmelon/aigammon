@@ -977,8 +977,26 @@ void main() {
 ///
 /// * **dice pair 0/4.** The reader declines every real roll — it finds no pair
 ///   at all rather than reading a wrong one. This board's dice are 0.021 of it
-///   across against the synthetic bed's 0.075, and the band-location and tilt
-///   work that would let a die that small be found is queued, not done.
+///   across against the synthetic bed's 0.075.
+///
+///   **The BAND-LOCATION half of the queued dice work is now DONE** (merged
+///   from `claude/brave-turing-b75e0e`, 2026-09-03), and the floor did not
+///   move. The reader searches the whole playing surface rather than a
+///   mid-board band, judges every cell against its own measured background,
+///   reads faces as SHAPES scaled by the board's own measured aspect
+///   ([PipPattern], which retired pip COUNTING), refuses one die seen twice,
+///   and can read a colour-camouflaged die straight off its pips — and on the
+///   same footage's OTHER windows it reads a tilted pair's up-faces right
+///   (frame 031's 1-2) where counting used to invent rolls from wood grain.
+///   What keeps these four particular rolls at null, each measured in the
+///   dice reader's and [PipPattern]'s docs: 010's and 013's dice tilt into two
+///   faces whose pip subsets no shape accepts; 003's far die splits its pips
+///   at this resolution; and 005's camouflaged pair needs BOTH the pip channel
+///   and its session's own 0.8 pip span — a span this footage cannot enable,
+///   because its glare washes a five's pips into the three inside them (frame
+///   046). What remains queued is the TILT half. Dice this small, tilted and
+///   washed still want a closer camera or the ML hatch; every refusal here is
+///   the designed answer.
 ///
 ///   **The denominator stayed at four when it was audited, and that is a
 ///   finding rather than an oversight.** Nine of the ten frames have dice in

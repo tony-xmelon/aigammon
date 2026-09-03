@@ -15,6 +15,32 @@ set by CI from the workflow run number and is not tracked here.
 > section. No git tags exist for them either; see "Releasing" in the README for
 > the tagging convention that starts with the next release.
 
+## [Unreleased]
+
+### Changed
+
+- **Buddy Mode's dice reader searches the whole playing surface**, and reads a
+  face as a **shape** rather than by counting pips. `PipPattern` matches
+  pairwise pip distances inside a die's own frame — blind to rotation and
+  reflection — scaled by the board's own measured aspect
+  (`BoardCalibration.surfaceAspect`, taken from the start position's checkers,
+  since a disc is as wide as it is deep and every pixel estimate on this
+  footage carries 1.35–3.8× foreshortening). Per-cell reference backgrounds
+  replace a shared mid-board vocabulary that could hide a die, one die seen
+  twice is refused, and a second candidate channel reads a colour-camouflaged
+  die straight off its pips. Merged from the dice-reader branch that had been
+  parked since the Phase-1 gate.
+
+  **The published floor did not move, and that is the honest headline**: the
+  real corpus is still **0 of 4** certified rolls found and **0 read wrong** —
+  every one a refusal, which is the behaviour the design asks for. What moved
+  is underneath it, on the 70-window sweep the corpus does not score: three
+  candidate pairs (two true, one wood-grain phantom) became **one claim, right,
+  with no phantoms**. Fewer true finds and no invented ones — the trade the
+  design prefers, since a wrong roll enters the authoritative game state and
+  stays there. What each of the four rolls is still waiting on is recorded in
+  `corpus_harness_test.dart`; the **tilt** work is queued.
+
 ## [0.14.0] — 2026-08-27
 
 **Buddy Mode**: play on your real board against the engine, with the phone

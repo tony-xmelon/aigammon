@@ -982,10 +982,30 @@ class DicePlacement {
   /// Rotation about [center], radians, clockwise in image coordinates.
   final double angle;
 
+  /// Pip positions overriding [face]'s own layout, in quarter-sides from the
+  /// die's centre — the units `_pipOffsets` speaks.
+  ///
+  /// For painting the ILLEGAL patterns real optics produce and no [face] can
+  /// express: the line of three a blurred six's columns merge into, the
+  /// split dot that makes a four count six. The reader has to refuse those
+  /// shapes, and only a bed that can paint them can prove it does. [face] is
+  /// still what the spot reports as ground truth.
+  final List<(double, double)>? pipOffsets;
+
+  /// Pips painted at a fraction of the pip colour's depth — what a window's
+  /// glare does to the pips it catches. The real footage holds up-faces
+  /// whose lit pips sit far enough toward the body's own colour that the
+  /// reader's pip cut misses them, and a face read minus its faintest pips
+  /// is a smaller legal face; only a bed that can paint the wash can prove
+  /// the reader refuses it.
+  final List<(double, double)>? faintPipOffsets;
+
   const DicePlacement({
     required this.face,
     required this.center,
     this.angle = 0.0,
+    this.pipOffsets,
+    this.faintPipOffsets,
   });
 
   @override
@@ -1001,11 +1021,21 @@ class DieSpot {
   /// Rotation about [center], radians, clockwise in image coordinates.
   final double angle;
 
+  /// Pips painted instead of [value]'s own layout, when the placement asked
+  /// for an illegal pattern — see [DicePlacement.pipOffsets].
+  final List<(double, double)>? pipOffsets;
+
+  /// Pips painted washed toward the body — see
+  /// [DicePlacement.faintPipOffsets].
+  final List<(double, double)>? faintPipOffsets;
+
   const DieSpot({
     required this.value,
     required this.center,
     required this.side,
     required this.angle,
+    this.pipOffsets,
+    this.faintPipOffsets,
   });
 
   @override
@@ -2337,6 +2367,8 @@ List<DieSpot> _drawDice(
       center: Pt(placement.center.x * w, placement.center.y * h),
       side: side,
       angle: placement.angle,
+      pipOffsets: placement.pipOffsets,
+      faintPipOffsets: placement.faintPipOffsets,
     );
     _drawDie(image, spot, palette);
     spots.add(spot);
@@ -2371,7 +2403,7 @@ void _drawDie(img.Image image, DieSpot die, BoardPalette palette) {
 
   final pipRadius = (BoardLayout.pipRadiusFraction * die.side).round();
   final step = die.side / 4;
-  for (final (px, py) in _pipOffsets(die.value)) {
+  for (final (px, py) in die.pipOffsets ?? _pipOffsets(die.value)) {
     final p = place(px * step, py * step);
     img.fillCircle(
       image,
@@ -2381,6 +2413,27 @@ void _drawDie(img.Image image, DieSpot die, BoardPalette palette) {
       color: _color(palette.diePip),
     );
   }
+  for (final (px, py) in die.faintPipOffsets ?? const <(double, double)>[]) {
+    final p = place(px * step, py * step);
+    img.fillCircle(
+      image,
+      x: p.x.round(),
+      y: p.y.round(),
+      radius: pipRadius,
+      // A third of the way from the body's colour toward the pip's: enough
+      // wash that a half-depth pip cut misses it and a quarter-depth one
+      // does not, which is the case the faint pips exist to paint.
+      color: _color(_blendRgb(palette.dieBody, palette.diePip, 0.42)),
+    );
+  }
+}
+
+/// [t] of the way from [a] to [b], per channel, in 0xRRGGBB space.
+int _blendRgb(int a, int b, double t) {
+  int channel(int x, int y) => (x + (y - x) * t).round();
+  return (channel((a >> 16) & 0xFF, (b >> 16) & 0xFF) << 16) |
+      (channel((a >> 8) & 0xFF, (b >> 8) & 0xFF) << 8) |
+      channel(a & 0xFF, b & 0xFF);
 }
 
 /// Pip positions for a face, in units of a quarter of the die's side from its

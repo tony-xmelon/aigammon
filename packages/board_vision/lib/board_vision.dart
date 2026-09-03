@@ -26,6 +26,7 @@ export 'src/frame.dart';
 export 'src/geometry_types.dart';
 export 'src/homography.dart';
 export 'src/occupancy.dart';
+export 'src/pip_pattern.dart';
 export 'src/play_matcher.dart';
 export 'src/readability.dart';
 export 'src/roi_atlas.dart';

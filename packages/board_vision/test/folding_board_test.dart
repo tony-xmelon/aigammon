@@ -164,9 +164,57 @@ void main() {
       // The dice band crosses the hinge, so the two dice are read through two
       // different planes in one pass. Nothing in the dice reader knows that —
       // it walks a lattice in board space, and each cell routes itself.
-      final start = renderFoldingShot(board: BoardState.initial());
+      //
+      // From a HIGHER camera than [kFoldingTent]'s, deliberately. A face is
+      // read as a shape now, and framing the shape needs a die's height in
+      // board units — an estimate that carries the camera's own
+      // foreshortening (see the reader's `_dieDownUnits`). At this file's
+      // usual near-table viewpoint the estimate runs 1.85 times the truth,
+      // every framed pattern compresses to half a die frame, and the reader
+      // refuses the pair; the companion test below pins that refusal. From a
+      // camera high enough to keep the estimate inside
+      // [PipPattern.tolerance], the same tented board reads its pair across
+      // two planes — which is what THIS test pins.
+      const overhead = FoldingView(
+        ridgeHeight: 0.05,
+        eye: (0.25, -0.45, 0.9),
+        target: (0.5, 0.33, 0.02),
+        focal: 760,
+      );
+      final start =
+          renderFoldingShot(board: BoardState.initial(), view: overhead);
       final vision = BoardVision(_calibrate(start));
 
+      final rolled = renderFoldingShot(
+        board: BoardState.initial(),
+        view: overhead,
+        dicePlacements: const <DicePlacement>[
+          DicePlacement(face: 5, center: Pt(0.20, 0.5)),
+          DicePlacement(face: 2, center: Pt(0.75, 0.5)),
+        ],
+      );
+      final reading = vision.readDice(rolled.frame);
+      expect(reading, isNotNull, reason: 'no pair found across the hinge');
+      expect(
+        <int>[reading!.first.face, reading.second.face]..sort(),
+        <int>[2, 5],
+      );
+    });
+
+    test('the usual low viewpoint reads the same pair, through the measured '
+        'aspect', () {
+      // This pin spent a day expecting a REFUSAL, and the history is the
+      // point. When the face became a shape, the die frame's height came
+      // from a pixel estimate — 2.78 at this camera against a painted truth
+      // of 1.5 — so framed patterns compressed to 0.54 of a die and no face
+      // matched. The fix the refusal was measured by is in:
+      // `BoardCalibration.surfaceAspect`, the board's ratio taken from its
+      // own checkers (a disc is as wide as it is deep), which this tented
+      // view measures at 1.35 — close enough that the shapes frame true and
+      // the pair reads again, from the same near-table camera that broke
+      // the estimate.
+      final start = renderFoldingShot(board: BoardState.initial());
+      final vision = BoardVision(_calibrate(start));
       final rolled = renderFoldingShot(
         board: BoardState.initial(),
         dicePlacements: const <DicePlacement>[
@@ -175,7 +223,8 @@ void main() {
         ],
       );
       final reading = vision.readDice(rolled.frame);
-      expect(reading, isNotNull, reason: 'no pair found across the hinge');
+      expect(reading, isNotNull,
+          reason: 'the measured aspect should frame these shapes true');
       expect(
         <int>[reading!.first.face, reading.second.face]..sort(),
         <int>[2, 5],

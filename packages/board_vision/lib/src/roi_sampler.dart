@@ -476,6 +476,55 @@ class RoiSampler extends FrameSampler {
     return held ?? _bestEffort(profile, offsets, steps, holdSteps);
   }
 
+  /// How far across the checker standing at [depth] along [axis] is, in
+  /// board-x units — the contiguous run of [color] readings straight across
+  /// the disc, or zero when even [centreX] does not read as one.
+  ///
+  /// The instrument behind `BoardCalibration.surfaceAspect`: a checker is a
+  /// DISC, as wide as it is deep on the table, so its width here against the
+  /// stacks' own pitch is the board's width-to-height ratio measured from
+  /// furniture the camera cannot foreshorten away. Call it with [depth] at
+  /// the disc's middle — half a pitch behind the edge the finder settled
+  /// on — where the chord is widest. Each probe is the median of three
+  /// samples a [checkerSearchStep] apart in depth, because a single pixel at
+  /// a disc's rim is a coin toss and a run test amplifies coin tosses.
+  double checkerWidth(
+    StackAxis axis, {
+    required double depth,
+    required double centreX,
+    required CheckerColor color,
+    required ColorModel colors,
+  }) {
+    final width = axis.maxX - axis.minX;
+    final step = width / 64;
+
+    bool reads(double x) {
+      final samples = <Rgb>[];
+      for (final d in <double>[
+        depth - checkerSearchStep,
+        depth,
+        depth + checkerSearchStep,
+      ]) {
+        final sample = at(x, axis.yAt(d));
+        if (sample != null) samples.add(sample);
+      }
+      if (samples.isEmpty) return false;
+      return colors.classifyIn(axis.region, medianRgb(samples)) == color;
+    }
+
+    if (!reads(centreX)) return 0;
+    var left = centreX, right = centreX;
+    // A checker can stand off its column's centre but not a whole column
+    // away; the run stops at the rim's blend long before these bounds do.
+    while (left - step >= axis.minX - width && reads(left - step)) {
+      left -= step;
+    }
+    while (right + step <= axis.maxX + width && reads(right + step)) {
+      right += step;
+    }
+    return right - left + step;
+  }
+
   /// The shallowest coherent block any offset offers that [accepts] it, and
   /// the more uniform of the two where both do at the same depth.
   static CheckerFind? _firstBlock(

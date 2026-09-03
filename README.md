@@ -35,8 +35,11 @@ engine ([wildbg](https://github.com/carsten-wenderdel/wildbg), vendored, dual
   three-tap dice pad is the shipping dice path and is always open, because the
   camera's dice reader **declines rather than misreads** on the real corpus
   today — it found no pair on any of the four frames carrying a certified
-  roll, and read none of them wrong — with the band-location and tilt work
-  that would find dice this small still queued. The microphone is an optional
+  roll, and read none of them wrong. The **band-location** half of the work
+  that would find dice this small has since landed — the reader searches the
+  whole playing surface and reads a face as a shape rather than counting its
+  pips — and the floor did not move; the **tilt** half is still queued, and
+  dice this small may want a closer camera either way. The microphone is an optional
   optimization (it hears the dice land and looks sooner; nothing is recorded),
   and the belief mirror is one tap away for a play the felt does not give up.
   Matches land in History with analysis like any other. The perception core is

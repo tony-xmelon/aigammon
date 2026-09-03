@@ -286,35 +286,33 @@ void main() {
       expect(calibrateWith(BoardPalette.blueRed, blurSigma: 3).ok, isFalse);
     });
 
-    test('a sigma of blur and half the dice cannot be found at all', () {
-      // The tightest limit anywhere in the pipeline, and the most consequential
-      // measurement in this file. Calibration survives 1.8 sigma of blur; the
-      // dice reader gives out earlier. Its first gate looks for what the board
-      // does not account for and its second asks whether that thing is square,
-      // and a blur that leaves a checker perfectly countable has already
-      // softened a die's corners past the squareness threshold.
-      //
-      // **Re-measured when the reader's size gates were derived from
-      // `BoardCalibration.dieSide` rather than written for the bed's dice.**
-      // It moved the right way and by more than expected: every board reads
-      // correctly to 1.3 sigma now, against losing boards at 1.1 before. The
-      // old smallest-blob floor was a share of the BAND, so it was rejecting
-      // blurred dice for the same reason it rejected small ones — a blur
-      // spreads a die's edge outward and its foreign core inward, and what
-      // was left came in under a floor that had nothing to do with how big a
-      // die is. Every reading that comes back here is also the right roll:
-      // measured 3/3, 3/3, 3/3, 3/3 correct at 0.5 through 1.1, then 2/3 at
-      // 1.3 and 1.5, 1/3 at 1.8 and beyond, with no wrong answers at any
-      // sigma.
+    test('blur takes the calibration before it takes the dice', () {
+      // The most consequential measurement in this file, RE-MEASURED — twice
+      // now — as the reader changed shape, which is why the name no longer
+      // says the dice give out first. The original band reader lost boards
+      // under blur well before calibration did: correct to 1.1 sigma, 2/3 at
+      // 1.3, boards gone past that — the measurement behind the spec's bet
+      // that dice are where the ML escape hatch gets spent. Deriving the
+      // size gates from `BoardCalibration.dieSide` moved the curve once
+      // (every board correct to 1.3). Widening the search to the whole
+      // playing surface moved it again, and further than expected: the
+      // gates the widening forced — pips must stand where a face's pips
+      // stand, a candidate is die-sized and stands clear of the board's
+      // walls — turn out to be exactly the noise filters the band reader
+      // lacked under blur.
+      // Measured at 0.5 through 1.3 sigma: every board reads its pair, every
+      // pair is right, and a bare board invents nothing at any sigma. At
+      // 1.5 the steep blue-red board stops CALIBRATING, and the two boards
+      // that still calibrate still read — so on this bed the dice reader is
+      // no longer the tightest blur limit in the pipeline; calibration is.
       //
       // Measured over a grid of viewpoints, palettes, seatings and sub-pixel
       // corner offsets (the table on [kCorpusDegradation]); three cells here,
       // enough to hold the shape without paying for the grid on every run.
       //
       // A hand-held phone at arm's length over a table will not always be
-      // sharper than one sigma. This is the measurement behind the spec's bet
-      // that dice are where the ML escape hatch gets spent, taken before a
-      // single photograph exists — and it is why the corpus runs at 0.5.
+      // sharper than one sigma — the corpus still runs at 0.5, and the
+      // margin above it is the point.
       int readsAt(double sigma) {
         var read = 0;
         for (final palette in BoardPalette.all) {
@@ -355,12 +353,19 @@ void main() {
 
       expect(readsAt(kCorpusDegradation.blurSigma), 3,
           reason: 'the corpus runs where every board reads');
+      expect(readsAt(1.0), greaterThanOrEqualTo(2),
+          reason: 'the cell where the far stacks smear worst. Exactly at one '
+              'sigma, one board\'s pair flickers between reading and an '
+              'honest null as the die frame\'s truth improves — a fragment '
+              'crowds the candidate list on some geometries and not others — '
+              'so this is a floor against collapse, not a pin on the '
+              'flicker; the cells either side hold the real line');
       expect(readsAt(1.1), 3,
-          reason: 'a sigma of blur is inside the reader now, and this is the '
-              'assertion that says so — if it drops back to two, the size '
-              'gates have gone absolute again');
-      expect(readsAt(1.3), lessThan(3),
-          reason: 'past about 1.3 the reader loses boards outright');
+          reason: 'a sigma of blur is inside the reader, as it has been '
+              'since the size gates learned the session\'s own die');
+      expect(readsAt(1.3), 3,
+          reason: 're-measured when the search widened: the whole-surface '
+              'gates filter the blur noise that used to cost a board here');
     });
 
     test('but the viewpoint is not the thing that limits it', () {
