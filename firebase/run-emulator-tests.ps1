@@ -11,6 +11,37 @@
 #   ...` works because emulators:exec already wraps the command in `cmd /s /c`.
 $ErrorActionPreference = 'Stop'
 
+# The Microsoft Store build of PowerShell is MSIX-packaged, and a packaged
+# process hands its children a VIRTUALIZED %LOCALAPPDATA% — which is where the
+# pub cache lives. Under it the emulator's own suites pass and then leg 2 dies
+# on ``Could not find `bin\test.dart` in package `test` ``, an error that names
+# nothing that is actually wrong. This used to be a README paragraph asking you
+# to remember to type `powershell.exe -File ...` instead; a trap you have to
+# remember is a trap, so the script types it for you. Windows PowerShell is not
+# packaged, and the command strings below were already written to survive it —
+# see the `--name` note in leg 4.
+$isPackaged = $PSHOME -like "$env:ProgramFiles\WindowsApps\*"
+if ($isPackaged -and -not $env:AIGAMMON_EMULATOR_REEXEC) {
+  $winPs = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  if (-not (Test-Path $winPs)) {
+    throw "This pwsh is Store-packaged (its children cannot see the pub cache) " +
+      "and Windows PowerShell was not found at $winPs. Run this script from " +
+      "cmd, Git Bash, or a non-Store PowerShell."
+  }
+  # Keep every STRING in this file ASCII, and this line is why. Windows
+  # PowerShell reads a BOM-less UTF-8 file as ANSI, so an em dash arrives as
+  # three characters ending in 0x94 -- a right smart quote, which PowerShell
+  # honours as a string delimiter. This line held one, it closed its own
+  # string, and the file stopped PARSING under 5.1 -- the very shell this
+  # guard hands it to, so the guard would have broken the script it was
+  # written to rescue. Comments are safe (they end at the newline) and the
+  # eight already in this file are untouched; strings are not.
+  Write-Host "Store-packaged pwsh detected - re-running under Windows PowerShell so the pub cache stays visible." -ForegroundColor Yellow
+  $env:AIGAMMON_EMULATOR_REEXEC = '1'
+  & $winPs -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @args
+  exit $LASTEXITCODE
+}
+
 # Make node / firebase / dart resolvable even from a bare shell.
 $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') +
   ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')

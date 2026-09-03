@@ -215,13 +215,14 @@ default to the **local emulator suite** — no configuration needed; start it fr
 pwsh firebase/run-emulator-tests.ps1
 ```
 
-**If `pwsh` came from the Microsoft Store**, run the script with
-`powershell.exe -File firebase/run-emulator-tests.ps1` instead. The Store build
+**If `pwsh` came from the Microsoft Store**, the script re-runs itself under
+Windows PowerShell and says so — you need do nothing. The Store build
 is MSIX-packaged and hands its child processes a **virtualized `%LOCALAPPDATA%`**,
 which hides the real pub cache from them: the emulator's own suites pass, and
 then leg 2 dies on ``Could not find `bin\test.dart` in package `test` `` before a
 single test loads. It is the shell, not the code — the identical command run
-from `cmd`, Git Bash or Windows PowerShell passes.
+from `cmd`, Git Bash or Windows PowerShell passes, which is exactly what the
+re-exec at the top of the script arranges.
 
 Creating the project, enabling anonymous sign-in, deploying the rules
 (`firebase deploy --only firestore:rules`), retrieving the Web API key, and
